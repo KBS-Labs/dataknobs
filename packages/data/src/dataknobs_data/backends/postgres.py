@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
@@ -23,8 +22,9 @@ from ..query_logic import ComplexQuery
 from ..streaming import (
     StreamConfig,
     StreamResult,
-    async_process_batch_with_fallback,
-    process_batch_with_fallback,
+    async_run_stream_write,
+    resolve_conflict_write,
+    run_stream_write,
 )
 from ..vector.mixins import VectorOperationsMixin
 from .config import PostgresDatabaseConfig
@@ -764,45 +764,27 @@ class SyncPostgresDatabase(
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into PostgreSQL."""
+        """Stream records into PostgreSQL.
+
+        Honors ``config.on_conflict``: INSERT uses the batch fast-path
+        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
+        write per-record via ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                continue_processing = process_batch_with_fallback(
-                    batch,
-                    self._write_batch,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            process_batch_with_fallback(
-                batch,
-                self._write_batch,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self._write_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def _write_batch(self, records: list[Record]) -> list[str]:
         """Write a batch of records to the database.
@@ -2162,54 +2144,32 @@ class AsyncPostgresDatabase(
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into PostgreSQL using batch inserts."""
+        """Stream records into PostgreSQL using batch inserts.
+
+        Honors ``config.on_conflict``: INSERT uses the COPY batch fast-path with
+        a ``create`` per-record fallback; UPSERT/SKIP write per-record via
+        ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
 
-        batch = []
-        async for record in records:
-            batch.append(record)
+        async def insert_batch(b):
+            await self._write_batch(b)
+            return [r.id for r in b]
 
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                # Use lambda wrapper for _write_batch
-                async def batch_func(b):
-                    await self._write_batch(b)
-                    return [r.id for r in b]
-
-                continue_processing = await async_process_batch_with_fallback(
-                    batch,
-                    batch_func,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            async def batch_func(b):
-                await self._write_batch(b)
-                return [r.id for r in b]
-
-            await async_process_batch_with_fallback(
-                batch,
-                batch_func,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=insert_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     async def _write_batch(self, records: list[Record]) -> list[str]:
         """Write a batch of records using COPY for performance.

@@ -40,6 +40,45 @@ print(f"Success rate: {result.success_rate:.1f}%")
 print(f"Failed indices: {result.failed_indices}")
 ```
 
+#### Conflict policy (insert / upsert / skip)
+
+`StreamConfig.on_conflict` selects how a write resolves an id that already
+exists in the target. It applies to every `stream_write` backend and to the
+`Migrator` methods that stream. The default preserves strict insert behavior.
+
+| Policy | Behavior on a colliding id |
+|--------|----------------------------|
+| `"insert"` (default) | Fail closed — the id is recorded as a failure. Correct for a virgin target. |
+| `"upsert"` | Overwrite the existing row so the target matches the source. Idempotent; a colliding id cannot fail. |
+| `"skip"` | Leave the existing row untouched and count the id as skipped (`StreamResult.skipped`). An idempotent top-up. |
+
+```python
+from dataknobs_data import ConflictPolicy, StreamConfig
+
+# Re-run a migration into a populated target, overwriting existing rows.
+config = StreamConfig(batch_size=1000, on_conflict="upsert")
+result = db.stream_write(records, config)
+
+# Or migrate only what is not already present, leaving existing rows as-is.
+config = StreamConfig(on_conflict=ConflictPolicy.SKIP)
+result = db.stream_write(records, config)
+print(f"Skipped {result.skipped} already-present records")
+```
+
+Under `"upsert"` and `"skip"` there is no conflict-aware bulk verb, so records
+are written one at a time (the `"insert"` fast-path uses the backend's native
+batch write). An unknown policy value is rejected when the `StreamConfig` is
+constructed, rather than silently falling back to insert.
+
+Whether streaming `"insert"` fails closed on a colliding id depends on the
+backend's streaming batch write. It holds on the **memory and file** backends.
+It does **not** hold on the **SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch**
+backends: their streaming batch write mints a fresh id per record, so a
+streaming `"insert"` into one of those targets neither preserves the source id
+nor fails closed on a collision. Use `"upsert"` / `"skip"` for idempotent
+re-runs into those targets, or single `create()` for id-preserving,
+collision-safe inserts.
+
 ### Use BatchConfig When:
 
 - **DataFrame operations**: Working with pandas DataFrames

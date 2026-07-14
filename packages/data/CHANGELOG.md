@@ -20,10 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation that honors conditional writes (real AWS S3, recent
   LocalStack); both a pre-existing key (412) and a concurrent conditional-write
   race (409) fail closed as `DuplicateRecordError`, while older stores that
-  ignore the header degrade to last-writer-wins. `create_batch()` does **not**
-  participate in this contract: it does not fail closed on a colliding id
-  (memory/file overwrite; the SQL and Elasticsearch backends assign a fresh id
-  and ignore `record.id`) — use single `create()` for collision-safe inserts.
+  ignore the header degrade to last-writer-wins. `create_batch()` honors this
+  contract on some but not all backends — see the `create_batch()` and streaming
+  entries below for the per-backend detail.
 - On the SQL backends (SQLite, DuckDB), `create()` now distinguishes a
   duplicate-id collision from other column-constraint violations: only a
   primary-key collision raises `DuplicateRecordError`, while a `NOT NULL` or
@@ -72,6 +71,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend matrix out-of-band. The advertisement is uniform because every
   backend enforces the contract; the ABA nuance of the content-hash backends
   is documented, not encoded as a separate capability.
+- `Migrator` gains an `on_conflict` policy (`insert` / `upsert` / `skip`) for
+  idempotent re-runs into a populated target. `insert` (the default) fails
+  closed on a colliding id as before; `upsert` overwrites the target row;
+  `skip` leaves the existing row and counts the id as skipped. The policy is
+  threaded through all four migrate methods — `migrate()` and
+  `migrate_parallel()` take it directly, `migrate_stream()` / `migrate_async()`
+  read it from `StreamConfig`. Default behavior is unchanged.
+- `ConflictPolicy` enum and `StreamConfig.on_conflict` field (exported from
+  `dataknobs_data` and `dataknobs_data.migration`) carry the policy on the
+  streaming path; every backend's `stream_write` honors it. `StreamResult`
+  gains a `skipped` counter. Under `upsert`/`skip` records are written one at a
+  time (no conflict-aware bulk verb yet); the `insert` fast-path still uses the
+  backend's native batch write and is byte-identical to prior behavior. An
+  unknown `on_conflict` value is rejected when the `StreamConfig` is built.
+- `create_batch()` on the **memory and file** backends now fails closed on a
+  colliding id, matching single `create()`: a colliding id — against an existing
+  record or a duplicate within the same batch — raises `DuplicateRecordError`
+  before any record is written (the batch is all-or-nothing), and the record's
+  own id is honored. Memory and sync-file previously overwrote on collision;
+  async-file previously minted a fresh id and discarded `record.id`.
+- As a result, the **streaming INSERT** path (`migrate_stream` /
+  `migrate_async` under the default `ConflictPolicy.INSERT`) now fails closed on
+  a colliding id — recording it as a failure and preserving the source id — on
+  the **memory and file** backends (via the `create_batch` fix above). A re-run
+  into a populated memory/file target records the colliding ids as failures
+  rather than silently overwriting them, matching the batched `migrate()` path.
+- **Known gap:** streaming INSERT into a **SQLite, DuckDB, PostgreSQL, S3, or
+  Elasticsearch** target is still *not* fail-closed — their streaming batch
+  write mints a fresh id per record, so a colliding source id is written as a
+  new row under a new id (the source id is not preserved). Use `upsert` / `skip`
+  for idempotent re-runs into those targets, or the batched `migrate()` path
+  (single `create()`) for id-preserving, collision-safe inserts. Closing this
+  gap is tracked as a follow-up (bringing each backend's bulk batch write into
+  line with the `create()` contract).
 
 ### Notes
 

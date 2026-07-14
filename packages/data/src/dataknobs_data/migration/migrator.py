@@ -6,8 +6,9 @@ from __future__ import annotations
 import concurrent.futures
 from typing import TYPE_CHECKING
 
+from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.query import Query
-from dataknobs_data.streaming import StreamConfig
+from dataknobs_data.streaming import ConflictPolicy, StreamConfig
 
 from .migration import Migration
 from .progress import MigrationProgress
@@ -34,10 +35,11 @@ class Migrator:
         query: Query | None = None,
         batch_size: int = 1000,
         on_progress: Callable[[MigrationProgress], None] | None = None,
-        on_error: Callable[[Exception, Record], bool] | None = None
+        on_error: Callable[[Exception, Record], bool] | None = None,
+        on_conflict: ConflictPolicy | str = ConflictPolicy.INSERT,
     ) -> MigrationProgress:
         """Migrate data between databases with optional transformation.
-        
+
         Args:
             source: Source database
             target: Target database
@@ -46,10 +48,16 @@ class Migrator:
             batch_size: Number of records to process per batch
             on_progress: Optional callback for progress updates
             on_error: Optional error handler (return True to continue)
-            
+            on_conflict: How to resolve an id that already exists in the target
+                (``"insert"`` fails closed on a collision — the default;
+                ``"upsert"`` overwrites the target row; ``"skip"`` leaves the
+                existing row and counts the id as skipped). Accepts a
+                ``ConflictPolicy`` or its string value.
+
         Returns:
             MigrationProgress with final statistics
         """
+        on_conflict = ConflictPolicy(on_conflict)
         progress = MigrationProgress().start()
 
         # Get total count for progress tracking
@@ -77,7 +85,7 @@ class Migrator:
 
                 # Process batch when full
                 if len(batch) >= batch_size:
-                    self._write_batch(target, batch, progress, on_error)
+                    self._write_batch(target, batch, progress, on_error, on_conflict)
                     batch = []
 
                     if on_progress:
@@ -96,7 +104,7 @@ class Migrator:
 
         # Process final batch
         if batch:
-            self._write_batch(target, batch, progress, on_error)
+            self._write_batch(target, batch, progress, on_error, on_conflict)
 
         progress.finish()
 
@@ -143,19 +151,27 @@ class Migrator:
         def transform_stream(records: Iterator[Record]) -> Iterator[Record]:
             """Apply transformation to streaming records."""
             for record in records:
-                progress.processed += 1  # Track that we've processed this record
+                # Count `processed` exactly once per record, at the point its
+                # outcome is decided: a yield below (pass-through), record_skip
+                # (filtered), or record_failure (transform error). record_skip
+                # and record_failure both increment `processed`, so a
+                # pre-increment here double-counted filtered / errored records.
                 try:
                     if transform is not None:
                         if isinstance(transform, Transformer):
                             original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
+                                progress.processed += 1
                                 yield transformed
                             else:
                                 progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
-                            yield transform.apply(record)
+                            applied = transform.apply(record)
+                            progress.processed += 1
+                            yield applied
                     else:
+                        progress.processed += 1
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
@@ -177,6 +193,7 @@ class Migrator:
         # Result contains only write successes/failures
         progress.succeeded += result.successful
         progress.failed += result.failed
+        progress.skipped += result.skipped
         progress.errors.extend(result.errors)
 
         progress.finish()
@@ -193,12 +210,13 @@ class Migrator:
         transform: Transformer | Migration | None = None,
         partitions: int = 4,
         partition_field: str = "partition_id",
-        on_progress: Callable[[MigrationProgress], None] | None = None
+        on_progress: Callable[[MigrationProgress], None] | None = None,
+        on_conflict: ConflictPolicy | str = ConflictPolicy.INSERT,
     ) -> MigrationProgress:
         """Parallel streaming migration.
-        
+
         Partition data and migrate in parallel streams.
-        
+
         Args:
             source: Source database
             target: Target database
@@ -206,14 +224,22 @@ class Migrator:
             partitions: Number of parallel partitions
             partition_field: Field to use for partitioning
             on_progress: Optional callback for progress updates
-            
+            on_conflict: Conflict policy for an id already present in the target
+                (insert = fail closed, upsert = overwrite, skip = leave and
+                count as skipped). Applied to every partition stream.
+
         Returns:
             Combined MigrationProgress
         """
+        on_conflict = ConflictPolicy(on_conflict)
+
         def migrate_partition(partition_id: int) -> MigrationProgress:
             """Migrate a single partition."""
             query = Query().filter(partition_field, "=", partition_id)
-            return self.migrate_stream(source, target, transform, query)
+            return self.migrate_stream(
+                source, target, transform, query,
+                config=StreamConfig(on_conflict=on_conflict),
+            )
 
         total_progress = MigrationProgress().start()
 
@@ -268,19 +294,27 @@ class Migrator:
         async def transform_stream(records):
             """Apply transformation to async streaming records."""
             async for record in records:
-                progress.processed += 1  # Track that we've processed this record
+                # Count `processed` exactly once per record, at the point its
+                # outcome is decided: a yield below (pass-through), record_skip
+                # (filtered), or record_failure (transform error). record_skip
+                # and record_failure both increment `processed`, so a
+                # pre-increment here double-counted filtered / errored records.
                 try:
                     if transform is not None:
                         if isinstance(transform, Transformer):
                             original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
+                                progress.processed += 1
                                 yield transformed
                             else:
                                 progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
-                            yield transform.apply(record)
+                            applied = transform.apply(record)
+                            progress.processed += 1
+                            yield applied
                     else:
+                        progress.processed += 1
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
@@ -302,6 +336,7 @@ class Migrator:
         # Result contains only write successes/failures
         progress.succeeded += result.successful
         progress.failed += result.failed
+        progress.skipped += result.skipped
         progress.errors.extend(result.errors)
 
         progress.finish()
@@ -316,15 +351,19 @@ class Migrator:
         target: SyncDatabase,
         batch: list[Record],
         progress: MigrationProgress,
-        on_error: Callable[[Exception, Record], bool] | None = None
+        on_error: Callable[[Exception, Record], bool] | None = None,
+        on_conflict: ConflictPolicy = ConflictPolicy.INSERT,
     ) -> None:
         """Write a batch of records to target database.
-        
+
         Args:
             target: Target database
             batch: Batch of records to write
             progress: Progress tracker to update
             on_error: Optional error handler
+            on_conflict: Conflict policy for an id already present in the target
+                (insert = fail closed, upsert = overwrite, skip = leave and
+                count as skipped).
         """
         for record in batch:
             try:
@@ -332,8 +371,19 @@ class Migrator:
                 if not record.id:
                     record.generate_id()
 
-                target.create(record)
-                progress.record_success(record.id)
+                if on_conflict == ConflictPolicy.UPSERT:
+                    target.upsert(record)
+                    progress.record_success(record.id)
+                elif on_conflict == ConflictPolicy.SKIP:
+                    try:
+                        target.create(record)
+                        progress.record_success(record.id)
+                    except DuplicateRecordError:
+                        # Idempotent top-up: leave the existing row untouched.
+                        progress.record_skip("Already present in target", record.id)
+                else:  # ConflictPolicy.INSERT — fail closed on a collision
+                    target.create(record)
+                    progress.record_success(record.id)
             except Exception as e:
                 progress.record_failure(str(e), record.id, e)
                 if on_error:
@@ -353,13 +403,20 @@ class Migrator:
         sample_size: int | None = None
     ) -> tuple[bool, list[str]]:
         """Validate that migration was successful.
-        
+
+        The source-vs-target count check is meaningful only for a from-empty
+        ``insert`` migration. Under ``upsert`` it holds only if the source ids
+        are a superset of the target's, and under a partial-target ``skip``
+        re-run the counts can legitimately differ (the target already held extra
+        rows). The per-id sample check (each source id present in the target)
+        remains valid for every conflict policy.
+
         Args:
             source: Source database
             target: Target database
             query: Optional query used for migration
             sample_size: Optional number of records to sample for validation
-            
+
         Returns:
             Tuple of (is_valid, list_of_issues)
         """

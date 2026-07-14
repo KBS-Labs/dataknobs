@@ -94,12 +94,16 @@ Backend notes:
   (real AWS S3, recent LocalStack) — both a pre-existing key (412) and a
   concurrent conditional-write race (409) fail closed — and degrades to
   last-writer-wins on stores that ignore the header.
-- **`create_batch()` does not carry the create-if-absent contract.** It does
-  **not** fail closed on a colliding id, and the backends differ: memory and
-  file overwrite (last-writer-wins), while the SQL and Elasticsearch backends
-  assign a fresh id and ignore any `record.id` you set. Use single `create()`
-  in a loop for collision-safe inserts; reach for `create_batch()` only for
-  throughput when ids are known-unique.
+- **`create_batch()` collision semantics are not uniform across backends.** On
+  **memory, file, and S3** a colliding id — against an existing record or a
+  duplicate within the same batch — fails closed with `DuplicateRecordError` and
+  `record.id` is honored (S3 and the abstract-base default loop single
+  `create()`). On **SQLite, DuckDB, PostgreSQL, and Elasticsearch** the bulk
+  `create_batch()` mints a fresh id per record and ignores any `record.id` you
+  set, so a colliding id does not fail. For collision-safe, id-preserving
+  inserts on those backends, use single `create()` in a loop. (The *streaming*
+  INSERT path is a separate axis — it fails closed on **memory and file**, but
+  not on SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch.)
 
 #### Optimistic concurrency (conditional writes)
 
@@ -409,87 +413,94 @@ The migration module (`dataknobs_data.migration`) provides data transformation a
 
 ### Operations
 
-Define operations to transform records:
+Define reversible operations to transform records:
 
 ```python
-from dataknobs_data.migration.operations import *
+from datetime import datetime
+from dataknobs_data.migration import (
+    AddField, RemoveField, RenameField, TransformField, CompositeOperation,
+)
 
-# Add field
-add_op = AddField("status", default="active")
+# Add a field (uses default_value when the field is absent)
+add_op = AddField("status", default_value="active")
 
-# Remove field
+# Remove a field
 remove_op = RemoveField("deprecated_field")
 
-# Rename field
+# Rename a field
 rename_op = RenameField("old_name", "new_name")
 
-# Transform field
+# Transform a field's value (pass reverse_fn to keep it reversible)
 def uppercase(value):
     return value.upper() if value else value
 transform_op = TransformField("name", uppercase)
 
-# Composite operations
+# Composite operation applies its members in order
 composite = CompositeOperation([
-    AddField("created_at", default=datetime.now()),
+    AddField("created_at", default_value=datetime.now()),
     RemoveField("temp_field"),
-    RenameField("user_name", "username")
+    RenameField("user_name", "username"),
 ])
 ```
 
 ### Migrations
 
-Create migrations to evolve your data:
+A `Migration` is an ordered, reversible set of operations between two versions:
 
 ```python
-from dataknobs_data.migration import Migration
+from dataknobs_data.migration import Migration, AddField, RemoveField
 
-# Create migration
+# Create a migration (from_version, to_version, optional description)
 migration = Migration(
-    name="add_user_status",
-    version="1.0.0",
-    description="Add status field to user records"
+    from_version="1.0.0",
+    to_version="2.0.0",
+    description="Add status field to user records",
 )
 
-# Add operations
-migration.add_operation(AddField("status", default="active"))
-migration.add_operation(RemoveField("legacy_field"))
+# Add operations (fluent — add() returns the migration)
+migration.add(AddField("status", default_value="active"))
+migration.add(RemoveField("legacy_field"))
 
-# Apply to record
+# Apply to a record (returns the migrated Record)
 record = Record({"name": "Alice", "legacy_field": "old"})
-result = migration.apply(record)
-if result.valid:
-    migrated = result.value  # Record with changes applied
+migrated = migration.apply(record)
 
-# Reverse migration
-result = migration.reverse(migrated)
+# Reverse it by applying the operations backwards
+original = migration.apply(migrated, reverse=True)
 ```
 
 ### Migrator
 
-Batch migration for databases:
+`Migrator` is a stateless orchestrator; the source and target are passed per
+call. See the [Migration guide](migration.md) for the streaming methods
+(`migrate_stream` / `migrate_parallel` / `migrate_async`) and the full
+conflict-policy API.
 
 ```python
 from dataknobs_data.migration import Migrator
 
-# Create migrator
-migrator = Migrator(source_db, target_db)
+migrator = Migrator()
 
-# Configure migration
-migration = Migration("update_schema", "2.0.0")
-migration.add_operation(AddField("version", default=2))
+# A transform may be a Transformer or a Migration; here we evolve schema.
+migration = Migration(from_version="1.0.0", to_version="2.0.0")
+migration.add(AddField("version", default_value=2))
 
-# Run migration
-async def migrate():
-    progress = await migrator.migrate(
-        migration=migration,
-        query=Query().filter("type", Operator.EQ, "user"),
-        batch_size=100,
-        on_progress=lambda p: print(f"Progress: {p.percentage}%")
-    )
-    
-    print(f"Migrated: {progress.successful}")
-    print(f"Failed: {progress.failed}")
-    print(f"Duration: {progress.duration}s")
+# Batched migration is synchronous.
+progress = migrator.migrate(
+    source_db,
+    target_db,
+    transform=migration,
+    query=Query().filter("type", Operator.EQ, "user"),
+    batch_size=100,
+    on_progress=lambda p: print(f"Progress: {p.percent:.0f}%"),
+)
+
+print(f"Migrated: {progress.succeeded}")
+print(f"Failed: {progress.failed}")
+print(f"Duration: {progress.duration:.2f}s")
+
+# Conflict policy for idempotent re-runs into a populated target:
+progress = migrator.migrate(source_db, target_db, on_conflict="upsert")
 ```
 
 ## Backends

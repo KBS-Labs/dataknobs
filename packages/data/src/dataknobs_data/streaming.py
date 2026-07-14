@@ -4,15 +4,36 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfig
+
+from .exceptions import DuplicateRecordError
 
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
     from .query import Query
     from .records import Record
+
+
+class ConflictPolicy(str, Enum):
+    """How a streaming/batched write resolves an id that already exists.
+
+    - ``INSERT`` (default) — fail closed on a colliding id, exactly as a plain
+      ``create()`` does. Correct for a virgin target; a re-run into a populated
+      target records the colliding ids as failures.
+    - ``UPSERT`` — overwrite the target row so it matches the source. Idempotent
+      by definition; a colliding id cannot fail.
+    - ``SKIP`` — leave the existing row untouched and count the colliding id as
+      skipped (not failed). An idempotent top-up that migrates only what is not
+      already present.
+    """
+
+    INSERT = "insert"
+    UPSERT = "upsert"
+    SKIP = "skip"
 
 
 @dataclass(frozen=True)
@@ -23,6 +44,7 @@ class StreamConfig(StructuredConfig):
     prefetch: int = 2  # Number of batches to prefetch
     timeout: float | None = None
     on_error: Callable[[Exception, Record], bool] | None = None  # Return True to continue
+    on_conflict: ConflictPolicy = ConflictPolicy.INSERT
 
     def __post_init__(self):
         """Validate configuration."""
@@ -32,6 +54,10 @@ class StreamConfig(StructuredConfig):
             raise ValueError("prefetch must be non-negative")
         if self.timeout is not None and self.timeout <= 0:
             raise ValueError("timeout must be positive if specified")
+        # Coerce a raw string (e.g. from a config dict) to the enum and reject
+        # an unknown value loudly, rather than silently defaulting to INSERT.
+        # Frozen dataclass: assign through object.__setattr__.
+        object.__setattr__(self, "on_conflict", ConflictPolicy(self.on_conflict))
 
 
 @dataclass
@@ -41,6 +67,7 @@ class StreamResult:
     total_processed: int = 0
     successful: int = 0
     failed: int = 0
+    skipped: int = 0  # Records left untouched under ConflictPolicy.SKIP
     errors: list[dict[str, Any]] = field(default_factory=list)
     duration: float = 0.0
     total_batches: int = 0  # Number of batches processed
@@ -75,6 +102,7 @@ class StreamResult:
         self.total_processed += other.total_processed
         self.successful += other.successful
         self.failed += other.failed
+        self.skipped += other.skipped
         self.errors.extend(other.errors)
         self.duration += other.duration
         self.total_batches += other.total_batches
@@ -92,132 +120,297 @@ class StreamResult:
 
 def process_batch_with_fallback(
     batch: list[Record],
-    batch_create_func: Callable[[list[Record]], list[str]],
+    batch_create_func: Callable[[list[Record]], list[str]] | None,
     single_create_func: Callable[[Record], str],
     result: StreamResult,
     config: StreamConfig,
     on_quit_signal: Callable[[], None] | None = None,
-    batch_index: int = 0
+    batch_index: int = 0,
+    *,
+    skip_on_duplicate: bool = False,
 ) -> bool:
-    """Process a batch with graceful fallback to individual record creation.
-    
-    When a batch operation fails, this function will retry each record individually
-    to identify which specific records are causing the failure, allowing successful
-    records to be processed while only failing the problematic ones.
-    
+    """Process a batch with graceful fallback to individual record writes.
+
+    When a batch operation fails, this function retries each record individually
+    to identify which specific records are causing the failure, allowing
+    successful records to be processed while only failing the problematic ones.
+
     Args:
         batch: List of records to process
-        batch_create_func: Function to create a batch of records
-        single_create_func: Function to create a single record
+        batch_create_func: Function to write a batch of records, or ``None`` to
+            skip the batch attempt and write every record individually. A
+            conflict-aware policy (upsert/skip) has no conflict-aware batch verb,
+            so it passes ``None`` and relies on the per-record path.
+        single_create_func: Function to write a single record
         result: StreamResult to update with statistics
         config: Stream configuration
         on_quit_signal: Optional callback when quitting is signaled
-        
+        batch_index: Index of this batch (for computing global record indices)
+        skip_on_duplicate: When True, a per-record ``DuplicateRecordError`` is
+            counted as a skip (``result.skipped``) and processing continues,
+            rather than counting a failure and quitting. Implements
+            ``ConflictPolicy.SKIP``.
+
     Returns:
         True to continue processing, False to quit streaming
     """
-    try:
-        # Try batch creation first
-        ids = batch_create_func(batch)
-        result.successful += len(ids)
-        result.total_processed += len(batch)
-        result.total_batches += 1
-        return True
-    except Exception:
-        # Batch failed, try individual records to identify failures
-        result.total_batches += 1
-        for i, record in enumerate(batch):
-            result.total_processed += 1
-            record_index = batch_index * config.batch_size + i
-            try:
-                single_create_func(record)
-                result.successful += 1
-            except Exception as record_error:
-                # This specific record failed
-                result.failed += 1
-                # Safely get record ID if available
-                record_id = record.id if record and hasattr(record, 'id') else None
-                result.add_error(record_id, record_error, record_index)
+    if batch_create_func is not None:
+        try:
+            # Try batch creation first
+            ids = batch_create_func(batch)
+            result.successful += len(ids)
+            result.total_processed += len(batch)
+            result.total_batches += 1
+            return True
+        except Exception:
+            # Batch failed, fall back to per-record writes below.
+            pass
 
-                if config.on_error:
-                    # Call error handler
-                    if not config.on_error(record_error, record):
-                        # Handler returned False, quit streaming
-                        if on_quit_signal:
-                            on_quit_signal()
-                        return False
-                else:
-                    # No error handler, quit on first error
+    # Per-record path: either the policy has no batch verb, or the batch failed.
+    result.total_batches += 1
+    for i, record in enumerate(batch):
+        result.total_processed += 1
+        record_index = batch_index * config.batch_size + i
+        try:
+            single_create_func(record)
+            result.successful += 1
+        except Exception as record_error:
+            if skip_on_duplicate and isinstance(record_error, DuplicateRecordError):
+                # Idempotent top-up: leave the existing row, count a skip.
+                result.skipped += 1
+                continue
+            # This specific record failed
+            result.failed += 1
+            # Safely get record ID if available
+            record_id = record.id if record and hasattr(record, 'id') else None
+            result.add_error(record_id, record_error, record_index)
+
+            if config.on_error:
+                # Call error handler
+                if not config.on_error(record_error, record):
+                    # Handler returned False, quit streaming
                     if on_quit_signal:
                         on_quit_signal()
                     return False
+            else:
+                # No error handler, quit on first error
+                if on_quit_signal:
+                    on_quit_signal()
+                return False
 
     return True
 
 
 async def async_process_batch_with_fallback(
     batch: list[Record],
-    batch_create_func: Callable,  # Async callable
+    batch_create_func: Callable | None,  # Async callable, or None to skip the batch attempt
     single_create_func: Callable,  # Async callable
     result: StreamResult,
     config: StreamConfig,
     on_quit_signal: Callable[[], None] | None = None,
-    batch_index: int = 0
+    batch_index: int = 0,
+    *,
+    skip_on_duplicate: bool = False,
 ) -> bool:
     """Async version of process_batch_with_fallback.
-    
-    When a batch operation fails, this function will retry each record individually
-    to identify which specific records are causing the failure, allowing successful
-    records to be processed while only failing the problematic ones.
-    
+
+    When a batch operation fails, this function retries each record individually
+    to identify which specific records are causing the failure, allowing
+    successful records to be processed while only failing the problematic ones.
+
     Args:
         batch: List of records to process
-        batch_create_func: Async function to create a batch of records
-        single_create_func: Async function to create a single record
+        batch_create_func: Async function to write a batch of records, or
+            ``None`` to skip the batch attempt and write every record
+            individually (a conflict-aware upsert/skip policy has no
+            conflict-aware batch verb).
+        single_create_func: Async function to write a single record
         result: StreamResult to update with statistics
         config: Stream configuration
         on_quit_signal: Optional callback when quitting is signaled
-        
+        batch_index: Index of this batch (for computing global record indices)
+        skip_on_duplicate: When True, a per-record ``DuplicateRecordError`` is
+            counted as a skip (``result.skipped``) and processing continues,
+            rather than counting a failure and quitting (``ConflictPolicy.SKIP``).
+
     Returns:
         True to continue processing, False to quit streaming
     """
-    try:
-        # Try batch creation first
-        ids = await batch_create_func(batch)
-        result.successful += len(ids)
-        result.total_processed += len(batch)
-        result.total_batches += 1
-        return True
-    except Exception:
-        # Batch failed, try individual records to identify failures
-        result.total_batches += 1
-        for i, record in enumerate(batch):
-            result.total_processed += 1
-            record_index = batch_index * config.batch_size + i
-            try:
-                await single_create_func(record)
-                result.successful += 1
-            except Exception as record_error:
-                # This specific record failed
-                result.failed += 1
-                # Safely get record ID if available
-                record_id = record.id if record and hasattr(record, 'id') else None
-                result.add_error(record_id, record_error, record_index)
+    if batch_create_func is not None:
+        try:
+            # Try batch creation first
+            ids = await batch_create_func(batch)
+            result.successful += len(ids)
+            result.total_processed += len(batch)
+            result.total_batches += 1
+            return True
+        except Exception:
+            # Batch failed, fall back to per-record writes below.
+            pass
 
-                if config.on_error:
-                    # Call error handler
-                    if not config.on_error(record_error, record):
-                        # Handler returned False, quit streaming
-                        if on_quit_signal:
-                            on_quit_signal()
-                        return False
-                else:
-                    # No error handler, quit on first error
+    # Per-record path: either the policy has no batch verb, or the batch failed.
+    result.total_batches += 1
+    for i, record in enumerate(batch):
+        result.total_processed += 1
+        record_index = batch_index * config.batch_size + i
+        try:
+            await single_create_func(record)
+            result.successful += 1
+        except Exception as record_error:
+            if skip_on_duplicate and isinstance(record_error, DuplicateRecordError):
+                # Idempotent top-up: leave the existing row, count a skip.
+                result.skipped += 1
+                continue
+            # This specific record failed
+            result.failed += 1
+            # Safely get record ID if available
+            record_id = record.id if record and hasattr(record, 'id') else None
+            result.add_error(record_id, record_error, record_index)
+
+            if config.on_error:
+                # Call error handler
+                if not config.on_error(record_error, record):
+                    # Handler returned False, quit streaming
                     if on_quit_signal:
                         on_quit_signal()
                     return False
+            else:
+                # No error handler, quit on first error
+                if on_quit_signal:
+                    on_quit_signal()
+                return False
 
     return True
+
+
+def resolve_conflict_write(
+    on_conflict: ConflictPolicy,
+    *,
+    insert_batch_func: Callable | None,
+    single_create_func: Callable,
+    upsert_func: Callable,
+) -> tuple[Callable | None, Callable, bool]:
+    """Map a write-conflict policy to concrete ``(batch, single, skip)`` funcs.
+
+    Returns the triple ``process_batch_with_fallback`` consumes —
+    ``(batch_write_func, single_write_func, skip_on_duplicate)`` — for the given
+    policy. This is the single shared definition every ``stream_write`` path uses
+    so the policy behaves identically across backends; only the backend-specific
+    ``insert_batch_func`` (the native bulk fast-path) differs per caller.
+
+    - ``INSERT`` — the backend's native batch fast-path plus a ``create``
+      fallback; a colliding id fails closed. Byte-identical to prior behavior.
+    - ``UPSERT`` — no batch attempt (there is no conflict-aware batch verb);
+      every record goes through ``upsert``, which overwrites and cannot collide.
+    - ``SKIP`` — no batch attempt (the native batch path would overwrite instead
+      of raising); ``create`` per record, and a ``DuplicateRecordError`` is
+      counted as a skip rather than a failure.
+    """
+    if on_conflict == ConflictPolicy.UPSERT:
+        return None, upsert_func, False
+    if on_conflict == ConflictPolicy.SKIP:
+        return None, single_create_func, True
+    return insert_batch_func, single_create_func, False
+
+
+def run_stream_write(
+    records: Iterator[Record],
+    *,
+    batch_write_func: Callable | None,
+    single_write_func: Callable,
+    skip_on_duplicate: bool,
+    config: StreamConfig,
+) -> StreamResult:
+    """Drive a sync ``stream_write``: accumulate batches, write each with fallback.
+
+    The shared batch-accumulation loop used by ``StreamingMixin`` and by the
+    backends whose ``stream_write`` needs a per-record conflict-aware path. The
+    caller resolves the write funcs (usually via :func:`resolve_conflict_write`)
+    and hands them in, so the loop itself is backend- and policy-agnostic.
+    """
+    result = StreamResult()
+    start_time = time.time()
+    quitting = False
+    batch_index = 0
+
+    batch: list[Record] = []
+    for record in records:
+        batch.append(record)
+        if len(batch) >= config.batch_size:
+            if not process_batch_with_fallback(
+                batch,
+                batch_write_func,
+                single_write_func,
+                result,
+                config,
+                batch_index=batch_index,
+                skip_on_duplicate=skip_on_duplicate,
+            ):
+                quitting = True
+                break
+            batch = []
+            batch_index += 1
+
+    if batch and not quitting:
+        process_batch_with_fallback(
+            batch,
+            batch_write_func,
+            single_write_func,
+            result,
+            config,
+            batch_index=batch_index,
+            skip_on_duplicate=skip_on_duplicate,
+        )
+
+    result.duration = time.time() - start_time
+    return result
+
+
+async def async_run_stream_write(
+    records: AsyncIterator[Record],
+    *,
+    batch_write_func: Callable | None,
+    single_write_func: Callable,
+    skip_on_duplicate: bool,
+    config: StreamConfig,
+) -> StreamResult:
+    """Async counterpart of :func:`run_stream_write`."""
+    result = StreamResult()
+    start_time = time.time()
+    quitting = False
+    batch_index = 0
+
+    batch: list[Record] = []
+    async for record in records:
+        batch.append(record)
+        if len(batch) >= config.batch_size:
+            if not await async_process_batch_with_fallback(
+                batch,
+                batch_write_func,
+                single_write_func,
+                result,
+                config,
+                batch_index=batch_index,
+                skip_on_duplicate=skip_on_duplicate,
+            ):
+                quitting = True
+                break
+            batch = []
+            batch_index += 1
+
+    if batch and not quitting:
+        await async_process_batch_with_fallback(
+            batch,
+            batch_write_func,
+            single_write_func,
+            result,
+            config,
+            batch_index=batch_index,
+            skip_on_duplicate=skip_on_duplicate,
+        )
+
+    result.duration = time.time() - start_time
+    return result
 
 
 class StreamProcessor:
@@ -373,52 +566,26 @@ class StreamingMixin:
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Default implementation of stream_write using create_batch method.
-        
-        This provides batch writing functionality with graceful fallback
-        to individual record creation when batches fail.
+        """Default implementation of stream_write.
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch``
+        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
+        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-        batch_index = 0
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                continue_processing = process_batch_with_fallback(
-                    batch,
-                    self.create_batch,
-                    self.create,
-                    result,
-                    config,
-                    batch_index=batch_index
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-                batch_index += 1
-
-        # Write remaining batch
-        if batch and not quitting:
-            process_batch_with_fallback(
-                batch,
-                self.create_batch,
-                self.create,
-                result,
-                config,
-                batch_index=batch_index
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
 
 class AsyncStreamingMixin:
@@ -455,49 +622,23 @@ class AsyncStreamingMixin:
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Default implementation of async stream_write using create_batch method.
-        
-        This provides batch writing functionality with graceful fallback
-        to individual record creation when batches fail.
+        """Default implementation of async stream_write.
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch``
+        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
+        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-        batch_index = 0
-
-        batch = []
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                continue_processing = await async_process_batch_with_fallback(
-                    batch,
-                    self.create_batch,
-                    self.create,
-                    result,
-                    config,
-                    batch_index=batch_index
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-                batch_index += 1
-
-        # Write remaining batch
-        if batch and not quitting:
-            await async_process_batch_with_fallback(
-                batch,
-                self.create_batch,
-                self.create,
-                result,
-                config,
-                batch_index=batch_index
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )

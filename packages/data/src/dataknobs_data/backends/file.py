@@ -10,18 +10,29 @@ import os
 import platform
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
+from ..database import (
+    AsyncDatabase,
+    SyncDatabase,
+    enforce_content_version,
+    prepare_atomic_batch,
+)
 from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..records import Record
-from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..streaming import (
+    AsyncStreamingMixin,
+    StreamConfig,
+    StreamingMixin,
+    StreamResult,
+    resolve_conflict_write,
+    run_stream_write,
+)
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -648,14 +659,24 @@ class AsyncFileDatabase(  # type: ignore[misc]
             return count
 
     async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, and the record's
+        own id is honored (this path previously minted a fresh id and ignored
+        ``record.id``). The pre-scan runs before ``_save_data``, so the batch is
+        all-or-nothing and the streaming INSERT fast-path fails closed.
+        """
         async with self._lock:
             data = await self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
             ids = []
-            for record in records:
-                record_id = self._generate_id()
-                data[record_id] = record.copy(deep=True)
-                ids.append(record_id)
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
             await self._save_data(data)
             return ids
 
@@ -867,15 +888,6 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         _save_file_data(self.handler, self.filepath, self._file_lock, data)
 
-    def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
-        """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
-        # Use centralized method to prepare record
-        record_copy, storage_id = self._prepare_record_for_storage(record)
-
-        # Store the record
-        data[storage_id] = record_copy
-        return storage_id
-
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
         with self._lock:
@@ -1019,13 +1031,24 @@ class SyncFileDatabase(  # type: ignore[misc]
             return count
 
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written (this path
+        previously overwrote on collision). The pre-scan runs before
+        ``_save_data``, so the batch is all-or-nothing and the streaming INSERT
+        fast-path fails closed.
+        """
         with self._lock:
             data = self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
             ids = []
-            for record in records:
-                record_id = self._do_set_data(data, record)
-                ids.append(record_id)
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
             self._save_data(data)
             return ids
 
@@ -1085,59 +1108,26 @@ class SyncFileDatabase(  # type: ignore[misc]
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into file."""
-        # Use the default implementation
+        """Stream records into file.
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch``
+        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
+        per-record via ``upsert``/``create``.
+        """
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-
-        def do_write_batch(batch: list) -> bool:
-            """Write batch with individual retries, return False to quit"""
-            retval = True
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception:
-                # Try creating each item again and catch specific error items
-                for rec in batch:
-                    result.total_processed += 1
-                    try:
-                        self.create(rec)
-                        result.successful += 1
-                    except Exception as e:
-                        # This item failed again
-                        result.failed += 1
-                        result.add_error(None, e)
-                        if config.on_error:
-                            if not config.on_error(e, rec):
-                                retval = False
-                                break
-                        else:
-                            # Without "on_error", quit streaming
-                            retval = False
-                            break
-            return retval
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch
-                quitting = not do_write_batch(batch)
-                if quitting:
-                    # Got signal to quit
-                    break
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            do_write_batch(batch)
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def vector_search(
         self,

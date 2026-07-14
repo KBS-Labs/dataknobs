@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -20,7 +19,12 @@ from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
 from ..query import Operator, Query
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
+from ..streaming import (
+    StreamConfig,
+    StreamResult,
+    async_run_stream_write,
+    resolve_conflict_write,
+)
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -652,53 +656,32 @@ class AsyncS3Database(  # type: ignore[misc]
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into S3."""
+        """Stream records into S3.
+
+        Honors ``config.on_conflict``: INSERT uses the batch fast-path
+        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
+        write per-record via ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
 
-        batch = []
-        async for record in records:
-            batch.append(record)
+        async def insert_batch(b):
+            await self._write_batch(b)
+            return [r.id for r in b]
 
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                async def batch_func(b):
-                    await self._write_batch(b)
-                    return [r.id for r in b]
-
-                continue_processing = await async_process_batch_with_fallback(
-                    batch,
-                    batch_func,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            async def batch_func(b):
-                await self._write_batch(b)
-                return [r.id for r in b]
-
-            await async_process_batch_with_fallback(
-                batch,
-                batch_func,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=insert_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     async def _write_batch(self, records: list[Record]) -> None:
         """Write a batch of records to S3."""

@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
+from ..database import (
+    AsyncDatabase,
+    SyncDatabase,
+    prepare_atomic_batch,
+    version_conflict_error,
+)
 from ..exceptions import DuplicateRecordError
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
@@ -239,14 +244,21 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             return count
 
     async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
-        async with self._lock:
-            ids = []
-            for record in records:
-                # Use centralized method to prepare record
-                record_copy, storage_id = self._prepare_record_for_storage(record)
+        """Create multiple records, failing closed on any colliding id.
 
-                # Store the record
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing row or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, so the batch is
+        all-or-nothing. This lets the streaming INSERT fast-path fail closed and
+        retry cleanly per record (see ``run_stream_write``), matching the
+        transactional SQL backends rather than silently overwriting.
+        """
+        async with self._lock:
+            prepared = prepare_atomic_batch(
+                records, self._storage, self._prepare_record_for_storage
+            )
+            ids = []
+            for record_copy, storage_id in prepared:
                 self._storage[storage_id] = record_copy
                 self._versions[storage_id] = self._next_version()
                 ids.append(storage_id)
@@ -530,15 +542,29 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             return count
 
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing row or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, so the batch is
+        all-or-nothing. This lets the streaming INSERT fast-path fail closed and
+        retry cleanly per record (see ``run_stream_write``), matching the
+        transactional SQL backends rather than silently overwriting.
+        """
         with self._lock:
+            # This backend keys on ``record.id`` (falling back to a generated
+            # id) and stores a deep copy without embedding the generated id in
+            # the stored record — preserved here via the prepare callable.
+            prepared = prepare_atomic_batch(
+                records,
+                self._storage,
+                lambda r: (r.copy(deep=True), r.id if r.id else self._generate_id()),
+            )
             ids = []
-            for record in records:
-                # Use record's ID if it has one, otherwise generate a new one
-                id = record.id if record.id else self._generate_id()
-                self._storage[id] = record.copy(deep=True)
-                self._versions[id] = self._next_version()
-                ids.append(id)
+            for record_copy, storage_id in prepared:
+                self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
             return ids
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:

@@ -28,6 +28,7 @@ from .operations import (
 )
 from .progress import MigrationProgress
 from .transformer import AddRule, ExcludeRule, MapRule, Transformer, TransformRule
+from ..streaming import ConflictPolicy
 
 __all__ = [
     # Operations
@@ -49,6 +50,7 @@ __all__ = [
     "MigrationProgress",
     # Migrator
     "Migrator",
+    "ConflictPolicy",
     # Factories
     "migration_factory",
     "transformer_factory",

@@ -12,7 +12,12 @@ from dataknobs_common.testing import assert_structured_config_roundtrip
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
-from dataknobs_data.streaming import StreamConfig, StreamProcessor, StreamResult
+from dataknobs_data.streaming import (
+    ConflictPolicy,
+    StreamConfig,
+    StreamProcessor,
+    StreamResult,
+)
 
 
 class TestStreamConfig:
@@ -82,6 +87,23 @@ class TestStreamConfig:
             return True
 
         assert_structured_config_roundtrip(StreamConfig(on_error=on_error))
+
+    def test_on_conflict_from_dict_string(self):
+        """on_conflict coerces from a config-dict string to the enum member.
+
+        This is the primary config-file path — the reason the coercion in
+        ``__post_init__`` exists — and is distinct from direct construction.
+        """
+        assert (
+            StreamConfig.from_dict({"on_conflict": "upsert"}).on_conflict
+            is ConflictPolicy.UPSERT
+        )
+
+    def test_on_conflict_roundtrip(self):
+        """on_conflict (an enum member) survives a to_dict -> from_dict round-trip."""
+        assert_structured_config_roundtrip(
+            StreamConfig(on_conflict=ConflictPolicy.SKIP)
+        )
 
     def test_validation_preserved_from_dict(self):
         """__post_init__ validation fires on the from_dict path too."""
