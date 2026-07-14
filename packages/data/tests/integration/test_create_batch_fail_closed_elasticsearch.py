@@ -8,10 +8,10 @@ honored. The Elasticsearch bulk API is per-item (non-atomic), so — exactly lik
 conflict is raised; these tests therefore assert the fail-closed signal and id
 honoring, not whole-batch atomicity.
 
-The streaming INSERT path routes through per-record ``create()`` (the non-atomic
-bulk would double-write under the per-record fallback), so a colliding source id
-in a re-run into a populated target is recorded as a failure with the source id
-preserved.
+The streaming INSERT path — and the batched ``Migrator.migrate()`` INSERT path —
+both route through per-record ``create()`` (the non-atomic bulk would double-write
+under the per-record fallback), so a colliding source id in a re-run into a
+populated target is recorded as a failure with the source id preserved.
 
 Enable with ``TEST_ELASTICSEARCH=true`` and a running Elasticsearch; the module
 skips otherwise.
@@ -75,6 +75,37 @@ def test_sync_streaming_insert_fails_closed(elasticsearch_test_index) -> None:
         assert db.read("1").get_value("v") == "src"
     finally:
         db.close()
+
+
+def test_sync_migrate_insert_fails_closed_into_populated_index(
+    elasticsearch_test_index,
+) -> None:
+    # Regression: Migrator.migrate() INSERT into a populated ES index must route
+    # per-record, exactly as ES's own stream_write does. ES create_batch is
+    # non-atomic on raise (its per-item bulk indexes the non-colliding rows
+    # before the 409), so riding the bulk fast-path here would let the
+    # per-record fallback re-write those already-indexed rows and mis-count them
+    # as duplicate failures. ES inherits _insert_batch_atomic()=False, so the
+    # migrator skips the bulk verb and attributes each id correctly.
+    from dataknobs_data.backends.memory import SyncMemoryDatabase
+    from dataknobs_data.migration import Migrator
+
+    src = SyncMemoryDatabase()
+    for i in (1, 2, 3):
+        src.create(Record({"v": "src"}, id=str(i)))
+
+    tgt = SyncElasticsearchDatabase(elasticsearch_test_index)
+    tgt.connect()
+    try:
+        tgt.create(Record({"v": "old"}, id="2"))  # collides with a source id
+        progress = Migrator().migrate(src, tgt, on_error=lambda e, r: True)
+        assert progress.succeeded == 2  # ids 1 and 3 written
+        assert progress.failed == 1     # id 2 collided
+        assert tgt.read("2").get_value("v") == "old"  # collider untouched
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+    finally:
+        tgt.close()
 
 
 async def test_async_create_batch_fails_closed(elasticsearch_test_index) -> None:

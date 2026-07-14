@@ -43,7 +43,11 @@ class StreamConfig(StructuredConfig):
     batch_size: int = 1000
     prefetch: int = 2  # Number of batches to prefetch
     timeout: float | None = None
-    on_error: Callable[[Exception, Record], bool] | None = None  # Return True to continue
+    # Return True to continue. ``record`` is the failing record, or ``None`` for
+    # an aggregate batch shortfall (a bulk verb that confirmed fewer ids than it
+    # was given — see ``StreamResultAccountant.on_batch_success``), where no
+    # single record maps to the error.
+    on_error: Callable[[Exception, Record | None], bool] | None = None
     on_conflict: ConflictPolicy = ConflictPolicy.INSERT
 
     def __post_init__(self):
@@ -116,6 +120,23 @@ class StreamResult:
             f"success_rate={self.success_rate:.1f}%, "
             f"duration={self.duration:.2f}s)"
         )
+
+
+def build_shortfall_error(written: int, total: int) -> OperationError:
+    """Build the aggregate error for a bulk write that confirmed fewer ids.
+
+    A batch verb that returns fewer ids than it was handed partially succeeded;
+    the individual failing records cannot be recovered from the confirmed-id
+    count alone, so both :class:`BatchWriteAccountant` implementations route a
+    single aggregate :class:`OperationError` describing the shortfall through
+    their stop/continue contract. Shared so the message and the shortfall
+    arithmetic cannot drift between the streaming and migrator sinks.
+    """
+    shortfall = total - written
+    return OperationError(
+        f"batch write confirmed {written} of {total} records; "
+        f"{shortfall} failed to write"
+    )
 
 
 class BatchWriteAccountant(Protocol):
@@ -198,10 +219,7 @@ class StreamResultAccountant:
         # an aggregate error, on the same stop/continue contract as a per-record
         # failure — keeping ``total_processed == successful + failed + skipped``.
         self._result.failed += shortfall
-        error = OperationError(
-            f"batch write confirmed {written} of {len(batch)} records; "
-            f"{shortfall} failed to write"
-        )
+        error = build_shortfall_error(written, len(batch))
         self._result.add_error(None, error)
         if self._config.on_error and self._config.on_error(error, None):
             return True

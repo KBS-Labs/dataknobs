@@ -1471,6 +1471,32 @@ class SyncDatabase(CapabilityMixin, ABC):
         # Return the created ID (might be different from what we provided).
         return created_id or id
 
+    def _insert_batch_atomic(self) -> bool:
+        """Whether :meth:`create_batch` leaves the target unchanged when it raises.
+
+        The batch-first-with-per-record-fallback writer
+        (:func:`dataknobs_data.streaming.drive_batch_with_fallback`, used by the
+        streaming write path and the batched migrator) re-attempts every record
+        individually after a batch-verb failure. That fallback is only correct
+        when the batch verb is **atomic on raise** — i.e. a collision leaves
+        *nothing* written. A non-atomic bulk create (Elasticsearch's per-item
+        bulk API, or the ABC's per-record ``create_batch`` loop that S3 inherits)
+        durably writes the non-colliding records before raising; re-attempting
+        them then re-writes and mis-counts those already-written rows as spurious
+        duplicate failures.
+
+        The default is ``False`` because the ABC :meth:`create_batch` is a
+        per-record loop with exactly that non-atomic behavior: a backend is
+        assumed unsafe for the INSERT batch fast-path until it proves otherwise.
+        A backend whose ``create_batch`` is atomic on raise (a transactional
+        multi-value INSERT, or a pre-scanned all-or-nothing apply) overrides this
+        to return ``True`` so the migrator uses the bulk fast-path. Consulted by
+        the migrator's batched INSERT path; a backend routing INSERT per-record
+        in its own ``stream_write`` (S3, Elasticsearch) inherits ``False`` here,
+        so both paths agree.
+        """
+        return False
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""
         ids = []

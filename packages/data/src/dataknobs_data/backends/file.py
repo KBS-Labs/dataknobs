@@ -1066,6 +1066,12 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data({})
             return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch pre-scans for collisions (prepare_atomic_batch) before the
+        # single _save_data, so a colliding id raises before anything is written
+        # and the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 

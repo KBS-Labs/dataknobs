@@ -1211,6 +1211,13 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         result = self.conn.execute(sql_query, params).fetchone()
         return result[0] if result else 0
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch runs a multi-value INSERT inside an explicit transaction
+        # (begin/commit, rollback on error): a colliding id rolls the batch back
+        # so nothing is written on raise and the migrator's INSERT bulk
+        # fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently.
 

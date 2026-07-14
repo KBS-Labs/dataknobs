@@ -575,6 +575,12 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             self._versions.clear()
             return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch applies a pre-scanned all-or-nothing batch
+        # (prepare_atomic_batch): a collision raises before any record is
+        # written, so the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 

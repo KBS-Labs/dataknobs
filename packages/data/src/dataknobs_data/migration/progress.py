@@ -143,6 +143,47 @@ class MigrationProgress:
         self.errors.append(error_info)
         return self
 
+    def record_batch_failure(
+        self,
+        count: int,
+        error: str,
+        exception: Exception | None = None,
+    ) -> MigrationProgress:
+        """Record ``count`` failures sharing one aggregate error.
+
+        Used when a bulk write confirms fewer ids than it was given: the
+        individual failing records are not recoverable from the confirmed-id
+        count, so ``count`` failures are tallied (keeping
+        ``processed == succeeded + failed + skipped``) but only a single
+        aggregate error entry is appended, rather than ``count`` identical
+        no-id entries.
+
+        Args:
+            count: Number of records that failed to write.
+            error: Aggregate error message.
+            exception: Optional exception behind the failures.
+
+        Returns:
+            Self for chaining
+        """
+        if count <= 0:
+            return self
+        self.processed += count
+        self.failed += count
+
+        error_info: dict[str, Any] = {
+            "error": error,
+            "record_id": None,
+            "count": count,
+            "timestamp": time.time(),
+        }
+        if exception:
+            error_info["exception"] = str(exception)
+            error_info["exception_type"] = type(exception).__name__
+
+        self.errors.append(error_info)
+        return self
+
     def record_skip(self, reason: str, record_id: str | None = None) -> MigrationProgress:
         """Record a skipped record.
         

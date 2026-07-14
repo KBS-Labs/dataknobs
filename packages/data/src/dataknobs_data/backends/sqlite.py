@@ -415,6 +415,12 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch runs a multi-value INSERT inside a transaction: a
+        # colliding id rolls the whole statement back, so nothing is written on
+        # raise and the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
 

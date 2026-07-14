@@ -6,11 +6,11 @@ from __future__ import annotations
 import concurrent.futures
 from typing import TYPE_CHECKING
 
-from dataknobs_data.exceptions import OperationError
 from dataknobs_data.query import Query
 from dataknobs_data.streaming import (
     ConflictPolicy,
     StreamConfig,
+    build_shortfall_error,
     drive_batch_with_fallback,
     resolve_conflict_write,
 )
@@ -40,7 +40,7 @@ class MigrationProgressAccountant:
     def __init__(
         self,
         progress: MigrationProgress,
-        on_error: Callable[[Exception, Record], bool] | None = None,
+        on_error: Callable[[Exception, Record | None], bool] | None = None,
     ) -> None:
         self._progress = progress
         self._on_error = on_error
@@ -56,15 +56,13 @@ class MigrationProgressAccountant:
         if shortfall <= 0:
             return True
         # A bulk backend confirmed fewer ids than the batch; the individual
-        # failing records are not available here, so record the shortfall and
-        # offer one aggregate error to ``on_error`` on the same stop contract as
-        # a per-record failure.
-        error = OperationError(
-            f"batch write confirmed {len(written_ids)} of {len(batch)} records; "
-            f"{shortfall} failed to write"
-        )
-        for _ in range(shortfall):
-            self._progress.record_failure(str(error), None, error)
+        # failing records are not available here, so record the shortfall as one
+        # aggregate failure (count-correct, single error entry) and offer the
+        # same aggregate error to ``on_error`` on the same stop contract as a
+        # per-record failure. ``on_error`` receives ``None`` for the record here
+        # because no single record maps to the aggregate shortfall.
+        error = build_shortfall_error(len(written_ids), len(batch))
+        self._progress.record_batch_failure(shortfall, str(error), error)
         if self._on_error and self._on_error(error, None):
             return True
         raise error
@@ -100,7 +98,7 @@ class Migrator:
         query: Query | None = None,
         batch_size: int = 1000,
         on_progress: Callable[[MigrationProgress], None] | None = None,
-        on_error: Callable[[Exception, Record], bool] | None = None,
+        on_error: Callable[[Exception, Record | None], bool] | None = None,
         on_conflict: ConflictPolicy | str = ConflictPolicy.INSERT,
     ) -> MigrationProgress:
         """Migrate data between databases with optional transformation.
@@ -112,7 +110,11 @@ class Migrator:
             query: Optional query to filter source records
             batch_size: Number of records to process per batch
             on_progress: Optional callback for progress updates
-            on_error: Optional error handler (return True to continue)
+            on_error: Optional error handler ``(exc, record) -> bool`` (return
+                True to continue, False/omit to abort). ``record`` is the failing
+                record, or ``None`` for an aggregate batch shortfall (a bulk verb
+                that confirmed fewer ids than it was given, where no single
+                record maps to the error).
             on_conflict: How to resolve an id that already exists in the target
                 (``"insert"`` fails closed on a collision — the default;
                 ``"upsert"`` overwrites the target row; ``"skip"`` leaves the
@@ -145,27 +147,30 @@ class Migrator:
                         record = transformed
                     elif isinstance(transform, Migration):
                         record = transform.apply(record)
-
-                batch.append(record)
-
-                # Process batch when full
-                if len(batch) >= batch_size:
-                    self._write_batch(target, batch, progress, on_error, on_conflict)
-                    batch = []
-
-                    if on_progress:
-                        on_progress(progress)
-
             except Exception as e:
-                progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
-                if on_error:
-                    if not on_error(e, record):
-                        # Handler says stop - re-raise to stop processing immediately
-                        raise
-                    # Handler says continue - keep going
-                else:
-                    # No handler - stop processing immediately
-                    raise
+                # Transform-stage failure only. Write failures are accounted
+                # inside _write_batch (below, outside this block) via the
+                # accountant, so keeping the flush out of this try prevents a
+                # write failure from being recorded — and offered to on_error —
+                # a second time here.
+                record_id = original_record.id if hasattr(original_record, "id") else None
+                progress.record_failure(str(e), record_id, e)
+                if on_error and on_error(e, original_record):
+                    continue  # Handler says continue - skip this record
+                raise  # Handler says stop, or no handler - abort immediately
+
+            batch.append(record)
+
+            # Process batch when full. _write_batch accounts every outcome
+            # through its accountant and re-raises to abort on an unhandled
+            # failure; that exception propagates directly (not through the
+            # transform handler above), so a write failure is neither recorded
+            # nor offered to on_error twice.
+            if len(batch) >= batch_size:
+                self._write_batch(target, batch, progress, on_error, on_conflict)
+                batch = []
+                if on_progress:
+                    on_progress(progress)
 
         # Process final batch
         if batch:
@@ -416,7 +421,7 @@ class Migrator:
         target: SyncDatabase,
         batch: list[Record],
         progress: MigrationProgress,
-        on_error: Callable[[Exception, Record], bool] | None = None,
+        on_error: Callable[[Exception, Record | None], bool] | None = None,
         on_conflict: ConflictPolicy = ConflictPolicy.INSERT,
     ) -> None:
         """Write a batch of records to target database.
@@ -431,6 +436,16 @@ class Migrator:
         batch-first-fallback loop the streaming write path uses
         (:func:`dataknobs_data.streaming.resolve_conflict_write` /
         :func:`dataknobs_data.streaming.drive_batch_with_fallback`).
+
+        The INSERT bulk fast-path is used only when the target's ``create_batch``
+        is atomic on raise (:meth:`SyncDatabase._insert_batch_atomic`). On a
+        backend whose bulk create is non-atomic (Elasticsearch's per-item bulk
+        API, or the ABC per-record ``create_batch`` loop S3 inherits), INSERT
+        routes per-record via ``create`` — because the fallback would otherwise
+        re-write the records the failed bulk call already durably wrote and count
+        them as spurious duplicate failures. This mirrors what those backends'
+        own ``stream_write`` already does (``insert_batch_func=None``), so the
+        batched migrator and the streaming writer agree per backend.
 
         Args:
             target: Target database
@@ -447,9 +462,15 @@ class Migrator:
             if not record.id:
                 record.generate_id()
 
+        # Only offer the native ``create_batch`` fast-path for INSERT when it is
+        # atomic on raise; otherwise ``None`` forces per-record ``create`` so the
+        # fallback never re-writes a non-atomic bulk verb's partial success.
+        insert_batch_func = (
+            target.create_batch if target._insert_batch_atomic() else None
+        )
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             on_conflict,
-            insert_batch_func=target.create_batch,
+            insert_batch_func=insert_batch_func,
             single_create_func=target.create,
             upsert_func=target.upsert,
             upsert_batch_func=target.upsert_batch,
