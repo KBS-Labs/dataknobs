@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T17:22:33Z",
+  "timestamp": "2026-07-14T18:01:25Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/elasticsearch-test-index-leak-shard-exhaustion",
-  "git_commit": "4b557eb6d0fe0bf03793c3eb8306507a6b175fbe",
+  "git_branch": "sbk/fsm-transaction-manager-wire-or-retire",
+  "git_commit": "e7959d750cc5e81204448a3be55ac9733df3863c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
