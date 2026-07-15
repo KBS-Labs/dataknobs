@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.3.12 - 2026-07-15
+
 ### Security
 
 - Bumped minimum `nltk` requirement from `>=3.9.4` to `>=3.10.0` to exclude

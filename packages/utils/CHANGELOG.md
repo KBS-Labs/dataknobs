@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.2.16 - 2026-07-15
+
 ### Added
 
 - `SimplifiedElasticsearchIndex.index()` gains an optional `op_type` parameter.

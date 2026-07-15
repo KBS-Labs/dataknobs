@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-fsm"
-version = "0.2.5"
+version = "0.3.0"
 description = "Finite State Machine framework with data modes, resource management, and streaming support"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,11 +19,11 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0.0",
-    "dataknobs-common>=1.5.2",
-    "dataknobs-data>=0.5.5",
-    "dataknobs-structures>=1.0.12",
-    "dataknobs-utils>=1.2.15",
-    "dataknobs-config>=0.4.1",
+    "dataknobs-common>=1.6.0",
+    "dataknobs-data>=0.6.0",
+    "dataknobs-structures>=1.0.13",
+    "dataknobs-utils>=1.2.16",
+    "dataknobs-config>=0.4.2",
     "aiofiles>=23.0.0",
     "click>=8.3.3",  # PYSEC-2026-2132 / CVE-2026-7246 (CVSS 7.2, command injection via click.edit()) fixed in 8.3.3
     "rich>=13.0.0",

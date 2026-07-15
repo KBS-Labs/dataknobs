@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.6 - 2026-07-15
+
 ### Security
 
 - Bumped minimum `transformers` requirement from `>=5.3.0` to `>=5.5.0` to

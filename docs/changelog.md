@@ -5,6 +5,91 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-15
+
+### dataknobs-common [1.6.0]
+
+#### Added
+- unified `Capability.CONDITIONAL_WRITE` compare-and-set advertisement (shared by data + knowledge backends)
+- `sweep_stale_test_indices` + `is_elasticsearch_available` / `requires_elasticsearch` test helpers
+
+#### Changed
+- ES pytest plugin sweeps stale `test_*` indices at session start (reclaims shard budget)
+- service availability probes resolve host Docker-aware
+
+#### Removed
+- **Breaking:** removed `Capability.TRANSACTIONAL_METADATA` (superseded by `Capability.CONDITIONAL_WRITE`)
+
+### dataknobs-config [0.4.2]
+
+#### Changed
+- maintenance release; refreshed cross-package dependency constraints
+
+### dataknobs-data [0.6.0]
+
+#### Added
+- opt-in optimistic concurrency: `get_version()` + `expected_version` compare-and-set on update/upsert/delete across all backends
+- atomic `create()` / `create_batch()` raising `DuplicateRecordError` on a colliding id
+- `upsert_batch()` write verb; `Operator.STARTS_WITH` prefix predicate; uniform `Filter("id", …)` filterability
+- `allocate` / `allocate_sync` monotonic-key allocation; `Migrator` `on_conflict` policy (insert/upsert/skip)
+
+#### Changed
+- **Breaking:** `create()` fails closed on a duplicate id instead of silently overwriting
+- **Breaking:** Elasticsearch query semantics unified — SQL-wildcard/case-insensitive `LIKE`, full-value `REGEX`, unsupported operators raise instead of matching all
+- string operators match only string values (JSON non-string fields no longer coerced)
+- multi-kind buffered transactions commit all-or-nothing on transactional backends; migrator rides native bulk verbs
+
+#### Fixed
+- async ES honors the full operator set (REGEX/EXISTS/NOT_LIKE/negations) + `ComplexQuery`
+- `Filter("id", …)` resolves to the storage key on async S3 / async ES; honest partial-batch failure accounting
+
+### dataknobs-fsm [0.3.0]
+
+#### Removed
+- **Breaking:** retired the strategy-based transaction coordinator (`core.transactions`, `TransactionConfig`, `configure_transactions`, `on_transaction_*` hooks) — it drove no real DB atomicity
+
+#### Changed
+- `DatabaseResource.commit_batch` rides `upsert_batch`; multi-kind `DatabaseTransaction` commits atomically; `BatchCommit(atomicity="require")` honored on the idempotent-upsert path
+
+#### Security
+- bump `click` floor to `>=8.3.3` (CVE-2026-7246)
+
+### dataknobs-llm [0.6.6]
+
+#### Security
+- bump `transformers` floor to `>=5.5.0` (CVE-2026-5241); bump `torch` floor to `>=2.13.0` to sweep transitive `setuptools` (CVE-2026-59890)
+
+### dataknobs-structures [1.0.13]
+
+#### Changed
+- maintenance release; refreshed cross-package dependency constraints
+
+### dataknobs-utils [1.2.16]
+
+#### Added
+- `SimplifiedElasticsearchIndex` atomic create (`op_type="create"` + `ElasticsearchConflictError`) and optimistic-concurrency `if_seq_no` / `if_primary_term` on update/delete
+
+#### Fixed
+- percent-encode the document id in ES REST paths (slash/special-char ids round-trip)
+
+#### Security
+- bump `nltk` floor to `>=3.10.0` (CVE-2026-54293)
+
+### dataknobs-xization [1.3.12]
+
+#### Security
+- bump `nltk` floor to `>=3.10.0` (CVE-2026-54293)
+
+### dataknobs-bots [0.9.0]
+
+#### Changed
+- **Breaking:** knowledge backends advertise `Capability.CONDITIONAL_WRITE` (old `TRANSACTIONAL_METADATA` identifier no longer resolves)
+
+### dataknobs [0.1.9]
+
+#### Changed
+- maintenance version bump
+
 ## Release - 2026-07-07
 
 ### dataknobs-common [1.5.2]
