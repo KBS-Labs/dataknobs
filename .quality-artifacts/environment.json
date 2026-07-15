@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T22:10:16Z",
+  "timestamp": "2026-07-15T02:13:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/migrator-batched-write-verb-adoption",
-  "git_commit": "c2c3c60adb11f27aed99529d251e0d5302b334ea",
+  "git_branch": "sbk/data-allocate-with-retry",
+  "git_commit": "97a112eee5c859f616a84d30e6b0c475b91e2f0d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
