@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `transformers` requirement from `>=5.3.0` to `>=5.5.0` to
+  exclude versions affected by GHSA-fgcw-684q-jj6r / CVE-2026-5241 (CVSS 8.0,
+  arbitrary code execution during LightGlue model initialization), fixed in
+  5.5.0. Flagged at the floor resolve by the `dependency-update` workflow.
+- Bumped minimum `torch` requirement from `>=2.12.0` to `>=2.13.0` to sweep the
+  transitive `setuptools` floor past PYSEC-2026-3447 / CVE-2026-59890 (CVSS 6.1,
+  `MANIFEST.in` glob path traversal in `setuptools.FileList`), fixed in
+  setuptools 83.0.0. torch 2.12.0 pins `setuptools<82` (floor-resolving to the
+  vulnerable 81.0.0); torch>=2.13.0 requires `setuptools>=77.0.3` with no upper
+  cap, letting the floor resolve reach the fixed 83.0.0. The still-unfixed
+  GHSA-rrmf-rvhw-rf47 (`torch.jit.script`, not called from this codebase)
+  remains accepted; the inline floor comment in `pyproject.toml` records the
+  rationale.
+
 ## v0.6.5 - 2026-07-07
 
 ### Added
