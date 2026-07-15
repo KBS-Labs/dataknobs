@@ -30,7 +30,10 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
 Completeness: every top-level ``*.md`` in both trees MUST be classified. An
 unclassified file (or a manifest entry with no file on disk) fails the check
 -- that is what makes silent drift impossible to introduce: a new doc forces
-a classification decision at PR time.
+a classification decision at PR time. A paired entry may point at a package
+*subdirectory* source (e.g. a transclusion of ``guides/events.md``); such a
+source is not a top-level package doc, so it is exempt from the top-level
+completeness set (its existence is still enforced by the per-class check).
 
 Modes:
 
@@ -343,17 +346,27 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
             )
         store[name] = bucket
 
+    def _add_pkg(name: str, bucket: str) -> None:
+        # A paired entry may source from a package subdirectory (e.g. a
+        # transclusion of ``guides/events.md``). Such a source is not a
+        # top-level package doc, so it is not part of the top-level
+        # completeness set -- its existence is enforced by the per-class check
+        # instead. Only top-level sources participate here.
+        if "/" in name:
+            return
+        _add(pkg_classified, name, bucket, "package")
+
     for pair in entry.get("symlink", []):
-        _add(pkg_classified, pair["package"], "symlink", "package")
+        _add_pkg(pair["package"], "symlink")
         _add(site_classified, pair["site"], "symlink", "site")
     for pair in entry.get("mirror", []):
-        _add(pkg_classified, pair["package"], "mirror", "package")
+        _add_pkg(pair["package"], "mirror")
         _add(site_classified, pair["site"], "mirror", "site")
     for pair in entry.get("transclude", []):
-        _add(pkg_classified, pair["package"], "transclude", "package")
+        _add_pkg(pair["package"], "transclude")
         _add(site_classified, pair["site"], "transclude", "site")
     for pair in entry.get("diverge", []):
-        _add(pkg_classified, pair["package"], "diverge", "package")
+        _add_pkg(pair["package"], "diverge")
         _add(site_classified, pair["site"], "diverge", "site")
     for name in entry.get("package_only", []):
         _add(pkg_classified, name, "package_only", "package")

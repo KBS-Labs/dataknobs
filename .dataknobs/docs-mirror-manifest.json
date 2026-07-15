@@ -1,35 +1,153 @@
 {
-  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. See docs/packages/<pkg> and the 179 doc-mirror-drift brief for the model.",
+  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. A paired entry may source from a package subdirectory (e.g. a transclusion of guides/events.md); such a source is not a top-level package doc and is exempt from the top-level completeness set. See the guard's module docstring for the full model.",
   "_schema": {
     "symlink": "Site page is a symlink to the package source; drift is structurally impossible. The guard verifies the site path is a symlink resolving to the package source. Used when the source has no intra-doc links that need site-form rewriting. Each entry: {package, site}.",
     "transclude": "Site page is a pymdownx `--8<--` include of the package source; drift is structurally impossible. The guard only verifies the include still points at the source. Each entry: {package, site}.",
-    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence — make the surrounding line unique or drop the exception.",
+    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence \u2014 make the surrounding line unique or drop the exception.",
     "diverge": "Intentional content divergence (structural landing page, faithful condensation, independent elaboration). Recorded, not content-checked; both files must exist. Each entry: {package, site, reason}.",
     "package_only": "Package doc with no site mirror. Listed by package filename.",
     "site_only": "Site-native page with no package source. Listed by site filename."
   },
   "packages": {
+    "common": {
+      "package_dir": "packages/common/docs",
+      "site_dir": "docs/packages/common",
+      "transclude": [
+        {
+          "package": "AWS_SESSION.md",
+          "site": "aws-session.md"
+        },
+        {
+          "package": "guides/events.md",
+          "site": "events.md"
+        },
+        {
+          "package": "guides/locks.md",
+          "site": "locks.md"
+        },
+        {
+          "package": "guides/plugin-registry.md",
+          "site": "plugin-registry.md"
+        },
+        {
+          "package": "guides/postgres-config.md",
+          "site": "postgres-config.md"
+        },
+        {
+          "package": "guides/ratelimit.md",
+          "site": "ratelimit.md"
+        },
+        {
+          "package": "guides/serialization-usage-guide.md",
+          "site": "serialization.md"
+        },
+        {
+          "package": "guides/structured-config.md",
+          "site": "structured-config.md"
+        },
+        {
+          "package": "guides/sync-bridge.md",
+          "site": "sync-bridge.md"
+        },
+        {
+          "package": "TESTING.md",
+          "site": "testing.md"
+        }
+      ],
+      "site_only": [
+        "api.md",
+        "config-loading.md",
+        "expressions.md",
+        "index.md"
+      ]
+    },
+    "config": {
+      "package_dir": "packages/config/docs",
+      "site_dir": "docs/packages/config",
+      "mirror": [
+        {
+          "package": "template_vars.md",
+          "site": "template_vars.md"
+        }
+      ],
+      "transclude": [
+        {
+          "package": "configurable-base.md",
+          "site": "configurable-base.md"
+        }
+      ],
+      "package_only": [
+        "DESIGN_PLAN.md",
+        "PROGRESS_CHECKLIST.md",
+        "environment-variable-substitution.md"
+      ],
+      "site_only": [
+        "api.md",
+        "configuration-system.md",
+        "environment-aware.md",
+        "environment-variables.md",
+        "factory-registration.md",
+        "index.md",
+        "inheritance.md"
+      ]
+    },
     "data": {
       "package_dir": "packages/data/docs",
       "site_dir": "docs/packages/data",
       "symlink": [
-        {"package": "DEDUP.md", "site": "dedup.md"},
-        {"package": "KEYED_RECORD_STORE.md", "site": "keyed-record-store.md"},
-        {"package": "BATCH_PROCESSING_GUIDE.md", "site": "batch-processing-guide.md"}
+        {
+          "package": "DEDUP.md",
+          "site": "dedup.md"
+        },
+        {
+          "package": "KEYED_RECORD_STORE.md",
+          "site": "keyed-record-store.md"
+        },
+        {
+          "package": "BATCH_PROCESSING_GUIDE.md",
+          "site": "batch-processing-guide.md"
+        }
       ],
       "mirror": [
-        {"package": "API_REFERENCE.md", "site": "api-reference.md"},
-        {"package": "TRANSACTIONS.md", "site": "transactions.md"}
+        {
+          "package": "API_REFERENCE.md",
+          "site": "api-reference.md"
+        },
+        {
+          "package": "TRANSACTIONS.md",
+          "site": "transactions.md"
+        }
       ],
       "transclude": [
-        {"package": "GROUNDED_SOURCES.md", "site": "grounded-sources.md"},
-        {"package": "VECTOR_FILTER_SEMANTICS.md", "site": "vector-filter-semantics.md"},
-        {"package": "vector-timestamps.md", "site": "vector-timestamps.md"}
+        {
+          "package": "GROUNDED_SOURCES.md",
+          "site": "grounded-sources.md"
+        },
+        {
+          "package": "VECTOR_FILTER_SEMANTICS.md",
+          "site": "vector-filter-semantics.md"
+        },
+        {
+          "package": "vector-timestamps.md",
+          "site": "vector-timestamps.md"
+        }
       ],
       "diverge": [
-        {"package": "index.md", "site": "index.md", "reason": "Tree-specific landing pages: the package index is a GitHub development-history overview; the site index is a consumer-facing navigation page. Both API-correct."},
-        {"package": "HYBRID_SEARCH.md", "site": "hybrid-search.md", "reason": "The site page is a faithful condensation of the package source; both API-correct."},
-        {"package": "PGVECTOR_BACKEND.md", "site": "pgvector-backend.md", "reason": "Independent elaboration; both sides API-correct."}
+        {
+          "package": "index.md",
+          "site": "index.md",
+          "reason": "Tree-specific landing pages: the package index is a GitHub development-history overview; the site index is a consumer-facing navigation page. Both API-correct."
+        },
+        {
+          "package": "HYBRID_SEARCH.md",
+          "site": "hybrid-search.md",
+          "reason": "The site page is a faithful condensation of the package source; both API-correct."
+        },
+        {
+          "package": "PGVECTOR_BACKEND.md",
+          "site": "pgvector-backend.md",
+          "reason": "Independent elaboration; both sides API-correct."
+        }
       ],
       "package_only": [
         "ARCHITECTURE.md",
@@ -59,6 +177,140 @@
         "s3-backend.md",
         "sqlite-backend.md",
         "validation.md"
+      ]
+    },
+    "llm": {
+      "package_dir": "packages/llm/docs",
+      "site_dir": "docs/packages/llm",
+      "package_only": [
+        "AB_TESTING.md",
+        "BENCHMARKING.md",
+        "BEST_PRACTICES.md",
+        "JINJA2_INTEGRATION.md",
+        "JINJA2_MIGRATION.md",
+        "LLM_ARCHITECTURE_EXPLORATION.md",
+        "PARALLEL_EXECUTION.md",
+        "PROMPT_REFERENCE.md",
+        "PROVIDERS.md",
+        "RAG_CACHING.md",
+        "README.md",
+        "SCHEMA_VERSIONING.md",
+        "USER_GUIDE.md",
+        "VERSIONING.md"
+      ],
+      "site_only": [
+        "index.md",
+        "quickstart.md"
+      ]
+    },
+    "bots": {
+      "package_dir": "packages/bots/docs",
+      "site_dir": "docs/packages/bots",
+      "package_only": [
+        "API.md",
+        "ARCHITECTURE.md",
+        "ARTIFACTS.md",
+        "ARTIFACT_CORPUS.md",
+        "CONFIGURATION.md",
+        "CONFIG_TOOLKIT.md",
+        "CONTEXT_AWARE_WIZARDS.md",
+        "CUSTOM_STRATEGIES.md",
+        "DYNAMIC_REGISTRATION.md",
+        "GROUNDED_REASONING.md",
+        "HYBRID_REASONING.md",
+        "MIDDLEWARE.md",
+        "MIGRATION.md",
+        "MULTI_TENANT.md",
+        "PROMPT_CUSTOMIZATION.md",
+        "PROMPT_ENVELOPE.md",
+        "PROMPT_REFERENCE.md",
+        "PROVIDER_REGISTRY.md",
+        "RAG_INGESTION.md",
+        "RAG_QUERY.md",
+        "RAG_RETRIEVAL.md",
+        "RUBRICS.md",
+        "TEMPLATE_SECURITY.md",
+        "TESTING.md",
+        "TOOLS.md",
+        "USER_GUIDE.md",
+        "WIZARD_ADVANCE_API.md",
+        "WIZARD_CONFIG_BUILDER.md",
+        "WIZARD_SUBFLOWS.md"
+      ],
+      "site_only": [
+        "index.md",
+        "quickstart.md"
+      ]
+    },
+    "fsm": {
+      "package_dir": "packages/fsm/docs",
+      "site_dir": "docs/packages/fsm",
+      "package_only": [
+        "FSM_CONFIG_GUIDE.md",
+        "FSM_PROCESSING_FLOW.md",
+        "FSM_SUBFLOWS.md"
+      ],
+      "site_only": [
+        "faq.md",
+        "index.md",
+        "quickstart.md"
+      ]
+    },
+    "structures": {
+      "_note": "No package-local docs tree (packages/structures/docs does not exist); every site page is site-native. Listed so new site docs here still force a classification decision.",
+      "package_dir": "packages/structures/docs",
+      "site_dir": "docs/packages/structures",
+      "site_only": [
+        "api.md",
+        "conditional-dict.md",
+        "document.md",
+        "index.md",
+        "record-store.md",
+        "tree.md"
+      ]
+    },
+    "utils": {
+      "_note": "No package-local docs tree (packages/utils/docs does not exist); every site page is site-native. Listed so new site docs here still force a classification decision.",
+      "package_dir": "packages/utils/docs",
+      "site_dir": "docs/packages/utils",
+      "site_only": [
+        "api.md",
+        "elasticsearch.md",
+        "file-utils.md",
+        "index.md",
+        "json-utils.md",
+        "llm-utils.md",
+        "sql-utils.md"
+      ]
+    },
+    "xization": {
+      "package_dir": "packages/xization/docs",
+      "site_dir": "docs/packages/xization",
+      "transclude": [
+        {
+          "package": "markdown/RAG_HEADING_ENRICHMENT.md",
+          "site": "heading-enrichment.md"
+        },
+        {
+          "package": "markdown/MARKDOWN_CHUNKING.md",
+          "site": "markdown-chunking.md"
+        },
+        {
+          "package": "markdown/RAG_QUALITY_FILTERING.md",
+          "site": "quality-filtering.md"
+        }
+      ],
+      "site_only": [
+        "api.md",
+        "chunking-abstraction.md",
+        "content-transformation.md",
+        "html-conversion.md",
+        "index.md",
+        "ingestion.md",
+        "json-chunking.md",
+        "masking.md",
+        "normalization.md",
+        "tokenization.md"
       ]
     }
   }

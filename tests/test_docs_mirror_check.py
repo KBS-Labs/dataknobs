@@ -280,6 +280,23 @@ def test_manifest_reference_to_missing_file_is_detected(tree):
     assert any("references missing site doc" in e for e in res.errors)
 
 
+def test_transclude_subdir_source_exempt_from_completeness(tree):
+    """A transclusion may source from a package subdir (e.g. ``guides/events.md``).
+
+    Such a source is not a top-level package doc, so the top-level completeness
+    gate must not flag it as a manifest reference to a missing package doc (the
+    top-level glob would never list it).
+    """
+    mod, pkg, site = tree
+    (pkg / "guides").mkdir()
+    _w(pkg / "guides" / "events.md", "# Events\n")
+    _w(site / "events.md", '--8<-- "packages/demo/docs/guides/events.md"\n')
+    entry = {"transclude": [{"package": "guides/events.md", "site": "events.md"}]}
+    res = mod.Result()
+    mod.check_completeness(entry, pkg, site, res)
+    assert res.ok, res.errors
+
+
 def test_double_classification_is_detected(tree):
     mod, pkg, site = tree
     _w(pkg / "X.md", "# x\n")
