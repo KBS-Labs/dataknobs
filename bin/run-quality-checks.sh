@@ -481,6 +481,23 @@ TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
 
+# Compute the overall PASS/FAIL/PASS_WITH_SKIPS verdict from the individual check
+# statuses. Called from two sites that MUST agree — the quality-summary.json
+# generation (the value CI validates) and the terminal banner that drives the
+# exit code — so the logic lives here once. A new check added to the gate must
+# be added to this one function; wiring it into only one site (as previously
+# happened with the doc-mirror check) silently desyncs the exit code from the
+# reported summary.
+compute_overall_status() {
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
+        echo "FAIL"
+    elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
+        echo "PASS_WITH_SKIPS"
+    else
+        echo "PASS"
+    fi
+}
+
 # Determine package glob pattern
 if [ -n "$PACKAGES" ]; then
     # Build glob pattern for specific packages
@@ -932,12 +949,7 @@ if [ "$PR_MODE" = "yes" ]; then
     PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
 
     print_status "Generating quality summary..."
-    OVERALL_STATUS="PASS"
-    if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $DOCS_MIRROR_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
-        OVERALL_STATUS="FAIL"
-    elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
-        OVERALL_STATUS="PASS_WITH_SKIPS"
-    fi
+    OVERALL_STATUS=$(compute_overall_status)
 
     cat > "$ARTIFACTS_DIR/quality-summary.json" <<EOF
 {
@@ -1149,11 +1161,9 @@ fi
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 
-# Determine overall status
-OVERALL_STATUS="PASS"
-if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
-    OVERALL_STATUS="FAIL"
-fi
+# Determine overall status (same helper as the quality-summary.json computation,
+# so the exit code below can never disagree with the reported summary).
+OVERALL_STATUS=$(compute_overall_status)
 
 if [ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
     echo ""

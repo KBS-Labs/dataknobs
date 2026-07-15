@@ -102,17 +102,54 @@ def _canon_target(target: str) -> str:
     return canon + sep + anchor
 
 
+# A fenced-code-block delimiter: first non-space content is a run of 3+ backticks
+# or tildes (optionally followed by an info string). ``](target)`` text inside a
+# fence is a literal code example, not a real link, and must not be rewritten.
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+# An inline code span: a run of N backticks closed by a run of N backticks. Link
+# syntax shown literally in a `code span` must not be rewritten either.
+_CODE_SPAN_RE = re.compile(r"(`+).*?\1")
+
+
 def canonicalize_line(line: str) -> str:
-    """Rewrite every intra-doc ``.md`` link target in a line to site form."""
+    """Rewrite intra-doc ``.md`` link targets to site form, outside code spans.
+
+    Link syntax that appears inside an inline ``code span`` is literal example
+    text: its character range is protected and left untouched, so only real
+    links in the prose portion of the line are canonicalized.
+    """
+    protected = [(m.start(), m.end()) for m in _CODE_SPAN_RE.finditer(line)]
 
     def repl(m: re.Match[str]) -> str:
+        if any(start <= m.start() < end for start, end in protected):
+            return m.group(0)
         return f"]({_canon_target(m.group('target'))}{m.group('rest')})"
 
     return _LINK_RE.sub(repl, line)
 
 
 def canonicalize_text(text: str) -> list[str]:
-    return [canonicalize_line(ln) for ln in text.splitlines()]
+    """Canonicalize link targets line-by-line, skipping fenced code blocks.
+
+    A fenced code block (opened and closed by a ``` or ~~~ run) holds literal
+    example text; rewriting ``](target)`` inside it would corrupt code samples.
+    Fence state is tracked across lines so fenced content passes through verbatim.
+    """
+    out: list[str] = []
+    fence: str | None = None
+    for ln in text.splitlines():
+        m = _FENCE_RE.match(ln)
+        if m:
+            marker = m.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            out.append(ln)
+            continue
+        out.append(ln if fence is not None else canonicalize_line(ln))
+    return out
 
 
 def _read(path: Path) -> str:
@@ -141,6 +178,33 @@ def _exception_map(pair: dict) -> dict[str, str]:
     return out
 
 
+def _apply_line_exceptions(
+    lines: list[str], exmap: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """Apply canonicalized package->site line substitutions to ``lines``.
+
+    ``line_exceptions`` match by exact (canonicalized) line *content*, not by
+    position, so a substitution is only well-defined when its package line occurs
+    exactly once in the source. If the same line text recurs, substituting every
+    occurrence would silently rewrite unintended lines, so such a key is reported
+    as ambiguous and left un-substituted rather than applied. Returns the
+    substituted lines and the sorted list of ambiguous package keys.
+    """
+    if not exmap:
+        return lines, []
+    counts: dict[str, int] = {}
+    for ln in lines:
+        if ln in exmap:
+            counts[ln] = counts.get(ln, 0) + 1
+    ambiguous = sorted(key for key, count in counts.items() if count > 1)
+    ambiguous_set = set(ambiguous)
+    out = [
+        exmap[ln] if ln in exmap and ln not in ambiguous_set else ln
+        for ln in lines
+    ]
+    return out, ambiguous
+
+
 def check_mirror(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     pkg_path = pkg_dir / pair["package"]
     site_path = site_dir / pair["site"]
@@ -160,7 +224,19 @@ def check_mirror(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None
         return
 
     exmap = _exception_map(pair)
-    pkg_lines = [exmap.get(ln, ln) for ln in canonicalize_text(_read(pkg_path))]
+    pkg_lines, ambiguous = _apply_line_exceptions(
+        canonicalize_text(_read(pkg_path)), exmap
+    )
+    if ambiguous:
+        rel_pkg = pkg_path.relative_to(ROOT)
+        for key in ambiguous:
+            res.fail(
+                f"mirror: ambiguous line_exception for {rel_pkg}: the package line "
+                f"{key!r} occurs more than once, so a content-matched exception would "
+                f"rewrite every occurrence. Make the surrounding line unique, or drop "
+                f"the exception, in {MANIFEST.relative_to(ROOT)}."
+            )
+        return
     site_lines = canonicalize_text(_read(site_path))
 
     if pkg_lines == site_lines:
@@ -319,7 +395,12 @@ def fix_mirror(pair: dict, pkg_dir: Path, site_dir: Path) -> bool:
         return False
     exmap = _exception_map(pair)
     text = _read(pkg_path)
-    lines = [exmap.get(ln, ln) for ln in canonicalize_text(text)]
+    lines, ambiguous = _apply_line_exceptions(canonicalize_text(text), exmap)
+    if ambiguous:
+        # An ambiguous exception cannot be applied safely — regenerating would
+        # rewrite every occurrence of the recurring line. Leave the file as-is
+        # for `--check` to report rather than silently corrupt it.
+        return False
     regenerated = "\n".join(lines)
     if text.endswith("\n"):
         regenerated += "\n"
