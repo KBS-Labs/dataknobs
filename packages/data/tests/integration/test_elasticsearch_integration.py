@@ -194,7 +194,9 @@ class TestElasticsearchIntegration:
         assert results[0].get_value("name") == "Eve Anderson"
         
         # Test 4: Wildcard pattern matching (LIKE)
-        query = Query().filter("email", Operator.LIKE, "*@example.com")
+        # SQL LIKE wildcards are % and _ (portable across every backend); a
+        # literal '*' is now escaped, so use '%' for "any run of characters".
+        query = Query().filter("email", Operator.LIKE, "%@example.com")
         results = db.search(query)
         assert len(results) == 5  # All have @example.com
         
@@ -311,8 +313,8 @@ class TestElasticsearchIntegration:
         ids = db.create_batch(docs)
         time.sleep(1)
         
-        # Test wildcard search
-        query = Query().filter("title", Operator.LIKE, "*Elasticsearch*")
+        # Test wildcard search (SQL LIKE wildcard is %, not * — * is now literal)
+        query = Query().filter("title", Operator.LIKE, "%Elasticsearch%")
         results = db.search(query)
         assert len(results) == 2
         
@@ -445,8 +447,8 @@ class TestElasticsearchIntegration:
         assert retrieved.get_value("json_field")["nested"]["key"] == "value with 'quotes'"
         assert retrieved.get_value("html") == "<div>HTML & entities</div>"
         
-        # Search with special characters
-        query = Query().filter("name", Operator.LIKE, "*Special*")
+        # Search with special characters (SQL LIKE wildcard is %, not *)
+        query = Query().filter("name", Operator.LIKE, "%Special%")
         results = db.search(query)
         assert len(results) == 1
         

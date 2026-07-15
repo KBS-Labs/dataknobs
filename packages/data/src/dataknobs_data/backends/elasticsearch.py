@@ -15,7 +15,7 @@ from dataknobs_utils.elasticsearch_utils import (
 
 from ..database import SyncDatabase, version_conflict_error
 from ..exceptions import DatabaseError, DuplicateRecordError
-from ..query import Operator, Query, SortOrder
+from ..query import Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector.types import DistanceMetric, VectorSearchResult
@@ -30,6 +30,7 @@ from .elasticsearch_mixins import (
     es_version_token,
     parse_es_version_token,
 )
+from .elasticsearch_query import build_bool_query, build_complex_es_query
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
@@ -688,169 +689,18 @@ class SyncElasticsearchDatabase(
                 # If bulk operation completely fails, mark all as failed
                 return [False] * len(updates)
 
-    def _build_complex_es_query(self, condition: Any) -> dict[str, Any]:
-        """Build Elasticsearch query from complex boolean logic conditions.
-        
-        Args:
-            condition: The Condition object (LogicCondition or FilterCondition)
-            
-        Returns:
-            Elasticsearch query dict
-        """
-        from ..query_logic import FilterCondition, LogicCondition, LogicOperator
-
-        # Handle FilterCondition (leaf node)
-        if isinstance(condition, FilterCondition):
-            return self._build_filter_es_query(condition.filter)
-
-        # Handle LogicCondition (branch node)
-        elif isinstance(condition, LogicCondition):
-            if condition.operator == LogicOperator.AND:
-                # Build AND query with must clauses
-                must_clauses = []
-                for sub_condition in condition.conditions:
-                    sub_query = self._build_complex_es_query(sub_condition)
-                    if sub_query:
-                        must_clauses.append(sub_query)
-
-                if not must_clauses:
-                    return {"match_all": {}}
-                elif len(must_clauses) == 1:
-                    return must_clauses[0]
-                else:
-                    return {"bool": {"must": must_clauses}}
-
-            elif condition.operator == LogicOperator.OR:
-                # Build OR query with should clauses
-                should_clauses = []
-                for sub_condition in condition.conditions:
-                    sub_query = self._build_complex_es_query(sub_condition)
-                    if sub_query:
-                        should_clauses.append(sub_query)
-
-                if not should_clauses:
-                    return {"match_all": {}}
-                elif len(should_clauses) == 1:
-                    return should_clauses[0]
-                else:
-                    return {"bool": {"should": should_clauses, "minimum_should_match": 1}}
-
-            elif condition.operator == LogicOperator.NOT:
-                # Build NOT query with must_not
-                if condition.conditions:
-                    sub_query = self._build_complex_es_query(condition.conditions[0])
-                    if sub_query:
-                        return {"bool": {"must_not": sub_query}}
-
-                return {"match_all": {}}
-
-        return {"match_all": {}}
-
-    def _build_filter_es_query(self, filter_obj: Any) -> dict[str, Any]:
-        """Build Elasticsearch query for a single filter.
-        
-        Args:
-            filter_obj: The Filter object
-            
-        Returns:
-            Elasticsearch query dict for the filter
-        """
-        # Special handling for 'id' field - use _id in Elasticsearch
-        if filter_obj.field == 'id':
-            field_path = "_id"
-            # _id field doesn't need .keyword suffix
-        else:
-            field_path = f"data.{filter_obj.field}"
-
-            # For string fields in exact match queries, use .keyword suffix
-            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and
-                    filter_obj.value and
-                    isinstance(filter_obj.value[0], str)
-                ):
-                    field_path = f"{field_path}.keyword"
-            elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                # Wildcard needs .keyword for proper matching
-                if isinstance(filter_obj.value, str):
-                    field_path = f"{field_path}.keyword"
-
-        if filter_obj.operator == Operator.EQ:
-            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-            return {"term": {field_path: value}}
-        elif filter_obj.operator == Operator.NEQ:
-            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-            return {"bool": {"must_not": {"term": {field_path: value}}}}
-        elif filter_obj.operator == Operator.GT:
-            return {"range": {field_path: {"gt": filter_obj.value}}}
-        elif filter_obj.operator == Operator.GTE:
-            return {"range": {field_path: {"gte": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LT:
-            return {"range": {field_path: {"lt": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LTE:
-            return {"range": {field_path: {"lte": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LIKE:
-            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-            return {"wildcard": {field_path: pattern}}
-        elif filter_obj.operator == Operator.NOT_LIKE:
-            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-            return {"bool": {"must_not": {"wildcard": {field_path: pattern}}}}
-        elif filter_obj.operator == Operator.IN:
-            # Special handling for _id field - use ids query instead of terms
-            if filter_obj.field == 'id':
-                return {"ids": {"values": filter_obj.value}}
-            else:
-                return {"terms": {field_path: filter_obj.value}}
-        elif filter_obj.operator == Operator.NOT_IN:
-            # Special handling for _id field
-            if filter_obj.field == 'id':
-                return {"bool": {"must_not": {"ids": {"values": filter_obj.value}}}}
-            else:
-                return {"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}}
-        elif filter_obj.operator == Operator.EXISTS:
-            return {"exists": {"field": field_path}}
-        elif filter_obj.operator == Operator.NOT_EXISTS:
-            return {"bool": {"must_not": {"exists": {"field": field_path}}}}
-        elif filter_obj.operator == Operator.REGEX:
-            return {"regexp": {field_path: filter_obj.value}}
-        elif filter_obj.operator == Operator.STARTS_WITH:
-            # Literal, case-sensitive prefix on a keyword field. For the id
-            # field, target the top-level ``id`` keyword (a prefix query on the
-            # ``_id`` metafield is not reliably supported); it mirrors the
-            # storage key. Non-id fields use the ``.keyword`` sub-field.
-            if filter_obj.field == "id":
-                prefix_field = "id"
-            else:
-                prefix_field = f"data.{filter_obj.field}.keyword"
-            return {"prefix": {prefix_field: filter_obj.value}}
-        elif filter_obj.operator == Operator.BETWEEN:
-            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                lower, upper = filter_obj.value
-                return {"range": {field_path: {"gte": lower, "lte": upper}}}
-        elif filter_obj.operator == Operator.NOT_BETWEEN:
-            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                lower, upper = filter_obj.value
-                return {"bool": {"must_not": {"range": {field_path: {"gte": lower, "lte":
-upper}}}}}
-
-        return {"match_all": {}}
-
-
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        # Handle ComplexQuery with native Elasticsearch bool queries
+        # Translate through the shared filter->DSL functions so the sync,
+        # async and vector-pre-filter sites cannot drift apart.
         if isinstance(query, ComplexQuery):
-            if query.condition:
-                es_query = self._build_complex_es_query(query.condition)
-            else:
-                es_query = {"match_all": {}}
+            es_query = (
+                build_complex_es_query(query.condition)
+                if query.condition
+                else {"match_all": {}}
+            )
         else:
-            # Translate each filter through the single per-filter translator
-            # (``_build_filter_es_query``) shared with the ComplexQuery and
-            # count() paths, so the three cannot drift apart. An empty filter
-            # list matches all documents.
-            must = [self._build_filter_es_query(f) for f in query.filters]
-            es_query = {"bool": {"must": must}} if must else {"match_all": {}}
+            es_query = build_bool_query(query.filters)
 
         # Build sort
         sort = []
@@ -933,14 +783,9 @@ upper}}}}}
         if not query or not query.filters:
             return self._count_all()
 
-        # Translate each filter through the shared per-filter translator so
-        # count() cannot drift from search()/ComplexQuery. (The former inline
-        # loop omitted BETWEEN/NOT_BETWEEN, so a BETWEEN-only count fell back to
-        # match_all and returned the total instead of the filtered count.)
-        must = [self._build_filter_es_query(f) for f in query.filters]
-        es_query = {"bool": {"must": must}} if must else {"match_all": {}}
-
-        # Count with the query
+        # Same shared translator as search()/ComplexQuery, so count() cannot
+        # drift from them (e.g. drop an operator and fall back to match_all).
+        es_query = build_bool_query(query.filters)
         return self.es_index.count(body={"query": es_query})
 
     def clear(self) -> int:

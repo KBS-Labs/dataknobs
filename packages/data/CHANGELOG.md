@@ -197,6 +197,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The async Elasticsearch backend honors the full operator set — `REGEX`,
+  `EXISTS`, `NOT_EXISTS`, `NOT_LIKE`, and the negations of `IN`/`BETWEEN` — in
+  `search()`, `count()`, and `stream_read()`, matching the sync backend and the
+  other backends. It previously translated only a subset inline, so those
+  operators were silently dropped and the query fell back to matching every
+  document. The async `search()` also accepts a `ComplexQuery` (AND/OR/NOT).
+- Elasticsearch `LIKE`/`NOT_LIKE` uses SQL-wildcard (`%`→any, `_`→one),
+  case-insensitive matching, consistent with the in-memory and SQL backends
+  (the async backend previously did a case-sensitive substring match). Only `%`
+  and `_` are wildcards: a literal Lucene metacharacter in the pattern (`*`,
+  `?`, `\`) is now escaped so it matches verbatim, rather than leaking through
+  as an Elasticsearch wildcard (an unescaped `*` previously matched anything).
+  The case-insensitive `wildcard` form requires Elasticsearch ≥ 7.10.
+  **Behavior change / migration:** a consumer that relied on the old
+  Elasticsearch-only passthrough — passing a raw `*` or `?` in a `LIKE` pattern
+  and expecting it to act as an Elasticsearch wildcard — must switch to the
+  portable SQL wildcards `%` and `_`. For example `LIKE "*name*"` (which matched
+  any value containing `name` on Elasticsearch, but matched a literal asterisk
+  or errored on the other backends) becomes `LIKE "%name%"`, which now behaves
+  identically on every backend.
+- Elasticsearch `REGEX` matches the **full field value** (via the `.keyword`
+  sub-field, case-sensitive), consistent with the in-memory (`re.search`) and
+  SQL backends. It previously ran against the analyzed `data.<field>` path,
+  where `regexp` matches a single lowercased token — so a pattern spanning a
+  word boundary (e.g. `alice.*smith` against `"alice smith"`) matched nothing.
+  `Filter("id", REGEX, ...)` was already full-value; data fields now agree.
+  (Elasticsearch `regexp` is anchored and uses Lucene RegExp syntax, which
+  differs from Python `re` — no `^`/`$` anchors, no look-around.)
+- Elasticsearch raises `ValueError` for an operator its translator cannot
+  express, rather than silently falling back to `match_all` (a dropped filter
+  returning every document). This is the fail-loud counterpart to the operator
+  convergence above; a caller that relied on the silent everything-match now
+  gets an explicit error.
+- `Filter("id", ...)` on Elasticsearch accepts the full operator set — prefix,
+  range, membership, wildcard, regex — against the record's storage key, which
+  is carried as a queryable `id` keyword field (a metafield-`_id` filter did not
+  support range/prefix/wildcard). **Migration note:** because `id` filtering now
+  targets the stamped top-level `id` field rather than the `_id` metafield, it
+  only sees documents written with that field present. Every write path stamps
+  it now, but a record indexed by an older version that did not stamp a *minted*
+  `id` (one the backend generated because the record had none) is invisible to
+  an `id` filter until the index is reindexed. `read(id)` is unaffected — it
+  still fetches by `_id`.
+- Elasticsearch vector and hybrid search pre-filters honor the full operator set
+  and resolve `Filter("id", ...)` to the record's storage key; equality is exact
+  (`term` on the keyword sub-field) rather than an analyzed match.
 - `upsert(id, record)` now honors the explicit `id` when the record carries a
   *different* pre-set `storage_id` and the id does not yet exist. The base
   create-fallback previously wrote the new row under the record's own

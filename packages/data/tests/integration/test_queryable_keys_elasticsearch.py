@@ -20,6 +20,8 @@ import pytest
 from dataknobs_data import Filter, Operator, Query, Record, SortOrder, SortSpec
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
+from dataknobs_data.query_logic import ComplexQuery, LogicCondition, LogicOperator
+from dataknobs_data.query_logic import FilterCondition
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("TEST_ELASTICSEARCH") != "true",
@@ -187,7 +189,8 @@ async def test_async_batch_minted_ids_are_filterable(elasticsearch_test_index) -
 
 def test_sync_minted_id_is_filterable(elasticsearch_test_index) -> None:
     """Parity guard: the sync backend already stamps the minted id — keep a
-    minted-id record findable by its id so the two backends cannot drift."""
+    minted-id record findable by its id so the two backends cannot drift.
+    """
     db = SyncElasticsearchDatabase(elasticsearch_test_index)
     db.connect()
     try:
@@ -237,3 +240,177 @@ def test_sync_count_between_is_filtered(elasticsearch_test_index) -> None:
         assert db.count(Query(filters=[Filter("n", Operator.BETWEEN, [2, 4])])) == 3
     finally:
         db.close()
+
+
+# --- full-operator sync/async parity matrix --------------------------------
+#
+# The sync and async backends and the vector pre-filter now share one
+# filter->DSL translator. These pin, against a live Elasticsearch, that the two
+# query backends return the *same* rows for the same query across the full
+# operator set — the class of drift the shared translator exists to close
+# (async previously dropped REGEX / EXISTS / NOT_EXISTS / NOT_LIKE and used a
+# substring LIKE).
+
+_MATRIX_RECORDS = [
+    Record({"tag": "alpha", "n": 1}, id="orders/1"),
+    Record({"tag": "beta", "n": 2}, id="orders/2"),
+    Record({"tag": "gamma", "n": 3}, id="artifacts/a"),
+    Record({"tag": "Alpha", "n": 4}, id="artifacts/b"),
+]
+
+# One Query per row, exercised on a data field and on the id storage key.
+_MATRIX_QUERIES = [
+    Query(filters=[Filter("tag", Operator.EQ, "alpha")]),
+    Query(filters=[Filter("tag", Operator.NEQ, "alpha")]),
+    Query(filters=[Filter("n", Operator.GT, 2)]),
+    Query(filters=[Filter("n", Operator.GTE, 2)]),
+    Query(filters=[Filter("n", Operator.LT, 3)]),
+    Query(filters=[Filter("n", Operator.LTE, 3)]),
+    Query(filters=[Filter("tag", Operator.LIKE, "alph%")]),
+    Query(filters=[Filter("tag", Operator.NOT_LIKE, "alph%")]),
+    Query(filters=[Filter("tag", Operator.IN, ["alpha", "beta"])]),
+    Query(filters=[Filter("tag", Operator.NOT_IN, ["alpha", "beta"])]),
+    Query(filters=[Filter("tag", Operator.EXISTS)]),
+    Query(filters=[Filter("missing", Operator.NOT_EXISTS)]),
+    Query(filters=[Filter("tag", Operator.REGEX, "al.*")]),
+    Query(filters=[Filter("tag", Operator.STARTS_WITH, "al")]),
+    Query(filters=[Filter("n", Operator.BETWEEN, [2, 3])]),
+    Query(filters=[Filter("n", Operator.NOT_BETWEEN, [2, 3])]),
+    Query(filters=[Filter("id", Operator.EQ, "orders/1")]),
+    Query(filters=[Filter("id", Operator.NEQ, "orders/1")]),
+    Query(filters=[Filter("id", Operator.IN, ["orders/1", "orders/2"])]),
+    Query(filters=[Filter("id", Operator.NOT_IN, ["orders/1", "orders/2"])]),
+    Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/")]),
+    Query(filters=[Filter("id", Operator.LIKE, "orders/%")]),
+    Query(filters=[Filter("id", Operator.REGEX, "orders/.*")]),
+]
+
+
+def _seed_matrix_sync(db: SyncElasticsearchDatabase) -> None:
+    for record in _MATRIX_RECORDS:
+        db.create(record)
+
+
+@pytest.mark.parametrize("query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field)
+async def test_sync_async_search_parity(elasticsearch_test_index, query) -> None:
+    """Sync and async ES return identical id sets for every operator."""
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        _seed_matrix_sync(sync_db)
+        assert _ids(await async_db.search(query)) == _ids(sync_db.search(query))
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+@pytest.mark.parametrize("query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field)
+async def test_sync_async_count_parity(elasticsearch_test_index, query) -> None:
+    """Sync and async ``count`` agree for every operator (the class of the
+    BETWEEN-only count-drop bug).
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        _seed_matrix_sync(sync_db)
+        assert await async_db.count(query) == sync_db.count(query)
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_like_is_case_insensitive(elasticsearch_test_index) -> None:
+    """``LIKE`` matches case-insensitively, like the in-memory and SQL backends.
+
+    ``alpha`` and ``Alpha`` both match ``LIKE "alpha"`` — the ES ``wildcard``
+    now carries ``case_insensitive: true``.
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        _seed_matrix_sync(sync_db)
+        q = Query(filters=[Filter("tag", Operator.LIKE, "alpha")])
+        assert _ids(sync_db.search(q)) == {"orders/1", "artifacts/b"}
+        assert _ids(await async_db.search(q)) == {"orders/1", "artifacts/b"}
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_regex_matches_full_value_across_tokens(elasticsearch_test_index) -> None:
+    """``REGEX`` matches the full field value, not a single analyzed token.
+
+    ``regexp`` on the analyzed ``data.<field>`` path runs per-indexed-term, so a
+    cross-token pattern (``alice.*smith`` against ``"alice smith"``) matched
+    nothing — the analyzer split the value into ``alice`` / ``smith`` and the
+    pattern matched neither. Routing ``REGEX`` to the ``.keyword`` sub-field
+    matches the whole value, consistent with the in-memory (``re.search``) and
+    SQL backends. Both query backends agree.
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        sync_db.create(Record({"name": "alice smith"}, id="p/1"))
+        sync_db.create(Record({"name": "alice jones"}, id="p/2"))
+        q = Query(filters=[Filter("name", Operator.REGEX, "alice.*smith")])
+        assert _ids(sync_db.search(q)) == {"p/1"}
+        assert _ids(await async_db.search(q)) == {"p/1"}
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_like_escapes_literal_wildcard_metacharacter(elasticsearch_test_index) -> None:
+    """A literal ``*`` in a SQL ``LIKE`` pattern matches verbatim, not as a
+    wildcard.
+
+    Only ``%``/``_`` are SQL wildcards; an unescaped ``*`` reaching the ES
+    ``wildcard`` query would match anything. With escaping, ``LIKE "a*b"`` finds
+    only the value ``"a*b"`` — not ``"axb"``. Both query backends agree.
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        sync_db.create(Record({"code": "a*b"}, id="c/star"))
+        sync_db.create(Record({"code": "axb"}, id="c/other"))
+        q = Query(filters=[Filter("code", Operator.LIKE, "a*b")])
+        assert _ids(sync_db.search(q)) == {"c/star"}
+        assert _ids(await async_db.search(q)) == {"c/star"}
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_async_complex_query_matches_sync(elasticsearch_test_index) -> None:
+    """The async backend honors ComplexQuery (AND/OR/NOT) at parity with sync."""
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        _seed_matrix_sync(sync_db)
+        # id starts with "orders/" AND n < 2  ->  {orders/1}
+        cq = ComplexQuery(
+            condition=LogicCondition(
+                operator=LogicOperator.AND,
+                conditions=[
+                    FilterCondition(Filter("id", Operator.STARTS_WITH, "orders/")),
+                    FilterCondition(Filter("n", Operator.LT, 2)),
+                ],
+            )
+        )
+        assert _ids(await async_db.search(cq)) == {"orders/1"}
+        assert _ids(await async_db.search(cq)) == _ids(sync_db.search(cq))
+    finally:
+        sync_db.close()
+        await async_db.close()

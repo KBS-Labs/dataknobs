@@ -8,7 +8,7 @@ import numpy as np
 from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.fields import VectorField
-from dataknobs_data.query import Query, Operator
+from dataknobs_data.query import Filter, Query, Operator
 from dataknobs_data.vector.types import DistanceMetric
 
 # Skip tests if Elasticsearch integration testing is not enabled
@@ -326,6 +326,82 @@ class TestElasticsearchVectorIntegration:
                 assert vec_meta.get("source_field") == "document"
                 assert vec_meta.get("model") == "sentence-transformers/all-MiniLM-L6-v2"
                 assert vec_meta.get("model_version") == "2.0.0"
-            
+
+        finally:
+            await db.close()
+
+    async def test_vector_prefilter_by_id_prefix(self, vector_test_index):
+        """Reproduce-first: a vector-search pre-filter on the ``id`` storage key
+        honors the full operator set (here ``STARTS_WITH``).
+
+        The vector pre-filter previously translated only a stub operator set and
+        treated ``id`` as ``data.id``, so an id pre-filter matched nothing. It
+        now shares the same translator as the plain search paths.
+        """
+        db = AsyncElasticsearchDatabase(vector_test_index)
+        await db.connect()
+        try:
+            await db.create_vector_index(
+                vector_field="embedding",
+                dimensions=8,
+                metric=DistanceMetric.COSINE,
+            )
+            vectors = [np.random.rand(8).astype(np.float32) for _ in range(4)]
+            keys = ["artifacts/a", "artifacts/b", "orders/1", "orders/2"]
+            for key, vec in zip(keys, vectors):
+                await db.create(
+                    Record(
+                        {"embedding": VectorField(vec, name="embedding")},
+                        id=key,
+                    )
+                )
+            time.sleep(2)
+
+            results = await db.vector_search(
+                query_vector=vectors[0],
+                vector_field="embedding",
+                k=10,
+                filter=Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/")]),
+            )
+            assert {r.record.id for r in results} == {"artifacts/a", "artifacts/b"}
+        finally:
+            await db.close()
+
+    async def test_vector_prefilter_eq_is_exact(self, vector_test_index):
+        """An ``EQ`` pre-filter matches exactly (``term`` on ``.keyword``), not
+        an analyzed substring — so a two-word tag only matches the whole value.
+        """
+        db = AsyncElasticsearchDatabase(vector_test_index)
+        await db.connect()
+        try:
+            await db.create_vector_index(
+                vector_field="embedding",
+                dimensions=8,
+                metric=DistanceMetric.COSINE,
+            )
+            vectors = [np.random.rand(8).astype(np.float32) for _ in range(2)]
+            await db.create(
+                Record(
+                    {"tag": "red apple", "embedding": VectorField(vectors[0], name="embedding")},
+                    id="a",
+                )
+            )
+            await db.create(
+                Record(
+                    {"tag": "green apple", "embedding": VectorField(vectors[1], name="embedding")},
+                    id="b",
+                )
+            )
+            time.sleep(2)
+
+            # Exact match on the full value returns only that record; an analyzed
+            # match on the token "apple" would have returned both.
+            results = await db.vector_search(
+                query_vector=vectors[0],
+                vector_field="embedding",
+                k=10,
+                filter=Query(filters=[Filter("tag", Operator.EQ, "red apple")]),
+            )
+            assert {r.record.id for r in results} == {"a"}
         finally:
             await db.close()
