@@ -400,6 +400,45 @@ query = (Query()
 # Operator.EXISTS - field exists
 # Operator.NOT_EXISTS - field doesn't exist
 # Operator.REGEX - regular expression match
+# Operator.STARTS_WITH - literal, case-sensitive prefix match
+#   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
+```
+
+### Querying by identifier and key prefix
+
+A record's identifier is a first-class query target. `Filter("id", ...)`
+resolves to the record's **storage key** on every backend — equality (`EQ`),
+membership (`IN`), and literal prefix (`STARTS_WITH`) all apply to the key, and
+push down to the backend query engine where it supports them (a SQL range or
+`LIKE ... ESCAPE` on the `id` column, an Elasticsearch `prefix`/`ids` query),
+scanning in memory otherwise.
+
+`STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
+`_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
+`LIKE` and `REGEX`, it matches **string values only** — a non-string field value
+never matches, consistently across the SQL and in-memory backends. When a store
+encodes hierarchy into its keys, a whole subtree is one filter:
+
+```python
+from dataknobs_data import Query, Filter, Operator
+
+# Records keyed like "artifacts/{owner}/{path}/{name}".
+subtree = db.search(Query(filters=[
+    Filter("id", Operator.STARTS_WITH, f"artifacts/{owner}/{path}/")
+]))
+# Exactly the keys under that prefix — a '_' in the path matches literally,
+# with no LIKE wildcard false positives.
+```
+
+**Looking up by a secondary identifier.** To query by an identifier that is
+*not* the storage key, either make it the storage key (then `read()` is O(1) and
+`Filter("id", ...)` pushes down), or store it as a data field and filter that
+field directly:
+
+```python
+# The lookup id is an ordinary indexed field.
+db.create(Record({"sku": "SKU-200", "name": "gadget"}, id="row-2"))
+found = db.search(Query(filters=[Filter("sku", Operator.EQ, "SKU-200")]))
 ```
 
 ### Streaming

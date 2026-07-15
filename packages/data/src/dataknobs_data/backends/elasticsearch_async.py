@@ -198,8 +198,17 @@ class AsyncElasticsearchDatabase(
         if not self._connected or not self._client:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-    def _record_to_doc(self, record: Record) -> dict[str, Any]:
-        """Convert a Record to an Elasticsearch document."""
+    def _record_to_doc(self, record: Record, id: str | None = None) -> dict[str, Any]:
+        """Convert a Record to an Elasticsearch document.
+
+        ``id`` stamps the resolved storage key into the document's top-level
+        ``id`` keyword field so it mirrors ``_id`` and stays filterable via
+        ``Filter("id", ...)`` — the same invariant the sync backend guarantees
+        in its own ``_record_to_doc``. Every write path resolves the id it uses
+        for ``_id`` and passes it here, so a record created without an explicit
+        id (minted uuid) is still findable by that id. When ``id`` is omitted,
+        an absent doc id is minted here as a safety net.
+        """
         # Update vector tracking if needed
         if self._has_vector_fields(record):
             self._update_vector_tracking(record)
@@ -220,7 +229,12 @@ class AsyncElasticsearchDatabase(
                             "model_version": getattr(field, "model_version", None),
                         }
 
-        return self._record_to_document(record)
+        doc = self._record_to_document(record)
+        if id:
+            doc["id"] = id
+        elif not doc.get("id"):
+            doc["id"] = str(uuid.uuid4())
+        return doc
 
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
         """Convert an Elasticsearch document to a Record."""
@@ -236,7 +250,6 @@ class AsyncElasticsearchDatabase(
     async def create(self, record: Record) -> str:
         """Create a new record."""
         self._check_connection()
-        doc = self._record_to_doc(record)
 
         # Mint the id client-side when the record has none, so create() always
         # supplies an explicit id and returns a known value — uniform with the
@@ -244,6 +257,9 @@ class AsyncElasticsearchDatabase(
         # atomic insert: a colliding id yields a 409 conflict instead of
         # silently overwriting the existing document.
         record_id = record.id if record.id else str(uuid.uuid4())
+        # Stamp the resolved id into the doc so a minted-id record stays
+        # findable by ``Filter("id", ...)``.
+        doc = self._record_to_doc(record, record_id)
 
         from elasticsearch import ConflictError
 
@@ -344,7 +360,7 @@ class AsyncElasticsearchDatabase(
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)
             ids.append(record_id)
-            doc = self._record_to_doc(record)
+            doc = self._record_to_doc(record, record_id)
             operations.append(
                 {"create": {"_index": self.index_name, "_id": record_id}}
             )
@@ -383,7 +399,7 @@ class AsyncElasticsearchDatabase(
         for record in records:
             record_id = record.id or str(uuid.uuid4())
             ids.append(record_id)
-            doc = self._record_to_doc(record)
+            doc = self._record_to_doc(record, record_id)
             operations.append(
                 {"index": {"_index": self.index_name, "_id": record_id}}
             )
@@ -441,7 +457,9 @@ class AsyncElasticsearchDatabase(
         ``None`` the update is unconditional, byte-identical to prior behavior.
         """
         self._check_connection()
-        doc = self._record_to_doc(record)
+        # Target id stamped so a partial update heals/keeps the top-level id
+        # field consistent with ``_id``.
+        doc = self._record_to_doc(record, id)
 
         if expected_version is not None:
             from elasticsearch import ConflictError, NotFoundError
@@ -581,7 +599,7 @@ class AsyncElasticsearchDatabase(
                 return id
             raise version_conflict_error(id, expected_version, None)
 
-        doc = self._record_to_doc(record)
+        doc = self._record_to_doc(record, id)
 
         await self._client.index(
             index=self.index_name,
@@ -619,7 +637,7 @@ class AsyncElasticsearchDatabase(
                 }
             })
             # Add document data
-            doc = self._record_to_doc(record)
+            doc = self._record_to_doc(record, record_id)
             operations.append({
                 "doc": doc,
                 "doc_as_upsert": False  # Don't create if doesn't exist
@@ -662,13 +680,22 @@ class AsyncElasticsearchDatabase(
         es_query = {"bool": {"must": []}}
 
         for filter in query.filters:
-            field_path = f"data.{filter.field}"
+            # The 'id' field is the storage key: the document carries it as a
+            # top-level ``id`` keyword mirroring ``_id``, so filters on it resolve
+            # to the storage key rather than a data field named ``id``.
+            is_id = filter.field == "id"
+            field_path = "id" if is_id else f"data.{filter.field}"
 
             if filter.operator == Operator.EQ:
                 # For string values, use keyword field for exact matching
-                if isinstance(filter.value, str):
+                # (the 'id' field is already a keyword — no suffix needed).
+                if isinstance(filter.value, str) and not is_id:
                     field_path = f"{field_path}.keyword"
                 es_query["bool"]["must"].append({"term": {field_path: filter.value}})
+            elif filter.operator == Operator.STARTS_WITH:
+                # Literal, case-sensitive prefix on a keyword field.
+                prefix_field = "id" if is_id else f"data.{filter.field}.keyword"
+                es_query["bool"]["must"].append({"prefix": {prefix_field: filter.value}})
             elif filter.operator == Operator.NEQ:
                 es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
                 es_query["bool"]["must_not"].append({"term": {field_path: filter.value}})
@@ -722,7 +749,12 @@ class AsyncElasticsearchDatabase(
         if query.sort_specs:
             for sort_spec in query.sort_specs:
                 direction = "desc" if sort_spec.order == SortOrder.DESC else "asc"
-                sort.append({f"data.{sort_spec.field}": {"order": direction}})
+                # The 'id' field is the storage key: sort on the top-level ``id``
+                # keyword (mirroring ``_id``), not a data field named ``id``,
+                # matching the sync backend. ``_id`` itself is unsortable
+                # (fielddata disabled by default), so the keyword mirror is used.
+                sort_path = "id" if sort_spec.field == "id" else f"data.{sort_spec.field}"
+                sort.append({sort_path: {"order": direction}})
 
         # Build request body
         body = {"query": es_query}
@@ -775,12 +807,18 @@ class AsyncElasticsearchDatabase(
         es_query: dict[str, Any] = {"bool": {"must": []}}
 
         for filter_obj in query.filters:
-            field_path = f"data.{filter_obj.field}"
+            # The 'id' field is the storage key (top-level ``id`` keyword
+            # mirroring ``_id``), so filters on it resolve to the storage key.
+            is_id = filter_obj.field == "id"
+            field_path = "id" if is_id else f"data.{filter_obj.field}"
 
             if filter_obj.operator == Operator.EQ:
-                if isinstance(filter_obj.value, str):
+                if isinstance(filter_obj.value, str) and not is_id:
                     field_path = f"{field_path}.keyword"
                 es_query["bool"]["must"].append({"term": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.STARTS_WITH:
+                prefix_field = "id" if is_id else f"data.{filter_obj.field}.keyword"
+                es_query["bool"]["must"].append({"prefix": {prefix_field: filter_obj.value}})
             elif filter_obj.operator == Operator.NEQ:
                 es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
                 es_query["bool"]["must_not"].append({"term": {field_path: filter_obj.value}})

@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from collections.abc import Generator
+from urllib.parse import quote
 from typing import Any, Dict, List, TextIO, Union
 
 # import os
@@ -570,9 +571,22 @@ class ElasticsearchIndex:
         return resp
 
 
+def _encode_doc_id(doc_id: str) -> str:
+    """Percent-encode a document id for use in a REST path segment.
+
+    Elasticsearch document ids may contain any character (hierarchical keys
+    like ``artifacts/alice/report/final`` are common), but an unencoded ``/``
+    in the ``_doc/<id>`` path is parsed by ES as extra route segments, so the
+    document is silently rejected. Encoding with ``safe=""`` turns ``/`` into
+    ``%2F`` (and likewise escapes ``#``/``?``/space/…); the URL builder does no
+    path encoding of its own, so there is no double-encoding.
+    """
+    return quote(doc_id, safe="")
+
+
 class SimplifiedElasticsearchIndex:
     """Simplified Elasticsearch index wrapper for single index operations.
-    
+
     This class provides a simpler API for working with a single Elasticsearch index,
     suitable for use as a database backend.
     """
@@ -636,7 +650,7 @@ class SimplifiedElasticsearchIndex:
         """
         if doc_id:
             # Check if document exists
-            response = self._request("head", f"_doc/{doc_id}")
+            response = self._request("head", f"_doc/{_encode_doc_id(doc_id)}")
             return response.succeeded
         else:
             # Check if index exists
@@ -697,7 +711,9 @@ class SimplifiedElasticsearchIndex:
                 params["if_seq_no"] = if_seq_no
             if if_primary_term is not None:
                 params["if_primary_term"] = if_primary_term
-            response = self._request("delete", f"_doc/{doc_id}", params=params or None)
+            response = self._request(
+                "delete", f"_doc/{_encode_doc_id(doc_id)}", params=params or None
+            )
             # A conditional delete (guards supplied) surfaces a stale-token 409
             # as a distinct conflict; the unconditional path keeps its bool
             # contract (and a missing doc is a 404 -> False).
@@ -738,7 +754,7 @@ class SimplifiedElasticsearchIndex:
             ElasticsearchConflictError: When ``op_type="create"`` targets an id
                 that already exists (HTTP 409).
         """
-        path = f"_doc/{doc_id}" if doc_id else "_doc"
+        path = f"_doc/{_encode_doc_id(doc_id)}" if doc_id else "_doc"
         params: Dict[str, Any] = {}
         if refresh:
             params["refresh"] = "true"
@@ -793,7 +809,7 @@ class SimplifiedElasticsearchIndex:
         Returns:
             Document data or None if not found
         """
-        response = self._request("get", f"_doc/{doc_id}")
+        response = self._request("get", f"_doc/{_encode_doc_id(doc_id)}")
 
         if response.succeeded and response.json:
             return response.json
@@ -837,7 +853,9 @@ class SimplifiedElasticsearchIndex:
             params["if_seq_no"] = if_seq_no
         if if_primary_term is not None:
             params["if_primary_term"] = if_primary_term
-        response = self._request("post", f"_update/{doc_id}", body, params or None)
+        response = self._request(
+            "post", f"_update/{_encode_doc_id(doc_id)}", body, params or None
+        )
         # A conditional update (guards supplied) surfaces a stale-token 409 as
         # a distinct conflict; the unconditional path keeps its bool contract.
         if if_seq_no is not None and response.status == 409:

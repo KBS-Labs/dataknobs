@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-15T02:41:27Z",
+  "timestamp": "2026-07-15T04:13:34Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/data-allocate-with-retry",
-  "git_commit": "713091d8f1098d06b8e0e3c239f48a1225b542b4",
+  "git_branch": "sbk/data-queryable-keys-starts-with",
+  "git_commit": "f74f17b3ee2faf4929cc04158e6ccb9305bbec2e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

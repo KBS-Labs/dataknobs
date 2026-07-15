@@ -15,7 +15,7 @@ from ..database import AsyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
-from ..query import Operator, Query
+from ..query import Query
 from ..records import Record
 from ..streaming import (
     StreamConfig,
@@ -500,41 +500,21 @@ class AsyncS3Database(  # type: ignore[misc]
         return self._process_search_results(results, query, deep_copy=False)
 
     def _matches_filters(self, record: Record, filters: list) -> bool:
-        """Check if a record matches all filters."""
+        """Check if a record matches all filters.
+
+        Delegates every operator to the canonical ``Filter.matches`` matcher
+        (mirroring the sync S3 backend), so the ``id`` field resolves to the
+        record's storage key and every operator — including ``BETWEEN`` /
+        ``EXISTS`` / ``REGEX`` / ``STARTS_WITH`` — is honored uniformly.
+        """
         for filter in filters:
-            field = record.get_field(filter.field)
-            if not field:
+            # Special handling for 'id' field — it's the storage key, not a data field.
+            if filter.field == "id":
+                field_value = record.id
+            else:
+                field_value = record.get_value(filter.field)
+            if not filter.matches(field_value):
                 return False
-
-            value = field.value
-
-            if filter.operator == Operator.EQ:
-                if value != filter.value:
-                    return False
-            elif filter.operator == Operator.NEQ:
-                if value == filter.value:
-                    return False
-            elif filter.operator == Operator.GT:
-                if value <= filter.value:
-                    return False
-            elif filter.operator == Operator.LT:
-                if value >= filter.value:
-                    return False
-            elif filter.operator == Operator.GTE:
-                if value < filter.value:
-                    return False
-            elif filter.operator == Operator.LTE:
-                if value > filter.value:
-                    return False
-            elif filter.operator == Operator.LIKE:
-                if str(filter.value) not in str(value):
-                    return False
-            elif filter.operator == Operator.IN:
-                if value not in filter.value:
-                    return False
-            elif filter.operator == Operator.NOT_IN:
-                if value in filter.value:
-                    return False
 
         return True
 
