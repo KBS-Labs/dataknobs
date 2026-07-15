@@ -189,7 +189,8 @@ async def test_async_batch_minted_ids_are_filterable(elasticsearch_test_index) -
 
 def test_sync_minted_id_is_filterable(elasticsearch_test_index) -> None:
     """Parity guard: the sync backend already stamps the minted id — keep a
-    minted-id record findable by its id so the two backends cannot drift."""
+    minted-id record findable by its id so the two backends cannot drift.
+    """
     db = SyncElasticsearchDatabase(elasticsearch_test_index)
     db.connect()
     try:
@@ -308,7 +309,8 @@ async def test_sync_async_search_parity(elasticsearch_test_index, query) -> None
 @pytest.mark.parametrize("query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field)
 async def test_sync_async_count_parity(elasticsearch_test_index, query) -> None:
     """Sync and async ``count`` agree for every operator (the class of the
-    BETWEEN-only count-drop bug)."""
+    BETWEEN-only count-drop bug).
+    """
     sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
     sync_db.connect()
     async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
@@ -336,6 +338,54 @@ async def test_like_is_case_insensitive(elasticsearch_test_index) -> None:
         q = Query(filters=[Filter("tag", Operator.LIKE, "alpha")])
         assert _ids(sync_db.search(q)) == {"orders/1", "artifacts/b"}
         assert _ids(await async_db.search(q)) == {"orders/1", "artifacts/b"}
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_regex_matches_full_value_across_tokens(elasticsearch_test_index) -> None:
+    """``REGEX`` matches the full field value, not a single analyzed token.
+
+    ``regexp`` on the analyzed ``data.<field>`` path runs per-indexed-term, so a
+    cross-token pattern (``alice.*smith`` against ``"alice smith"``) matched
+    nothing — the analyzer split the value into ``alice`` / ``smith`` and the
+    pattern matched neither. Routing ``REGEX`` to the ``.keyword`` sub-field
+    matches the whole value, consistent with the in-memory (``re.search``) and
+    SQL backends. Both query backends agree.
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        sync_db.create(Record({"name": "alice smith"}, id="p/1"))
+        sync_db.create(Record({"name": "alice jones"}, id="p/2"))
+        q = Query(filters=[Filter("name", Operator.REGEX, "alice.*smith")])
+        assert _ids(sync_db.search(q)) == {"p/1"}
+        assert _ids(await async_db.search(q)) == {"p/1"}
+    finally:
+        sync_db.close()
+        await async_db.close()
+
+
+async def test_like_escapes_literal_wildcard_metacharacter(elasticsearch_test_index) -> None:
+    """A literal ``*`` in a SQL ``LIKE`` pattern matches verbatim, not as a
+    wildcard.
+
+    Only ``%``/``_`` are SQL wildcards; an unescaped ``*`` reaching the ES
+    ``wildcard`` query would match anything. With escaping, ``LIKE "a*b"`` finds
+    only the value ``"a*b"`` — not ``"axb"``. Both query backends agree.
+    """
+    sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    sync_db.connect()
+    async_db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await async_db.connect()
+    try:
+        sync_db.create(Record({"code": "a*b"}, id="c/star"))
+        sync_db.create(Record({"code": "axb"}, id="c/other"))
+        q = Query(filters=[Filter("code", Operator.LIKE, "a*b")])
+        assert _ids(sync_db.search(q)) == {"c/star"}
+        assert _ids(await async_db.search(q)) == {"c/star"}
     finally:
         sync_db.close()
         await async_db.close()

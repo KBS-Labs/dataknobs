@@ -986,6 +986,24 @@ db = factory.create(
 await db.connect()
 ```
 
+**Query semantics.** The Elasticsearch backend translates every `Filter` through
+one shared translator, so the sync backend, async backend, and vector/hybrid
+pre-filters agree:
+
+- **`REGEX`** matches the **full field value** (case-sensitive), like the
+  in-memory and SQL backends — not a single analyzed token. Elasticsearch
+  `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
+  look-around), which differs from Python `re`.
+- **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
+  case-insensitively; a literal `*`, `?`, or `\` in the pattern is escaped to
+  match verbatim. The case-insensitive form requires **Elasticsearch ≥ 7.10**.
+- **`Filter("id", ...)`** targets the record's storage key via a stamped
+  top-level `id` keyword field. Records indexed by an older version that did not
+  stamp a *minted* `id` must be reindexed to become `id`-queryable; `read(id)`
+  is unaffected.
+- An operator the translator cannot express raises `ValueError` rather than
+  silently matching every document.
+
 ## Exceptions
 
 The package defines specific exceptions for different error scenarios:

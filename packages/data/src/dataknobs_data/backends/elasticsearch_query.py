@@ -14,20 +14,45 @@ Field-path rules:
   top-level ``id`` keyword mirroring ``_id``; unlike the ``_id`` metafield it
   supports the full operator set (term/terms/range/prefix/wildcard/regexp/
   exists), so ``Filter("id", …)`` is a first-class query target. It is already
-  a keyword and never takes a ``.keyword`` suffix.
+  a keyword and never takes a ``.keyword`` suffix. Because this targets the
+  stamped top-level ``id`` field (not the ``_id`` metafield), ``id`` filtering
+  only sees documents written with that field present — every write path stamps
+  it now, but records indexed by an older version that did not stamp a *minted*
+  ``id`` must be reindexed to become ``id``-queryable.
+* A record data field literally named ``id`` (``record.data["id"]``) is not
+  reachable through the query API — ``Filter("id", …)`` always means the storage
+  key. Query such a field under a different name.
 * Other fields live under ``data.<field>``. The ``.keyword`` sub-field is used
-  where exact matching applies — equality, membership, wildcard and prefix on
-  string values; the analyzed base path is used for range, existence and regex.
+  wherever matching is against the **full, un-analyzed** value — equality,
+  membership, wildcard, prefix, and regex on string values; the analyzed base
+  path is used only for range and existence.
 
 Semantics:
 
 * ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``) and
-  match case-insensitively, consistent with the in-memory and SQL backends.
+  match case-insensitively, consistent with the in-memory and SQL backends. Any
+  other character — including the Lucene wildcard metacharacters ``*`` ``?`` and
+  the backslash escape — is escaped so it matches literally, mirroring SQL
+  ``LIKE`` where only ``%`` and ``_`` are wildcards. The case-insensitive
+  ``wildcard`` form requires Elasticsearch ≥ 7.10.
+* ``REGEX`` runs against the **full field value** via the ``.keyword`` sub-field
+  (case-sensitive), so a pattern matches the whole string — matching the
+  in-memory (``re.search``) and SQL backends. Against the analyzed base path a
+  ``regexp`` would match per-token (and lowercased), which is why the keyword
+  sub-field is used. Note Elasticsearch ``regexp`` is anchored (the pattern must
+  match the entire value) and uses Lucene RegExp syntax, which differs from
+  Python ``re`` (no ``^``/``$`` anchors, no look-around).
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` query.
-* Every negation returns a self-contained ``{"bool": {"must_not": …}}`` clause,
-  so callers only ever wrap the returned clauses in ``bool``/``must``.
+* Every negation (``NEQ``/``NOT_IN``/``NOT_EXISTS``/``NOT_LIKE``/``NOT_BETWEEN``)
+  returns a self-contained ``{"bool": {"must_not": …}}`` clause, so callers only
+  ever wrap the returned clauses in ``bool``/``must``. Per Elasticsearch's
+  three-valued ``must_not`` semantics, a document that is *missing* the field is
+  included by a negation (e.g. ``NEQ`` matches docs without the field) — this
+  differs from SQL ``!=``, which excludes NULLs.
 * An unsupported operator raises ``ValueError`` rather than silently matching
-  every document.
+  every document — a dropped filter that falls back to ``match_all`` returns
+  everything, the worst failure mode for a query engine. ``ValueError`` matches
+  the in-memory matcher's own unknown-operator raise (``Filter.matches``).
 """
 
 from __future__ import annotations
@@ -47,13 +72,21 @@ if TYPE_CHECKING:
 _KEYWORD_EQUALITY_OPS = frozenset(
     {Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN}
 )
+# Pattern operators always match against the full, un-analyzed value, so they
+# unconditionally target the ``.keyword`` sub-field. ``REGEX`` is here (not on
+# the analyzed base path) so a pattern matches the whole string rather than a
+# single analyzed token — see the module Semantics note.
 _KEYWORD_PATTERN_OPS = frozenset(
-    {Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH}
+    {Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX}
 )
 
 
 def _is_string_value(value: Any) -> bool:
-    """Whether a value (or the first element of a list) is a string."""
+    """Whether a value (or the first element of a list) is a string.
+
+    For a membership list this inspects only the first element — a
+    heterogeneous ``IN``/``NOT_IN`` list keys its field path off ``value[0]``.
+    """
     if isinstance(value, str):
         return True
     return bool(value) and isinstance(value, list) and isinstance(value[0], str)
@@ -80,8 +113,22 @@ def _field_path(filter_obj: Filter) -> str:
 
 
 def _sql_wildcard_to_es(pattern: str) -> str:
-    """Translate SQL ``LIKE`` wildcards to Elasticsearch wildcard syntax."""
-    return pattern.replace("%", "*").replace("_", "?")
+    """Translate a SQL ``LIKE`` pattern to Elasticsearch ``wildcard`` syntax.
+
+    Only ``%`` and ``_`` are SQL wildcards; every other character is literal —
+    including the Lucene wildcard metacharacters ``*`` ``?`` and the backslash
+    escape. Those are escaped first (so they match literally), *then* the SQL
+    wildcards are mapped onto the ES forms, so a freshly-introduced ``*``/``?``
+    is never re-escaped. Raises ``ValueError`` for a non-string pattern.
+    """
+    if not isinstance(pattern, str):
+        raise ValueError(f"LIKE/NOT_LIKE pattern must be a string, got: {pattern!r}")
+    escaped = (
+        pattern.replace("\\", "\\\\")  # escape the escape char first
+        .replace("*", "\\*")  # literal SQL '*' -> ES literal
+        .replace("?", "\\?")  # literal SQL '?' -> ES literal
+    )
+    return escaped.replace("%", "*").replace("_", "?")
 
 
 def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
@@ -138,6 +185,8 @@ def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
     if op == Operator.NOT_EXISTS:
         return {"bool": {"must_not": {"exists": {"field": field_path}}}}
     if op == Operator.REGEX:
+        # ``field_path`` is the ``.keyword`` sub-field (or ``id``), so the
+        # regexp matches the full value, not a single analyzed token.
         return {"regexp": {field_path: value}}
     if op == Operator.STARTS_WITH:
         # Literal, case-sensitive prefix — no case_insensitive flag.

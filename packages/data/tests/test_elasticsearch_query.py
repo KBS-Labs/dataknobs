@@ -11,11 +11,14 @@ Contract pinned here:
 * ``Filter("id", …)`` targets the top-level ``id`` keyword (a full query
   target: term/terms/range/prefix/wildcard/regexp/exists), never ``_id`` or
   ``data.id``.
-* Other string fields use the ``.keyword`` sub-field where exact matching
-  applies (equality, membership, wildcard, prefix); numeric/range/exists/regex
-  use the analyzed ``data.<field>`` path.
-* ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``) and
-  match case-insensitively, matching the in-memory and SQL backends.
+* Other string fields use the ``.keyword`` sub-field wherever matching is
+  against the full un-analyzed value (equality, membership, wildcard, prefix,
+  regex); numeric range/exists use the analyzed ``data.<field>`` path.
+* ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``),
+  escape literal Lucene metacharacters (``*``/``?``/backslash), and match
+  case-insensitively, matching the in-memory and SQL backends.
+* ``REGEX`` targets the ``.keyword`` sub-field so the pattern matches the full
+  value, not a single analyzed token.
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` (no ``case_insensitive`` flag).
 * Every negation returns a self-contained ``{"bool": {"must_not": …}}`` clause.
 * An unsupported operator raises rather than silently matching everything.
@@ -29,6 +32,8 @@ import pytest
 
 from dataknobs_data import Filter, Operator
 from dataknobs_data.backends.elasticsearch_query import (
+    _field_path,
+    _sql_wildcard_to_es,
     build_bool_query,
     build_complex_es_query,
     build_filter_es_query,
@@ -116,6 +121,35 @@ def test_not_like_wraps_case_insensitive_wildcard() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("sql_pattern", "es_value"),
+    [
+        # Literal Lucene metacharacters in the SQL pattern must be escaped so
+        # they match verbatim — only % and _ are wildcards in SQL LIKE.
+        ("a*b", "a\\*b"),  # literal * -> \*  (not an ES wildcard)
+        ("a?b", "a\\?b"),  # literal ? -> \?  (not an ES single-char wildcard)
+        ("a\\b", "a\\\\b"),  # literal backslash -> \\
+        # SQL wildcards still map through, and a mix escapes only the literals.
+        ("a%_*", "a*?\\*"),  # % -> * , _ -> ? , literal * -> \*
+    ],
+)
+def test_like_escapes_literal_lucene_metacharacters(
+    sql_pattern: str, es_value: str
+) -> None:
+    # Reproduce-first for the escaping gap: without escaping, a literal '*' in
+    # a SQL LIKE pattern became an ES wildcard matching anything.
+    assert build_filter_es_query(Filter("f", Operator.LIKE, sql_pattern)) == {
+        "wildcard": {"data.f.keyword": {"value": es_value, "case_insensitive": True}}
+    }
+
+
+def test_like_non_string_pattern_raises() -> None:
+    # A non-string LIKE pattern fails loud with a clear message rather than an
+    # opaque AttributeError from .replace on a non-str.
+    with pytest.raises(ValueError, match="must be a string"):
+        build_filter_es_query(Filter("f", Operator.LIKE, 123))  # type: ignore[arg-type]
+
+
 # --- membership ------------------------------------------------------------
 
 def test_in_string_list_uses_keyword() -> None:
@@ -152,9 +186,22 @@ def test_not_exists_wraps_in_must_not() -> None:
 
 # --- regex / prefix --------------------------------------------------------
 
-def test_regex_uses_base_field_case_sensitive() -> None:
+def test_regex_uses_keyword_full_value() -> None:
+    # REGEX targets the .keyword sub-field (full, un-analyzed value), NOT the
+    # analyzed base path where a regexp would match a single lowercased token.
     assert build_filter_es_query(Filter("f", Operator.REGEX, "a.*z")) == {
-        "regexp": {"data.f": "a.*z"}
+        "regexp": {"data.f.keyword": "a.*z"}
+    }
+
+
+def test_regex_multi_token_pattern_targets_full_value() -> None:
+    # Reproduce-first for the tokenization divergence: a pattern spanning a
+    # space (``alice.*smith``) is meaningless against per-token analyzed text
+    # but matches the full value ``"alice smith"`` on the keyword sub-field.
+    # Pin that REGEX resolves to .keyword so cross-token patterns work like the
+    # in-memory (re.search) and SQL backends, not the old per-token data.name.
+    assert build_filter_es_query(Filter("name", Operator.REGEX, "alice.*smith")) == {
+        "regexp": {"data.name.keyword": "alice.*smith"}
     }
 
 
@@ -264,7 +311,40 @@ def test_complex_single_filter_condition() -> None:
     assert build_complex_es_query(condition) == {"prefix": {"id": "orders/"}}
 
 
-# --- unsupported operator fails loud ---------------------------------------
+def test_complex_single_clause_and_collapses() -> None:
+    # A one-condition AND collapses to the bare clause (no bool/must wrapper).
+    condition = LogicCondition(
+        operator=LogicOperator.AND,
+        conditions=[FilterCondition(Filter("a", Operator.EQ, "x"))],
+    )
+    assert build_complex_es_query(condition) == {"term": {"data.a.keyword": "x"}}
+
+
+def test_complex_single_clause_or_collapses() -> None:
+    # A one-condition OR collapses too (no should/minimum_should_match wrapper).
+    condition = LogicCondition(
+        operator=LogicOperator.OR,
+        conditions=[FilterCondition(Filter("a", Operator.EQ, "x"))],
+    )
+    assert build_complex_es_query(condition) == {"term": {"data.a.keyword": "x"}}
+
+
+@pytest.mark.parametrize("logic_op", [LogicOperator.AND, LogicOperator.OR])
+def test_complex_empty_branch_is_match_all(logic_op: LogicOperator) -> None:
+    # An empty AND/OR branch is match_all — a no-constraint branch matches all.
+    assert build_complex_es_query(
+        LogicCondition(operator=logic_op, conditions=[])
+    ) == {"match_all": {}}
+
+
+def test_complex_empty_not_is_match_all() -> None:
+    # A NOT with no inner condition has nothing to negate -> match_all.
+    assert build_complex_es_query(
+        LogicCondition(operator=LogicOperator.NOT, conditions=[])
+    ) == {"match_all": {}}
+
+
+# --- unsupported operator / malformed value fail loud ----------------------
 
 def test_unsupported_operator_raises() -> None:
     # A translator that cannot express a filter must fail loud, not silently
@@ -272,3 +352,93 @@ def test_unsupported_operator_raises() -> None:
     bogus = SimpleNamespace(field="f", operator="not-an-operator", value=1)
     with pytest.raises(ValueError, match="Unsupported operator"):
         build_filter_es_query(bogus)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("op", [Operator.BETWEEN, Operator.NOT_BETWEEN])
+@pytest.mark.parametrize("bad_value", [[1], [1, 2, 3], "not-a-pair", 5])
+def test_between_malformed_bounds_raise(op: Operator, bad_value: object) -> None:
+    # BETWEEN/NOT_BETWEEN require exactly a two-element bound; anything else
+    # fails loud rather than emitting a malformed range clause.
+    with pytest.raises(ValueError, match="two-element bound"):
+        build_filter_es_query(Filter("age", op, bad_value))
+
+
+# --- helper functions in isolation -----------------------------------------
+# The operators above pin these transitively; these pin them directly so a
+# regression in the escaping or field-path logic points at the helper, not a
+# downstream operator clause.
+
+@pytest.mark.parametrize(
+    ("sql_pattern", "es_value"),
+    [
+        ("abc", "abc"),  # no wildcards -> unchanged
+        ("a%b", "a*b"),  # % -> *
+        ("a_b", "a?b"),  # _ -> ?
+        ("a%_b", "a*?b"),  # both SQL wildcards
+        ("a*b", "a\\*b"),  # literal * escaped
+        ("a?b", "a\\?b"),  # literal ? escaped
+        ("a\\b", "a\\\\b"),  # literal backslash escaped
+        ("*_%", "\\*?*"),  # literal * escaped; _ -> ? ; % -> *
+        ("\\%", "\\\\*"),  # backslash escaped first, then % -> *
+    ],
+)
+def test_sql_wildcard_to_es_translates_and_escapes(
+    sql_pattern: str, es_value: str
+) -> None:
+    assert _sql_wildcard_to_es(sql_pattern) == es_value
+
+
+@pytest.mark.parametrize("bad", [123, None, ["a"], 4.5])
+def test_sql_wildcard_to_es_non_string_raises(bad: object) -> None:
+    with pytest.raises(ValueError, match="must be a string"):
+        _sql_wildcard_to_es(bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        Operator.EQ,
+        Operator.STARTS_WITH,
+        Operator.REGEX,
+        Operator.GT,
+        Operator.IN,
+        Operator.EXISTS,
+    ],
+)
+def test_field_path_id_is_always_unsuffixed(op: Operator) -> None:
+    # The id short-circuit runs before any operator check, so every operator
+    # resolves id to the bare top-level keyword — never id.keyword, never _id.
+    value = ["x"] if op in (Operator.IN,) else "x"
+    assert _field_path(Filter("id", op, value)) == "id"
+
+
+@pytest.mark.parametrize(
+    "op",
+    [Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX],
+)
+def test_field_path_pattern_ops_use_keyword_regardless_of_value(
+    op: Operator,
+) -> None:
+    # Pattern operators always match the full un-analyzed value, so they target
+    # .keyword unconditionally (patterns are strings anyway).
+    assert _field_path(Filter("f", op, "p")) == "data.f.keyword"
+
+
+def test_field_path_string_equality_uses_keyword() -> None:
+    assert _field_path(Filter("f", Operator.EQ, "s")) == "data.f.keyword"
+    assert _field_path(Filter("f", Operator.IN, ["a", "b"])) == "data.f.keyword"
+
+
+@pytest.mark.parametrize(
+    ("op", "value"),
+    [
+        (Operator.EQ, 30),  # non-string equality stays on the analyzed path
+        (Operator.IN, [1, 2]),  # non-string membership too
+        (Operator.GT, 5),  # range never uses .keyword
+        (Operator.EXISTS, None),  # existence targets the base field
+    ],
+)
+def test_field_path_non_string_and_range_use_base(
+    op: Operator, value: object
+) -> None:
+    assert _field_path(Filter("f", op, value)) == "data.f"
