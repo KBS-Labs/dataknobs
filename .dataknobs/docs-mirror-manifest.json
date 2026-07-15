@@ -14,20 +14,11 @@
       "site_dir": "docs/packages/data",
       "symlink": [
         {"package": "DEDUP.md", "site": "dedup.md"},
-        {"package": "KEYED_RECORD_STORE.md", "site": "keyed-record-store.md"}
+        {"package": "KEYED_RECORD_STORE.md", "site": "keyed-record-store.md"},
+        {"package": "BATCH_PROCESSING_GUIDE.md", "site": "batch-processing-guide.md"}
       ],
       "mirror": [
-        {
-          "package": "API_REFERENCE.md",
-          "site": "api-reference.md",
-          "line_exceptions": [
-            {
-              "package": "call. See the [Batch Processing Guide](BATCH_PROCESSING_GUIDE.md) for the",
-              "site": "call. See the [Migration guide](migration.md) for the",
-              "note": "The source links to BATCH_PROCESSING_GUIDE.md, which has no site mirror yet; the site repoints to the existing migration.md page (same streaming-write / StreamConfig material). Remove this exception once the batch guide is mirrored to the site."
-            }
-          ]
-        },
+        {"package": "API_REFERENCE.md", "site": "api-reference.md"},
         {"package": "TRANSACTIONS.md", "site": "transactions.md"}
       ],
       "transclude": [
@@ -42,7 +33,6 @@
       ],
       "package_only": [
         "ARCHITECTURE.md",
-        "BATCH_PROCESSING_GUIDE.md",
         "BOOLEAN_LOGIC_OPERATORS.md",
         "DESIGN_PLAN.md",
         "RECORD_ID_ARCHITECTURE.md",

@@ -534,7 +534,7 @@ original = migration.apply(migrated, reverse=True)
 ### Migrator
 
 `Migrator` is a stateless orchestrator; the source and target are passed per
-call. See the [Migration guide](migration.md) for the
+call. See the [Batch Processing Guide](batch-processing-guide.md) for the
 streaming write path (`StreamConfig` / `StreamResult`) and the full
 conflict-policy API; `migrate_stream` / `migrate_parallel` / `migrate_async`
 are the streaming siblings of `migrate`.
