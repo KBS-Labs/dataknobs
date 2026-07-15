@@ -197,6 +197,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The async Elasticsearch backend honors the full operator set — `REGEX`,
+  `EXISTS`, `NOT_EXISTS`, `NOT_LIKE`, and the negations of `IN`/`BETWEEN` — in
+  `search()`, `count()`, and `stream_read()`, matching the sync backend and the
+  other backends. It previously translated only a subset inline, so those
+  operators were silently dropped and the query fell back to matching every
+  document. The async `search()` also accepts a `ComplexQuery` (AND/OR/NOT).
+- Elasticsearch `LIKE`/`NOT_LIKE` uses SQL-wildcard (`%`→any, `_`→one),
+  case-insensitive matching, consistent with the in-memory and SQL backends
+  (the async backend previously did a case-sensitive substring match).
+- `Filter("id", ...)` on Elasticsearch accepts the full operator set — prefix,
+  range, membership, wildcard, regex — against the record's storage key, which
+  is carried as a queryable `id` keyword field (a metafield-`_id` filter did not
+  support range/prefix/wildcard).
+- Elasticsearch vector and hybrid search pre-filters honor the full operator set
+  and resolve `Filter("id", ...)` to the record's storage key; equality is exact
+  (`term` on the keyword sub-field) rather than an analyzed match.
 - `upsert(id, record)` now honors the explicit `id` when the record carries a
   *different* pre-set `storage_id` and the id does not yet exist. The base
   create-fallback previously wrote the new row under the record's own

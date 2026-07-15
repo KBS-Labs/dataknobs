@@ -340,46 +340,16 @@ class ElasticsearchQueryBuilder:
 
     @staticmethod
     def _build_filter_query(filter_query: Query | None) -> dict[str, Any] | None:
-        """Build Elasticsearch filter query from Query object.
-        
-        Args:
-            filter_query: Query object to convert
-            
-        Returns:
-            Elasticsearch query dict or None
+        """Build an Elasticsearch pre-filter clause from a Query.
+
+        Vector and hybrid search pre-filter through the same shared translator
+        as the plain search paths, so the pre-filter honors the full operator
+        set and resolves ``id`` to the record's storage key. Equality is exact
+        (``term`` on the ``.keyword`` sub-field), not analyzed. Returns ``None``
+        when there is nothing to filter.
         """
-        if not filter_query:
+        from .elasticsearch_query import build_bool_query
+
+        if not filter_query or not filter_query.filters:
             return None
-
-        # TODO: Implement full query translation
-        # For now, just support simple field equality
-        from ..query import Operator
-
-        must_clauses = []
-
-        if filter_query.filters:
-            for filter_item in filter_query.filters:
-                field_path = f"data.{filter_item.field}"
-
-                if filter_item.operator == Operator.EQ:
-                    # Use match query for text fields to handle analyzed text
-                    must_clauses.append({
-                        "match": {field_path: filter_item.value}
-                    })
-                elif filter_item.operator == Operator.IN:
-                    must_clauses.append({
-                        "terms": {field_path: filter_item.value}
-                    })
-                elif filter_item.operator == Operator.GT:
-                    must_clauses.append({
-                        "range": {field_path: {"gt": filter_item.value}}
-                    })
-                elif filter_item.operator == Operator.LT:
-                    must_clauses.append({
-                        "range": {field_path: {"lt": filter_item.value}}
-                    })
-
-        if must_clauses:
-            return {"bool": {"must": must_clauses}}
-
-        return None
+        return build_bool_query(filter_query.filters)

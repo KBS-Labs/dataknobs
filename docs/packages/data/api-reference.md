@@ -410,8 +410,8 @@ A record's identifier is a first-class query target. `Filter("id", ...)`
 resolves to the record's **storage key** on every backend — equality (`EQ`),
 membership (`IN`), and literal prefix (`STARTS_WITH`) all apply to the key, and
 push down to the backend query engine where it supports them (a SQL range or
-`LIKE ... ESCAPE` on the `id` column, an Elasticsearch `prefix`/`ids` query),
-scanning in memory otherwise.
+`LIKE ... ESCAPE` on the `id` column, an Elasticsearch `term`/`terms`/`prefix`/
+`range` query on the `id` keyword field), scanning in memory otherwise.
 
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
 `_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
