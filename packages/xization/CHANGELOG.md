@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `nltk` requirement from `>=3.9.4` to `>=3.10.0` to exclude
+  versions affected by GHSA-p4gq-832x-fm9v / PYSEC-2026-2078 / CVE-2026-54293
+  (CVSS 7.5, path traversal in `nltk.data.find()` / `load()` via percent-encoded
+  `..%2f` sequences that bypass the `../` regex check once `url2pathname()`
+  decodes them), now fixed in 3.10.0 — previously acknowledged as unfixed in
+  v1.3.11. Flagged at the floor resolve by the `dependency-update` workflow. The
+  related PYSEC-2026-597 / CVE-2026-12243 (same path-traversal class) still has
+  no upstream fix and remains accepted — not reachable from this codebase, which
+  loads only fixed corpus names (wordnet/omw-1.4/wordnet_ic) and never passes
+  caller-controlled strings into `nltk.data.find()`.
+
 ## v1.3.11 - 2026-07-07
 
 ### Security

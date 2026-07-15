@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
   `AsyncDatabase.transaction()` primitive.
 
+### Security
+
+- Bumped minimum `click` requirement from `>=8.1.0` to `>=8.3.3` to exclude
+  versions affected by PYSEC-2026-2132 / CVE-2026-7246 (CVSS 7.2, command
+  injection in `click.edit()`), fixed in 8.3.3. Flagged at the floor resolve by
+  the `dependency-update` workflow.
+
 ## v0.2.5 - 2026-07-07
 
 ### Security
