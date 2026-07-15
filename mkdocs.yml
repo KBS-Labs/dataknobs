@@ -112,6 +112,7 @@ nav:
         - packages/data/hybrid-search.md
         - packages/data/dedup.md
         - packages/data/performance-tuning.md
+        - packages/data/batch-processing-guide.md
         - packages/data/migration.md
         - packages/data/validation.md
         - packages/data/pandas-integration.md
