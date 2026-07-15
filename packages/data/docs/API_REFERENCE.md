@@ -145,7 +145,76 @@ Backend notes:
   (memory) — and the per-record abstract-base loop (per-key PUT) on S3. This is
   the batch verb the streaming `"upsert"` conflict policy routes through.
 
+#### Allocating a new key under contention
+
+Allocating a *new* immutable record under a monotonic key — a version
+(`<stem>-v{N}`), a sequence number, or any derived key — follows a read →
+compute-next-key → `create()` shape. Because `create()` fails closed on a
+collision (above), two concurrent allocators that compute the same key no longer
+both win: the loser raises `DuplicateRecordError`. That is *safe*, but a
+legitimate second allocator should land the *next* key rather than error.
+
+`allocate()` (and its synchronous twin `allocate_sync()`) close that window with
+a bounded create-on-conflict retry. Supply a `build` callable that does a fresh
+read, computes the next key, and returns a `Record` under it; on a collision the
+helper re-runs `build` — so the retry sees the winner's write and computes a
+fresh key — and each concurrent allocator lands a distinct next key:
+
+```python
+from dataknobs_data import allocate, Record
+
+async def build() -> Record:
+    latest = await highest_existing_version(db, stem)   # fresh read each attempt
+    return Record({"body": text}, id=f"{stem}-v{latest + 1}")
+
+new_id = await allocate(db, build=build)   # concurrent writers each get a distinct -v{N}
+```
+
+The helper is key-agnostic — it never mints or mutates ids, so it works for any
+monotonic scheme the caller expresses through `build`. A single uncontended
+allocation makes exactly one attempt, identical to a direct `create()`; after
+`max_attempts` (default 16) consecutive collisions it re-raises the last
+`DuplicateRecordError`, bounded and fail-closed. `allocate_sync()` is the
+`SyncDatabase` twin with a plain (non-async) `build`.
+
+`allocate()` retries immediately with no delay. Each attempt targets `highest
+existing key + 1`, so the k-th concurrent allocator on one stem needs up to k
+attempts to diverge — and a burst of **more than** `max_attempts` allocators
+contending on the same stem can drive the tail allocators to exhaust the bound
+and fail closed *even though free keys remain*. The seamless guarantee holds only
+up to `max_attempts`-way same-stem contention: size `max_attempts` to the peak
+concurrent allocation you expect on a single stem. (Persistent exhaustion below
+that peak instead means a `build` that does not recompute a fresh key.) A consumer
+facing a thundering herd, or wanting backoff/jitter, can drive the same
+read-compute-create callable through `RetryExecutor` instead, retrying on
+`DuplicateRecordError` — the same idiom the conditional-write recipe below uses:
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+from dataknobs_data import DuplicateRecordError, Record
+
+async def allocate_next() -> str:
+    latest = await highest_existing_version(db, stem)
+    return await db.create(Record({"body": text}, id=f"{stem}-v{latest + 1}"))
+
+new_id = await RetryExecutor(
+    RetryConfig(
+        retry_on_exceptions=[DuplicateRecordError],
+        max_attempts=8,
+        backoff_strategy=BackoffStrategy.JITTER,
+    )
+).execute(allocate_next)
+```
+
 #### Optimistic concurrency (conditional writes)
+
+Optimistic concurrency guards a **conditional update of an existing record** — a
+shared, mutable cell claimed by compare-and-set. It is the wrong tool for
+*allocating a new immutable key* (a version, a sequence number): that case is
+served by the atomic `create()` + retry loop above (`allocate()`), which needs no
+authoritative pointer row. Reach for `expected_version` when a mutable counter or
+head record is CAS-updated to claim a slot; reach for atomic-create + retry for
+append-only/immutable-version allocation.
 
 `update()`, `upsert()`, and `delete()` accept an opt-in, keyword-only
 `expected_version` token so a read-modify-write (or a read-then-delete) can fail
