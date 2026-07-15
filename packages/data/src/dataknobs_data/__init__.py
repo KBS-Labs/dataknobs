@@ -118,6 +118,7 @@ from .query_logic import (
     QueryBuilder,
 )
 from .records import Record
+from .allocation import allocate, allocate_sync
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import ConflictPolicy, StreamConfig, StreamProcessor, StreamResult
@@ -138,6 +139,9 @@ __all__ = [
     "Operator",
     "SortOrder",
     "SortSpec",
+    # Allocation
+    "allocate",
+    "allocate_sync",
     # Boolean logic
     "ComplexQuery",
     "QueryBuilder",

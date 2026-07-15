@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `allocate` / `allocate_sync`: create a record under a caller-computed monotonic
+  key (a version, a sequence number, any derived key), retrying on a colliding id
+  so concurrent allocators each land a distinct next key. A caller-supplied
+  `build` callable does the fresh read, next-key computation, and record
+  construction; the helper re-runs it on `DuplicateRecordError` and retries. A
+  bounded create-on-conflict loop over the atomic `create()` — a single
+  uncontended allocation makes exactly one attempt, and after `max_attempts`
+  (default 8) collisions it re-raises the last collision, fail-closed. Key-agnostic
+  (never mints or mutates ids) and backend-agnostic (composes over the shared
+  `create()` contract, no backend-specific path).
+
 ### Changed
 
 - The `Migrator`'s batched write path (`migrate()`) now writes each batch
