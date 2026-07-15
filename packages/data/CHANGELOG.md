@@ -25,12 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pushes down to the backend query engine where available (a SQL range or
   `LIKE ... ESCAPE`, an Elasticsearch `prefix` query) and scans in memory
   otherwise. Record identifiers are first-class query targets: `Filter("id", ...)`
-  resolves to the storage key — equality, membership, and literal prefix —
-  uniformly across all backends, so a store that encodes hierarchy into its keys
+  resolves to the storage key — equality, membership, literal prefix, and
+  sorting — uniformly across all backends, including records whose id the
+  backend minted at write time, so a store that encodes hierarchy into its keys
   can scan a subtree with one filter instead of fetching coarsely and filtering
   in Python.
 
 ### Changed
+
+- The string-matching operators (`LIKE`, `NOT_LIKE`, `REGEX`, `STARTS_WITH`)
+  match **only string values**, consistently across the SQL and in-memory
+  backends. On the SQL backends (SQLite, PostgreSQL, DuckDB) a `data`/`metadata`
+  JSON field whose stored value is not a string (a number, boolean, …) no longer
+  matches these operators via text coercion — the push-down carries a
+  JSON-string-type guard so it agrees with the in-memory backends'
+  (`memory`/`file`/`s3`) `isinstance(str)` contract. The `id` storage key is a
+  real string column and is unaffected. The async S3
+  backend's `LIKE` now uses the same anchored, case-insensitive SQL-wildcard
+  semantics as the sync S3 backend and every other backend (previously a
+  case-sensitive substring test), and its non-`LIKE` operators — `BETWEEN`,
+  `EXISTS`, `REGEX`, `STARTS_WITH` — are now honored rather than silently
+  dropped.
 
 - The `Migrator`'s batched write path (`migrate()`) now writes each batch
   through the target's native bulk verbs — `create_batch` for `insert`

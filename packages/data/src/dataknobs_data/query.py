@@ -172,6 +172,10 @@ class Filter:
         elif self.operator == Operator.STARTS_WITH:
             # Literal, case-sensitive prefix match. Unlike LIKE, the prefix is
             # matched verbatim (a ``_`` or ``%`` in it is not a wildcard).
+            # String-only, like LIKE/REGEX: a non-string value never matches.
+            # The SQL backends enforce the same contract with a JSON-string-type
+            # guard (see SQLQueryBuilder._json_string_guard), so every backend
+            # agrees.
             return isinstance(record_value, str) and record_value.startswith(self.value)
         else:
             # This should never be reached as all operators are handled above

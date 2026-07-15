@@ -304,6 +304,94 @@ def test_sql_pushdown_sqlite_empty_prefix_is_always_true() -> None:
     assert params == []
 
 
+def test_sql_pushdown_sqlite_all_maximal_prefix_keeps_lower_bound() -> None:
+    """Reproduce-first: a non-empty all-maximal prefix stays lower-bounded.
+
+    ``prefix_upper_bound(chr(0x10FFFF))`` is ``None`` (no exclusive upper bound
+    exists), but the prefix is non-empty, so the SQLite clause must remain
+    ``id >= <prefix>`` — one bound param — not the empty-prefix ``IS NOT NULL``
+    that would return every row.
+    """
+    qb = SQLQueryBuilder("records", dialect="sqlite", param_style="qmark")
+    sql, params = qb.build_search_query(
+        Query(filters=[Filter("id", Operator.STARTS_WITH, chr(0x10FFFF))])
+    )
+    assert "id >=" in sql
+    assert "IS NOT NULL" not in sql
+    assert params == [chr(0x10FFFF)]
+
+
+def test_starts_with_all_maximal_prefix_is_lower_bounded(sync_db: object) -> None:
+    """Reproduce-first: a non-empty all-``U+10FFFF`` prefix must not degrade to
+    match-all — it stays lower-bounded, matching only keys at/after it.
+
+    The SQLite range path previously emitted a bare ``IS NOT NULL`` for both the
+    empty prefix and a non-empty all-maximal prefix, so ``STARTS_WITH
+    chr(0x10FFFF)`` returned every row. Verified across every in-process backend
+    for cross-backend parity with ``str.startswith``.
+    """
+    maximal = chr(0x10FFFF)
+    sync_db.create(Record({"n": 1}, id=maximal + "z"))
+    sync_db.create(Record({"n": 2}, id=maximal))
+    sync_db.create(Record({"n": 3}, id="normal"))
+    got = _ids(sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, maximal)])))
+    assert got == {maximal + "z", maximal}
+
+
+def test_string_only_operators_guard_non_string_json_fields() -> None:
+    """The SQL push-down carries a JSON-string-type guard for string-only
+    operators on a JSON data field, so a non-string value cannot match via text
+    projection — parity with the in-memory ``isinstance(str)`` contract."""
+    guards = {
+        "postgres": "jsonb_typeof(data->'code') = 'string'",
+        "sqlite": "json_type(data, '$.code') = 'text'",
+        "duckdb": "json_type(data, '$.code') = 'VARCHAR'",
+    }
+    styles = {"postgres": "numeric", "sqlite": "qmark", "duckdb": "qmark"}
+    for dialect, guard in guards.items():
+        qb = SQLQueryBuilder("records", dialect=dialect, param_style=styles[dialect])
+        for op in (Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH):
+            sql, _ = qb.build_search_query(Query(filters=[Filter("code", op, "5")]))
+            assert guard in sql, (dialect, op, sql)
+
+
+def test_id_string_only_operators_are_unguarded() -> None:
+    """The 'id' real column is always a string — no JSON type guard is added."""
+    for dialect, style in (("postgres", "numeric"), ("sqlite", "qmark"), ("duckdb", "qmark")):
+        qb = SQLQueryBuilder("records", dialect=dialect, param_style=style)
+        sql, _ = qb.build_search_query(
+            Query(filters=[Filter("id", Operator.STARTS_WITH, "x")])
+        )
+        assert "jsonb_typeof" not in sql
+        assert "json_type" not in sql
+
+
+def test_string_only_operators_skip_non_string_values(sync_db: object) -> None:
+    """Reproduce-first: STARTS_WITH / LIKE on a JSON data field match only string
+    values — a numeric value whose text form shares the prefix does not match.
+
+    The SQL text projection (``data->>'f'`` / ``json_extract``) coerced a numeric
+    value to text, so SQLite/DuckDB matched ``500`` for ``STARTS_WITH "500"`` while
+    the in-memory matcher (``isinstance(str)``) did not. The JSON-string-type guard
+    aligns every in-process backend.
+    """
+    sync_db.create(Record({"code": 500}, id="numeric"))
+    sync_db.create(Record({"code": "500-alpha"}, id="string"))
+    assert _ids(
+        sync_db.search(Query(filters=[Filter("code", Operator.STARTS_WITH, "500")]))
+    ) == {"string"}
+    assert _ids(
+        sync_db.search(Query(filters=[Filter("code", Operator.LIKE, "500%")]))
+    ) == {"string"}
+    # NOT_LIKE polarity: the numeric value must NOT resurface just because its
+    # text form ('500') is unlike 'zzz%'. A non-string value never matches a
+    # string-only operator in *either* direction (in-memory returns False for
+    # NOT_LIKE too), so only the genuinely-unlike string is returned.
+    assert _ids(
+        sync_db.search(Query(filters=[Filter("code", Operator.NOT_LIKE, "zzz%")]))
+    ) == {"string"}
+
+
 # ---------------------------------------------------------------------------
 # 6. Byte-identity regression — existing operators unchanged; async S3 gaps closed
 # ---------------------------------------------------------------------------

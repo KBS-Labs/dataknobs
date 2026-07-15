@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from dataknobs_data import Filter, Operator, Query, Record
+from dataknobs_data import Filter, Operator, Query, Record, SortOrder, SortSpec
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
@@ -117,6 +117,107 @@ async def test_async_matches_sync(elasticsearch_test_index) -> None:
     finally:
         sync_db.close()
         await async_db.close()
+
+
+async def test_async_minted_id_is_filterable(elasticsearch_test_index) -> None:
+    """Reproduce-first: a record created without an explicit id (minted uuid)
+    is still findable by ``Filter("id", ...)``.
+
+    The async backend built the document *before* minting the id and passed the
+    minted value only as ES ``_id`` — never stamping it into the document body.
+    Since id filters target the top-level ``id`` keyword field (mirroring
+    ``_id``), that field was absent for minted-id records, so EQ / STARTS_WITH /
+    IN on the minted id returned nothing. The sync backend never had this gap
+    (it always stamps ``doc["id"]``), so this is a sync/async parity fix.
+    """
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        minted = await db.create(Record({"payload": "no-id"}))
+        assert minted  # create() minted and returned a uuid
+        eq = await db.search(Query(filters=[Filter("id", Operator.EQ, minted)]))
+        assert _ids(eq) == {minted}
+        prefix = await db.search(
+            Query(filters=[Filter("id", Operator.STARTS_WITH, minted[:8])])
+        )
+        assert _ids(prefix) == {minted}
+        in_ = await db.search(Query(filters=[Filter("id", Operator.IN, [minted])]))
+        assert _ids(in_) == {minted}
+    finally:
+        await db.close()
+
+
+async def test_async_batch_minted_ids_are_filterable(elasticsearch_test_index) -> None:
+    """The minting write paths beyond ``create()`` stamp the resolved id into the
+    document body too, so a record they mint stays findable by ``Filter("id", ...)``.
+
+    Covers the same ``_record_to_doc(record, id)`` id-stamping fix through
+    ``create_batch`` / ``upsert_batch`` / ``upsert(record)`` — the write paths
+    that resolve their own id when the record has none.
+    """
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        # create_batch mints a uuid per id-less record.
+        created = await db.create_batch(
+            [Record({"payload": "a"}), Record({"payload": "b"})]
+        )
+        assert len(created) == 2
+        for rid in created:
+            assert _ids(
+                await db.search(Query(filters=[Filter("id", Operator.EQ, rid)]))
+            ) == {rid}
+
+        # upsert_batch mints too, and the id remains prefix-filterable.
+        upserted = await db.upsert_batch([Record({"payload": "c"})])
+        assert len(upserted) == 1
+        batch_id = upserted[0]
+        assert _ids(
+            await db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, batch_id[:8])]))
+        ) == {batch_id}
+
+        # upsert(record) with no id mints and must stay filterable.
+        single_id = await db.upsert(Record({"payload": "d"}))
+        assert _ids(
+            await db.search(Query(filters=[Filter("id", Operator.EQ, single_id)]))
+        ) == {single_id}
+    finally:
+        await db.close()
+
+
+def test_sync_minted_id_is_filterable(elasticsearch_test_index) -> None:
+    """Parity guard: the sync backend already stamps the minted id — keep a
+    minted-id record findable by its id so the two backends cannot drift."""
+    db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    db.connect()
+    try:
+        minted = db.create(Record({"payload": "no-id"}))
+        assert _ids(
+            db.search(Query(filters=[Filter("id", Operator.EQ, minted)]))
+        ) == {minted}
+    finally:
+        db.close()
+
+
+async def test_async_sort_by_id(elasticsearch_test_index) -> None:
+    """Reproduce-first: sorting by ``id`` orders by the storage key.
+
+    The async sort loop built ``data.{field}`` for every sort field, so
+    ``SortSpec("id")`` sorted on the (absent) ``data.id`` field and did not
+    order by the storage key. Sync ES special-cases ``id``; async now matches.
+    """
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        await _seed_async(db)
+        asc = await db.search(Query(sort_specs=[SortSpec("id")]))
+        assert [r.id for r in asc] == sorted(_KEYS)
+        desc = await db.search(
+            Query(sort_specs=[SortSpec("id", SortOrder.DESC)])
+        )
+        assert [r.id for r in desc] == sorted(_KEYS, reverse=True)
+    finally:
+        await db.close()
 
 
 def test_sync_count_between_is_filtered(elasticsearch_test_index) -> None:

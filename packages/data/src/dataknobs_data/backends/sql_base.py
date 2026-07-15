@@ -963,6 +963,40 @@ class SQLQueryBuilder:
         # SQLite: json_extract already returns typed values, no cast needed
         return base_expr
 
+    # Operators whose in-memory ``Filter.matches`` contract requires the field
+    # value to be a string (a non-string value never matches). On a JSON field
+    # the SQL text projection would otherwise coerce non-string values to text
+    # and match, so these get a JSON-string-type guard AND'd in — see
+    # :meth:`_json_string_guard` and :meth:`_build_filter_clause`.
+    _STRING_ONLY_OPERATORS = frozenset(
+        {Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH}
+    )
+
+    def _json_string_guard(self, field: str, column: str) -> str | None:
+        """Return a predicate asserting the JSON value at ``column.field`` is a string.
+
+        The string-only operators (LIKE / NOT_LIKE / REGEX / STARTS_WITH) match
+        only string values in the in-memory :meth:`Filter.matches` matcher
+        (``isinstance(record_value, str)``). Without this guard the SQL push-down
+        diverges: the text projection (``data->>'f'`` / ``json_extract`` /
+        ``json_extract_string``) coerces a numeric/boolean JSON value to text and
+        matches it. AND'ing this guard in keeps SQL and in-memory in agreement.
+
+        Returns ``None`` for a dialect without JSON type introspection (the
+        ``standard`` fallback), leaving behavior unchanged there. ``field`` is
+        pre-validated by the :meth:`_build_json_field_expr` call that precedes
+        every use of this guard; ``column`` is our own ``"data"``/``"metadata"``.
+        """
+        if self.dialect == "postgres":
+            # ``->`` (jsonb, not ``->>`` text) so jsonb_typeof sees the real type.
+            json_expr = self._build_json_field_expr(field, column=column, as_text=False)
+            return f"jsonb_typeof({json_expr}) = 'string'"
+        elif self.dialect == "sqlite":
+            return f"json_type({column}, '$.{field}') = 'text'"
+        elif self.dialect == "duckdb":
+            return f"json_type({column}, '$.{field}') = 'VARCHAR'"
+        return None
+
     def _build_operator_clause(
         self, field_expr: str, op: Operator, value: Any, param_start: int,
     ) -> tuple[str, list[Any]]:
@@ -1045,9 +1079,13 @@ class SQLQueryBuilder:
         - **sqlite** — a half-open range ``field >= prefix AND field <
           upper_bound``. SQLite ``LIKE`` is case-*insensitive* for ASCII, so it
           cannot be used here; ``>=``/``<`` on TEXT use BINARY collation
-          (case-sensitive) and ride the ``id`` primary-key index. An empty
-          prefix (or an all-maximal-code-point prefix) has no finite upper
-          bound → emit an always-true clause with no bound parameters.
+          (case-sensitive) and ride the ``id`` primary-key index. Two prefixes
+          have no finite upper bound: an **empty** prefix (matches every
+          non-null value → an always-true clause, no bound params) and a
+          **non-empty all-maximal-code-point** prefix (still lower-bounded →
+          ``field >= prefix``, one bound param). These are distinct: the
+          all-maximal case must keep the lower bound or it over-matches every
+          row, diverging from ``str.startswith``.
         """
         if self.dialect in ("postgres", "duckdb"):
             placeholder = self._get_param_placeholder(param_start)
@@ -1058,9 +1096,17 @@ class SQLQueryBuilder:
         prefix = str(value)
         upper = prefix_upper_bound(prefix)
         if upper is None:
-            # No finite upper bound (empty or all-maximal prefix) → match all
-            # non-null values, with no bound parameters consumed.
-            return f"{field_expr} IS NOT NULL", []
+            if not prefix:
+                # Empty prefix — every non-null value starts with it. Always-true
+                # clause, no bound parameters consumed.
+                return f"{field_expr} IS NOT NULL", []
+            # Non-empty prefix whose every code point is maximal (U+10FFFF):
+            # no exclusive upper bound exists, but the lower bound still holds.
+            # ``>= prefix`` matches exactly the strings at-or-above it (which are
+            # precisely those starting with this all-maximal prefix), unlike a
+            # bare ``IS NOT NULL`` that would return every row.
+            placeholder = self._get_param_placeholder(param_start)
+            return f"{field_expr} >= {placeholder}", [prefix]
         placeholder1 = self._get_param_placeholder(param_start)
         placeholder2 = self._get_param_placeholder(param_start + 1)
         return (
@@ -1097,6 +1143,11 @@ class SQLQueryBuilder:
         op = filter_spec.operator
         value = filter_spec.value
 
+        # Track the JSON (column, path) for string-only-operator guarding; the
+        # 'id' real column has no JSON type and is always a string, so it stays
+        # None (unguarded).
+        json_target: tuple[str, str] | None = None
+
         # Special handling for 'id' field — it's a real column, not inside JSON
         if field == 'id':
             field_expr = 'id'
@@ -1105,12 +1156,25 @@ class SQLQueryBuilder:
             nested_path = field[len("metadata."):]
             base_expr = self._build_json_field_expr(nested_path, column="metadata")
             field_expr = self._apply_type_cast(base_expr, op, value)
+            json_target = ("metadata", nested_path)
         else:
             # Everything else targets the data JSONB column (supports dot-notation)
             base_expr = self._build_json_field_expr(field, column="data")
             field_expr = self._apply_type_cast(base_expr, op, value)
+            json_target = ("data", field)
 
-        return self._build_operator_clause(field_expr, op, value, param_start)
+        clause, params = self._build_operator_clause(field_expr, op, value, param_start)
+
+        # String-only operators match only string values (in-memory contract).
+        # On a JSON field, AND in a JSON-string-type guard so a non-string value
+        # the text projection would coerce-and-match is excluded — keeping the
+        # SQL push-down in agreement with Filter.matches across every backend.
+        if op in self._STRING_ONLY_OPERATORS and json_target is not None:
+            guard = self._json_string_guard(json_target[1], json_target[0])
+            if guard:
+                clause = f"({guard} AND {clause})"
+
+        return clause, params
 
     def _record_to_json(self, record: Record) -> str:
         """Convert a Record to JSON string for storage."""

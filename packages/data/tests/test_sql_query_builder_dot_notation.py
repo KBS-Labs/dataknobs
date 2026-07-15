@@ -282,7 +282,12 @@ class TestOperatorsThroughRefactoredPath:
         b = _builder("postgres")
         f = Filter("metadata.description", Operator.LIKE, "%test%")
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "metadata->>'description' LIKE $1"
+        # LIKE is a string-only operator, so a JSON-string-type guard is AND'd in
+        # to keep non-string values from matching via text projection.
+        assert clause == (
+            "(jsonb_typeof(metadata->'description') = 'string' "
+            "AND metadata->>'description' LIKE $1)"
+        )
         assert params == ["%test%"]
 
     def test_exists_operator_with_metadata(self) -> None:
@@ -296,7 +301,10 @@ class TestOperatorsThroughRefactoredPath:
         b = _builder("postgres")
         f = Filter("metadata.tag", Operator.REGEX, "^v[0-9]+")
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "metadata->>'tag' ~ $1"
+        # REGEX is string-only — guarded so non-string JSON values never match.
+        assert clause == (
+            "(jsonb_typeof(metadata->'tag') = 'string' AND metadata->>'tag' ~ $1)"
+        )
         assert params == ["^v[0-9]+"]
 
 

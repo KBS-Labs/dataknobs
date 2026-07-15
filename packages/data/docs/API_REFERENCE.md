@@ -414,8 +414,10 @@ push down to the backend query engine where it supports them (a SQL range or
 scanning in memory otherwise.
 
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
-`_` or `%` in the prefix is matched verbatim rather than as a wildcard. When a
-store encodes hierarchy into its keys, a whole subtree is one filter:
+`_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
+`LIKE` and `REGEX`, it matches **string values only** — a non-string field value
+never matches, consistently across the SQL and in-memory backends. When a store
+encodes hierarchy into its keys, a whole subtree is one filter:
 
 ```python
 from dataknobs_data import Query, Filter, Operator
