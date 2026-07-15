@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase
+from ..database import AsyncDatabase, enforce_content_version
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncSQLiteDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLTableManager
+from .sql_base import SQLQueryBuilder, SQLTableManager, is_duplicate_key_error
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -79,6 +81,12 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         self.db: aiosqlite.Connection | None = None
         self._connected = False
+
+        # Serializes conditional (compare-and-set) writes so a concurrent pair
+        # on one instance yields exactly one winner. aiosqlite queues each
+        # statement independently, so without this the read and the write of a
+        # conditional update could interleave across coroutines.
+        self._cas_lock = asyncio.Lock()
 
         # Initialize vector support
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
@@ -191,7 +199,11 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             return record_id
         except aiosqlite.IntegrityError as e:
             await self.db.rollback()
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(params[0]) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
@@ -206,17 +218,44 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(dict(row))
             return None
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for SQLite). When provided,
+                a stale token raises ``ConcurrencyError`` instead of
+                overwriting. When ``None`` the update is unconditional,
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
+
+        # Conditional write: hold the CAS lock across the read-compare-write so
+        # a concurrent conditional pair on this instance yields exactly one
+        # winner. Reusing read() guarantees the token compared here matches the
+        # one get_version() returned. Cross-connection atomicity is out of
+        # scope (see the module docs on the in-process content-hash backends).
+        if expected_version is not None:
+            async with self._cas_lock:
+                current = await self.read(id)
+                if current is None:
+                    return False
+                enforce_content_version(id, expected_version, current)
+                query, params = self.query_builder.build_update_query(id, record)
+                cursor = await self.db.execute(query, params)
+                await self.db.commit()
+                return cursor.rowcount > 0
 
         query, params = self.query_builder.build_update_query(id, record)
 
@@ -229,9 +268,31 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         return rows_affected > 0
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the read-compare-delete runs
+        under the CAS lock so a concurrent conditional pair on this instance
+        yields exactly one winner; a stale token raises ``ConcurrencyError``
+        and a missing record returns ``False``. Cross-connection atomicity is
+        out of scope (see the module docs on the in-process content-hash
+        backends). When ``None`` the delete is unconditional, byte-identical to
+        prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            async with self._cas_lock:
+                current = await self.read(id)
+                if current is None:
+                    return False
+                enforce_content_version(id, expected_version, current)
+                query, params = self.query_builder.build_delete_query(id)
+                cursor = await self.db.execute(query, params)
+                await self.db.commit()
+                return cursor.rowcount > 0
 
         query, params = self.query_builder.build_delete_query(id)
 
@@ -288,30 +349,111 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         """SQLite batch ops run inside an explicit ``BEGIN``/``COMMIT``."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Open one native transaction on the shared aiosqlite connection.
+
+        Issues a single ``BEGIN TRANSACTION`` and yields ``self.db`` as the
+        handle; the batch methods run their DML on it and skip their own
+        ``BEGIN``/``commit`` when a handle is threaded (``_tx is not None``), so
+        a multi-kind buffered-transaction flush commits (or rolls back) as one
+        unit. Concurrency: the connection is single, so — as the module docs
+        note — two buffered-transaction commits must not run against this
+        instance concurrently; the ``BEGIN``/``COMMIT`` boundaries would
+        interleave.
+        """
+        self._check_connection()
+        await self.db.execute("BEGIN TRANSACTION")
+        try:
+            yield self.db
+            await self.db.commit()
+        except BaseException:
+            await self.db.rollback()
+            raise
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently using a single query.
 
-        Uses multi-value INSERT for better performance.
+        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
+        colliding id (or a duplicate id within the batch) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written. A caller-supplied ``record.id`` is honored (the shared query
+        builder mints a uuid only when a record has none).
+
+        When ``_tx`` is supplied (a multi-kind buffered-transaction flush), the
+        DML joins that outer transaction and this method skips its own
+        ``BEGIN``/``commit``/``rollback`` — the outer :meth:`_transaction` owns
+        the boundary.
         """
         if not records:
             return []
 
         self._check_connection()
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
-        # Execute the batch insert in a transaction
-        await self.db.execute("BEGIN TRANSACTION")
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
 
         try:
             await self.db.execute(query, params)
-            await self.db.commit()
+            if own_tx:
+                await self.db.commit()
 
             # Return the generated IDs
             return ids
+        except aiosqlite.IntegrityError as e:
+            if own_tx:
+                await self.db.rollback()
+            if is_duplicate_key_error(e):
+                # Name the colliding id precisely on the error path only.
+                colliding = ids[0]
+                for record in records:
+                    if record.id and await self.exists(record.id):
+                        colliding = record.id
+                        break
+                raise DuplicateRecordError(colliding) from e
+            raise RecordValidationError(str(e)) from e
         except Exception:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
+            raise
+
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+
+        When ``_tx`` is supplied the DML joins that outer transaction and this
+        method skips its own boundary (see :meth:`create_batch`).
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
+        try:
+            await self.db.execute(query, params)
+            if own_tx:
+                await self.db.commit()
+            return ids
+        except Exception:
+            if own_tx:
+                await self.db.rollback()
             raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -354,10 +496,15 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             await self.db.rollback()
             raise
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause for better performance.
+
+        When ``_tx`` is supplied the DML joins that outer transaction and this
+        method skips its own boundary (see :meth:`create_batch`).
         """
         if not ids:
             return []
@@ -375,12 +522,14 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         # Use the shared batch delete query builder
         query, params = self.query_builder.build_batch_delete_query(ids)
 
-        # Execute the batch delete in a transaction
-        await self.db.execute("BEGIN TRANSACTION")
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
 
         try:
             await self.db.execute(query, params)
-            await self.db.commit()
+            if own_tx:
+                await self.db.commit()
 
             # Return results based on which IDs existed
             results = []
@@ -389,7 +538,8 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
             return results
         except Exception:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
             raise
 
     def _initialize(self) -> None:
@@ -440,38 +590,35 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into database."""
-        import time
+        """Stream records into database.
 
-        from ..streaming import StreamConfig, StreamResult
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
+        """
+        from ..streaming import (
+            StreamConfig,
+            async_run_stream_write,
+            resolve_conflict_write,
+        )
 
         config = config or StreamConfig()
-        batch = []
-        total_written = 0
-        start_time = time.time()
 
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write the batch
-                await self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            await self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )
 
     async def vector_search(

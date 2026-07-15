@@ -10,6 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from dataknobs_utils.sql_utils import quote_ident
 
+from ..exceptions import DuplicateRecordError
 from ..query import Filter, Operator, Query, SortOrder
 from ..records import Record
 
@@ -29,6 +30,83 @@ def validate_field_name(field: str) -> None:
             f"Invalid field name: {field!r}. "
             f"Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
+
+
+def escape_like_prefix(prefix: str) -> str:
+    r"""Escape a literal string for use as a ``LIKE ... ESCAPE '\'`` prefix.
+
+    Escapes the LIKE metacharacters ``%`` and ``_`` and the escape character
+    ``\`` itself so that the prefix is matched *verbatim* — a ``_`` or ``%``
+    in the caller's prefix matches a literal ``_`` or ``%``, not a wildcard.
+    The caller appends the trailing ``%`` wildcard after escaping.
+
+    Args:
+        prefix: The literal prefix string.
+
+    Returns:
+        The prefix with ``\\``, ``%``, and ``_`` backslash-escaped.
+    """
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def prefix_upper_bound(prefix: str) -> str | None:
+    """Compute the exclusive upper bound for a literal-prefix range scan.
+
+    Returns the smallest string strictly greater than every string that begins
+    with *prefix*, formed by incrementing the last code point of *prefix*. A
+    half-open range ``value >= prefix AND value < upper_bound`` then matches
+    exactly the strings with that literal prefix, using a plain index range
+    scan under BINARY collation (case-sensitive).
+
+    Edge cases:
+    - An empty prefix has no upper bound (every string starts with it) →
+      returns ``None``; callers emit an always-true clause instead.
+    - A prefix whose final code point is the maximum representable
+      (``U+10FFFF``) cannot be incremented in place; the last incrementable
+      code point is advanced and the maximal tail is dropped. If every code
+      point is maximal, returns ``None`` (unbounded above).
+
+    Args:
+        prefix: The literal prefix string.
+
+    Returns:
+        The exclusive upper-bound string, or ``None`` if the prefix has no
+        finite upper bound.
+    """
+    if not prefix:
+        return None
+    # Walk from the end, incrementing the first code point that is not already
+    # the maximum. Everything after it (all maximal code points) is dropped.
+    for i in range(len(prefix) - 1, -1, -1):
+        if ord(prefix[i]) < 0x10FFFF:
+            return prefix[:i] + chr(ord(prefix[i]) + 1)
+    return None
+
+
+def is_duplicate_key_error(exc: BaseException) -> bool:
+    """Return True if a SQL integrity/constraint error is a primary-key
+    (duplicate-id) collision rather than another column-constraint violation.
+
+    ``create()`` maps a colliding id to ``DuplicateRecordError``, but the raw
+    driver exceptions (``sqlite3.IntegrityError``, ``duckdb.ConstraintException``)
+    also fire for ``NOT NULL`` and ``CHECK`` violations on the ``data`` /
+    ``metadata`` columns. Those must not be mislabeled as a duplicate id — this
+    predicate distinguishes them by the driver's error text:
+
+    - SQLite enforces a non-integer ``PRIMARY KEY`` via a unique index, so a
+      colliding id surfaces as ``UNIQUE constraint failed``.
+    - DuckDB reports ``Duplicate key ... violates primary key constraint``.
+
+    ``NOT NULL`` / ``CHECK`` violations carry their own distinct markers and
+    return ``False`` here.
+    """
+    msg = str(exc).lower()
+    return (
+        "unique constraint failed" in msg  # sqlite (id PK -> unique index)
+        or "primary key" in msg  # duckdb
+        or "duplicate key" in msg  # duckdb / generic
+    )
+
 
 if TYPE_CHECKING:
     from ..query_logic import ComplexQuery
@@ -566,27 +644,43 @@ class SQLQueryBuilder:
 
     def build_batch_create_query(self, records: list[Record]) -> tuple[str, list[Any], list[str]]:
         """Build a batch INSERT query for multiple records.
-        
-        Generates efficient multi-value INSERT statements.
-        
+
+        Generates an efficient multi-value INSERT statement. Like ``create()``,
+        a caller-supplied ``record.id`` is honored (a uuid is minted only when a
+        record has none); the id primary-key constraint makes a colliding id
+        fail closed at the store (the executor translates the driver violation
+        to ``DuplicateRecordError``). A duplicate id *within* the same batch —
+        which the single INSERT statement cannot express and which would surface
+        as an opaque constraint error — is detected here and raises
+        ``DuplicateRecordError`` before any SQL runs.
+
         Args:
             records: List of records to insert
-            
+
         Returns:
-            Tuple of (SQL query, parameters, generated IDs)
+            Tuple of (SQL query, parameters, ids in input order)
+
+        Raises:
+            DuplicateRecordError: two records in the batch share an id.
         """
         if not records:
             return "", [], []
 
         import uuid
 
-        # Generate IDs and prepare values
+        # Honor record.id; mint only when absent. Detect within-batch duplicate
+        # ids up front (a single INSERT cannot insert the same PK twice), failing
+        # closed the same way create() does for a colliding id.
         ids = []
         values_clauses = []
         params = []
+        seen: set[str] = set()
 
         for i, record in enumerate(records):
-            record_id = str(uuid.uuid4())
+            record_id = record.id or str(uuid.uuid4())
+            if record_id in seen:
+                raise DuplicateRecordError(record_id)
+            seen.add(record_id)
             ids.append(record_id)
             data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
@@ -606,6 +700,75 @@ class SQLQueryBuilder:
         """
 
         # PostgreSQL can use RETURNING
+        if self.dialect == "postgres":
+            query += " RETURNING id"
+
+        return query, params, ids
+
+    def build_batch_upsert_query(
+        self, records: list[Record]
+    ) -> tuple[str, list[Any], list[str]]:
+        """Build a batch INSERT ... ON CONFLICT DO UPDATE query.
+
+        The batch analogue of ``build_batch_create_query`` with upsert
+        semantics: a caller-supplied ``record.id`` is honored (a uuid is minted
+        only when absent) and an id already present is overwritten (never
+        raised). All three SQL dialects (PostgreSQL, SQLite, DuckDB) support
+        ``ON CONFLICT (id) DO UPDATE``.
+
+        A single ``ON CONFLICT`` statement cannot affect the same row twice, so
+        within-batch duplicate ids are coalesced keeping the **last** occurrence
+        (last-wins, matching a per-record ``upsert`` loop); the returned id list
+        still carries one entry per input record, in input order.
+
+        Args:
+            records: List of records to upsert
+
+        Returns:
+            Tuple of (SQL query, parameters, ids in input order)
+        """
+        if not records:
+            return "", [], []
+
+        import uuid
+
+        ids: list[str] = []
+        # Ordered id -> (data_json, metadata_json), last occurrence wins.
+        rows: dict[str, tuple[str, str | None]] = {}
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            data_json = self._record_to_json(record)
+            metadata_json = (
+                json.dumps(record.metadata) if record.metadata else None
+            )
+            rows[record_id] = (data_json, metadata_json)
+
+        values_clauses = []
+        params: list[Any] = []
+        for i, (record_id, (data_json, metadata_json)) in enumerate(rows.items()):
+            param_idx = i * 3 + 1
+            p1 = self._get_param_placeholder(param_idx)
+            p2 = self._get_param_placeholder(param_idx + 1)
+            p3 = self._get_param_placeholder(param_idx + 2)
+            values_clauses.append(
+                f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+            params.extend([record_id, data_json, metadata_json])
+
+        # EXCLUDED.updated_at is the CURRENT_TIMESTAMP from this row's VALUES
+        # clause (i.e. "now"); referencing it instead of a bare CURRENT_TIMESTAMP
+        # in the SET clause keeps the statement portable — DuckDB's binder
+        # rejects a bare CURRENT_TIMESTAMP there, PostgreSQL/SQLite accept both.
+        query = f"""
+        INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
+        VALUES {', '.join(values_clauses)}
+        ON CONFLICT (id) DO UPDATE SET
+            data = EXCLUDED.data,
+            metadata = EXCLUDED.metadata,
+            updated_at = EXCLUDED.updated_at
+        """
+
         if self.dialect == "postgres":
             query += " RETURNING id"
 
@@ -800,6 +963,40 @@ class SQLQueryBuilder:
         # SQLite: json_extract already returns typed values, no cast needed
         return base_expr
 
+    # Operators whose in-memory ``Filter.matches`` contract requires the field
+    # value to be a string (a non-string value never matches). On a JSON field
+    # the SQL text projection would otherwise coerce non-string values to text
+    # and match, so these get a JSON-string-type guard AND'd in — see
+    # :meth:`_json_string_guard` and :meth:`_build_filter_clause`.
+    _STRING_ONLY_OPERATORS = frozenset(
+        {Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH}
+    )
+
+    def _json_string_guard(self, field: str, column: str) -> str | None:
+        """Return a predicate asserting the JSON value at ``column.field`` is a string.
+
+        The string-only operators (LIKE / NOT_LIKE / REGEX / STARTS_WITH) match
+        only string values in the in-memory :meth:`Filter.matches` matcher
+        (``isinstance(record_value, str)``). Without this guard the SQL push-down
+        diverges: the text projection (``data->>'f'`` / ``json_extract`` /
+        ``json_extract_string``) coerces a numeric/boolean JSON value to text and
+        matches it. AND'ing this guard in keeps SQL and in-memory in agreement.
+
+        Returns ``None`` for a dialect without JSON type introspection (the
+        ``standard`` fallback), leaving behavior unchanged there. ``field`` is
+        pre-validated by the :meth:`_build_json_field_expr` call that precedes
+        every use of this guard; ``column`` is our own ``"data"``/``"metadata"``.
+        """
+        if self.dialect == "postgres":
+            # ``->`` (jsonb, not ``->>`` text) so jsonb_typeof sees the real type.
+            json_expr = self._build_json_field_expr(field, column=column, as_text=False)
+            return f"jsonb_typeof({json_expr}) = 'string'"
+        elif self.dialect == "sqlite":
+            return f"json_type({column}, '$.{field}') = 'text'"
+        elif self.dialect == "duckdb":
+            return f"json_type({column}, '$.{field}') = 'VARCHAR'"
+        return None
+
     def _build_operator_clause(
         self, field_expr: str, op: Operator, value: Any, param_start: int,
     ) -> tuple[str, list[Any]]:
@@ -863,8 +1060,59 @@ class SQLQueryBuilder:
                 return f"regexp_matches({field_expr}, {param_placeholder})", [value]
             else:
                 return f"{field_expr} REGEXP {param_placeholder}", [value]
+        elif op == Operator.STARTS_WITH:
+            return self._build_starts_with_clause(field_expr, value, param_start)
         else:
             raise ValueError(f"Unsupported operator: {op}")
+
+    def _build_starts_with_clause(
+        self, field_expr: str, value: Any, param_start: int,
+    ) -> tuple[str, list[Any]]:
+        r"""Build a case-sensitive literal-prefix clause for ``STARTS_WITH``.
+
+        Case-sensitivity parity with the in-memory ``str.startswith`` matcher
+        is the constraint, and it drives a per-dialect shape:
+
+        - **postgres / duckdb** — ``LIKE '<escaped-prefix>%' ESCAPE '\'``.
+          ``LIKE`` is case-sensitive on both engines, and the literal prefix is
+          escaped so ``%``/``_`` in it match verbatim.
+        - **sqlite** — a half-open range ``field >= prefix AND field <
+          upper_bound``. SQLite ``LIKE`` is case-*insensitive* for ASCII, so it
+          cannot be used here; ``>=``/``<`` on TEXT use BINARY collation
+          (case-sensitive) and ride the ``id`` primary-key index. Two prefixes
+          have no finite upper bound: an **empty** prefix (matches every
+          non-null value → an always-true clause, no bound params) and a
+          **non-empty all-maximal-code-point** prefix (still lower-bounded →
+          ``field >= prefix``, one bound param). These are distinct: the
+          all-maximal case must keep the lower bound or it over-matches every
+          row, diverging from ``str.startswith``.
+        """
+        if self.dialect in ("postgres", "duckdb"):
+            placeholder = self._get_param_placeholder(param_start)
+            escaped = escape_like_prefix(str(value)) + "%"
+            return f"{field_expr} LIKE {placeholder} ESCAPE '\\'", [escaped]
+
+        # sqlite (and any other dialect): case-sensitive half-open range scan.
+        prefix = str(value)
+        upper = prefix_upper_bound(prefix)
+        if upper is None:
+            if not prefix:
+                # Empty prefix — every non-null value starts with it. Always-true
+                # clause, no bound parameters consumed.
+                return f"{field_expr} IS NOT NULL", []
+            # Non-empty prefix whose every code point is maximal (U+10FFFF):
+            # no exclusive upper bound exists, but the lower bound still holds.
+            # ``>= prefix`` matches exactly the strings at-or-above it (which are
+            # precisely those starting with this all-maximal prefix), unlike a
+            # bare ``IS NOT NULL`` that would return every row.
+            placeholder = self._get_param_placeholder(param_start)
+            return f"{field_expr} >= {placeholder}", [prefix]
+        placeholder1 = self._get_param_placeholder(param_start)
+        placeholder2 = self._get_param_placeholder(param_start + 1)
+        return (
+            f"({field_expr} >= {placeholder1} AND {field_expr} < {placeholder2})",
+            [prefix, upper],
+        )
 
     def _build_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
         """Build a WHERE clause for a single filter.
@@ -895,6 +1143,11 @@ class SQLQueryBuilder:
         op = filter_spec.operator
         value = filter_spec.value
 
+        # Track the JSON (column, path) for string-only-operator guarding; the
+        # 'id' real column has no JSON type and is always a string, so it stays
+        # None (unguarded).
+        json_target: tuple[str, str] | None = None
+
         # Special handling for 'id' field — it's a real column, not inside JSON
         if field == 'id':
             field_expr = 'id'
@@ -903,12 +1156,25 @@ class SQLQueryBuilder:
             nested_path = field[len("metadata."):]
             base_expr = self._build_json_field_expr(nested_path, column="metadata")
             field_expr = self._apply_type_cast(base_expr, op, value)
+            json_target = ("metadata", nested_path)
         else:
             # Everything else targets the data JSONB column (supports dot-notation)
             base_expr = self._build_json_field_expr(field, column="data")
             field_expr = self._apply_type_cast(base_expr, op, value)
+            json_target = ("data", field)
 
-        return self._build_operator_clause(field_expr, op, value, param_start)
+        clause, params = self._build_operator_clause(field_expr, op, value, param_start)
+
+        # String-only operators match only string values (in-memory contract).
+        # On a JSON field, AND in a JSON-string-type guard so a non-string value
+        # the text projection would coerce-and-match is excluded — keeping the
+        # SQL push-down in agreement with Filter.matches across every backend.
+        if op in self._STRING_ONLY_OPERATORS and json_target is not None:
+            guard = self._json_string_guard(json_target[1], json_target[0])
+            if guard:
+                clause = f"({guard} AND {clause})"
+
+        return clause, params
 
     def _record_to_json(self, record: Record) -> str:
         """Convert a Record to JSON string for storage."""

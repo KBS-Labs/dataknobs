@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import time
 import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -13,7 +12,8 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import SyncDatabase
+from ..database import SyncDatabase, enforce_content_version
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
@@ -21,7 +21,12 @@ from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncSQLiteDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLRecordSerializer,
+    SQLTableManager,
+    is_duplicate_key_error,
+)
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -209,7 +214,11 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             return storage_id
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
-            raise ValueError(f"Record with ID {record.id} already exists") from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(storage_id) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
         finally:
             cursor.close()
 
@@ -233,15 +242,28 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for SQLite). When provided,
+                the read-compare-write runs inside one transaction so the
+                compare-and-set is atomic within the connection; a stale token
+                raises ``ConcurrencyError`` instead of overwriting. When
+                ``None`` the update is unconditional, byte-identical to prior
+                behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -257,6 +279,18 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         query = f"UPDATE {self.table_manager.qualified_table} SET data = ?, metadata = ? WHERE id = ?"
         params = [data_json, metadata_json, id]
 
+        # Conditional write: compare the current content-hash token before
+        # issuing the UPDATE. Reusing read() guarantees the token compared
+        # here is byte-identical to the one get_version() returned. On a
+        # single connection the read and write are effectively serialized;
+        # cross-connection atomicity is out of scope (see the module docs on
+        # the in-process content-hash backends).
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
+
         cursor = self.conn.cursor()
 
         try:
@@ -271,9 +305,25 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the current content-hash token is
+        compared before the ``DELETE``; a stale token raises
+        ``ConcurrencyError`` and a missing record returns ``False``. Reusing
+        ``read()`` keeps the compared token byte-identical to ``get_version()``.
+        On a single connection the read and delete are serialized;
+        cross-connection atomicity is out of scope (see the module docs on the
+        in-process content-hash backends). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
 
         query, params = self.query_builder.build_delete_query(id)
         cursor = self.conn.cursor()
@@ -365,17 +415,29 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch runs a multi-value INSERT inside a transaction: a
+        # colliding id rolls the whole statement back, so nothing is written on
+        # raise and the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
-        
-        Uses multi-value INSERT for better performance.
+
+        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
+        colliding id (or a duplicate id within the batch) raises
+        ``DuplicateRecordError`` and, because the INSERT runs in a transaction,
+        the whole batch is rolled back so nothing is written. A caller-supplied
+        ``record.id`` is honored (the shared query builder mints a uuid only when
+        a record has none).
         """
         if not records:
             return []
 
         self._check_connection()
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
         cursor = self.conn.cursor()
@@ -386,6 +448,44 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             self.conn.commit()
 
             # Return the generated IDs
+            return ids
+        except sqlite3.IntegrityError as e:
+            self.conn.rollback()
+            if is_duplicate_key_error(e):
+                # Name the colliding id precisely on the error path (cheap — only
+                # runs on a failed batch, never on the happy path).
+                colliding = next(
+                    (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+                )
+                raise DuplicateRecordError(colliding) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute(query, params)
+            self.conn.commit()
             return ids
         except Exception:
             self.conn.rollback()
@@ -523,36 +623,35 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into database."""
-        from ..streaming import StreamConfig, StreamResult
+        """Stream records into database.
+
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
+        """
+        from ..streaming import (
+            StreamConfig,
+            resolve_conflict_write,
+            run_stream_write,
+        )
 
         config = config or StreamConfig()
-        batch = []
-        total_written = 0
-        start_time = time.time()
 
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write the batch
-                self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )
 
     # Vector support methods

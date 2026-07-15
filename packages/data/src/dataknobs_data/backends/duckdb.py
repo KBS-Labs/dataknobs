@@ -11,17 +11,24 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLRecordSerializer,
+    SQLTableManager,
+    is_duplicate_key_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -232,7 +239,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(params[0]) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -266,15 +277,28 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for DuckDB). When provided,
+                the read-compare-write runs inside the connection lock so the
+                compare-and-set is atomic within the connection; a stale token
+                raises ``ConcurrencyError`` instead of overwriting. When
+                ``None`` the update is unconditional, byte-identical to prior
+                behavior.
 
         Returns:
             True if the record was updated, False if no record exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -283,14 +307,34 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             self.executor,
             self._update_sync,
             id,
-            record
+            record,
+            expected_version,
         )
 
-    def _update_sync(self, id: str, record: Record) -> bool:
+    def _update_sync(
+        self, id: str, record: Record, expected_version: str | None = None
+    ) -> bool:
         """Synchronous update implementation."""
         query, params = self.query_builder.build_update_query(id, record)
 
         with self._lock:
+            if expected_version is not None:
+                # Conditional write: read the current row and apply the update
+                # under the connection lock so the compare-and-set is atomic.
+                read_query, read_params = self.query_builder.build_read_query(id)
+                result = self.conn.execute(read_query, read_params).fetchone()
+                if result is None:
+                    # Conditional update of an absent record is a documented
+                    # False return, not a warning-worthy event (matches the
+                    # SQLite backend's quiet miss).
+                    return False
+                columns = self.conn.description
+                row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
+                current = SQLQueryBuilder.row_to_record(row_dict)
+                enforce_content_version(id, expected_version, current)
+                self.conn.execute(query, params)
+                return True
+
             # Check if record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
             exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
@@ -302,14 +346,26 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
             return False
 
-    async def delete(self, id: str) -> bool:
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional content-hash token from
+                ``get_version(id)``. When provided, the read-compare-delete
+                runs under the connection lock so the compare-and-set is atomic
+                within the connection; a stale token raises ``ConcurrencyError``
+                and a missing record returns ``False``. When ``None`` the
+                delete is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -317,14 +373,29 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._delete_sync,
-            id
+            id,
+            expected_version,
         )
 
-    def _delete_sync(self, id: str) -> bool:
+    def _delete_sync(self, id: str, expected_version: str | None = None) -> bool:
         """Synchronous delete implementation."""
         query, params = self.query_builder.build_delete_query(id)
 
         with self._lock:
+            if expected_version is not None:
+                # Conditional delete: read the current row and apply the delete
+                # under the connection lock so the compare-and-set is atomic.
+                read_query, read_params = self.query_builder.build_read_query(id)
+                result = self.conn.execute(read_query, read_params).fetchone()
+                if result is None:
+                    return False
+                columns = self.conn.description
+                row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
+                current = SQLQueryBuilder.row_to_record(row_dict)
+                enforce_content_version(id, expected_version, current)
+                self.conn.execute(query, params)
+                return True
+
             # First check if the record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
             exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
@@ -433,11 +504,58 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         """DuckDB batch ops run inside an explicit ``begin``/``commit``."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Open one native transaction on the shared DuckDB connection.
+
+        Runs the outer ``begin`` / ``commit`` / ``rollback`` on the executor
+        under ``self._lock`` (matching how every op reaches the connection) and
+        yields ``self.conn`` as the handle. The batch sync cores run their DML
+        under the same lock and skip their own ``begin``/``commit`` when a handle
+        is threaded, so a multi-kind buffered-transaction flush commits (or rolls
+        back) as one unit. As the module docs note, two buffered-transaction
+        commits must not run against this instance concurrently.
+        """
+        self._check_connection()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self.executor, self._begin_sync)
+        try:
+            yield self.conn
+            # Commit inside the ``try`` (not an ``else``) so a failure of the
+            # commit itself rolls the connection back — otherwise the shared
+            # connection is left with an open/aborted transaction and the next
+            # ``begin()`` raises "cannot start a transaction within a
+            # transaction". Mirrors the sqlite ``_transaction`` sibling.
+            await loop.run_in_executor(self.executor, self._commit_sync)
+        except BaseException:
+            await loop.run_in_executor(self.executor, self._rollback_sync)
+            raise
+
+    def _begin_sync(self) -> None:
+        """Begin a transaction on the connection (executor thread, under lock)."""
+        with self._lock:
+            self.conn.begin()
+
+    def _commit_sync(self) -> None:
+        """Commit the connection's transaction (executor thread, under lock)."""
+        with self._lock:
+            self.conn.commit()
+
+    def _rollback_sync(self) -> None:
+        """Roll back the connection's transaction (executor thread, under lock)."""
+        with self._lock:
+            self.conn.rollback()
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently.
 
         Args:
             records: List of records to create
+            _tx: Internal. When supplied (a multi-kind buffered-transaction
+                flush), the DML joins the outer :meth:`_transaction` and the sync
+                core skips its own ``begin``/``commit``.
 
         Returns:
             List of record IDs
@@ -451,23 +569,108 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._create_batch_sync,
-            records
+            records,
+            _tx is None,
         )
 
-    def _create_batch_sync(self, records: list[Record]) -> list[str]:
-        """Synchronous batch create implementation."""
+    def _create_batch_sync(
+        self, records: list[Record], own_tx: bool = True
+    ) -> list[str]:
+        """Synchronous batch create implementation.
+
+        Fails closed like ``create()``: a colliding id (or a within-batch
+        duplicate, raised up front by the shared query builder) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written; a caller-supplied ``record.id`` is honored. When ``own_tx`` is
+        ``False`` the DML runs inside an outer :meth:`_transaction` and this core
+        skips its own ``begin``/``commit``/``rollback``.
+        """
         # Use the shared batch create query builder
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
         # Execute the batch insert in a transaction
         with self._lock:
             try:
-                self.conn.begin()
+                if own_tx:
+                    self.conn.begin()
                 self.conn.execute(query, params)
-                self.conn.commit()
+                if own_tx:
+                    self.conn.commit()
+                return ids
+            except duckdb.ConstraintException as e:
+                if own_tx:
+                    self.conn.rollback()
+                if is_duplicate_key_error(e):
+                    colliding = ids[0]
+                    # Precise colliding-id naming needs a read probe, but DuckDB
+                    # (like Postgres) aborts the whole transaction on a
+                    # constraint violation. Probe only on the owned path, where
+                    # we just rolled back and the connection is queryable again;
+                    # on the multi-kind flush path (own_tx=False) the transaction
+                    # is still aborted — a probe would raise
+                    # ``duckdb.TransactionException`` and mask the
+                    # ``DuplicateRecordError`` — so report the first batch id and
+                    # let the outer ``_transaction`` roll the whole flush back.
+                    # We are on the executor thread holding the lock, so probe
+                    # the raw connection directly rather than the async exists()
+                    # coroutine.
+                    if own_tx:
+                        for record in records:
+                            rid = record.id
+                            if not rid:
+                                continue
+                            read_query, read_params = self.query_builder.build_read_query(rid)
+                            if self.conn.execute(read_query, read_params).fetchone() is not None:
+                                colliding = rid
+                                break
+                    raise DuplicateRecordError(colliding) from e
+                raise RecordValidationError(str(e)) from e
+            except Exception:
+                if own_tx:
+                    self.conn.rollback()
+                raise
+
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order. When ``_tx`` is
+        supplied the DML joins the outer :meth:`_transaction` (see
+        :meth:`create_batch`).
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self._upsert_batch_sync,
+            records,
+            _tx is None,
+        )
+
+    def _upsert_batch_sync(
+        self, records: list[Record], own_tx: bool = True
+    ) -> list[str]:
+        """Synchronous batch upsert implementation."""
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        with self._lock:
+            try:
+                if own_tx:
+                    self.conn.begin()
+                self.conn.execute(query, params)
+                if own_tx:
+                    self.conn.commit()
                 return ids
             except Exception:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -521,11 +724,15 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 self.conn.rollback()
                 raise
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently.
 
         Args:
             ids: List of record IDs to delete
+            _tx: Internal. When supplied the DML joins the outer
+                :meth:`_transaction` (see :meth:`create_batch`).
 
         Returns:
             List of success indicators
@@ -539,10 +746,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._delete_batch_sync,
-            ids
+            ids,
+            _tx is None,
         )
 
-    def _delete_batch_sync(self, ids: list[str]) -> list[bool]:
+    def _delete_batch_sync(self, ids: list[str], own_tx: bool = True) -> list[bool]:
         """Synchronous batch delete implementation."""
         with self._lock:
             # Check which IDs exist before deletion
@@ -557,9 +765,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
             # Execute the batch delete in a transaction
             try:
-                self.conn.begin()
+                if own_tx:
+                    self.conn.begin()
                 self.conn.execute(query, params)
-                self.conn.commit()
+                if own_tx:
+                    self.conn.commit()
 
                 # Return results based on which IDs existed
                 results = []
@@ -568,7 +778,8 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
                 return results
             except Exception:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 raise
 
     def _initialize(self) -> None:
@@ -643,38 +854,34 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
         Returns:
             Stream result with statistics
-        """
-        import time
 
-        from ..streaming import StreamConfig, StreamResult
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
+        """
+        from ..streaming import (
+            StreamConfig,
+            async_run_stream_write,
+            resolve_conflict_write,
+        )
 
         config = config or StreamConfig()
-        batch = []
-        total_written = 0
-        start_time = time.time()
 
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write the batch
-                await self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            await self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )
 
 
@@ -829,7 +1036,11 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(params[0]) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -851,18 +1062,43 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for DuckDB). When provided,
+                a stale token raises ``ConcurrencyError`` instead of
+                overwriting. When ``None`` the update is unconditional,
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
         query, params = self.query_builder.build_update_query(id, record)
+
+        # Conditional write: compare the current content-hash token before
+        # issuing the UPDATE. Reusing read() guarantees the token compared
+        # here matches the one get_version() returned. On a single connection
+        # the read and write are serialized; cross-connection atomicity is out
+        # of scope (see the module docs on the in-process content-hash
+        # backends).
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                # Conditional update of an absent record is a documented False
+                # return, not a warning-worthy event (matches SQLite).
+                return False
+            enforce_content_version(id, expected_version, current)
 
         # Check if record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)
@@ -875,17 +1111,34 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
         return False
 
-    def delete(self, id: str) -> bool:
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional content-hash token from
+                ``get_version(id)``. When provided, a stale token raises
+                ``ConcurrencyError`` and a missing record returns ``False``.
+                When ``None`` the delete is unconditional, byte-identical to
+                prior behavior.
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
         query, params = self.query_builder.build_delete_query(id)
+
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
+            self.conn.execute(query, params)
+            return True
 
         # First check if the record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)
@@ -958,8 +1211,21 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         result = self.conn.execute(sql_query, params).fetchone()
         return result[0] if result else 0
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch runs a multi-value INSERT inside an explicit transaction
+        # (begin/commit, rollback on error): a colliding id rolls the batch back
+        # so nothing is written on raise and the migrator's INSERT bulk
+        # fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently.
+
+        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
+        colliding id (or a duplicate id within the batch) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written. A caller-supplied ``record.id`` is honored (the shared query
+        builder mints a uuid only when a record has none).
 
         Args:
             records: List of records to create
@@ -972,6 +1238,36 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
 
         self._check_connection()
         query, params, ids = self.query_builder.build_batch_create_query(records)
+
+        try:
+            self.conn.begin()
+            self.conn.execute(query, params)
+            self.conn.commit()
+            return ids
+        except duckdb.ConstraintException as e:
+            self.conn.rollback()
+            if is_duplicate_key_error(e):
+                colliding = next(
+                    (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+                )
+                raise DuplicateRecordError(colliding) from e
+            raise RecordValidationError(str(e)) from e
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
 
         try:
             self.conn.begin()
@@ -1116,35 +1412,32 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
 
         Returns:
             Stream result with statistics
-        """
-        import time
 
-        from ..streaming import StreamConfig, StreamResult
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
+        """
+        from ..streaming import (
+            StreamConfig,
+            resolve_conflict_write,
+            run_stream_write,
+        )
 
         config = config or StreamConfig()
-        batch = []
-        total_written = 0
-        start_time = time.time()
 
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )

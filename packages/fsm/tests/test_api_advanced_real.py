@@ -9,7 +9,6 @@ from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.common import TraversalStrategy
-from dataknobs_fsm.core.transactions import TransactionStrategy
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_data import Record
 
@@ -147,18 +146,6 @@ class TestAdvancedFSMInitialization:
         for strategy in strategies:
             advanced_fsm.set_execution_strategy(strategy)
             assert advanced_fsm._engine.strategy == strategy
-    
-    def test_configure_transactions(self, advanced_fsm):
-        """Test configuring transaction management."""
-        advanced_fsm.configure_transactions(
-            TransactionStrategy.BATCH,
-            timeout=30,
-            max_retries=3
-        )
-        
-        assert advanced_fsm._transaction_manager is not None
-        # Transaction manager should be configured with the strategy
-        # (exact verification depends on TransactionManager implementation)
 
 
 class TestAdvancedFSMResourceManagement:
@@ -503,7 +490,6 @@ class TestAdvancedFSMIntegration:
         
         # Configure all features
         fsm.set_execution_strategy(TraversalStrategy.BREADTH_FIRST)
-        fsm.configure_transactions(TransactionStrategy.SINGLE, timeout=60)
         fsm.register_resource('test_db', {'type': 'memory', 'data': {}})
         
         # Set up hooks
@@ -521,7 +507,6 @@ class TestAdvancedFSMIntegration:
         # Verify configuration
         assert fsm.execution_mode == ExecutionMode.DEBUG
         assert fsm._engine.strategy == TraversalStrategy.BREADTH_FIRST
-        assert fsm._transaction_manager is not None
         assert 'review' in fsm._breakpoints
         assert fsm._history is not None
         assert fsm._hooks == hooks

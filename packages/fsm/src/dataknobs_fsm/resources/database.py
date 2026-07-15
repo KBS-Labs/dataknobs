@@ -605,10 +605,11 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
     ) -> Dict[str, Any]:
         """Persist a batch of records, atomically where the backend allows.
 
-        Without ``identity`` the batch is written via ``create_batch`` — which
-        is all-or-nothing on transactional backends (postgres/sqlite/duckdb).
-        With ``identity`` each row is upserted under its derived id, so a
-        re-commit of the same batch is idempotent.
+        Without ``identity`` the batch is written via ``create_batch``; with
+        ``identity`` each row is upserted under its derived id via
+        ``upsert_batch`` (so a re-commit of the same batch is idempotent). Both
+        are all-or-nothing on transactional backends (postgres/sqlite/duckdb) —
+        each a single atomic batch statement.
 
         Args:
             records: Row dicts to persist.
@@ -619,8 +620,9 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
                 all-or-nothing; ``"require"`` raises
                 :class:`CapabilityNotSupportedError` on a backend whose
                 :meth:`~dataknobs_data.AsyncDatabase.supports_transactions` is
-                ``False`` (and on the idempotent-upsert path, which is not
-                batch-atomic without connection-scoped isolation).
+                ``False``. Both the create and the idempotent-upsert path commit
+                atomically on transactional backends (each via a single
+                all-or-nothing batch statement).
 
         Returns:
             ``{"affected_rows": <count>}``.
@@ -656,22 +658,27 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             ids = await db.create_batch([Record(dict(row)) for row in records])
             return {"affected_rows": len(ids)}
 
-        # Idempotent per-row upsert. The loop is not batch-atomic without the
-        # transaction capability, so "require" cannot be honored here.
-        if atomicity == "require":
-            raise CapabilityNotSupportedError(
-                "atomic idempotent batch commit", self
-            )
-        affected = 0
+        # Idempotent batch upsert under the derived ids, via the ``upsert_batch``
+        # batch verb. On a transactional backend this is a single atomic
+        # ``INSERT ... ON CONFLICT DO UPDATE`` statement — all-or-nothing, the
+        # same guarantee the ``create_batch`` path above relies on — so
+        # ``atomicity="require"`` is honored here on transactional backends
+        # (and was already rejected on non-transactional ones by the shared
+        # guard above, before either write path). No identity-path-specific
+        # guard is needed: the create and idempotent-upsert paths are symmetric.
+        # Each derived id is stamped onto the record's ``storage_id`` (which
+        # ``upsert_batch`` honors and which takes priority over any ``id`` field
+        # in the row); a ``None`` derivation leaves the record to mint/resolve
+        # its own id, matching a per-row ``db.upsert(record)`` call.
+        batch: list[Record] = []
         for row in records:
             record_id = identity.derive(row)
             record = Record(dict(row))
             if record_id is not None:
-                await db.upsert(record_id, record)
-            else:
-                await db.upsert(record)
-            affected += 1
-        return {"affected_rows": affected}
+                record.storage_id = record_id
+            batch.append(record)
+        ids = await db.upsert_batch(batch)
+        return {"affected_rows": len(ids)}
 
     async def execute_query(
         self,

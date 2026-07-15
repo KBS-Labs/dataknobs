@@ -89,6 +89,12 @@ def _sqlite_adapter(tmp_path: Path, name: str) -> AsyncDatabaseResourceAdapter:
     )
 
 
+def _duckdb_adapter(tmp_path: Path, name: str) -> AsyncDatabaseResourceAdapter:
+    return AsyncDatabaseResourceAdapter(
+        name=name, backend="duckdb", path=str(tmp_path / f"{name}.duckdb")
+    )
+
+
 class _CountingAdapter(AsyncDatabaseResourceAdapter):
     """Real adapter that also counts ``commit_batch`` invocations.
 
@@ -121,6 +127,17 @@ async def _read_file(path: Path, record_id: str) -> Any:
 
 async def _count_file(path: Path) -> int:
     db = await AsyncDatabase.from_backend("file", {"type": "file", "path": str(path)})
+    try:
+        return await db.count()
+    finally:
+        await db.close()
+
+
+async def _count_backend(backend: str, path: Path) -> int:
+    """Count rows via a fresh ``AsyncDatabase`` — proves persistence
+    independently of the writing adapter, for any file-backed backend.
+    """
+    db = await AsyncDatabase.from_backend(backend, {"type": backend, "path": str(path)})
     try:
         return await db.count()
     finally:
@@ -399,6 +416,59 @@ async def test_commit_batch_require_succeeds_on_sqlite(tmp_path: Path) -> None:
         await adapter.aclose()
 
 
+@pytest.mark.parametrize("backend", ["sqlite", "duckdb"])
+@pytest.mark.asyncio
+async def test_commit_batch_require_with_identity_succeeds_on_transactional(
+    backend: str, tmp_path: Path
+) -> None:
+    """``atomicity="require"`` on the *identity* (idempotent-upsert) path must
+    succeed on a transactional backend — the batch is written by a single
+    ``db.upsert_batch()`` (one atomic ``INSERT ... ON CONFLICT DO UPDATE``),
+    exactly the guarantee the no-identity create path already relies on.
+
+    Reproduces the pre-fix asymmetry: the create path honored ``require`` on
+    sqlite/duckdb while the identity path rejected it with
+    ``CapabilityNotSupportedError`` even there.
+    """
+    ext = "db" if backend == "sqlite" else "duckdb"
+    path = tmp_path / f"reqid.{ext}"
+    adapter = AsyncDatabaseResourceAdapter(
+        name="reqid", backend=backend, path=str(path)
+    )
+    ident = KeyColumnsIdentity(["id"])
+    batch = [{"id": "1", "v": "a"}, {"id": "2", "v": "b"}]
+    try:
+        res = await adapter.commit_batch(batch, identity=ident, atomicity="require")
+        assert res["affected_rows"] == 2
+        # Idempotent: a second require-commit of the same batch overwrites the
+        # same two ids rather than duplicating.
+        res2 = await adapter.commit_batch(batch, identity=ident, atomicity="require")
+        assert res2["affected_rows"] == 2
+    finally:
+        await adapter.aclose()
+    assert await _count_backend(backend, path) == 2
+
+
+@pytest.mark.asyncio
+async def test_commit_batch_require_with_identity_raises_on_non_transactional(
+    tmp_path: Path,
+) -> None:
+    """The relaxation must not widen to non-transactional backends: identity +
+    ``require`` on a ``file`` adapter still raises via the shared guard — a
+    regression pin that WS1 only honored ``require`` where the backend is
+    genuinely transactional.
+    """
+    adapter = _file_adapter(tmp_path, "reqidfile")
+    ident = KeyColumnsIdentity(["id"])
+    try:
+        with pytest.raises(CapabilityNotSupportedError):
+            await adapter.commit_batch(
+                [{"id": "1", "v": "a"}], identity=ident, atomicity="require"
+            )
+    finally:
+        await adapter.aclose()
+
+
 @pytest.mark.asyncio
 async def test_commit_batch_unknown_atomicity_is_configuration_error(
     tmp_path: Path,
@@ -482,6 +552,53 @@ async def test_batch_commit_require_issues_single_atomic_batch(
     assert adapter.commit_batch_calls == 1  # NOT chunked under "require"
     assert result["committed_count"] == 5
     assert result["batch"] == []
+
+
+@pytest.mark.asyncio
+async def test_batch_commit_require_with_identity_single_atomic_batch(
+    tmp_path: Path,
+) -> None:
+    """The idempotent-upsert path also issues ONE all-or-nothing commit under
+    ``require``: ``key_columns`` + ``atomicity="require"`` at batch_size=2 over
+    5 rows is a SINGLE ``commit_batch`` call on sqlite (not chunked), persisting
+    idempotently. Extends the create-mode single-batch guarantee to identity.
+    """
+    adapter = _CountingAdapter(
+        name="atomicid", backend="sqlite", path=str(tmp_path / "atomicid.db")
+    )
+    fn = BatchCommit(
+        "target_db", batch_size=2, key_columns=["id"], atomicity="require"
+    )
+    batch = [{"id": str(i), "v": str(i)} for i in range(5)]
+    try:
+        result = await fn.transform({"batch": batch}, _ctx("target_db", adapter))
+        # Re-commit the same batch through a fresh transform: idempotent.
+        await fn.transform({"batch": batch}, _ctx("target_db", adapter))
+    finally:
+        await adapter.aclose()
+    assert adapter.commit_batch_calls == 2  # one per transform, neither chunked
+    assert result["committed_count"] == 5
+    assert result["batch"] == []
+    assert await _count_backend("sqlite", tmp_path / "atomicid.db") == 5
+
+
+@pytest.mark.asyncio
+async def test_batch_commit_use_transaction_alias_with_identity_on_sqlite(
+    tmp_path: Path,
+) -> None:
+    """The back-compat ``use_transaction=True`` alias maps to
+    ``atomicity="require"`` and, with ``key_columns``, persists idempotently on
+    a transactional backend (previously rejected on the identity path).
+    """
+    adapter = _sqlite_adapter(tmp_path, "usetx")
+    fn = BatchCommit("target_db", use_transaction=True, key_columns=["id"])
+    batch = [{"id": "1", "v": "a"}, {"id": "2", "v": "b"}]
+    try:
+        result = await fn.transform({"batch": batch}, _ctx("target_db", adapter))
+    finally:
+        await adapter.aclose()
+    assert result["committed_count"] == 2
+    assert await _count_backend("sqlite", tmp_path / "usetx.db") == 2
 
 
 def test_batch_commit_nonpositive_batch_size_is_configuration_error() -> None:

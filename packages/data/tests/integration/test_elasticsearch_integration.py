@@ -138,8 +138,27 @@ class TestElasticsearchIntegration:
         # Verify all deleted
         retrieved = db.read_batch(ids)
         assert all(r is None for r in retrieved)
-        
+
         db.close()
+
+    def test_upsert_batch_inserts_and_overwrites(self, elasticsearch_test_index):
+        """upsert_batch (bulk index-by-id) inserts new + overwrites existing."""
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
+        try:
+            db.create(Record({"name": "old"}, id="u1"))
+            time.sleep(1)
+            ids = db.upsert_batch(
+                [
+                    Record({"name": "new"}, id="u1"),  # overwrite
+                    Record({"name": "u2"}, id="u2"),  # insert
+                ]
+            )
+            assert ids == ["u1", "u2"]
+            time.sleep(1)
+            assert db.read("u1").get_value("name") == "new"
+            assert db.read("u2").get_value("name") == "u2"
+        finally:
+            db.close()
 
     def test_complex_queries(self, elasticsearch_test_index, sample_records):
         """Test complex query operations."""
@@ -175,7 +194,9 @@ class TestElasticsearchIntegration:
         assert results[0].get_value("name") == "Eve Anderson"
         
         # Test 4: Wildcard pattern matching (LIKE)
-        query = Query().filter("email", Operator.LIKE, "*@example.com")
+        # SQL LIKE wildcards are % and _ (portable across every backend); a
+        # literal '*' is now escaped, so use '%' for "any run of characters".
+        query = Query().filter("email", Operator.LIKE, "%@example.com")
         results = db.search(query)
         assert len(results) == 5  # All have @example.com
         
@@ -292,8 +313,8 @@ class TestElasticsearchIntegration:
         ids = db.create_batch(docs)
         time.sleep(1)
         
-        # Test wildcard search
-        query = Query().filter("title", Operator.LIKE, "*Elasticsearch*")
+        # Test wildcard search (SQL LIKE wildcard is %, not * — * is now literal)
+        query = Query().filter("title", Operator.LIKE, "%Elasticsearch%")
         results = db.search(query)
         assert len(results) == 2
         
@@ -426,8 +447,8 @@ class TestElasticsearchIntegration:
         assert retrieved.get_value("json_field")["nested"]["key"] == "value with 'quotes'"
         assert retrieved.get_value("html") == "<div>HTML & entities</div>"
         
-        # Search with special characters
-        query = Query().filter("name", Operator.LIKE, "*Special*")
+        # Search with special characters (SQL LIKE wildcard is %, not *)
+        query = Query().filter("name", Operator.LIKE, "%Special%")
         results = db.search(query)
         assert len(results) == 1
         
@@ -575,8 +596,31 @@ class TestElasticsearchAsyncIntegration:
         # Delete batch
         results = await db.delete_batch(ids)
         assert all(results)
-        
+
         await db.close()
+
+    async def test_async_upsert_batch_inserts_and_overwrites(
+        self, elasticsearch_test_index
+    ):
+        """Async upsert_batch (bulk index-by-id) inserts new + overwrites."""
+        db = await AsyncDatabase.from_backend(
+            "elasticsearch", elasticsearch_test_index
+        )
+        try:
+            await db.create(Record({"name": "old"}, id="u1"))
+            await asyncio.sleep(1)
+            ids = await db.upsert_batch(
+                [
+                    Record({"name": "new"}, id="u1"),  # overwrite
+                    Record({"name": "u2"}, id="u2"),  # insert
+                ]
+            )
+            assert ids == ["u1", "u2"]
+            await asyncio.sleep(1)
+            assert (await db.read("u1")).get_value("name") == "new"
+            assert (await db.read("u2")).get_value("name") == "u2"
+        finally:
+            await db.close()
 
     async def test_async_concurrent_operations(self, elasticsearch_test_index):
         """Test concurrent async operations."""

@@ -1,550 +1,295 @@
 # Data Migration Utilities
 
-The DataKnobs data package provides comprehensive migration utilities to facilitate data movement between different backends, schema evolution, and data transformation.
+The DataKnobs data package provides migration utilities for moving records
+between backends, evolving record schemas, and transforming data in flight.
 
 ## Overview
 
 The migration utilities enable:
 
-- **Backend-to-backend migration**: Move data between any supported backends (Memory, File, SQLite, DuckDB, PostgreSQL, Elasticsearch, S3)
-- **Schema evolution**: Manage schema versions and automatic migration generation
-- **Data transformation**: Apply transformations during migration with pipeline support
-- **Progress tracking**: Monitor migration progress with detailed statistics
-- **Error handling**: Robust error recovery and retry mechanisms
+- **Backend-to-backend migration**: Move records between any supported backends (Memory, File, SQLite, DuckDB, PostgreSQL, Elasticsearch, S3)
+- **Schema evolution**: Apply reversible operations that add, remove, rename, or transform fields
+- **Data transformation**: Reshape records during migration with a fluent transformer
+- **Progress tracking**: Monitor progress and per-record outcomes
+- **Conflict handling**: Choose how a re-run resolves ids already present in the target
 
-## Core Components
+The public API lives in `dataknobs_data.migration`:
 
-### DataMigrator
+| Symbol | Role |
+|--------|------|
+| `Migrator` | Stateless orchestrator with `migrate`, `migrate_stream`, `migrate_parallel`, `migrate_async`, `validate_migration` |
+| `Migration` | An ordered, reversible set of `Operation`s between two versions |
+| `AddField`, `RemoveField`, `RenameField`, `TransformField`, `CompositeOperation` | Reversible field `Operation`s |
+| `Transformer` | Fluent record reshaper (`map`, `rename`, `exclude`, `add`) |
+| `MigrationProgress` | Progress and outcome statistics |
+| `ConflictPolicy` | Conflict resolution policy (`insert` / `upsert` / `skip`) |
 
-The `DataMigrator` class handles the transfer of records between different database backends.
+## Migrator
+
+`Migrator` is stateless — the source and target databases are passed to each
+method, so one instance can drive many migrations.
 
 ```python
-from dataknobs_data.migration import DataMigrator
-from dataknobs_data.backends.postgres import PostgresDatabase
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data import database_factory
+from dataknobs_data.migration import Migrator
 
-# Initialize source and target databases
-source = PostgresDatabase.from_config(config.get_database("postgres"))
-target = S3Database.from_config(config.get_database("s3"))
+source = database_factory.create(backend="sqlite", path="app.db")
+source.connect()
+target = database_factory.create(backend="duckdb", path="analytics.duckdb")
+target.connect()
 
-# Create migrator
-migrator = DataMigrator(source, target)
+migrator = Migrator()
+progress = migrator.migrate(source, target, batch_size=1000)
+
+print(f"Succeeded: {progress.succeeded}")
+print(f"Failed:    {progress.failed}")
+print(f"Skipped:   {progress.skipped}")
+print(f"Duration:  {progress.duration:.2f}s")
 ```
 
-#### Synchronous Migration
+### Migration methods
+
+| Method | Sync/Async | Notes |
+|--------|-----------|-------|
+| `migrate(source, target, transform=None, query=None, batch_size=1000, on_progress=None, on_error=None, on_conflict="insert")` | sync | Loads the source result set, writes in batches. |
+| `migrate_stream(source, target, transform=None, query=None, config=None, on_progress=None)` | sync | Streams source → target without materializing the full dataset. Reads the conflict policy from `config.on_conflict`. |
+| `migrate_parallel(source, target, transform=None, partitions=4, partition_field="partition_id", on_progress=None, on_conflict="insert")` | sync | Runs one streaming migration per partition value in parallel threads. |
+| `migrate_async(source, target, transform=None, query=None, config=None, on_progress=None)` | async | Async streaming migration; reads the conflict policy from `config.on_conflict`. |
 
 ```python
-# Simple migration
-result = migrator.migrate_sync()
-print(f"Migrated {result.successful_records} records")
-print(f"Failed: {result.failed_records}")
-print(f"Duration: {result.duration:.2f} seconds")
+from dataknobs_data import StreamConfig
 
-# Migration with options
-result = migrator.migrate_sync(
-    batch_size=1000,              # Process in batches
-    transform=lambda r: r,         # Apply transformation
-    on_error="skip",              # Skip errors or "stop"
-    progress_callback=print_progress
+# Streaming (memory-efficient) migration
+progress = migrator.migrate_stream(
+    source, target, config=StreamConfig(batch_size=5000)
 )
-```
 
-#### Asynchronous Migration
+# Parallel migration across partition values 0..3 of "partition_id"
+progress = migrator.migrate_parallel(source, target, partitions=4)
 
-```python
+# Async streaming migration
 import asyncio
 
-async def migrate_async():
-    result = await migrator.migrate_async(
-        batch_size=5000,
-        parallel_batches=4,  # Process 4 batches concurrently
-        transform=transform_record
+async def run():
+    return await migrator.migrate_async(
+        async_source, async_target, config=StreamConfig(batch_size=5000)
     )
-    return result
 
-result = asyncio.run(migrate_async())
+progress = asyncio.run(run())
 ```
 
-#### Progress Tracking
+## Conflict Policy (Idempotent Re-runs)
+
+`create()` is an atomic insert, so migrating a source into a target that
+already holds one of the source ids records those ids as **failures** by
+default. The conflict policy lets a re-run overwrite or skip existing rows
+instead. It is threaded through all four migrate methods and defaults to strict
+insert, so existing calls are unchanged.
+
+| Policy | Behavior on a colliding id |
+|--------|----------------------------|
+| `"insert"` (default) | Fail closed — the id is recorded as a failure. Correct for a virgin target. |
+| `"upsert"` | Overwrite the existing row so the target matches the source. Idempotent by definition. |
+| `"skip"` | Leave the existing row untouched and count the id as skipped (`progress.skipped`). Idempotent top-up. |
 
 ```python
-def progress_callback(progress: MigrationProgress):
-    pct = (progress.processed_records / progress.total_records) * 100
-    print(f"Progress: {pct:.1f}% ({progress.processed_records}/{progress.total_records})")
-    print(f"Rate: {progress.records_per_second:.0f} records/sec")
-    if progress.estimated_time_remaining:
-        print(f"ETA: {progress.estimated_time_remaining:.0f} seconds")
+from dataknobs_data import ConflictPolicy, StreamConfig
+from dataknobs_data.migration import Migrator
 
-result = migrator.migrate_sync(
-    progress_callback=progress_callback,
-    progress_interval=1.0  # Update every second
+migrator = Migrator()
+
+# Batched migrate / migrate_parallel take the policy directly.
+progress = migrator.migrate(source, target, on_conflict="upsert")
+progress = migrator.migrate_parallel(source, target, on_conflict="upsert")
+
+# Skip ids already present, migrate the rest; safe to re-run.
+progress = migrator.migrate(source, target, on_conflict=ConflictPolicy.SKIP)
+print(f"Skipped {progress.skipped} already-present records")
+
+# Streaming / async methods read the policy from StreamConfig.
+progress = migrator.migrate_stream(
+    source, target, config=StreamConfig(on_conflict="skip")
 )
 ```
 
-### SchemaEvolution
+The `"insert"` fast-path uses the backend's native `create_batch` (or an atomic
+`_write_batch` on PostgreSQL) with a per-record `create()` fallback; the
+non-transactional backends (S3, Elasticsearch-sync, async-Elasticsearch) write
+INSERT per-record via `create()`. `"upsert"` uses the native `upsert_batch` bulk
+verb (with a
+per-record `upsert` fallback); `"skip"` writes one record at a time (a
+whole-batch verb cannot skip individual duplicates while inserting the rest). An
+unknown policy value is rejected when the `StreamConfig` is constructed, rather
+than silently falling back to insert.
 
-The `SchemaEvolution` class manages schema versions and migrations between them.
+Streaming `"insert"` fails closed on a colliding id — recording it as a failure
+and preserving the source id — across **every** backend (streaming and batched
+`migrate()` alike). For an idempotent re-run into a populated target use
+`"upsert"` or `"skip"`.
+
+## Progress Tracking
+
+Every migrate method returns a `MigrationProgress`. Pass `on_progress` to
+observe it during a long run.
 
 ```python
-from dataknobs_data.migration import SchemaEvolution
-from dataknobs_data.validation import Schema, FieldDefinition
+def show(progress):
+    print(f"{progress.percent:.1f}% — "
+          f"{progress.succeeded} ok, {progress.failed} failed, "
+          f"{progress.skipped} skipped")
 
-# Define schema versions
-evolution = SchemaEvolution("user_schema")
+progress = migrator.migrate(source, target, on_progress=show)
 
-# Version 1: Basic user
-v1_schema = Schema(
-    name="UserV1",
-    fields={
-        "name": FieldDefinition(name="name", type=str, required=True),
-        "email": FieldDefinition(name="email", type=str, required=True)
-    }
-)
-evolution.add_version("1.0.0", v1_schema)
-
-# Version 2: Add age field
-v2_schema = Schema(
-    name="UserV2",
-    fields={
-        "name": FieldDefinition(name="name", type=str, required=True),
-        "email": FieldDefinition(name="email", type=str, required=True),
-        "age": FieldDefinition(name="age", type=int, required=False, default=0)
-    }
-)
-evolution.add_version("2.0.0", v2_schema)
+# Fields and derived properties:
+progress.total          # source count (when available)
+progress.processed      # records seen
+progress.succeeded      # written successfully
+progress.failed         # write failures
+progress.skipped        # filtered out or skipped by policy
+progress.errors         # list of {error, record_id, timestamp, ...}
+progress.duration       # seconds (property)
+progress.percent        # processed / total * 100 (property)
+progress.success_rate   # succeeded / processed * 100 (property)
+progress.has_errors     # bool (property)
+print(progress.get_summary())
 ```
 
-#### Automatic Migration Generation
+## Transforming Records
+
+Pass a `Transformer` (fluent reshaper) or a `Migration` (versioned operation
+set) as the `transform=` argument. A `Transformer` that returns `None` for a
+record filters it out — the record is counted as skipped.
 
 ```python
-# Generate migration from v1 to v2
-migration = evolution.generate_migration("1.0.0", "2.0.0")
+from dataknobs_data.migration import Transformer
 
-# The migration automatically detects:
-# - Added fields (with defaults)
-# - Removed fields
-# - Type changes
-# - Constraint changes
-
-# Apply migration to records
-migrated_records = migration.apply(v1_records)
-```
-
-#### Custom Migration Logic
-
-```python
-def custom_migration(record):
-    """Custom migration from v1 to v2"""
-    # Add computed field
-    record.fields["age"] = Field(
-        name="age",
-        type=FieldType.INTEGER,
-        value=calculate_age(record.fields["birthdate"].value)
-    )
-    # Remove deprecated field
-    del record.fields["birthdate"]
-    return record
-
-evolution.add_migration("1.0.0", "2.0.0", custom_migration)
-```
-
-#### Migration History
-
-```python
-# Track applied migrations
-evolution.apply_migration(database, "1.0.0", "2.0.0")
-
-# Get migration history
-history = evolution.get_history()
-for entry in history:
-    print(f"{entry.from_version} -> {entry.to_version}")
-    print(f"Applied: {entry.timestamp}")
-    print(f"Records: {entry.records_affected}")
-```
-
-### DataTransformer
-
-The `DataTransformer` class provides field mapping and value transformation capabilities.
-
-```python
-from dataknobs_data.migration import DataTransformer
-
-# Create transformer with field mapping
-transformer = DataTransformer(
-    field_mapping={
-        "full_name": "name",           # Rename field
-        "email_address": "email",       # Rename field
-        "years": "age"                  # Rename field
-    },
-    value_transformers={
-        "age": lambda v: int(v) if v else 0,  # Type conversion
-        "email": lambda v: v.lower(),         # Normalize
-        "name": lambda v: v.title()           # Format
-    }
+transformer = (
+    Transformer()
+    .rename("full_name", "name")            # rename a field
+    .map("email", transform=str.lower)      # transform a value in place
+    .add("migrated", True)                  # add a constant field
+    .add("initial", lambda r: r.get_value("name")[0])  # computed field
+    .exclude("temporary", "scratch")        # drop fields
 )
 
-# Transform a record
-transformed = transformer.transform(record)
+progress = migrator.migrate(source, target, transform=transformer)
 ```
 
-#### Built-in Transformers
+`Transformer` methods (all chainable):
+
+| Method | Effect |
+|--------|--------|
+| `map(source, target=None, transform=None)` | Copy/rename a field, optionally transforming its value |
+| `rename(old_name, new_name)` | Rename a field |
+| `exclude(*fields)` | Drop fields |
+| `add(field_name, value, field_type=None)` | Add a field from a constant or a `Callable[[Record], Any]` |
+| `add_rule(rule)` | Append a custom `TransformRule` |
+
+## Schema Evolution with Migration
+
+A `Migration` bundles reversible `Operation`s between two versions. Apply it to
+records directly, or pass it as `transform=` to migrate a whole backend.
 
 ```python
-from dataknobs_data.migration.transformers import (
-    lowercase_transformer,
-    uppercase_transformer,
-    trim_transformer,
-    default_value_transformer,
-    type_cast_transformer,
-    regex_replace_transformer
+from datetime import datetime
+from dataknobs_data import Record
+from dataknobs_data.migration import (
+    Migration, AddField, RemoveField, RenameField, TransformField, CompositeOperation,
 )
 
-transformer = DataTransformer(
-    value_transformers={
-        "email": lowercase_transformer,
-        "name": trim_transformer,
-        "age": type_cast_transformer(int, default=0),
-        "phone": regex_replace_transformer(r"[^0-9]", ""),
-        "status": default_value_transformer("active")
-    }
+migration = Migration(
+    from_version="1.0.0",
+    to_version="2.0.0",
+    description="Add status, drop legacy field, rename user_name",
 )
+migration.add(AddField("status", default_value="active"))
+migration.add(RemoveField("legacy_field"))
+migration.add(RenameField("user_name", "username"))
+migration.add(TransformField("created_at", transform_fn=lambda v: v or datetime.now()))
+
+# Apply to a single record (returns the migrated Record)
+record = Record({"user_name": "alice", "legacy_field": "x"}, id="u1")
+migrated = migration.apply(record)
+
+# Reverse the migration (operations applied backwards)
+original = migration.apply(migrated, reverse=True)
+
+# Or migrate an entire backend through the migration
+progress = migrator.migrate(source, target, transform=migration)
 ```
 
-#### Transformation Pipelines
+Available operations (each is reversible):
 
-```python
-from dataknobs_data.migration import TransformationPipeline
+| Operation | Constructor |
+|-----------|-------------|
+| `AddField` | `AddField(field_name, default_value=None, field_type=None)` |
+| `RemoveField` | `RemoveField(field_name, store_removed=False)` |
+| `RenameField` | `RenameField(old_name, new_name)` |
+| `TransformField` | `TransformField(field_name, transform_fn, reverse_fn=None)` |
+| `CompositeOperation` | `CompositeOperation([op, ...])` |
 
-# Create a pipeline of transformations
-pipeline = TransformationPipeline([
-    # Step 1: Clean data
-    DataTransformer(value_transformers={
-        "email": lowercase_transformer,
-        "name": trim_transformer
-    }),
-    
-    # Step 2: Validate
-    SchemaValidator(user_schema),
-    
-    # Step 3: Enrich
-    DataTransformer(value_transformers={
-        "created_at": lambda v: v or datetime.now(),
-        "updated_at": lambda v: datetime.now()
-    }),
-    
-    # Step 4: Custom logic
-    custom_business_logic_transformer
-])
+## Filtering and Incremental Migration
 
-# Apply pipeline during migration
-migrator = DataMigrator(source, target)
-result = migrator.migrate_sync(transform=pipeline.transform)
-```
-
-## Advanced Migration Patterns
-
-### Conditional Migration
-
-```python
-def should_migrate(record):
-    """Only migrate active records"""
-    return record.fields.get("status", Field("", "", "")).value == "active"
-
-result = migrator.migrate_sync(
-    filter_fn=should_migrate,
-    batch_size=1000
-)
-```
-
-### Incremental Migration
+Restrict the source with a `Query`. Combined with `skip`, this makes a resumable
+incremental migration.
 
 ```python
 from datetime import datetime, timedelta
+from dataknobs_data import Query, Operator
 
-# Migrate only recent records
-last_sync = datetime.now() - timedelta(days=1)
-
-query = Query(
-    filters=[
-        Filter(field="updated_at", operator=">=", value=last_sync)
-    ]
-)
-
-records = source.search(query)
-migrator = DataMigrator(source, target)
-result = migrator.migrate_records(records)
+# Only records updated in the last day, skipping any already in the target
+recent = Query().filter("updated_at", Operator.GTE, datetime.now() - timedelta(days=1))
+progress = migrator.migrate(source, target, query=recent, on_conflict="skip")
 ```
 
-### Parallel Migration
+## Validating a Migration
+
+`validate_migration` compares source and target and returns
+`(is_valid, issues)`.
 
 ```python
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
-async def migrate_partition(partition_key):
-    """Migrate a single partition"""
-    query = Query(filters=[
-        Filter(field="partition", operator="=", value=partition_key)
-    ])
-    
-    source = PostgresDatabase.from_config(config)
-    target = S3Database.from_config(config)
-    migrator = DataMigrator(source, target)
-    
-    return await migrator.migrate_async(query=query)
-
-# Migrate multiple partitions in parallel
-partitions = ["us-east", "us-west", "eu-west", "ap-south"]
-tasks = [migrate_partition(p) for p in partitions]
-results = await asyncio.gather(*tasks)
+is_valid, issues = migrator.validate_migration(source, target)
+if not is_valid:
+    for issue in issues:
+        print(issue)
 ```
 
-### Migrating to DuckDB for Analytics
-
-When migrating from transactional databases (SQLite, PostgreSQL) to DuckDB for analytical workloads:
-
-```python
-from dataknobs_data import DatabaseFactory
-from dataknobs_data.migration import DataMigrator
-
-# Source: SQLite transactional database
-source_factory = DatabaseFactory()
-source_db = source_factory.create(backend="sqlite", path="app.db")
-source_db.connect()
-
-# Target: DuckDB for fast analytics
-target_db = source_factory.create(backend="duckdb", path="analytics.duckdb")
-target_db.connect()
-
-# Migrate historical data for analysis
-migrator = DataMigrator(source_db, target_db)
-
-# DuckDB performs best with larger batches
-result = migrator.migrate_sync(
-    batch_size=10000,  # Larger batches for DuckDB's columnar storage
-    transform=lambda r: r  # Optional: transform as needed
-)
-
-print(f"Migrated {result.successful_records} records to DuckDB")
-print(f"Duration: {result.duration:.2f} seconds")
-
-# Now use DuckDB for fast analytical queries
-from dataknobs_data.query import Query, Operator
-
-# Fast aggregation on DuckDB (much faster than SQLite)
-high_value_records = target_db.search(
-    Query().filter("amount", Operator.GT, 1000)
-)
-total = sum(r["amount"] for r in high_value_records)
-print(f"Total high-value transactions: ${total:,.2f}")
-```
-
-**Use Case**: Migrate historical transactional data from SQLite/PostgreSQL to DuckDB for:
-- Fast analytical queries and reporting
-- Business intelligence dashboards
-- Data science analysis
-- Historical trend analysis
-
-### Two-Phase Migration
-
-```python
-class TwoPhaseM igrator:
-    """Migrate with validation phase"""
-    
-    def __init__(self, source, target, validator):
-        self.source = source
-        self.target = target
-        self.validator = validator
-    
-    def migrate(self):
-        # Phase 1: Validate all records
-        print("Phase 1: Validation")
-        invalid_records = []
-        
-        for record in self.source.all():
-            result = self.validator.validate(record)
-            if not result.is_valid:
-                invalid_records.append((record, result.errors))
-        
-        if invalid_records:
-            print(f"Found {len(invalid_records)} invalid records")
-            # Handle invalid records (log, fix, or abort)
-            return False
-        
-        # Phase 2: Migrate validated records
-        print("Phase 2: Migration")
-        migrator = DataMigrator(self.source, self.target)
-        result = migrator.migrate_sync()
-        
-        return result
-```
+The source-vs-target count check is meaningful only for a from-empty `insert`
+migration; under `upsert`/`skip` the counts can legitimately differ. The per-id
+sample check (each source id present in the target) is valid for every policy.
+Pass `sample_size=N` to check only the first `N` source ids.
 
 ## Error Handling
 
-### Error Recovery Strategies
+Pass an `on_error(exception, record) -> bool` callback to `migrate`. Return
+`True` to record the failure and continue, `False` (or omit the handler) to stop
+the run and re-raise.
 
 ```python
-from dataknobs_data.migration import MigrationError, RetryPolicy
+def keep_going(exc, record):
+    logger.warning("Skipping %s: %s", record.id, exc)
+    return True  # continue past the failure
 
-# Configure retry policy
-retry_policy = RetryPolicy(
-    max_retries=3,
-    backoff_factor=2.0,  # Exponential backoff
-    retry_on=[ConnectionError, TimeoutError]
-)
-
-# Migration with retry
-result = migrator.migrate_sync(
-    retry_policy=retry_policy,
-    on_error="continue"  # Continue on error
-)
-
-# Check failed records
-if result.failed_records > 0:
-    for error in result.errors:
-        print(f"Record {error.record_id}: {error.message}")
-        # Optionally retry failed records
+progress = migrator.migrate(source, target, on_error=keep_going)
+print(f"{progress.failed} records failed; see progress.errors for detail")
 ```
 
-### Rollback Support
-
-```python
-class TransactionalMigration:
-    """Migration with rollback capability"""
-    
-    def __init__(self, source, target):
-        self.source = source
-        self.target = target
-        self.migrated_ids = []
-    
-    def migrate_with_rollback(self):
-        try:
-            # Track migrated records
-            for record in self.source.all():
-                self.target.create(record)
-                self.migrated_ids.append(record.id)
-            
-            # Verify migration
-            if not self.verify():
-                raise MigrationError("Verification failed")
-                
-        except Exception as e:
-            # Rollback on error
-            self.rollback()
-            raise
-    
-    def rollback(self):
-        """Remove migrated records from target"""
-        for record_id in self.migrated_ids:
-            try:
-                self.target.delete(record_id)
-            except:
-                pass  # Best effort rollback
-```
-
-## Performance Optimization
-
-### Batch Size Tuning
-
-```python
-# Find optimal batch size
-def find_optimal_batch_size(source, target, sample_size=1000):
-    """Determine optimal batch size for migration"""
-    
-    test_sizes = [100, 500, 1000, 5000, 10000]
-    results = {}
-    
-    # Test each batch size with sample
-    sample_records = list(source.search(Query(limit=sample_size)))
-    
-    for size in test_sizes:
-        start = time.time()
-        migrator = DataMigrator(source, target)
-        migrator.migrate_records(sample_records, batch_size=size)
-        duration = time.time() - start
-        
-        results[size] = sample_size / duration  # Records per second
-    
-    # Return batch size with best throughput
-    optimal = max(results, key=results.get)
-    print(f"Optimal batch size: {optimal} ({results[optimal]:.0f} records/sec)")
-    return optimal
-```
-
-### Memory-Efficient Migration
-
-```python
-def migrate_large_dataset(source, target, chunk_size=10000):
-    """Migrate large datasets without loading all into memory"""
-    
-    migrator = DataMigrator(source, target)
-    total = source.count()
-    offset = 0
-    
-    while offset < total:
-        # Process one chunk at a time
-        query = Query(offset=offset, limit=chunk_size)
-        chunk_result = migrator.migrate_sync(
-            query=query,
-            batch_size=1000
-        )
-        
-        offset += chunk_size
-        print(f"Processed {min(offset, total)}/{total} records")
-        
-        # Optional: Clear caches between chunks
-        import gc
-        gc.collect()
-```
-
-## Monitoring and Logging
-
-```python
-import logging
-from dataknobs_data.migration import MigrationMonitor
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("migration")
-
-# Create monitor
-monitor = MigrationMonitor(
-    log_interval=10.0,  # Log stats every 10 seconds
-    metrics_collector=prometheus_client  # Optional metrics
-)
-
-# Migration with monitoring
-result = migrator.migrate_sync(
-    monitor=monitor,
-    progress_callback=monitor.update
-)
-
-# Get final statistics
-stats = monitor.get_statistics()
-print(f"Total time: {stats.duration:.2f}s")
-print(f"Average speed: {stats.avg_records_per_second:.0f} records/sec")
-print(f"Peak speed: {stats.peak_records_per_second:.0f} records/sec")
-print(f"Memory used: {stats.peak_memory_mb:.0f} MB")
-```
+Migration-related failures raise `dataknobs_data.exceptions.MigrationError`
+(a subclass of `OperationError`).
 
 ## Best Practices
 
-1. **Test migrations thoroughly**: Always test with a subset of data first
-2. **Monitor progress**: Use progress callbacks for long-running migrations
-3. **Handle errors gracefully**: Implement retry logic and error recovery
-4. **Optimize batch sizes**: Find the optimal batch size for your data and backends
-5. **Validate data**: Ensure data integrity before and after migration
-6. **Document schema changes**: Keep clear records of schema evolution
-7. **Plan for rollback**: Have a rollback strategy for critical migrations
-8. **Use appropriate backends**: Choose backends that match your performance needs
-9. **Consider parallelization**: Use async/parallel migration for large datasets
-10. **Monitor resource usage**: Track memory and CPU usage during migration
+1. **Test with a subset first** — migrate a `Query`-limited slice before the full run.
+2. **Choose the right method** — `migrate` for bounded sets; `migrate_stream`/`migrate_async` for large datasets; `migrate_parallel` when the source partitions cleanly.
+3. **Pick a conflict policy for re-runs** — `upsert` to make the target match the source, `skip` for idempotent top-ups; the default `insert` is correct only for a virgin target.
+4. **Watch progress** — pass `on_progress` for long-running migrations.
+5. **Handle errors explicitly** — supply `on_error` so one bad record does not abort the whole run.
+6. **Keep migrations reversible** — provide `reverse_fn` on `TransformField` so a `Migration` can be rolled back with `apply(..., reverse=True)`.
 
 ## See Also
 
-- [Schema Validation](validation.md) - Data validation and schema management
-- [Pandas Integration](pandas-integration.md) - Bulk operations with pandas
-- [Backends Overview](backends.md) - Supported database backends
-<!-- TODO: Add when tutorial is created:
-- [Migration Tutorial](tutorials/migration-tutorial.md) - Step-by-step migration guide
--->
+- [API Reference](api-reference.md) — `StreamConfig`, `StreamResult`, `ConflictPolicy`, and the operation/transformer types
+- [Schema Validation](validation.md) — data validation and schema management
+- [Pandas Integration](pandas-integration.md) — bulk DataFrame operations
+- [Backends Overview](backends.md) — supported database backends
+- [Migration Tutorial](tutorials/migration-tutorial.md) — step-by-step walkthrough

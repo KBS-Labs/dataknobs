@@ -8,11 +8,14 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
+from dataknobs_utils.elasticsearch_utils import (
+    ElasticsearchConflictError,
+    SimplifiedElasticsearchIndex,
+)
 
-from ..database import SyncDatabase
-from ..exceptions import DatabaseError
-from ..query import Operator, Query, SortOrder
+from ..database import SyncDatabase, version_conflict_error
+from ..exceptions import DatabaseError, DuplicateRecordError
+from ..query import Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector.types import DistanceMetric, VectorSearchResult
@@ -24,7 +27,10 @@ from .elasticsearch_mixins import (
     ElasticsearchQueryBuilder,
     ElasticsearchRecordSerializer,
     ElasticsearchVectorSupport,
+    es_version_token,
+    parse_es_version_token,
 )
+from .elasticsearch_query import build_bool_query, build_complex_es_query
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
@@ -198,12 +204,19 @@ class SyncElasticsearchDatabase(
         id = record.id if record.id else str(uuid.uuid4())
         doc = self._record_to_doc(record, id)
 
-        # Index the document
-        response = self.es_index.index(
-            body=doc,
-            doc_id=id,
-            refresh=self.refresh,
-        )
+        # Index the document as an atomic insert. op_type="create" makes a
+        # colliding id fail closed with a 409 conflict rather than overwrite.
+        # Mirrors the async backend's try/except ConflictError shape so the two
+        # conflict-detection paths cannot silently drift.
+        try:
+            response = self.es_index.index(
+                body=doc,
+                doc_id=id,
+                refresh=self.refresh,
+                op_type="create",
+            )
+        except ElasticsearchConflictError as e:
+            raise DuplicateRecordError(id) from e
 
         if not response.get("_id"):
             raise DatabaseError(f"Failed to create record: {response}")
@@ -220,9 +233,50 @@ class SyncElasticsearchDatabase(
         doc = response.get("_source", {})
         return self._doc_to_record(doc)
 
-    def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+    def get_version(self, id: str) -> str | None:
+        """Return the document's ``_seq_no``/``_primary_term`` version token.
+
+        Elasticsearch's native optimistic-concurrency pair
+        (``_seq_no``, ``_primary_term``) advances on every write, so it is a
+        native version — ABA-safe, unlike the base content-hash default this
+        overrides. The two values are combined into one opaque token.
+        """
+        response = self.es_index.get(doc_id=id)
+        if not response:
+            return None
+        seq_no = response.get("_seq_no")
+        primary_term = response.get("_primary_term")
+        if seq_no is None or primary_term is None:
+            return None
+        return es_version_token(seq_no, primary_term)
+
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
+        """Update an existing record.
+
+        When ``expected_version`` is provided the update carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError``. When
+        ``None`` the update is unconditional, byte-identical to prior behavior.
+        """
         doc = self._record_to_doc(record, id)
+
+        if expected_version is not None:
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                return self.es_index.update(
+                    doc_id=id,
+                    body={"doc": doc},
+                    refresh=self.refresh,
+                    if_seq_no=seq_no,
+                    if_primary_term=primary_term,
+                )
+            except ElasticsearchConflictError as e:
+                # Either the doc is gone (update never inserts -> False) or the
+                # token is stale (concurrent modification -> raise).
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
 
         # Update the document
         success = self.es_index.update(
@@ -233,9 +287,30 @@ class SyncElasticsearchDatabase(
 
         return success
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
-        success = self.es_index.delete(doc_id=id)
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the delete carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError`` and a
+        missing document returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
+        if expected_version is not None:
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                success = self.es_index.delete(
+                    doc_id=id, if_seq_no=seq_no, if_primary_term=primary_term
+                )
+            except ElasticsearchConflictError as e:
+                # Stale token (doc exists, version mismatch). If the doc is
+                # already gone, treat it as not-found -> False.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
+        else:
+            success = self.es_index.delete(doc_id=id)
 
         # Refresh if needed
         if success and self.refresh:
@@ -247,12 +322,22 @@ class SyncElasticsearchDatabase(
         """Check if a record exists."""
         return self.es_index.exists(doc_id=id)
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching version token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -266,7 +351,18 @@ class SyncElasticsearchDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
+        if expected_version is not None:
+            # A conditional upsert never inserts. Delegate to update()'s
+            # server-side seq_no/primary_term compare-and-set: a True return is
+            # the update; a stale token raises straight out; a False return
+            # means the doc is absent, which for a conditional upsert is itself
+            # a conflict. Acting on the return (not a separate exists() probe)
+            # closes the exists()->update() TOCTOU.
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
         doc = self._record_to_doc(record, id)
         response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)
 
@@ -277,14 +373,24 @@ class SyncElasticsearchDatabase(
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using the bulk API.
-        
-        Uses Elasticsearch's bulk API for efficient batch creation.
-        
+
+        Uses the bulk ``create`` op (fail-closed-by-id), honoring a
+        caller-supplied ``record.id`` (minting a uuid only when absent). Like
+        ``create()``, a colliding id fails closed: the bulk response is scanned
+        for a 409 conflict and raises ``DuplicateRecordError``. The Elasticsearch
+        bulk API is per-item (non-atomic), so — exactly like a ``create()`` loop —
+        non-colliding records in the same batch may already be indexed when the
+        conflict is raised.
+
         Args:
             records: List of records to create
-            
+
         Returns:
             List of created record IDs
+
+        Raises:
+            DuplicateRecordError: a record collides with an existing id, or two
+                records in the batch share an id.
         """
         if not records:
             return []
@@ -292,27 +398,76 @@ class SyncElasticsearchDatabase(
         # Build bulk operations
         bulk_operations = []
         ids = []
+        seen: set[str] = set()
 
         for record in records:
-            # Generate ID
-            record_id = str(uuid.uuid4())
+            record_id = record.id or str(uuid.uuid4())
+            if record_id in seen:
+                raise DuplicateRecordError(record_id)
+            seen.add(record_id)
             ids.append(record_id)
 
-            # Create action dict for bulk operation
+            # op_type "create" fails closed on a colliding id (409) instead of
+            # overwriting, mirroring the single-record create().
             doc = self._record_to_doc(record, record_id)
             action = {
-                "_op_type": "index",
+                "_op_type": "create",
                 "_index": self.es_index.index_name,
                 "_id": record_id,
                 "_source": doc
             }
             bulk_operations.append(action)
 
-        # Execute bulk create
+        return self._execute_bulk_index(bulk_operations, ids, raise_on_conflict=True)
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently using the bulk API.
+
+        Uses the bulk ``index`` op (upsert-by-id), honoring a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        bulk_operations = []
+        ids = []
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            doc = self._record_to_doc(record, record_id)
+            bulk_operations.append(
+                {
+                    "_op_type": "index",  # index = upsert-by-id
+                    "_index": self.es_index.index_name,
+                    "_id": record_id,
+                    "_source": doc,
+                }
+            )
+
+        return self._execute_bulk_index(bulk_operations, ids)
+
+    def _execute_bulk_index(
+        self,
+        bulk_operations: list[dict],
+        ids: list[str],
+        *,
+        raise_on_conflict: bool = False,
+    ) -> list[str]:
+        """Run a bulk index/create request, returning the ids that succeeded.
+
+        Shared by ``create_batch`` and ``upsert_batch``: the request execution
+        and per-item error reconciliation are identical; only how each caller
+        derives the id and op type differs.
+
+        ``raise_on_conflict`` (set by ``create_batch``, whose ``create`` op fails
+        closed) turns a per-item 409 conflict into ``DuplicateRecordError``,
+        matching a ``create()`` loop; ``upsert_batch`` leaves it ``False`` (its
+        ``index`` op cannot conflict).
+        """
         from elasticsearch import helpers
 
         try:
-            # Use the bulk helper for creation
             # Note: helpers.BulkIndexError may be raised if raise_on_error=True
             _success_count, errors = helpers.bulk(
                 self.es_client,
@@ -329,7 +484,10 @@ class SyncElasticsearchDatabase(
                     # Error dict can have 'index', 'create', 'update', or 'delete' keys
                     for op_type in ['index', 'create']:
                         if op_type in err:
-                            error_dict[err[op_type].get('_id')] = err
+                            op = err[op_type]
+                            if raise_on_conflict and op.get('status') == 409:
+                                raise DuplicateRecordError(op.get('_id'))
+                            error_dict[op.get('_id')] = err
                             break
 
                 result_ids = []
@@ -342,11 +500,26 @@ class SyncElasticsearchDatabase(
                 # All succeeded
                 return ids
 
+        except DuplicateRecordError:
+            # A create() collision — propagate the fail-closed signal.
+            raise
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
-                # Extract which operations succeeded
-                failed_ids = {err.get('index', {}).get('_id') for err in e.errors}
+                # Extract which operations failed. An error entry carries an
+                # 'index' or 'create' key depending on the op type, so probe
+                # both — mirroring the returned-errors reconciliation above, and
+                # honoring raise_on_conflict so a 409 surfaced via this path also
+                # fails closed rather than silently passing as success.
+                failed_ids = set()
+                for err in e.errors:
+                    for op_type in ['index', 'create']:
+                        if op_type in err:
+                            op = err[op_type]
+                            if raise_on_conflict and op.get('status') == 409:
+                                raise DuplicateRecordError(op.get('_id')) from e
+                            failed_ids.add(op.get('_id'))
+                            break
                 result_ids = []
                 for record_id in ids:
                     if record_id not in failed_ids:
@@ -516,253 +689,18 @@ class SyncElasticsearchDatabase(
                 # If bulk operation completely fails, mark all as failed
                 return [False] * len(updates)
 
-    def _build_complex_es_query(self, condition: Any) -> dict[str, Any]:
-        """Build Elasticsearch query from complex boolean logic conditions.
-        
-        Args:
-            condition: The Condition object (LogicCondition or FilterCondition)
-            
-        Returns:
-            Elasticsearch query dict
-        """
-        from ..query_logic import FilterCondition, LogicCondition, LogicOperator
-
-        # Handle FilterCondition (leaf node)
-        if isinstance(condition, FilterCondition):
-            return self._build_filter_es_query(condition.filter)
-
-        # Handle LogicCondition (branch node)
-        elif isinstance(condition, LogicCondition):
-            if condition.operator == LogicOperator.AND:
-                # Build AND query with must clauses
-                must_clauses = []
-                for sub_condition in condition.conditions:
-                    sub_query = self._build_complex_es_query(sub_condition)
-                    if sub_query:
-                        must_clauses.append(sub_query)
-
-                if not must_clauses:
-                    return {"match_all": {}}
-                elif len(must_clauses) == 1:
-                    return must_clauses[0]
-                else:
-                    return {"bool": {"must": must_clauses}}
-
-            elif condition.operator == LogicOperator.OR:
-                # Build OR query with should clauses
-                should_clauses = []
-                for sub_condition in condition.conditions:
-                    sub_query = self._build_complex_es_query(sub_condition)
-                    if sub_query:
-                        should_clauses.append(sub_query)
-
-                if not should_clauses:
-                    return {"match_all": {}}
-                elif len(should_clauses) == 1:
-                    return should_clauses[0]
-                else:
-                    return {"bool": {"should": should_clauses, "minimum_should_match": 1}}
-
-            elif condition.operator == LogicOperator.NOT:
-                # Build NOT query with must_not
-                if condition.conditions:
-                    sub_query = self._build_complex_es_query(condition.conditions[0])
-                    if sub_query:
-                        return {"bool": {"must_not": sub_query}}
-
-                return {"match_all": {}}
-
-        return {"match_all": {}}
-
-    def _build_filter_es_query(self, filter_obj: Any) -> dict[str, Any]:
-        """Build Elasticsearch query for a single filter.
-        
-        Args:
-            filter_obj: The Filter object
-            
-        Returns:
-            Elasticsearch query dict for the filter
-        """
-        # Special handling for 'id' field - use _id in Elasticsearch
-        if filter_obj.field == 'id':
-            field_path = "_id"
-            # _id field doesn't need .keyword suffix
-        else:
-            field_path = f"data.{filter_obj.field}"
-
-            # For string fields in exact match queries, use .keyword suffix
-            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and
-                    filter_obj.value and
-                    isinstance(filter_obj.value[0], str)
-                ):
-                    field_path = f"{field_path}.keyword"
-            elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                # Wildcard needs .keyword for proper matching
-                if isinstance(filter_obj.value, str):
-                    field_path = f"{field_path}.keyword"
-
-        if filter_obj.operator == Operator.EQ:
-            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-            return {"term": {field_path: value}}
-        elif filter_obj.operator == Operator.NEQ:
-            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-            return {"bool": {"must_not": {"term": {field_path: value}}}}
-        elif filter_obj.operator == Operator.GT:
-            return {"range": {field_path: {"gt": filter_obj.value}}}
-        elif filter_obj.operator == Operator.GTE:
-            return {"range": {field_path: {"gte": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LT:
-            return {"range": {field_path: {"lt": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LTE:
-            return {"range": {field_path: {"lte": filter_obj.value}}}
-        elif filter_obj.operator == Operator.LIKE:
-            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-            return {"wildcard": {field_path: pattern}}
-        elif filter_obj.operator == Operator.NOT_LIKE:
-            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-            return {"bool": {"must_not": {"wildcard": {field_path: pattern}}}}
-        elif filter_obj.operator == Operator.IN:
-            # Special handling for _id field - use ids query instead of terms
-            if filter_obj.field == 'id':
-                return {"ids": {"values": filter_obj.value}}
-            else:
-                return {"terms": {field_path: filter_obj.value}}
-        elif filter_obj.operator == Operator.NOT_IN:
-            # Special handling for _id field
-            if filter_obj.field == 'id':
-                return {"bool": {"must_not": {"ids": {"values": filter_obj.value}}}}
-            else:
-                return {"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}}
-        elif filter_obj.operator == Operator.EXISTS:
-            return {"exists": {"field": field_path}}
-        elif filter_obj.operator == Operator.NOT_EXISTS:
-            return {"bool": {"must_not": {"exists": {"field": field_path}}}}
-        elif filter_obj.operator == Operator.REGEX:
-            return {"regexp": {field_path: filter_obj.value}}
-        elif filter_obj.operator == Operator.BETWEEN:
-            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                lower, upper = filter_obj.value
-                return {"range": {field_path: {"gte": lower, "lte": upper}}}
-        elif filter_obj.operator == Operator.NOT_BETWEEN:
-            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                lower, upper = filter_obj.value
-                return {"bool": {"must_not": {"range": {field_path: {"gte": lower, "lte":
-upper}}}}}
-
-        return {"match_all": {}}
-
-
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        # Handle ComplexQuery with native Elasticsearch bool queries
+        # Translate through the shared filter->DSL functions so the sync,
+        # async and vector-pre-filter sites cannot drift apart.
         if isinstance(query, ComplexQuery):
-            if query.condition:
-                es_query = self._build_complex_es_query(query.condition)
-            else:
-                es_query = {"match_all": {}}
+            es_query = (
+                build_complex_es_query(query.condition)
+                if query.condition
+                else {"match_all": {}}
+            )
         else:
-            # Build Elasticsearch query from simple Query object
-            es_query = {"bool": {"must": []}}
-
-            # Apply filters
-            for filter_obj in query.filters:
-                # Special handling for 'id' field - use _id in Elasticsearch
-                if filter_obj.field == 'id':
-                    field_path = "_id"
-                    # _id field doesn't need .keyword suffix
-                else:
-                    field_path = f"data.{filter_obj.field}"
-
-                    # For string fields in exact match queries, use .keyword suffix
-                    # LIKE and REGEX need to use the text field, not keyword
-                    if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                        if isinstance(filter_obj.value, str) or (
-                            isinstance(filter_obj.value, list) and
-                            filter_obj.value and
-                            isinstance(filter_obj.value[0], str)
-                        ):
-                            field_path = f"{field_path}.keyword"
-                    elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                        # Wildcard needs .keyword for proper matching
-                        if isinstance(filter_obj.value, str):
-                            field_path = f"{field_path}.keyword"
-
-                if filter_obj.operator == Operator.EQ:
-                    # Handle boolean values correctly
-                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                    es_query["bool"]["must"].append({"term": {field_path: value}})
-                elif filter_obj.operator == Operator.NEQ:
-                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
-                elif filter_obj.operator == Operator.GT:
-                    es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
-                elif filter_obj.operator == Operator.GTE:
-                    es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LT:
-                    es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LTE:
-                    es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LIKE:
-                    # Convert SQL LIKE pattern to Elasticsearch wildcard
-                    # Wildcard queries should use the keyword field for exact matching
-                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                    # Use the base field path for LIKE (already has .keyword added above if string)
-                    es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
-                elif filter_obj.operator == Operator.NOT_LIKE:
-                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
-                elif filter_obj.operator == Operator.IN:
-                    # Special handling for _id field - use ids query instead of terms
-                    if filter_obj.field == 'id':
-                        es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
-                    else:
-                        es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
-                elif filter_obj.operator == Operator.NOT_IN:
-                    # Special handling for _id field
-                    if filter_obj.field == 'id':
-                        es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
-                    else:
-                        es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
-                elif filter_obj.operator == Operator.EXISTS:
-                    es_query["bool"]["must"].append({"exists": {"field": field_path}})
-                elif filter_obj.operator == Operator.NOT_EXISTS:
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
-                elif filter_obj.operator == Operator.REGEX:
-                    es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-                elif filter_obj.operator == Operator.BETWEEN:
-                    # Use Elasticsearch's native range query for efficient BETWEEN
-                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                        lower, upper = filter_obj.value
-                        es_query["bool"]["must"].append({
-                            "range": {
-                                field_path: {
-                                    "gte": lower,
-                                    "lte": upper
-                                }
-                            }
-                        })
-                elif filter_obj.operator == Operator.NOT_BETWEEN:
-                    # NOT BETWEEN using bool must_not with range
-                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                        lower, upper = filter_obj.value
-                        es_query["bool"]["must"].append({
-                            "bool": {
-                                "must_not": {
-                                    "range": {
-                                        field_path: {
-                                            "gte": lower,
-                                            "lte": upper
-                                        }
-                                    }
-                                }
-                            }
-                        })
-
-        # If no filters, match all
-        if not es_query["bool"]["must"]:
-            es_query = {"match_all": {}}
+            es_query = build_bool_query(query.filters)
 
         # Build sort
         sort = []
@@ -845,76 +783,9 @@ upper}}}}}
         if not query or not query.filters:
             return self._count_all()
 
-        # Build Elasticsearch query from Query object (same as search)
-        es_query = {"bool": {"must": []}}
-
-        for filter_obj in query.filters:
-            # Special handling for 'id' field - use _id in Elasticsearch
-            if filter_obj.field == 'id':
-                field_path = "_id"
-                # _id field doesn't need .keyword suffix
-            else:
-                field_path = f"data.{filter_obj.field}"
-
-                # For string fields in exact match queries, use .keyword suffix
-                # LIKE and REGEX need different handling
-                if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                    if isinstance(filter_obj.value, str) or (
-                        isinstance(filter_obj.value, list) and
-                        filter_obj.value and
-                        isinstance(filter_obj.value[0], str)
-                    ):
-                        field_path = f"{field_path}.keyword"
-                elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                    # Wildcard needs .keyword for proper matching
-                    if isinstance(filter_obj.value, str):
-                        field_path = f"{field_path}.keyword"
-
-            if filter_obj.operator == Operator.EQ:
-                # Handle boolean values correctly
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"term": {field_path: value}})
-            elif filter_obj.operator == Operator.NEQ:
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
-            elif filter_obj.operator == Operator.GT:
-                es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.GTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LT:
-                es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LIKE:
-                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
-            elif filter_obj.operator == Operator.NOT_LIKE:
-                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
-            elif filter_obj.operator == Operator.IN:
-                # Special handling for _id field - use ids query instead of terms
-                if filter_obj.field == 'id':
-                    es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
-                else:
-                    es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
-            elif filter_obj.operator == Operator.NOT_IN:
-                # Special handling for _id field
-                if filter_obj.field == 'id':
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
-                else:
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
-            elif filter_obj.operator == Operator.EXISTS:
-                es_query["bool"]["must"].append({"exists": {"field": field_path}})
-            elif filter_obj.operator == Operator.NOT_EXISTS:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
-            elif filter_obj.operator == Operator.REGEX:
-                es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-
-        # If no filters were added, use match_all
-        if not es_query["bool"]["must"]:
-            es_query = {"match_all": {}}
-
-        # Count with the query
+        # Same shared translator as search()/ComplexQuery, so count() cannot
+        # drift from them (e.g. drop an operator and fall back to match_all).
+        es_query = build_bool_query(query.filters)
         return self.es_index.count(body={"query": es_query})
 
     def clear(self) -> int:
@@ -959,9 +830,40 @@ upper}}}}}
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into Elasticsearch."""
-        # Use the default implementation from mixin
-        return self._default_stream_write(records, config)
+        """Stream records into Elasticsearch.
+
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than the bulk ``create_batch`` fast-path: the Elasticsearch bulk
+        API is non-atomic, so a partial-success batch followed by the per-record
+        fallback would re-write the already-indexed rows and count them as
+        spurious duplicate failures. Per-doc ``create`` is the natural granularity
+        and fails closed cleanly. UPSERT keeps the bulk ``upsert_batch`` fast-path
+        (overwrite is idempotent, so partial success is benign).
+        """
+        from ..streaming import (
+            StreamConfig,
+            resolve_conflict_write,
+            run_stream_write,
+        )
+
+        config = config or StreamConfig()
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy (UPSERT uses
+        # upsert_batch, SKIP is per-record), so None is safe for every policy.
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=None,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def vector_search(
         self,

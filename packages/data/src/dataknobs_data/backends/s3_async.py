@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -14,12 +11,18 @@ from typing import TYPE_CHECKING, Any, cast
 from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase
+from ..database import AsyncDatabase, version_conflict_error
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
-from ..pooling.s3 import S3PoolConfig, validate_s3_session
-from ..query import Operator, Query
+from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
+from ..query import Query
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
+from ..streaming import (
+    StreamConfig,
+    StreamResult,
+    async_run_stream_write,
+    resolve_conflict_write,
+)
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -163,7 +166,14 @@ class AsyncS3Database(  # type: ignore[misc]
         return Record.from_dict(obj)
 
     async def create(self, record: Record) -> str:
-        """Create a new record in S3."""
+        """Create a new record in S3.
+
+        Atomic create-if-absent is enforced with a conditional PUT
+        (``If-None-Match: *``): a colliding id raises ``DuplicateRecordError``.
+        The guarantee holds against any S3 implementation that honors
+        conditional writes (real AWS S3, recent LocalStack). Older stores
+        that ignore the header degrade to last-writer-wins.
+        """
         self._check_connection()
 
         # Use centralized method to prepare record
@@ -174,13 +184,25 @@ class AsyncS3Database(  # type: ignore[misc]
         # Add ID to metadata
         obj["metadata"]["id"] = storage_id
 
+        from botocore.exceptions import ClientError
+
+        # Atomic insert. IfNoneMatch="*" makes the PUT fail closed if the key
+        # already exists (412 PreconditionFailed) or if a concurrent conditional
+        # write races it (409 ConditionalRequestConflict), so a colliding id
+        # cannot silently overwrite an existing record.
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            await s3.put_object(
-                Bucket=self._pool_config.bucket,
-                Key=key,
-                Body=json.dumps(obj),
-                ContentType="application/json"
-            )
+            try:
+                await s3.put_object(
+                    Bucket=self._pool_config.bucket,
+                    Key=key,
+                    Body=json.dumps(obj),
+                    ContentType="application/json",
+                    IfNoneMatch="*",
+                )
+            except ClientError as e:
+                if is_s3_conditional_conflict(e):
+                    raise DuplicateRecordError(storage_id) from e
+                raise
 
         return storage_id
 
@@ -211,12 +233,47 @@ class AsyncS3Database(  # type: ignore[misc]
         except Exception:
             return None
 
-    async def update(self, id: str, record: Record) -> bool:
-        """Update an existing record in S3."""
+    async def get_version(self, id: str) -> str | None:
+        """Return the object's S3 ``ETag`` as the version token.
+
+        The ETag changes whenever the object's bytes change, and S3 enforces
+        it server-side via ``If-Match`` on the conditional PUT, so it is a
+        native version token — overrides the base content-hash default.
+        """
+        self._check_connection()
+        key = self._get_key(id)
+        from botocore.exceptions import ClientError
+
+        try:
+            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+                response = await s3.head_object(
+                    Bucket=self._pool_config.bucket,
+                    Key=key,
+                )
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None
+            raise
+        return response.get("ETag")
+
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
+        """Update an existing record in S3.
+
+        When ``expected_version`` is provided the PUT carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError``. When ``None`` the update is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
 
-        # Check if record exists
-        if not await self.exists(id):
+        # An unconditional update must fail closed on a missing object (a plain
+        # PUT would insert), so it keeps the exists() pre-check. A conditional
+        # update needs no pre-check: the IfMatch PUT below resolves the missing
+        # case itself (S3 answers a missing key with 404 NoSuchKey, handled
+        # below -> False), so we skip the extra head_object round-trip.
+        if expected_version is None and not await self.exists(id):
             return False
 
         key = self._get_key(id)
@@ -225,21 +282,81 @@ class AsyncS3Database(  # type: ignore[misc]
         # Preserve ID in metadata
         obj["metadata"]["id"] = id
 
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            await s3.put_object(
-                Bucket=self._pool_config.bucket,
-                Key=key,
-                Body=json.dumps(obj),
-                ContentType="application/json"
-            )
+        put_kwargs: dict[str, Any] = {
+            "Bucket": self._pool_config.bucket,
+            "Key": key,
+            "Body": json.dumps(obj),
+            "ContentType": "application/json",
+        }
+        if expected_version is not None:
+            put_kwargs["IfMatch"] = expected_version
+
+        from botocore.exceptions import ClientError
+
+        try:
+            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+                await s3.put_object(**put_kwargs)
+        except ClientError as e:
+            if expected_version is not None:
+                code = e.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey"):
+                    # A conditional update never inserts: an absent id is a
+                    # miss, not a conflict, so an IfMatch PUT against a missing
+                    # key (S3 -> 404 NoSuchKey) returns False.
+                    return False
+                if is_s3_conditional_conflict(e):
+                    # The guarded PUT lost: either the object vanished mid-op
+                    # (update never inserts -> False) or the ETag is stale
+                    # (-> raise).
+                    current = await self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
+            raise
 
         return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from S3."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from S3.
+
+        When ``expected_version`` is provided the ``DeleteObject`` carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError`` and a missing object returns
+        ``False``. When ``None`` the delete is unconditional, byte-identical to
+        prior behavior.
+        """
         self._check_connection()
 
         key = self._get_key(id)
+
+        if expected_version is not None:
+            from botocore.exceptions import ClientError
+
+            try:
+                async with self._session.client(
+                    "s3", endpoint_url=self._pool_config.endpoint_url
+                ) as s3:
+                    await s3.delete_object(
+                        Bucket=self._pool_config.bucket,
+                        Key=key,
+                        IfMatch=expected_version,
+                    )
+                return True
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey"):
+                    # A conditional delete never conflicts on an absent id.
+                    return False
+                if is_s3_conditional_conflict(e):
+                    # The guarded delete lost: the ETag is stale (-> raise) or
+                    # the object vanished mid-op (-> False).
+                    current = await self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
+                raise
 
         try:
             async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
@@ -267,12 +384,22 @@ class AsyncS3Database(  # type: ignore[misc]
         except Exception:
             return False
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ETag, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts.
         """
         self._check_connection()
 
@@ -288,6 +415,17 @@ class AsyncS3Database(  # type: ignore[misc]
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
+
+        if expected_version is not None:
+            # A conditional upsert never inserts. Delegate to update()'s ETag
+            # If-Match compare-and-set: a True return is the update; a stale
+            # ETag raises straight out; a False return means the object is
+            # absent, which for a conditional upsert is itself a conflict.
+            # Acting on the return (not a separate exists() probe) closes the
+            # exists()->update() TOCTOU.
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         key = self._get_key(id)
         obj = self._record_to_s3_object(record)
@@ -362,41 +500,21 @@ class AsyncS3Database(  # type: ignore[misc]
         return self._process_search_results(results, query, deep_copy=False)
 
     def _matches_filters(self, record: Record, filters: list) -> bool:
-        """Check if a record matches all filters."""
+        """Check if a record matches all filters.
+
+        Delegates every operator to the canonical ``Filter.matches`` matcher
+        (mirroring the sync S3 backend), so the ``id`` field resolves to the
+        record's storage key and every operator — including ``BETWEEN`` /
+        ``EXISTS`` / ``REGEX`` / ``STARTS_WITH`` — is honored uniformly.
+        """
         for filter in filters:
-            field = record.get_field(filter.field)
-            if not field:
+            # Special handling for 'id' field — it's the storage key, not a data field.
+            if filter.field == "id":
+                field_value = record.id
+            else:
+                field_value = record.get_value(filter.field)
+            if not filter.matches(field_value):
                 return False
-
-            value = field.value
-
-            if filter.operator == Operator.EQ:
-                if value != filter.value:
-                    return False
-            elif filter.operator == Operator.NEQ:
-                if value == filter.value:
-                    return False
-            elif filter.operator == Operator.GT:
-                if value <= filter.value:
-                    return False
-            elif filter.operator == Operator.LT:
-                if value >= filter.value:
-                    return False
-            elif filter.operator == Operator.GTE:
-                if value < filter.value:
-                    return False
-            elif filter.operator == Operator.LTE:
-                if value > filter.value:
-                    return False
-            elif filter.operator == Operator.LIKE:
-                if str(filter.value) not in str(value):
-                    return False
-            elif filter.operator == Operator.IN:
-                if value not in filter.value:
-                    return False
-            elif filter.operator == Operator.NOT_IN:
-                if value in filter.value:
-                    return False
 
         return True
 
@@ -516,79 +634,35 @@ class AsyncS3Database(  # type: ignore[misc]
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into S3."""
+        """Stream records into S3.
+
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than a bulk fast-path: the per-key S3 writes are non-transactional,
+        so a partial-success batch followed by the per-record fallback would
+        re-write the already-written keys and count them as spurious duplicate
+        failures. A per-key conditional ``create`` PUT is the natural granularity
+        and fails closed cleanly. UPSERT keeps the bulk ``upsert_batch`` fast-path
+        (overwrite is idempotent, so partial success is benign).
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
 
-        batch = []
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                async def batch_func(b):
-                    await self._write_batch(b)
-                    return [r.id for r in b]
-
-                continue_processing = await async_process_batch_with_fallback(
-                    batch,
-                    batch_func,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            async def batch_func(b):
-                await self._write_batch(b)
-                return [r.id for r in b]
-
-            await async_process_batch_with_fallback(
-                batch,
-                batch_func,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
-
-    async def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records to S3."""
-        if not records:
-            return
-
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            # Write each record (S3 doesn't have native batch write)
-            # We could potentially use multipart upload for very large batches
-            tasks = []
-            for record in records:
-                id = str(uuid.uuid4())
-                key = self._get_key(id)
-                obj = self._record_to_s3_object(record)
-                obj["metadata"]["id"] = id
-
-                task = s3.put_object(
-                    Bucket=self._pool_config.bucket,
-                    Key=key,
-                    Body=json.dumps(obj),
-                    ContentType="application/json"
-                )
-                tasks.append(task)
-
-            # Execute all uploads concurrently
-            await asyncio.gather(*tasks)
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy.
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=None,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     async def list_all(self) -> list[str]:
         """List all record IDs in the database."""

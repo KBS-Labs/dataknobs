@@ -88,6 +88,17 @@ async def test_create_batch_does_not_block(db: AsyncFileDatabase) -> None:
 
 
 @requires_blockbuster
+async def test_upsert_batch_does_not_block(db: AsyncFileDatabase) -> None:
+    await db.create(Record({"name": "a", "value": 1}, id="a"))
+    with assert_no_blocking():
+        # Insert + overwrite in one batch; the single load/save must stay off
+        # the event loop.
+        await db.upsert_batch(
+            [Record({"name": "a", "value": 2}, id="a"), _record("b", 3)]
+        )
+
+
+@requires_blockbuster
 async def test_close_temp_file_cleanup_does_not_block() -> None:
     """Temp-file cleanup on close() must not block the loop.
 

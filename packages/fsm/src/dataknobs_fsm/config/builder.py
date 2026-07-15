@@ -14,7 +14,6 @@ raw configuration with optional custom functions.
 import asyncio
 import importlib
 import inspect
-import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
 
@@ -33,13 +32,6 @@ from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode, get_dat
 from dataknobs_fsm.core.data_wrapper import ensure_dict
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
-from dataknobs_fsm.core.transactions import (
-    TransactionManager,
-    TransactionStrategy,
-    SingleTransactionManager,
-    BatchTransactionManager,
-    ManualTransactionManager,
-)
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
@@ -54,8 +46,6 @@ from dataknobs_fsm.functions.manager import (
     FunctionManager,
     FunctionSource
 )
-
-logger = logging.getLogger(__name__)
 
 
 # Interface -> the method the engine ultimately invokes on a function instance.
@@ -213,7 +203,6 @@ class FSMBuilder:
         self._function_manager = FunctionManager()
         self._networks: Dict[str, StateNetwork] = {}
         self._data_handlers: Dict[DataHandlingMode, DataHandler] = {}
-        self._transaction_manager: TransactionManager | None = None
 
         # Register built-in functions on initialization
         self._register_builtin_functions()
@@ -238,19 +227,16 @@ class FSMBuilder:
         
         # 2. Initialize data handlers
         self._init_data_handlers(config.data_mode)
-        
-        # 3. Initialize transaction manager
-        self._init_transaction_manager(config.transaction)
-        
-        # 4. Build networks
+
+        # 3. Build networks
         for network_config in config.networks:
             network = self._build_network(network_config, config)
             self._networks[network.name] = network
-        
-        # 5. Validate completeness
+
+        # 4. Validate completeness
         self._validate_completeness(config)
-        
-        # 6. Create core FSM instance
+
+        # 5. Create core FSM instance
         from dataknobs_fsm.core.modes import ProcessingMode as CoreDataMode
         from dataknobs_fsm.core.modes import TransactionMode as CoreTransactionMode
         
@@ -264,7 +250,6 @@ class FSMBuilder:
             transaction_mode=transaction_mode,
             description=config.description,
             resource_manager=self._resource_manager,
-            transaction_manager=self._transaction_manager,
         )
         
         # Store config in FSM for reference
@@ -387,43 +372,6 @@ class FSMBuilder:
         for mode in DataHandlingMode:
             self._data_handlers[mode] = get_data_handler(mode)
 
-    def _init_transaction_manager(self, config: Any) -> None:
-        """Initialize transaction manager.
-
-        Args:
-            config: Transaction configuration.
-        """
-        if config.strategy == TransactionStrategy.SINGLE:
-            self._transaction_manager = SingleTransactionManager()
-        elif config.strategy == TransactionStrategy.BATCH:
-            self._transaction_manager = BatchTransactionManager(
-                batch_size=config.batch_size
-            )
-        elif config.strategy == TransactionStrategy.MANUAL:
-            self._transaction_manager = ManualTransactionManager()
-        else:
-            # Default to single transaction
-            self._transaction_manager = SingleTransactionManager()
-
-        # Honesty guard: the ``transaction:`` config builds an in-memory
-        # commit-coordination ``TransactionManager``, but the execution engines
-        # (sync and async) do not currently consult it to drive database
-        # commit/rollback. A consumer who configures a non-default strategy to
-        # get database atomicity gets none from this knob — so say so loudly
-        # rather than silently. Real database atomicity is available through the
-        # ``DatabaseTransaction`` function, ``BatchCommit(atomicity="require")``,
-        # or the ``AsyncDatabase.transaction()`` primitive directly. SINGLE (the
-        # default present on every config) is left quiet to avoid noise.
-        if config.strategy != TransactionStrategy.SINGLE:
-            logger.warning(
-                "transaction.strategy=%s configures an in-memory "
-                "TransactionManager that the execution engines do not use to "
-                "drive database commit/rollback; it will not make database "
-                "writes atomic. For database atomicity use the "
-                "DatabaseTransaction function, BatchCommit(atomicity='require'), "
-                "or AsyncDatabase.transaction() directly.",
-                getattr(config.strategy, "value", config.strategy),
-            )
 
     def _build_network(self, network_config: NetworkConfig, fsm_config: FSMConfig) -> StateNetwork:
         """Build a state network from configuration.

@@ -1,0 +1,69 @@
+name: Documentation Mirror Check
+
+# Enforce the package<->site doc-mirror invariant so the two doc trees cannot
+# drift silently (the failure mode that let the rendered site teach a fictional
+# API). Classification + the guard live in:
+#   .dataknobs/docs-mirror-manifest.json   (per-package pair classification)
+#   bin/docs-mirror-check.py                (the checker; stdlib-only python3)
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'packages/*/docs/**'
+      - 'docs/packages/**'
+      - '.dataknobs/docs-mirror-manifest.json'
+      - 'bin/docs-mirror-check.py'
+      - '.github/workflows/docs-mirror-check.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-mirrors:
+    runs-on: ubuntu-latest
+    name: Verify Documentation Mirrors
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        fetch-depth: 1
+
+    - name: Check documentation mirrors
+      # bin/docs-mirror-check.py is standard-library only; runs under the
+      # runner's preinstalled python3 with no `uv sync`, matching
+      # docs-version-check.yml's zero-setup pattern.
+      run: |
+        echo "🔍 Checking package<->site doc mirrors are in sync..."
+        python3 bin/docs-mirror-check.py --check
+
+    - name: Comment on PR if mirrors drift
+      if: failure() && github.event_name == 'pull_request'
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+      with:
+        script: |
+          if (context.issue && context.issue.number) {
+            const [owner, repo] = context.payload.repository.full_name.split('/');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: owner,
+              repo: repo,
+              body: `## ❌ Documentation Mirror Drift
+
+          The package-local docs (\`packages/<pkg>/docs/\`) and the mkdocs site docs
+          (\`docs/packages/<pkg>/\`) are out of sync, or a doc is unclassified.
+
+          Run the check locally to see the exact issue:
+          \`\`\`bash
+          python3 bin/docs-mirror-check.py --check
+          \`\`\`
+
+          **Common fixes:**
+          - A hand-authored **mirror** drifted → reconcile it, or run
+            \`python3 bin/docs-mirror-check.py --fix\` to regenerate the site page from its package source.
+          - A **new doc** is unclassified → add it to \`.dataknobs/docs-mirror-manifest.json\`
+            under the right bucket (symlink / transclude / mirror / diverge / package_only / site_only).
+          - The divergence is **intentional** → reclassify the pair as \`diverge\` in the manifest.`
+            })
+          }

@@ -625,7 +625,10 @@ controls its table/index naming.
 | `make_elasticsearch_test_index` | function | `dataknobs_common.testing.elasticsearch_fixtures` |
 
 The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
-are also importable from `dataknobs_common.testing`.
+are also importable from `dataknobs_common.testing`, along with
+`sweep_stale_test_indices()` (see [Session-Start Index Sweep](#session-start-index-sweep))
+and the availability probes / skip markers `is_postgres_available()` /
+`requires_postgres`, `is_elasticsearch_available()` / `requires_elasticsearch`.
 
 ### Environment Variables
 
@@ -643,6 +646,8 @@ Elasticsearch fixtures read:
 - `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
 - `ELASTICSEARCH_PORT` — `9200`
 - `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+- `DK_ES_TEST_INDEX_MAX_AGE_SECONDS` — staleness threshold (seconds) for the
+  session-start index sweep; default `300`
 
 `get_localstack_endpoint` and `is_localstack_available` read:
 
@@ -722,6 +727,46 @@ errors.
 Elasticsearch cleanup is best-effort: `ConnectionError` and `ValueError`
 are logged at `WARNING` and swallowed (the test result is preserved); any
 other exception propagates to surface unexpected failures.
+
+### Session-Start Index Sweep
+
+Per-test teardown deletes each test's index — but only when the run reaches
+teardown. A run killed mid-test (Ctrl-C, crash, timeout) leaks its
+uniquely-suffixed `test_*` index. Because the dev/CI cluster uses a
+persistent data volume, those leaks accumulate across runs; each holds a
+shard, and a single-node cluster's `cluster.max_shards_per_node` ceiling
+(default 1000) eventually rejects all new index creation, reddening the whole
+Elasticsearch suite.
+
+To reclaim that residue, `ensure_elasticsearch_ready` calls
+`sweep_stale_test_indices()` once at session start (after the readiness
+wait). The sweep lists `test_*` indices (a read) and deletes, **by exact
+name**, each one whose ES `creation.date` is older than the staleness
+threshold:
+
+```python
+from dataknobs_common.testing import sweep_stale_test_indices
+
+# Defaults: prefixes=("test_",), threshold from
+# DK_ES_TEST_INDEX_MAX_AGE_SECONDS or 300s.
+deleted = sweep_stale_test_indices(host, port)
+```
+
+Two properties make it safe:
+
+- **Age-gating.** Session fixtures run once per worker, so under
+  pytest-xdist a blanket "delete all matching" would race a concurrent
+  worker's live index. An in-flight index is seconds old and is never swept;
+  accumulated residue is minutes-to-months old and always is. Deletion is by
+  exact name because ES rejects a wildcard `DELETE` under
+  `action.destructive_requires_name`.
+- **Best-effort.** Any request/connection/parse error is logged at `WARNING`
+  and the function returns the names deleted so far; it never raises, so a
+  cleanup hiccup can't fail an otherwise-green run.
+
+The `docker-compose.override.yml` Elasticsearch service also sets
+`cluster.max_shards_per_node=3000` — headroom for a single run that spikes
+many concurrent indices before the next sweep, not the fix itself.
 
 ---
 

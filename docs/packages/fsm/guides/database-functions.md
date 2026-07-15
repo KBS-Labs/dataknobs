@@ -148,9 +148,9 @@ backend-assigned ids and `on_duplicate` is not evaluated).
 ## `BatchCommit`
 
 Persists `data["batch"]` and clears it. Without an identity it writes the batch
-via `create_batch` (all-or-nothing on transactional backends); with an identity
-it upserts each row under its derived id, so re-committing the same batch is
-idempotent.
+via `create_batch`; with an identity it upserts each row under its derived id
+via `upsert_batch`, so re-committing the same batch is idempotent. Both paths
+are all-or-nothing on transactional backends.
 
 ```python
 BatchCommit(
@@ -185,11 +185,11 @@ The legacy `use_transaction=` flag is a back-compat alias:
 `use_transaction=True` maps to `atomicity="require"`, `False` to
 `"best_effort"`.
 
-> **Atomic idempotent commit** (`atomicity="require"` *together with* an
-> identity) is not yet supported — the per-row upsert path is not batch-atomic
-> without a connection-scoped transaction primitive, so it raises
-> `CapabilityNotSupportedError`. Use create-mode (`require`, no identity) for
-> all-or-nothing batch writes today.
+`atomicity="require"` is honored on **both** paths on transactional backends:
+create-mode (via `create_batch`) and the idempotent-upsert path (via
+`upsert_batch`) are each written as a single all-or-nothing batch statement. On
+a non-transactional backend `require` raises `CapabilityNotSupportedError` on
+either path.
 
 The `require` capability check is sourced from the data layer's
 `AsyncDatabase.supports_transactions()` flag — `True` on `sqlite`, `postgres`,
@@ -205,14 +205,17 @@ flushes them (returning `committed_count`) while `rollback` discards them.
 Because writes are buffered, a failure *before* `commit` persists nothing on any
 backend.
 
-Commit atomicity follows the buffered transaction's `is_atomic` flag: a single
-same-kind batch (all creates, or all deletes) is all-or-nothing on a
-transactional backend, but a **mixed** create/delete or **upsert**-containing
-buffer commits as a sequence of independent batches and can partially persist if
-one fails mid-flush (see the data package's
-[Transactions](../../data/transactions.md) guide). A `commit` reaching a state
-with no active handle — a missing or failed prior `begin` — is logged at WARNING
-and commits nothing, rather than reporting a phantom success; a handle-less
+Commit atomicity follows the buffered transaction's `is_atomic` flag: on a
+transactional backend the commit flush runs every coalesced batch inside one
+native transaction, so a commit is all-or-nothing regardless of composition —
+a single same-kind batch **and** a buffer spanning several kinds (e.g. mixed
+create/delete, or create + upsert) alike; a mid-flush failure rolls the whole
+commit back (see the data package's
+[Transactions](../../data/transactions.md) guide). On a non-transactional
+backend a multi-kind buffer commits as a sequence of independent batches and can
+partially persist if one fails mid-flush. A `commit` reaching a state with no
+active handle — a missing or failed prior `begin` — is logged at WARNING and
+commits nothing, rather than reporting a phantom success; a handle-less
 `rollback` is a quiet no-op.
 
 ```python
@@ -234,15 +237,29 @@ guarantee atomic commit (`supports_transactions()` is `False`):
 
 The buffered transaction defers all writes until commit; it does **not** provide
 in-transaction isolation or read-your-writes (staged writes are invisible to
-reads until commit). For connection-scoped isolation, branch on
-`supports_transactions()` and use a backend-native transaction directly.
+reads until commit). On a transactional backend it commits mixed operation kinds
+all-or-nothing (the multi-kind behaviour above); on a non-transactional backend
+a mixed-kind commit is best-effort per batch. The public API exposes no
+connection-scoped transaction beyond this buffered form: for a multi-record
+read-modify-write invariant use optimistic concurrency (`update` / `upsert` with
+`expected_version`).
 
-> **The `transaction:` config block is not a database-atomicity knob.** A
-> `transaction: {strategy: batch|manual, ...}` block configures an in-memory
-> `TransactionManager` (commit-trigger / batching coordination) that the
-> execution engines do **not** consult to drive database commit/rollback —
-> configuring it logs a warning at build time. For database atomicity use
-> `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
+> **There is no `transaction:` config block for database atomicity.** The
+> former strategy-based transaction coordinator has been removed — it
+> configured an in-memory object the execution engines never consulted, so it
+> delivered no database atomicity. A leftover `transaction:` block in an
+> existing config is ignored (a warning is logged at load time). For database
+> atomicity use `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or
+> the `AsyncDatabase.transaction()` primitive directly.
+
+> **`TransactionMode` is logical bookkeeping — it does not drive database
+> commits.** The FSM execution context carries a `transaction_mode`
+> (`TransactionMode.NONE` / `PER_RECORD` / `PER_BATCH` / `PER_SESSION` /
+> `DISTRIBUTED`), but it is internal execution-engine bookkeeping only: no
+> engine reads it to open, commit, or roll back a database transaction. Setting
+> it (e.g. to `PER_BATCH`) does **not** make execution commit per batch.
+> Database atomicity comes only from the functions on this page —
+> `DatabaseTransaction`, `BatchCommit(atomicity="require")` — or the
 > `AsyncDatabase.transaction()` primitive directly.
 
 ## Read functions

@@ -16,6 +16,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def es_version_token(seq_no: int, primary_term: int) -> str:
+    """Compose the opaque optimistic-concurrency token for an ES document.
+
+    Elasticsearch's native optimistic concurrency uses the pair
+    (``_seq_no``, ``_primary_term``); a single opaque ``"{seq_no}:{primary_term}"``
+    string carries both so ``get_version`` fits the one-token contract. Shared
+    by the sync and async Elasticsearch backends so the two cannot drift.
+    """
+    return f"{seq_no}:{primary_term}"
+
+
+def parse_es_version_token(token: str) -> tuple[int, int]:
+    """Split an ES version token back into ``(seq_no, primary_term)``.
+
+    Inverse of :func:`es_version_token`. Raises ``ValueError`` on a malformed
+    token (the caller passed something that did not come from ``get_version``).
+    """
+    seq_no_str, _, primary_term_str = token.partition(":")
+    if not primary_term_str:
+        raise ValueError(f"Malformed Elasticsearch version token: {token!r}")
+    return int(seq_no_str), int(primary_term_str)
+
+
 class ElasticsearchBaseConfig:
     """Mixin for parsing Elasticsearch configuration."""
 
@@ -317,46 +340,16 @@ class ElasticsearchQueryBuilder:
 
     @staticmethod
     def _build_filter_query(filter_query: Query | None) -> dict[str, Any] | None:
-        """Build Elasticsearch filter query from Query object.
-        
-        Args:
-            filter_query: Query object to convert
-            
-        Returns:
-            Elasticsearch query dict or None
+        """Build an Elasticsearch pre-filter clause from a Query.
+
+        Vector and hybrid search pre-filter through the same shared translator
+        as the plain search paths, so the pre-filter honors the full operator
+        set and resolves ``id`` to the record's storage key. Equality is exact
+        (``term`` on the ``.keyword`` sub-field), not analyzed. Returns ``None``
+        when there is nothing to filter.
         """
-        if not filter_query:
+        from .elasticsearch_query import build_bool_query
+
+        if not filter_query or not filter_query.filters:
             return None
-
-        # TODO: Implement full query translation
-        # For now, just support simple field equality
-        from ..query import Operator
-
-        must_clauses = []
-
-        if filter_query.filters:
-            for filter_item in filter_query.filters:
-                field_path = f"data.{filter_item.field}"
-
-                if filter_item.operator == Operator.EQ:
-                    # Use match query for text fields to handle analyzed text
-                    must_clauses.append({
-                        "match": {field_path: filter_item.value}
-                    })
-                elif filter_item.operator == Operator.IN:
-                    must_clauses.append({
-                        "terms": {field_path: filter_item.value}
-                    })
-                elif filter_item.operator == Operator.GT:
-                    must_clauses.append({
-                        "range": {field_path: {"gt": filter_item.value}}
-                    })
-                elif filter_item.operator == Operator.LT:
-                    must_clauses.append({
-                        "range": {field_path: {"lt": filter_item.value}}
-                    })
-
-        if must_clauses:
-            return {"bool": {"must": must_clauses}}
-
-        return None
+        return build_bool_query(filter_query.filters)

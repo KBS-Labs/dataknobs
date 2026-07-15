@@ -7,6 +7,304 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `allocate` / `allocate_sync`: create a record under a caller-computed monotonic
+  key (a version, a sequence number, any derived key), retrying on a colliding id
+  so concurrent allocators each land a distinct next key. A caller-supplied
+  `build` callable does the fresh read, next-key computation, and record
+  construction; the helper re-runs it on `DuplicateRecordError` and retries. A
+  bounded create-on-conflict loop over the atomic `create()` — a single
+  uncontended allocation makes exactly one attempt, and after `max_attempts`
+  (default 16) collisions it re-raises the last collision, fail-closed. Key-agnostic
+  (never mints or mutates ids) and backend-agnostic (composes over the shared
+  `create()` contract, no backend-specific path).
+
+- `Operator.STARTS_WITH`: a literal, case-sensitive, escape-safe prefix
+  predicate — a `_` or `%` in the prefix matches literally, unlike `LIKE`. It
+  pushes down to the backend query engine where available (a SQL range or
+  `LIKE ... ESCAPE`, an Elasticsearch `prefix` query) and scans in memory
+  otherwise. Record identifiers are first-class query targets: `Filter("id", ...)`
+  resolves to the storage key — equality, membership, literal prefix, and
+  sorting — uniformly across all backends, including records whose id the
+  backend minted at write time, so a store that encodes hierarchy into its keys
+  can scan a subtree with one filter instead of fetching coarsely and filtering
+  in Python.
+
+### Changed
+
+- The string-matching operators (`LIKE`, `NOT_LIKE`, `REGEX`, `STARTS_WITH`)
+  match **only string values**, consistently across the SQL and in-memory
+  backends. On the SQL backends (SQLite, PostgreSQL, DuckDB) a `data`/`metadata`
+  JSON field whose stored value is not a string (a number, boolean, …) no longer
+  matches these operators via text coercion — the push-down carries a
+  JSON-string-type guard so it agrees with the in-memory backends'
+  (`memory`/`file`/`s3`) `isinstance(str)` contract. The `id` storage key is a
+  real string column and is unaffected. The async S3
+  backend's `LIKE` now uses the same anchored, case-insensitive SQL-wildcard
+  semantics as the sync S3 backend and every other backend (previously a
+  case-sensitive substring test), and its non-`LIKE` operators — `BETWEEN`,
+  `EXISTS`, `REGEX`, `STARTS_WITH` — are now honored rather than silently
+  dropped.
+
+- The `Migrator`'s batched write path (`migrate()`) now writes each batch
+  through the target's native bulk verbs — `create_batch` for `insert`
+  (fail-closed on a colliding id) and `upsert_batch` for `upsert` — with a
+  graceful per-record fallback that preserves per-id progress accounting and
+  `on_error` semantics when a batch write fails. This matches the throughput of
+  the streaming write path (`migrate_stream()` / `migrate_parallel()` /
+  `migrate_async()`), which already rode the bulk verbs, so a from-empty
+  `insert` or a `make-target-match-source` `upsert` migration issues one bulk
+  call per batch instead of a round trip per record. The `insert` bulk
+  fast-path is used only where `create_batch` is atomic on a collision (memory,
+  SQLite, PostgreSQL, DuckDB, file); on a backend whose bulk create is
+  non-atomic (Elasticsearch's per-item bulk API, the S3 per-record loop),
+  `insert` routes per-record — mirroring what those backends' own `stream_write`
+  already does — because riding the bulk verb there would let the per-record
+  fallback re-write the rows a failed bulk call had already durably written and
+  count them as spurious duplicate failures. The `skip` policy still writes per
+  record (a whole-batch verb cannot skip one duplicate while inserting the
+  rest). Conflict-policy behavior and `MigrationProgress` accounting are
+  identical to the prior per-record path on every backend.
+
+- `AsyncDatabase.transaction()` / `begin_transaction()` now commit a buffered
+  transaction of **any** composition all-or-nothing on a transactional backend
+  (SQLite, PostgreSQL, DuckDB). `BufferedTransaction.commit()` coalesces
+  consecutive same-kind operations into a single `create_batch` / `upsert_batch`
+  / `delete_batch` call and runs every coalesced batch inside **one** native
+  transaction, so a commit is atomic whether the buffer is single-kind (all
+  creates, all upserts, or all deletes) or spans several kinds (e.g. mixed
+  create + delete, or create + upsert) — a mid-flush failure rolls the whole
+  commit back rather than partially persisting. `BufferedTransaction.is_atomic`
+  reports `True` for any composition on a transactional backend. Non-transactional
+  backends (memory/file/s3/elasticsearch) are unchanged — a multi-kind commit
+  there stays best-effort per batch and `is_atomic` is `False`.
+
+- `create()` is now a defined atomic insert across every backend: a colliding
+  id raises `DuplicateRecordError` instead of silently overwriting the existing
+  record (memory, file, S3, Elasticsearch) or raising a bare `ValueError`
+  (SQLite, DuckDB). This removes the racy `exists()`-then-`create()` workaround
+  consumers needed for collision-safe inserts. `DuplicateRecordError` subclasses
+  `ValueError`, so existing callers that caught the former `ValueError` on a
+  duplicate id are unaffected. On S3 the guarantee is enforced with a
+  conditional PUT (`If-None-Match`) and therefore holds against any S3
+  implementation that honors conditional writes (real AWS S3, recent
+  LocalStack); both a pre-existing key (412) and a concurrent conditional-write
+  race (409) fail closed as `DuplicateRecordError`, while older stores that
+  ignore the header degrade to last-writer-wins. `create_batch()` honors the same
+  contract uniformly across every backend — see the `create_batch()` and
+  streaming entries below.
+- On the SQL backends (SQLite, DuckDB), `create()` now distinguishes a
+  duplicate-id collision from other column-constraint violations: only a
+  primary-key collision raises `DuplicateRecordError`, while a `NOT NULL` or
+  `CHECK` violation on the stored data surfaces as `RecordValidationError`
+  rather than being mislabeled as a duplicate id.
+
+### Added
+
+- `DuplicateRecordError` (exported from `dataknobs_data`), raised by `create()`
+  on a duplicate id. Subclasses both the data-layer `ConcurrencyError` and
+  `ValueError`; carries the colliding id in `.id` and `context={"id": ...}`.
+- `ConcurrencyError.__init__` accepts an optional keyword-only `context` mapping
+  (backward-compatible), so concurrency conflicts can carry structured detail.
+- `get_version(id) -> str | None` on `AsyncDatabase` / `SyncDatabase` and every
+  backend: returns an opaque, backend-local optimistic-concurrency token for a
+  stored record (or `None` if the id does not exist). The token is native where
+  the store provides one — an in-memory per-instance monotonic sequence,
+  PostgreSQL `xmin`, Elasticsearch `_seq_no`/`_primary_term`, S3 `ETag` — and a
+  deterministic content hash of the stored record on the file, SQLite, and
+  DuckDB backends. The in-memory token is ABA-safe on every path, including a
+  delete→recreate at the same id (the sequence value is never reused). Treat it
+  as opaque; it is not comparable across backends.
+- An opt-in, keyword-only `expected_version` parameter on `update()`,
+  `upsert()`, and `delete()` across both base contracts and all 14 backends.
+  Passing a token read from `get_version()` turns the write into a
+  compare-and-set: it proceeds only if the record's current token still matches,
+  otherwise it raises `ConcurrencyError` (carrying `id` / `expected_version` /
+  `actual_version` in `.context`) instead of last-writer-wins. The
+  compare-and-set is enforced atomically where the store supports it —
+  PostgreSQL `WHERE ... AND xmin = …`, Elasticsearch `if_seq_no`/`if_primary_term`,
+  S3 `If-Match` (on both the conditional PUT and the conditional DELETE) — and
+  the in-process content-hash backends serialize the check within a single
+  connection/instance. A conditional `update()` never inserts (a missing record
+  returns `False`); a conditional `delete()` never conflicts on an absent id (a
+  missing record returns `False`); a conditional `upsert()` never inserts (a
+  missing record is itself a conflict and raises). Omitting `expected_version`
+  leaves all three operations byte-identical to prior behavior (unconditional
+  last-writer-wins). `upsert()` applies the update through the backend's own
+  atomic guard and acts on its result, so a concurrent delete cannot make it
+  report success without writing.
+- The database backends advertise their optional consistency features through
+  the `CapabilityContract` surface: `AsyncDatabase` / `SyncDatabase` and every
+  concrete backend report `Capability.CONDITIONAL_WRITE`. A consumer can query
+  `db.supports(Capability.CONDITIONAL_WRITE)` (or use `require_capability`)
+  before relying on `expected_version` compare-and-set, instead of knowing the
+  backend matrix out-of-band. The advertisement is uniform because every
+  backend enforces the contract; the ABA nuance of the content-hash backends
+  is documented, not encoded as a separate capability.
+- `Migrator` gains an `on_conflict` policy (`insert` / `upsert` / `skip`) for
+  idempotent re-runs into a populated target. `insert` (the default) fails
+  closed on a colliding id as before; `upsert` overwrites the target row;
+  `skip` leaves the existing row and counts the id as skipped. The policy is
+  threaded through all four migrate methods — `migrate()` and
+  `migrate_parallel()` take it directly, `migrate_stream()` / `migrate_async()`
+  read it from `StreamConfig`. Default behavior is unchanged.
+- `ConflictPolicy` enum and `StreamConfig.on_conflict` field (exported from
+  `dataknobs_data` and `dataknobs_data.migration`) carry the policy on the
+  streaming path; every backend's `stream_write` honors it. `StreamResult`
+  gains a `skipped` counter. The `insert` fast-path uses the backend's native
+  batch write; `upsert` uses the native `upsert_batch` bulk verb (see below)
+  with a per-record `upsert` fallback; `skip` writes one record at a time (a
+  whole-batch verb cannot skip individual dupes while inserting the rest). An
+  unknown `on_conflict` value is rejected when the `StreamConfig` is built.
+- `upsert_batch(records)` on `AsyncDatabase` / `SyncDatabase` and every backend
+  — the batch sibling of `create_batch`, with upsert (insert-or-overwrite)
+  semantics: it honors a caller-supplied `record.id` (minting one only when
+  absent), overwrites a colliding id (never raised, never skipped), returns ids
+  in input order, and carries no version check (a whole batch cannot carry one
+  optimistic-concurrency token). Native bulk fast-paths where the store has one
+  — a single `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite, DuckDB, and
+  PostgreSQL; a bulk index-by-id on Elasticsearch; a single file-rewrite (file)
+  / single-lock pass (memory) — and the per-record ABC-default loop (per-key
+  PUT) on S3, which has no cheaper bulk verb. The streaming `upsert` policy and
+  the FSM `DatabaseResource.commit_batch` identity path both adopt it for batch
+  throughput. `BufferedTransaction` gains a matching `upsert_batch` staging
+  method; on commit a consecutive upsert run is coalesced into a single
+  `upsert_batch` (atomic on transactional backends — see the Changed entry).
+- `create_batch()` now fails closed on a colliding id across **every backend**,
+  matching single `create()`: a colliding id — against an existing record or a
+  duplicate within the same batch — raises `DuplicateRecordError`, and a
+  caller-supplied `record.id` is honored (minted only when absent). The SQL
+  backends (SQLite, DuckDB, PostgreSQL) previously minted a fresh id per record
+  and ignored `record.id`; Elasticsearch overwrote (sync) or used server-assigned
+  ids (async); memory/sync-file overwrote and async-file minted. On the
+  transactional SQL backends the batch is atomic (a collision rolls back the
+  whole INSERT — nothing written); on Elasticsearch the bulk API is per-item, so
+  — exactly like a `create()` loop — non-colliding rows in the same batch may be
+  written before the conflict is raised.
+- The **streaming INSERT** path (`migrate_stream` / `migrate_async` and every
+  backend's `stream_write` under the default `ConflictPolicy.INSERT`) now fails
+  closed on a colliding id across **every backend** — recording it as a failure
+  and preserving the source id, rather than writing a fresh-id row. A re-run into
+  a populated target records the colliding ids as failures, matching the batched
+  `migrate()` path. SQLite/DuckDB reach this through the tightened bulk
+  `create_batch` plus a per-record `create()` fallback; PostgreSQL through its
+  atomic `_write_batch` fast-path; S3, Elasticsearch-sync, and async-Elasticsearch
+  through per-record `create()` (their non-transactional bulk write would
+  otherwise double-write the already-written rows under the fallback). `upsert` /
+  `skip`
+  remain available for idempotent re-runs.
+
+### Fixed
+
+- The async Elasticsearch backend honors the full operator set — `REGEX`,
+  `EXISTS`, `NOT_EXISTS`, `NOT_LIKE`, and the negations of `IN`/`BETWEEN` — in
+  `search()`, `count()`, and `stream_read()`, matching the sync backend and the
+  other backends. It previously translated only a subset inline, so those
+  operators were silently dropped and the query fell back to matching every
+  document. The async `search()` also accepts a `ComplexQuery` (AND/OR/NOT).
+- Elasticsearch `LIKE`/`NOT_LIKE` uses SQL-wildcard (`%`→any, `_`→one),
+  case-insensitive matching, consistent with the in-memory and SQL backends
+  (the async backend previously did a case-sensitive substring match). Only `%`
+  and `_` are wildcards: a literal Lucene metacharacter in the pattern (`*`,
+  `?`, `\`) is now escaped so it matches verbatim, rather than leaking through
+  as an Elasticsearch wildcard (an unescaped `*` previously matched anything).
+  The case-insensitive `wildcard` form requires Elasticsearch ≥ 7.10.
+  **Behavior change / migration:** a consumer that relied on the old
+  Elasticsearch-only passthrough — passing a raw `*` or `?` in a `LIKE` pattern
+  and expecting it to act as an Elasticsearch wildcard — must switch to the
+  portable SQL wildcards `%` and `_`. For example `LIKE "*name*"` (which matched
+  any value containing `name` on Elasticsearch, but matched a literal asterisk
+  or errored on the other backends) becomes `LIKE "%name%"`, which now behaves
+  identically on every backend.
+- Elasticsearch `REGEX` matches the **full field value** (via the `.keyword`
+  sub-field, case-sensitive), consistent with the in-memory (`re.search`) and
+  SQL backends. It previously ran against the analyzed `data.<field>` path,
+  where `regexp` matches a single lowercased token — so a pattern spanning a
+  word boundary (e.g. `alice.*smith` against `"alice smith"`) matched nothing.
+  `Filter("id", REGEX, ...)` was already full-value; data fields now agree.
+  (Elasticsearch `regexp` is anchored and uses Lucene RegExp syntax, which
+  differs from Python `re` — no `^`/`$` anchors, no look-around.)
+- Elasticsearch raises `ValueError` for an operator its translator cannot
+  express, rather than silently falling back to `match_all` (a dropped filter
+  returning every document). This is the fail-loud counterpart to the operator
+  convergence above; a caller that relied on the silent everything-match now
+  gets an explicit error.
+- `Filter("id", ...)` on Elasticsearch accepts the full operator set — prefix,
+  range, membership, wildcard, regex — against the record's storage key, which
+  is carried as a queryable `id` keyword field (a metafield-`_id` filter did not
+  support range/prefix/wildcard). **Migration note:** because `id` filtering now
+  targets the stamped top-level `id` field rather than the `_id` metafield, it
+  only sees documents written with that field present. Every write path stamps
+  it now, but a record indexed by an older version that did not stamp a *minted*
+  `id` (one the backend generated because the record had none) is invisible to
+  an `id` filter until the index is reindexed. `read(id)` is unaffected — it
+  still fetches by `_id`.
+- Elasticsearch vector and hybrid search pre-filters honor the full operator set
+  and resolve `Filter("id", ...)` to the record's storage key; equality is exact
+  (`term` on the keyword sub-field) rather than an analyzed match.
+- `upsert(id, record)` now honors the explicit `id` when the record carries a
+  *different* pre-set `storage_id` and the id does not yet exist. The base
+  create-fallback previously wrote the new row under the record's own
+  `storage_id` (and returned that id), silently discarding the explicit `id`
+  argument; it now stamps the resolved id onto the record before the create so
+  the explicit id is authoritative. Affects the backends that use the base
+  `upsert` (SQLite, DuckDB, sync S3); backends overriding `upsert` (memory,
+  PostgreSQL, Elasticsearch, file, async S3) already behaved correctly. The
+  common paths —
+  `upsert(record)`, and `upsert(id, record)` with a matching or absent
+  `storage_id` — are unchanged.
+- The async Elasticsearch backend's `create_batch()` and `upsert_batch()` now
+  reconcile the bulk response per item, so a record whose bulk operation failed
+  (e.g. a mapping error or version conflict) is no longer reported as written. A
+  partial bulk failure previously returned every input id as successful — the id
+  list is now filtered to the operations that actually succeeded, matching the
+  sync backend's `_execute_bulk_index` reconciliation (extracted here into a
+  shared `_extract_bulk_index_ids` helper used by both async bulk paths).
+- Streaming now accounts a partial-batch failure honestly. When a batch write
+  verb confirms fewer ids than the batch it was given — which a bulk backend
+  can do (Elasticsearch reports per-item errors, so its `create_batch` /
+  `upsert_batch` return only the ids that succeeded) — the unconfirmed records
+  are counted as `failed` instead of silently vanishing from the tally, so
+  `StreamResult.total_processed == successful + failed + skipped` holds. The
+  shortfall is routed through `StreamConfig.on_error` once as an aggregate
+  error (with a `None` record, since per-item identity is not available at this
+  layer), placing the batch path on the same stop/continue contract as the
+  per-record fallback: a configured handler decides whether to continue, and
+  with no handler the stream quits on the first failing batch — the same
+  fail-stop default a per-record failure already gets.
+- Corrected the buffered-transaction documentation (the
+  `dataknobs_data.transactions` module docstring and the Transactions guide) to
+  stop directing consumers to a non-existent "backend-native transaction"
+  primitive for cross-operation atomicity and connection-scoped isolation — the
+  public API exposes no connection-scoped transaction beyond the buffered
+  `db.transaction()` form. The docs now state the actual options: stage a single
+  operation kind per transaction for all-or-nothing on a transactional backend,
+  and use optimistic concurrency (`update` / `upsert` with `expected_version`)
+  for a read-modify-write invariant.
+- `Filter("id", ...)` on the async S3 and async Elasticsearch backends now
+  resolves to the record's storage key, matching every other backend; it
+  previously matched a data field named `id` (so an id filter returned the wrong
+  rows or none). The async S3 backend now also honors `BETWEEN` / `NOT_BETWEEN` /
+  `EXISTS` / `NOT_EXISTS` / `REGEX` filters it previously ignored — its filter
+  matching now delegates to the shared `Filter.matches` matcher rather than a
+  narrower inline operator switch.
+- The sync Elasticsearch backend's `count()` now honors `BETWEEN` / `NOT_BETWEEN`
+  filters. Its query translation is now shared with `search()` (both route
+  through one per-filter translator); previously `count()` carried a separate
+  translation that omitted these operators, so a `BETWEEN`-only count fell back
+  to matching everything and returned the total instead of the filtered count.
+
+### Notes
+
+- The file/SQLite/DuckDB content-hash token is subject to the classic ABA
+  limitation: an A→B→A mutation cycle yields the original token, so a stale
+  conditional write in that exact scenario is not detected. The backends with a
+  native monotonic version (memory counter, PostgreSQL `xmin`, Elasticsearch
+  `_seq_no`, S3 `ETag`) are ABA-safe. The in-process content-hash backends
+  enforce the compare-and-set within a single connection/instance; conditional
+  writes are not hardened across separate processes/connections.
+
 ## v0.5.5 - 2026-07-07
 
 ### Changed

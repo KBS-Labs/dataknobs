@@ -295,6 +295,53 @@ class TestUpsertWithDifferentBackends:
         id2 = await db.upsert("async-mem-id", Record({"test": "async-memory2"}))
         assert id2 == "async-mem-id"
 
+    def test_explicit_id_overrides_differing_storage_id_sync(self):
+        """``upsert(id, record)`` on the create-fallback path honors the explicit id.
+
+        Reproduce-first for a base-class create-fallback bug: sqlite/duckdb do
+        not override ``upsert``, so they take the base
+        :meth:`SyncDatabase.upsert`. When the caller supplies an explicit ``id``
+        for a not-yet-existing row AND the record carries a *different* pre-set
+        ``storage_id``, the explicit id must win — create must write under it,
+        not under the record's own id. The former conditional
+        ``if not record.storage_id`` guard let create silently write under the
+        record's storage_id and ignore the explicit id.
+        """
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:"})
+        db.connect()
+        try:
+            record = Record({"v": 1})
+            record.storage_id = "A"  # record self-identifies as "A"
+            result_id = db.upsert("B", record)  # caller explicitly asks for "B"
+            assert result_id == "B"
+            assert db.read("B") is not None
+            assert db.read("A") is None  # explicit id wins; "A" never written
+        finally:
+            db.close()
+
+    @pytest.mark.asyncio
+    async def test_explicit_id_overrides_differing_storage_id_async(self):
+        """Async twin of ``test_explicit_id_overrides_differing_storage_id_sync``.
+
+        AsyncSQLiteDatabase does not override ``upsert``, so it exercises the
+        base :meth:`AsyncDatabase.upsert` create-fallback path.
+        """
+        from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+        db = AsyncSQLiteDatabase({"path": ":memory:"})
+        await db.connect()
+        try:
+            record = Record({"v": 1})
+            record.storage_id = "A"
+            result_id = await db.upsert("B", record)
+            assert result_id == "B"
+            assert await db.read("B") is not None
+            assert await db.read("A") is None
+        finally:
+            await db.close()
+
 
 class TestRecordIDManagement:
     """Test how Record IDs are managed during upsert."""

@@ -56,7 +56,6 @@ State Lifecycle:
     - fail() marks state as FAILED
     - Error tracking (error_count, last_error)
     - Retry logic can re-enter state
-    - Transaction rollback if configured
 
 Data Handling Modes:
     States use configurable data handling modes to control how data flows:
@@ -202,20 +201,6 @@ Error Handling and Retries:
     - last_error: Most recent error message
     - Status: FAILED after all retries exhausted
 
-Transaction Support:
-    States participate in transactions when configured:
-
-    **Transaction Modes:**
-    - NONE: No transactional guarantees
-    - OPTIMISTIC: Commit at workflow end
-    - PESSIMISTIC: Commit at each state
-
-    **State Integration:**
-    - StateInstance.transaction: Active transaction
-    - Data changes recorded in transaction log
-    - Rollback on error
-    - Commit on success
-
 Note:
     This is an internal API used by the core FSM and execution engines.
     Users typically interact with states indirectly through the SimpleFSM,
@@ -238,7 +223,6 @@ from uuid import uuid4
 
 from dataknobs_data.fields import Field
 from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
-from dataknobs_fsm.core.transactions import Transaction
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
     ITransformFunction,
@@ -691,7 +675,6 @@ class StateInstance:
         data (Dict[str, Any]): Current state data
         data_mode_manager (DataModeManager | None): Manages data handling modes
         data_handler (Any | None): Active data mode handler (COPY/REFERENCE/DIRECT)
-        transaction (Transaction | None): Active transaction if using transactional mode
         acquired_resources (Dict[str, Any]): Resources acquired for this instance
         entry_time (datetime | None): When state was entered
         exit_time (datetime | None): When state was exited
@@ -753,20 +736,6 @@ class StateInstance:
         - next_state: Determined next state
         - last_error: Most recent error message
 
-    Transaction Support:
-        StateInstance participates in transactions:
-
-        **Integration:**
-        - transaction field holds active transaction
-        - Data changes logged to transaction
-        - Rollback on fail()
-        - Commit on exit(commit=True)
-
-        **Modes:**
-        - NONE: No transaction tracking
-        - OPTIMISTIC: Commit at workflow end
-        - PESSIMISTIC: Commit at each state exit
-
     Methods:
         **Lifecycle:**
         - enter(input_data): Enter state with data
@@ -801,7 +770,6 @@ class StateInstance:
         - :class:`~dataknobs_fsm.core.state.StateDefinition`: State blueprint
         - :class:`~dataknobs_fsm.core.state.StateStatus`: Status enum
         - :class:`~dataknobs_fsm.core.data_modes.DataModeManager`: Data mode manager
-        - :class:`~dataknobs_fsm.core.transactions.Transaction`: Transaction support
     """
 
     id: str = dataclass_field(default_factory=lambda: str(uuid4()))
@@ -812,10 +780,7 @@ class StateInstance:
     data: Dict[str, Any] = dataclass_field(default_factory=dict)
     data_mode_manager: DataModeManager | None = None
     data_handler: Any | None = None  # Active data handler
-    
-    # Transaction participation
-    transaction: Transaction | None = None
-    
+
     # Resource access
     acquired_resources: Dict[str, Any] = dataclass_field(default_factory=dict)
     

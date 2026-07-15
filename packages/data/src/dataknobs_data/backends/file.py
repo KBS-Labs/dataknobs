@@ -10,17 +10,29 @@ import os
 import platform
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import (
+    AsyncDatabase,
+    SyncDatabase,
+    enforce_content_version,
+    prepare_atomic_batch,
+)
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..records import Record
-from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..streaming import (
+    AsyncStreamingMixin,
+    StreamConfig,
+    StreamingMixin,
+    StreamResult,
+    resolve_conflict_write,
+    run_stream_write,
+)
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -508,6 +520,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
             data = await self._load_data()
             # Use centralized method to prepare record
             record_copy, storage_id = self._prepare_record_for_storage(record)
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in data:
+                raise DuplicateRecordError(storage_id)
             data[storage_id] = record_copy
             await self._save_data(data)
             return storage_id
@@ -520,25 +535,44 @@ class AsyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in the file."""
         async with self._lock:
             data = await self._load_data()
-            if id in data:
-                data[id] = record.copy(deep=True)
-                await self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            # Conditional write: compare the content-hash token inside the
+            # lock so the check and the write are atomic (no TOCTOU race).
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            data[id] = record.copy(deep=True)
+            await self._save_data(data)
+            return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         async with self._lock:
             data = await self._load_data()
-            if id in data:
-                del data[id]
-                await self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            await self._save_data(data)
+            return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
@@ -546,12 +580,23 @@ class AsyncFileDatabase(  # type: ignore[misc]
             data = await self._load_data()
             return id in data
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching token, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts (an absent
+        record's token is ``None``, which never matches).
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -567,6 +612,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
         async with self._lock:
             data = await self._load_data()
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
             data[id] = record.copy(deep=True)
             await self._save_data(data)
             return id
@@ -610,15 +658,55 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data({})
             return count
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, and the record's
+        own id is honored (this path previously minted a fresh id and ignored
+        ``record.id``). The pre-scan runs before ``_save_data``, so the batch is
+        all-or-nothing and the streaming INSERT fast-path fails closed.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored — the file backend has no native transaction to join.
+        """
+        async with self._lock:
+            data = await self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
+            ids = []
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
+            await self._save_data(data)
+            return ids
+
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records in one load/save cycle.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, and ids are returned in input order. The whole
+        batch is applied under one ``_load_data`` / ``_save_data`` (a single file
+        rewrite) rather than the per-record load+save the ABC default loop would
+        incur. ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
+        if not records:
+            return []
         async with self._lock:
             data = await self._load_data()
             ids = []
             for record in records:
-                record_id = self._generate_id()
-                data[record_id] = record.copy(deep=True)
-                ids.append(record_id)
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                data[storage_id] = record_copy  # overwrite (upsert)
+                ids.append(storage_id)
             await self._save_data(data)
             return ids
 
@@ -632,8 +720,14 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records efficiently."""
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
+        """Delete multiple records efficiently.
+
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
         async with self._lock:
             data = await self._load_data()
             results = []
@@ -830,23 +924,18 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         _save_file_data(self.handler, self.filepath, self._file_lock, data)
 
-    def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
-        """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
-        # Use centralized method to prepare record
-        record_copy, storage_id = self._prepare_record_for_storage(record)
-
-        # Store the record
-        data[storage_id] = record_copy
-        return storage_id
-
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
         with self._lock:
             data = self._load_data()
             # Use record's ID if it has one, otherwise generate a new one
-            record_id = self._do_set_data(data, record)
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in data:
+                raise DuplicateRecordError(storage_id)
+            data[storage_id] = record_copy
             self._save_data(data)
-            return record_id
+            return storage_id
 
     def read(self, id: str) -> Record | None:
         """Read a record from the file."""
@@ -856,25 +945,42 @@ class SyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in the file."""
         with self._lock:
             data = self._load_data()
-            if id in data:
-                data[id] = record.copy(deep=True)
-                self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            # Conditional write: compare the content-hash token inside the
+            # lock so the check and the write are atomic (no TOCTOU race).
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            data[id] = record.copy(deep=True)
+            self._save_data(data)
+            return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         with self._lock:
             data = self._load_data()
-            if id in data:
-                del data[id]
-                self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            self._save_data(data)
+            return True
 
     def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
@@ -882,12 +988,23 @@ class SyncFileDatabase(  # type: ignore[misc]
             data = self._load_data()
             return id in data
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching token, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts (an absent
+        record's token is ``None``, which never matches).
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -903,6 +1020,9 @@ class SyncFileDatabase(  # type: ignore[misc]
 
         with self._lock:
             data = self._load_data()
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
             data[id] = record.copy(deep=True)
             self._save_data(data)
             return id
@@ -946,14 +1066,53 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data({})
             return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch pre-scans for collisions (prepare_atomic_batch) before the
+        # single _save_data, so a colliding id raises before anything is written
+        # and the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written (this path
+        previously overwrote on collision). The pre-scan runs before
+        ``_save_data``, so the batch is all-or-nothing and the streaming INSERT
+        fast-path fails closed.
+        """
+        with self._lock:
+            data = self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
+            ids = []
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
+            self._save_data(data)
+            return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in one load/save cycle.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, and ids are returned in input order. The whole
+        batch is applied under one ``_load_data`` / ``_save_data`` (a single file
+        rewrite) rather than the per-record load+save the ABC default loop would
+        incur.
+        """
+        if not records:
+            return []
         with self._lock:
             data = self._load_data()
             ids = []
             for record in records:
-                record_id = self._do_set_data(data, record)
-                ids.append(record_id)
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                data[storage_id] = record_copy  # overwrite (upsert)
+                ids.append(storage_id)
             self._save_data(data)
             return ids
 
@@ -1013,59 +1172,28 @@ class SyncFileDatabase(  # type: ignore[misc]
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into file."""
-        # Use the default implementation
+        """Stream records into file.
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch``
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create``.
+        """
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-
-        def do_write_batch(batch: list) -> bool:
-            """Write batch with individual retries, return False to quit"""
-            retval = True
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception:
-                # Try creating each item again and catch specific error items
-                for rec in batch:
-                    result.total_processed += 1
-                    try:
-                        self.create(rec)
-                        result.successful += 1
-                    except Exception as e:
-                        # This item failed again
-                        result.failed += 1
-                        result.add_error(None, e)
-                        if config.on_error:
-                            if not config.on_error(e, rec):
-                                retval = False
-                                break
-                        else:
-                            # Without "on_error", quit streaming
-                            retval = False
-                            break
-            return retval
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch
-                quitting = not do_write_batch(batch)
-                if quitting:
-                    # Got signal to quit
-                    break
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            do_write_batch(batch)
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def vector_search(
         self,

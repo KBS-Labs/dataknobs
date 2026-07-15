@@ -40,6 +40,26 @@ def test_build_phrase_query_dict():
     assert pqd == expected
 
 
+def test_encode_doc_id_escapes_path_reserved_chars():
+    """Document ids with '/' (hierarchical keys) are percent-encoded for the path.
+
+    Reproduce-first: an unencoded '/' in the ``_doc/<id>`` path is parsed by ES
+    as extra route segments, so ``index()`` silently returns
+    ``{"_id": None, "result": "error"}``. Encoding turns it into ``%2F``.
+    """
+    assert es_utils._encode_doc_id("artifacts/alice/report/final") == (
+        "artifacts%2Falice%2Freport%2Ffinal"
+    )
+    assert es_utils._encode_doc_id("plain-id") == "plain-id"
+    # Each path-reserved character encodes to its percent form.
+    assert es_utils._encode_doc_id("/") == "%2F"
+    assert es_utils._encode_doc_id("#") == "%23"
+    assert es_utils._encode_doc_id("?") == "%3F"
+    assert es_utils._encode_doc_id(" ") == "%20"
+    # Idempotent for already-safe ids; not double-encoding a real '/'.
+    assert "%2F" in es_utils._encode_doc_id("a/b")
+
+
 def test_batchfile_functions():
     batchdir = tempfile.TemporaryDirectory(suffix=".batchfiles", prefix="test-es.")
     batchfile = os.path.join(batchdir.name, "bf-001.jsonl")

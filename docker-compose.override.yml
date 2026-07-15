@@ -53,6 +53,12 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      # Headroom, not the fix: the session-start test-index sweep
+      # (dataknobs_common.testing.sweep_stale_test_indices) is what prevents
+      # leaked test indices from accumulating. This raises the single-node
+      # shard ceiling (default 1000) so a single run that legitimately spikes
+      # many concurrent indices before the next sweep still has margin.
+      - cluster.max_shards_per_node=3000
     ports:
       - "9200:9200"
       - "9300:9300"
@@ -63,7 +69,7 @@ services:
       - devnet
 
   localstack:
-    image: localstack/localstack:3.0
+    image: localstack/localstack:4.14.0
     environment:
       - SERVICES=s3,sqs
       - DEBUG=0

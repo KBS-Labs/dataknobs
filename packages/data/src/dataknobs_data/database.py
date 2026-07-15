@@ -7,25 +7,139 @@ different backend database implementations.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common import CapabilityNotSupportedError
+from dataknobs_common import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+    CapabilityNotSupportedError,
+)
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
+from .exceptions import ConcurrencyError, DuplicateRecordError
 from .query import Query
 from .schema import DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator
 
     from .query_logic import ComplexQuery
     from .records import Record
     from .streaming import StreamConfig, StreamResult
+
+
+def hash_record_version(record: Record) -> str:
+    """Content-hash optimistic-concurrency token for a stored record.
+
+    Returns a deterministic sha256 over the record's structured
+    serialization (fields, metadata, and id). Backends that lack a native
+    row-version primitive use this as their opaque version token: it
+    changes whenever the stored content changes, so a conditional write
+    can detect that the record was modified since the token was read.
+
+    Because it is a pure content hash, an A->B->A mutation cycle yields
+    the original token (the classic ABA limitation). Backends that expose a
+    monotonic native version -- an in-memory counter, PostgreSQL ``xmin``,
+    Elasticsearch ``_seq_no`` -- override ``get_version`` to avoid it.
+    """
+    payload = json.dumps(
+        record.to_dict(include_metadata=True, flatten=False),
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def version_conflict_error(
+    id: str, expected_version: str | None, actual_version: str | None
+) -> ConcurrencyError:
+    """Build the standard stale-token error for a conditional write.
+
+    Centralizes the message and context shape so every backend's
+    optimistic-concurrency path raises an identical ``ConcurrencyError``
+    (``context`` carries the record id and the opaque expected/actual
+    tokens -- no sensitive values, no redaction needed).
+    """
+    return ConcurrencyError(
+        "record was modified concurrently",
+        context={
+            "id": id,
+            "expected_version": expected_version,
+            "actual_version": actual_version,
+        },
+    )
+
+
+def enforce_content_version(
+    id: str, expected_version: str | None, current_record: Record | None
+) -> None:
+    """Compare-and-set guard for content-hash backends.
+
+    Given the currently-stored record inside a backend's atomic section
+    (its lock or transaction), raise ``ConcurrencyError`` when
+    ``expected_version`` does not match the record's current content-hash
+    token. ``expected_version=None`` is an unconditional write (no-op).
+
+    ``current_record`` is ``None`` for an absent record, whose token is
+    ``None`` and therefore never matches a real token. Which callers reach
+    that branch differs by operation: the content-hash ``update`` / ``delete``
+    callers pre-filter the missing case (``if current is None: return False``)
+    *before* calling this, so for them the ``None`` -> raise path is not
+    exercised. It is live for ``upsert``-style callers (e.g. file's
+    ``upsert``) that have no pre-existence check and rely on a missing record
+    conflicting -- a conditional upsert must never insert.
+
+    Pass the read-prepared record (the same value ``read()`` would return),
+    so the token compared here is byte-identical to the one
+    ``get_version``'s content-hash default produced. This is the single
+    implementation of the content-hash CAS check shared by the file,
+    SQLite, and DuckDB backends (sync and async). Backends with a native
+    row version -- the in-memory counter, PostgreSQL ``xmin``,
+    Elasticsearch ``_seq_no``, S3 ETag -- enforce server-side instead and
+    do not call this.
+    """
+    if expected_version is None:
+        return
+    actual = None if current_record is None else hash_record_version(current_record)
+    if actual != expected_version:
+        raise version_conflict_error(id, expected_version, actual)
+
+
+def prepare_atomic_batch(
+    records: Iterable[Record],
+    existing: Container[str],
+    prepare: Callable[[Record], tuple[Record, str]],
+) -> list[tuple[Record, str]]:
+    """Pre-scan a batch for an all-or-nothing, fail-closed ``create_batch``.
+
+    Shared by the in-process backends (memory, file) whose ``create_batch``
+    honors ``create``'s atomic-insert contract. ``prepare`` maps each record to
+    its ``(record_to_store, storage_id)`` pair — typically
+    ``_prepare_record_for_storage`` — and ``existing`` is the backend's current
+    key container. ``DuplicateRecordError`` is raised *before this returns*, and
+    therefore before any caller write, if a storage id collides with an existing
+    key or with an earlier record in the same batch. The returned pairs can then
+    be written in order, so a collision aborts the whole batch cleanly and the
+    streaming INSERT fast-path can fail closed and retry per record (see
+    ``run_stream_write``).
+    """
+    prepared: list[tuple[Record, str]] = []
+    seen: set[str] = set()
+    for record in records:
+        record_to_store, storage_id = prepare(record)
+        if storage_id in existing or storage_id in seen:
+            raise DuplicateRecordError(storage_id)
+        seen.add(storage_id)
+        prepared.append((record_to_store, storage_id))
+    return prepared
 
 
 def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
@@ -44,7 +158,7 @@ def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
     return None
 
 
-class AsyncDatabase(ABC):
+class AsyncDatabase(CapabilityMixin, ABC):
     """Abstract base class for async database implementations.
 
     Provides a unified async interface for CRUD operations, querying, and streaming
@@ -87,6 +201,19 @@ class AsyncDatabase(ABC):
                 process_record(record)
         ```
     """
+
+    # Every backend enforces compare-and-set on ``update``/``upsert`` when
+    # an ``expected_version`` (read via ``get_version``) is supplied — a
+    # stale token raises ``ConcurrencyError`` instead of last-writer-wins.
+    # The guarantee is uniform, so it is declared once on the ABC and every
+    # backend inherits it with no per-backend ClassVar. NOTE:
+    # ``CapabilityMixin`` does NOT auto-union across the MRO — a backend that
+    # later needs a backend-specific capability MUST declare
+    # ``SUPPORTED_CAPABILITIES = AsyncDatabase.SUPPORTED_CAPABILITIES | {...}``
+    # or it will silently drop ``CONDITIONAL_WRITE``.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.CONDITIONAL_WRITE,
+    })
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -151,7 +278,7 @@ class AsyncDatabase(ABC):
         """
         return extract_schema_from_config(schema_config)
 
-    def _initialize(self) -> None:  # noqa: B027
+    def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
 
@@ -242,11 +369,19 @@ class AsyncDatabase(ABC):
     async def create(self, record: Record) -> str:
         """Create a new record in the database.
 
+        This is an atomic insert: if a record with the same id already
+        exists, the create fails closed rather than overwriting it.
+
         Args:
             record: The record to create
 
         Returns:
             The ID of the created record
+
+        Raises:
+            DuplicateRecordError: If a record with the same id already exists.
+                Subclasses ValueError, so callers catching ValueError on a
+                duplicate id remain compatible.
         """
         raise NotImplementedError
 
@@ -263,27 +398,73 @@ class AsyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID
             record: The updated record
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the update proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). When ``None``
+                (the default) the update is unconditional (last-writer-wins),
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
         """
         raise NotImplementedError
 
-    @abstractmethod
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID.
+    async def get_version(self, id: str) -> str | None:
+        """Return an opaque optimistic-concurrency token for a record.
+
+        Read the token, pass it back as ``expected_version`` to ``update`` /
+        ``upsert``, and the write becomes conditional: it proceeds only if the
+        record's current token still matches, otherwise it raises
+        ``ConcurrencyError`` instead of silently overwriting a concurrent
+        change. Treat the token as opaque and backend-local -- it is not
+        comparable across backends.
 
         Args:
             id: The record ID
 
         Returns:
+            The current version token, or ``None`` if the id does not exist.
+
+        The base implementation is a content hash of the stored record
+        (``hash_record_version``); backends with a native row version override
+        it. See ``hash_record_version`` for the content-hash ABA limitation.
+        """
+        record = await self.read(id)
+        return None if record is None else hash_record_version(record)
+
+    @abstractmethod
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        Args:
+            id: The record ID
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the delete proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). A missing record
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id). When ``None`` (the default) the delete is
+                unconditional, byte-identical to prior behavior.
+
+        Returns:
             True if the record was deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
         """
         raise NotImplementedError
 
@@ -370,19 +551,38 @@ class AsyncDatabase(ABC):
         """
         raise NotImplementedError
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
-        
+
         Args:
             id_or_record: Either an ID string or a Record
             record: The record to upsert (if first arg is ID)
-            
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)``. When provided, the record must already
+                exist with a matching token; the update proceeds only on a
+                match, otherwise it raises ``ConcurrencyError``. A missing
+                record is itself a mismatch (its current version is ``None``),
+                so ``expected_version`` never inserts. When ``None`` (the
+                default) the upsert is unconditional, byte-identical to prior
+                behavior.
+
         Returns:
             The record ID
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token (including when the
+                record does not exist).
         """
         import uuid
 
@@ -404,23 +604,51 @@ class AsyncDatabase(ABC):
                 # Set it on the record for future reference
                 record.storage_id = id
 
-        # Now perform the upsert
-        if await self.exists(id):
-            await self.update(id, record)
-        else:
-            # Ensure the record has the storage_id set for create
-            if not record.storage_id:
-                record.storage_id = id
-            created_id = await self.create(record)
-            # Return the created ID (might be different from what we provided)
-            return created_id or id
-        return id
+        # Conditional upsert: delegate to update()'s atomic compare-and-set. A
+        # True return is the update; a stale token raises ``ConcurrencyError``
+        # straight out; a False return means the record is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent record without side effects, so
+        # this stays quiet on the miss.
+        if expected_version is not None:
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of returning ``id`` while writing nothing (the old code
+        # ignored update()'s return -- the silent-no-write bug). Gating update()
+        # behind exists() also skips a doomed UPDATE on the common insert path.
+        if await self.exists(id) and await self.update(id, record):
+            return id
+        # Stamp the resolved id onto the record before create so the explicit
+        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
+        # so it must override any differing ``storage_id`` the caller pre-set on
+        # the record (a conditional ``if not record.storage_id`` guard would let
+        # create write under the record's own id and silently ignore ``id``). In
+        # the ``upsert(record)`` form ``id`` already equals the record's id, so
+        # this reproduces prior behavior there (a true no-op only when
+        # ``storage_id`` was already set; when the id came from an ``id`` field
+        # or a minted uuid it stamps ``storage_id``, exactly as before).
+        record.storage_id = id
+        created_id = await self.create(record)
+        # Return the created ID (might be different from what we provided).
+        return created_id or id
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records in batch.
 
         Args:
             records: List of records to create
+            _tx: Internal. A native-transaction handle from :meth:`_transaction`,
+                threaded by a multi-kind buffered-transaction flush so the batch
+                joins the flush's single native transaction. ``None`` (the
+                default) opens the batch's own boundary as before. Ignored here
+                (the ABC default writes per-record); transactional backends act
+                on it.
 
         Returns:
             List of created record IDs
@@ -428,6 +656,33 @@ class AsyncDatabase(ABC):
         ids = []
         for record in records:
             id = await self.create(record)
+            ids.append(id)
+        return ids
+
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records in batch.
+
+        The batch sibling of :meth:`create_batch`. Each record is written with
+        upsert semantics: a caller-supplied ``record.id`` is honored (one is
+        minted only when absent), an id that already exists is **overwritten**
+        (never raised, never skipped), and the ids are returned in input order.
+
+        Unlike ``create_batch`` this carries no version check — a whole batch
+        cannot carry a single optimistic-concurrency token, so ``upsert_batch``
+        is always unconditional (batch CAS is a separate concern).
+
+        Args:
+            records: List of records to upsert
+            _tx: Internal native-transaction handle (see :meth:`create_batch`).
+
+        Returns:
+            List of upserted record IDs, in input order
+        """
+        ids = []
+        for record in records:
+            id = await self.upsert(record)
             ids.append(id)
         return ids
 
@@ -446,11 +701,14 @@ class AsyncDatabase(ABC):
             records.append(record)
         return records
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records by ID.
 
         Args:
             ids: List of record IDs
+            _tx: Internal native-transaction handle (see :meth:`create_batch`).
 
         Returns:
             List of deletion results
@@ -529,6 +787,34 @@ class AsyncDatabase(ABC):
         """
         return False
 
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Source and scope one native transaction spanning a commit flush.
+
+        Yields an opaque, backend-specific handle to thread as ``_tx`` into the
+        write batch methods (``create_batch`` / ``upsert_batch`` /
+        ``delete_batch``), so a multi-kind
+        :class:`~dataknobs_data.transactions.BufferedTransaction` flush is
+        all-or-nothing: every coalesced batch runs inside this one transaction
+        and a mid-flush failure rolls the whole commit back.
+
+        The default yields ``None`` — no native transaction. Non-transactional
+        backends inherit it (the buffered-tx flush only enters here for a
+        multi-kind buffer on a backend reporting
+        :meth:`supports_transactions`). Transactional backends
+        (``sqlite_async`` / ``postgres`` / ``duckdb``) override it per their
+        connection model. Internal: the handle is threaded only through the
+        write batch methods and only for the synchronous commit flush.
+
+        Contract: a backend that reports :meth:`supports_transactions` as
+        ``True`` **must** override this to yield a real (non-``None``) handle.
+        The commit flush enforces it — a multi-kind flush that reaches this
+        default (``None`` handle) on a self-declared transactional backend fails
+        closed with :class:`~dataknobs_common.exceptions.OperationError` rather
+        than silently degrading to a non-atomic per-batch commit.
+        """
+        yield None
+
     async def begin_transaction(
         self, *, policy: str = "strict"
     ) -> BufferedTransaction:
@@ -590,11 +876,11 @@ class AsyncDatabase(ABC):
         else:
             await tx.commit()
 
-    async def connect(self) -> None:  # noqa: B027
+    async def connect(self) -> None:
         """Connect to the database. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit connection
 
-    async def close(self) -> None:  # noqa: B027
+    async def close(self) -> None:
         """Close the database connection. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit closing
 
@@ -700,7 +986,7 @@ class AsyncDatabase(ABC):
         return instance
 
 
-class SyncDatabase(ABC):
+class SyncDatabase(CapabilityMixin, ABC):
     """Synchronous variant of the Database abstract base class.
 
     Provides a unified synchronous interface for CRUD operations, querying, and streaming
@@ -733,6 +1019,13 @@ class SyncDatabase(ABC):
                 process_record(record)
         ```
     """
+
+    # See ``AsyncDatabase.SUPPORTED_CAPABILITIES`` — the same uniform
+    # conditional-write guarantee applies to every sync backend, and the
+    # same MRO no-auto-union caveat holds for backend-specific additions.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.CONDITIONAL_WRITE,
+    })
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -782,7 +1075,7 @@ class SyncDatabase(ABC):
         self.schema = schema or DatabaseSchema()
         self._initialize()
 
-    def _initialize(self) -> None:  # noqa: B027
+    def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
 
@@ -873,11 +1166,19 @@ class SyncDatabase(ABC):
     def create(self, record: Record) -> str:
         """Create a new record in the database.
 
+        This is an atomic insert: if a record with the same id already
+        exists, the create fails closed rather than overwriting it.
+
         Args:
             record: The record to create
 
         Returns:
             The ID of the created record
+
+        Raises:
+            DuplicateRecordError: If a record with the same id already exists.
+                Subclasses ValueError, so callers catching ValueError on a
+                duplicate id remain compatible.
 
         Example:
             ```python
@@ -908,15 +1209,27 @@ class SyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID
             record: The updated record
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the update proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). When ``None``
+                (the default) the update is unconditional (last-writer-wins),
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
 
         Example:
             ```python
@@ -927,15 +1240,49 @@ class SyncDatabase(ABC):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID.
+    def get_version(self, id: str) -> str | None:
+        """Return an opaque optimistic-concurrency token for a record.
+
+        Read the token, pass it back as ``expected_version`` to ``update`` /
+        ``upsert``, and the write becomes conditional: it proceeds only if the
+        record's current token still matches, otherwise it raises
+        ``ConcurrencyError`` instead of silently overwriting a concurrent
+        change. Treat the token as opaque and backend-local -- it is not
+        comparable across backends.
 
         Args:
             id: The record ID
 
         Returns:
+            The current version token, or ``None`` if the id does not exist.
+
+        The base implementation is a content hash of the stored record
+        (``hash_record_version``); backends with a native row version override
+        it. See ``hash_record_version`` for the content-hash ABA limitation.
+        """
+        record = self.read(id)
+        return None if record is None else hash_record_version(record)
+
+    @abstractmethod
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        Args:
+            id: The record ID
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the delete proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). A missing record
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id). When ``None`` (the default) the delete is
+                unconditional, byte-identical to prior behavior.
+
+        Returns:
             True if the record was deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
 
         Example:
             ```python
@@ -1039,19 +1386,38 @@ class SyncDatabase(ABC):
         """Check if a record exists."""
         raise NotImplementedError
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
-        
+
         Args:
             id_or_record: Either an ID string or a Record
             record: The record to upsert (if first arg is ID)
-            
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)``. When provided, the record must already
+                exist with a matching token; the update proceeds only on a
+                match, otherwise it raises ``ConcurrencyError``. A missing
+                record is itself a mismatch (its current version is ``None``),
+                so ``expected_version`` never inserts. When ``None`` (the
+                default) the upsert is unconditional, byte-identical to prior
+                behavior.
+
         Returns:
             The record ID
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token (including when the
+                record does not exist).
         """
         import uuid
 
@@ -1073,23 +1439,87 @@ class SyncDatabase(ABC):
                 # Set it on the record for future reference
                 record.storage_id = id
 
-        # Now perform the upsert
-        if self.exists(id):
-            self.update(id, record)
-        else:
-            # Ensure the record has the storage_id set for create
-            if not record.storage_id:
-                record.storage_id = id
-            created_id = self.create(record)
-            # Return the created ID (might be different from what we provided)
-            return created_id or id
-        return id
+        # Conditional upsert: delegate to update()'s atomic compare-and-set. A
+        # True return is the update; a stale token raises ``ConcurrencyError``
+        # straight out; a False return means the record is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent record without side effects, so
+        # this stays quiet on the miss.
+        if expected_version is not None:
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of returning ``id`` while writing nothing (the old code
+        # ignored update()'s return -- the silent-no-write bug). Gating update()
+        # behind exists() also skips a doomed UPDATE on the common insert path.
+        if self.exists(id) and self.update(id, record):
+            return id
+        # Stamp the resolved id onto the record before create so the explicit
+        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
+        # so it must override any differing ``storage_id`` the caller pre-set on
+        # the record (a conditional ``if not record.storage_id`` guard would let
+        # create write under the record's own id and silently ignore ``id``). In
+        # the ``upsert(record)`` form ``id`` already equals the record's id, so
+        # this reproduces prior behavior there (a true no-op only when
+        # ``storage_id`` was already set; when the id came from an ``id`` field
+        # or a minted uuid it stamps ``storage_id``, exactly as before).
+        record.storage_id = id
+        created_id = self.create(record)
+        # Return the created ID (might be different from what we provided).
+        return created_id or id
+
+    def _insert_batch_atomic(self) -> bool:
+        """Whether :meth:`create_batch` leaves the target unchanged when it raises.
+
+        The batch-first-with-per-record-fallback writer
+        (:func:`dataknobs_data.streaming.drive_batch_with_fallback`, used by the
+        streaming write path and the batched migrator) re-attempts every record
+        individually after a batch-verb failure. That fallback is only correct
+        when the batch verb is **atomic on raise** — i.e. a collision leaves
+        *nothing* written. A non-atomic bulk create (Elasticsearch's per-item
+        bulk API, or the ABC's per-record ``create_batch`` loop that S3 inherits)
+        durably writes the non-colliding records before raising; re-attempting
+        them then re-writes and mis-counts those already-written rows as spurious
+        duplicate failures.
+
+        The default is ``False`` because the ABC :meth:`create_batch` is a
+        per-record loop with exactly that non-atomic behavior: a backend is
+        assumed unsafe for the INSERT batch fast-path until it proves otherwise.
+        A backend whose ``create_batch`` is atomic on raise (a transactional
+        multi-value INSERT, or a pre-scanned all-or-nothing apply) overrides this
+        to return ``True`` so the migrator uses the bulk fast-path. Consulted by
+        the migrator's batched INSERT path; a backend routing INSERT per-record
+        in its own ``stream_write`` (S3, Elasticsearch) inherits ``False`` here,
+        so both paths agree.
+        """
+        return False
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""
         ids = []
         for record in records:
             id = self.create(record)
+            ids.append(id)
+        return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in batch.
+
+        The batch sibling of :meth:`create_batch`. Each record is written with
+        upsert semantics: a caller-supplied ``record.id`` is honored (one is
+        minted only when absent), an id that already exists is **overwritten**
+        (never raised, never skipped), and the ids are returned in input order.
+
+        Unlike ``create_batch`` this carries no version check — a whole batch
+        cannot carry a single optimistic-concurrency token, so ``upsert_batch``
+        is always unconditional (batch CAS is a separate concern).
+        """
+        ids = []
+        for record in records:
+            id = self.upsert(record)
             ids.append(id)
         return ids
 
@@ -1144,11 +1574,11 @@ class SyncDatabase(ABC):
         """Clear all records from the database."""
         raise NotImplementedError
 
-    def connect(self) -> None:  # noqa: B027
+    def connect(self) -> None:
         """Connect to the database. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit connection
 
-    def close(self) -> None:  # noqa: B027
+    def close(self) -> None:
         """Close the database connection. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit closing
 

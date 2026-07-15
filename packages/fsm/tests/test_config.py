@@ -15,6 +15,7 @@ from dataknobs_fsm.config.loader import ConfigLoader
 from dataknobs_fsm.config.schema import (
     ArcConfig,
     DataModeConfig,
+    ExecutionStrategy,
     FSMConfig,
     NetworkConfig,
     ResourceConfig,
@@ -25,7 +26,6 @@ from dataknobs_fsm.config.schema import (
     validate_config,
 )
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.core.transactions import TransactionStrategy
 
 
 class TestConfigSchema:
@@ -176,10 +176,9 @@ class TestConfigTemplates:
     def test_apply_template_database_etl(self):
         """Test applying database ETL template."""
         config = apply_template(UseCaseTemplate.DATABASE_ETL)
-        
+
         assert config["data_mode"]["default"] == DataHandlingMode.COPY
-        assert config["transaction"]["strategy"] == TransactionStrategy.BATCH
-        assert config["transaction"]["batch_size"] == 1000
+        assert config["execution_strategy"] == ExecutionStrategy.RESOURCE_OPTIMIZED
 
     def test_apply_template_with_overrides(self):
         """Test applying template with overrides."""
@@ -187,19 +186,16 @@ class TestConfigTemplates:
             UseCaseTemplate.FILE_PROCESSING,
             overrides={
                 "data_mode": {"default": DataHandlingMode.COPY},
-                "transaction": {"batch_size": 500},
             },
         )
-        
+
         assert config["data_mode"]["default"] == DataHandlingMode.COPY
-        assert config["transaction"]["batch_size"] == 500
 
     def test_all_templates(self):
         """Test that all templates are valid."""
         for template in UseCaseTemplate:
             config = apply_template(template)
             assert "data_mode" in config
-            assert "transaction" in config
             assert "execution_strategy" in config
 
 
@@ -649,10 +645,6 @@ def sample_config_dict():
             "state_overrides": {
                 "process": "reference",
             },
-        },
-        "transaction": {
-            "strategy": "batch",
-            "batch_size": 100,
         },
         "resources": [
             {

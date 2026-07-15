@@ -29,37 +29,295 @@ The DataKnobs Data Package provides a unified data abstraction layer with suppor
 The `Database` class provides async database operations, while `SyncDatabase` provides synchronous operations.
 
 ```python
-from dataknobs_data import Database, SyncDatabase
+from dataknobs_data import AsyncDatabaseFactory, DatabaseFactory, Record
 
 # Async usage
 async def main():
-    db = await Database.create("memory")  # Auto-connects
-    record = Record({"name": "Alice", "age": 30})
-    id = await db.create(record)
-    retrieved = await db.read(id)
+    factory = AsyncDatabaseFactory()
+    db = factory.create(backend="memory")
+    await db.connect()
+
+    record = Record(data={"name": "Alice", "age": 30})
+    record_id = await db.create(record)
+    retrieved = await db.read(record_id)
     await db.close()
 
 # Sync usage
-db = SyncDatabase.create("memory")  # Auto-connects
-record = Record({"name": "Bob", "age": 25})
-id = db.create(record)
-retrieved = db.read(id)
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+record = Record(data={"name": "Bob", "age": 25})
+record_id = db.create(record)
+retrieved = db.read(record_id)
 db.close()
 ```
 
+#### Typed configuration (advanced)
+
+Every backend is constructed through a typed `<Backend>DatabaseConfig`
+frozen dataclass (a `dataknobs_common.structured_config.StructuredConfig`
+subclass). The factory and the dict-construction shapes shown above
+continue to work unchanged — the dict keys are projected onto the typed
+config. For programmatic construction you can also build the typed config
+directly and pass it in; after construction, `db.config` is that typed
+object (read fields as attributes, e.g. `db.config.table`, not
+`db.config["table"]`):
+
+```python
+from dataknobs_data.backends.config import SyncSQLiteDatabaseConfig
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+cfg = SyncSQLiteDatabaseConfig(path="data.db", table="records")
+db = SyncSQLiteDatabase.from_config(cfg)   # or SyncSQLiteDatabase(cfg)
+assert db.config.table == "records"
+```
+
+Each backend exposes its config class via `db.CONFIG_CLS`. Mixing a typed
+`config=` with loose keyword arguments raises `TypeError`. The Postgres
+sync and async backends share one `PostgresDatabaseConfig`; the file
+backends share one `FileDatabaseConfig`.
+
 #### Database Methods
 
-- `create(record: Record) -> str`: Create a new record and return its ID
+- `create(record: Record) -> str`: Atomically insert a new record and return its ID; raises `DuplicateRecordError` if the id already exists
 - `read(id: str) -> Record | None`: Read a record by ID
-- `update(id: str, record: Record) -> bool`: Update an existing record
-- `delete(id: str) -> bool`: Delete a record
+- `get_version(id: str) -> str | None`: Return an opaque optimistic-concurrency token for a record (or `None` if absent)
+- `update(id: str, record: Record, *, expected_version: str | None = None) -> bool`: Update an existing record; with `expected_version`, a compare-and-set that raises `ConcurrencyError` on a stale token
+- `delete(id: str, *, expected_version: str | None = None) -> bool`: Delete a record; with `expected_version`, a compare-and-set that raises `ConcurrencyError` on a stale token (a missing record returns `False`)
 - `exists(id: str) -> bool`: Check if a record exists
-- `upsert(id_or_record: str | Record, record: Record | None = None) -> str`: Update or insert a record (enhanced to accept just a Record)
+- `upsert(id: str, record: Record, *, expected_version: str | None = None) -> str`: Update or insert a record; with `expected_version`, a compare-and-set that never inserts
 - `search(query: Query) -> List[Record]`: Search for records
 - `count(query: Query | None) -> int`: Count matching records
 - `clear() -> int`: Delete all records
 - `stream_read(query, config) -> Iterator[Record]`: Stream records
 - `stream_write(records, config) -> StreamResult`: Stream write records
+
+#### Create semantics (atomic create-if-absent)
+
+`create()` is a defined atomic insert across all backends. If a record with the
+same id already exists, it fails closed with `DuplicateRecordError` rather than
+overwriting the existing record — so a collision-safe insert needs no racy
+`exists()`-then-`create()` guard:
+
+```python
+from dataknobs_data import DuplicateRecordError, Record
+
+db.create(Record({"v": 1}, id="k"))
+try:
+    db.create(Record({"v": 2}, id="k"))
+except DuplicateRecordError as e:
+    print(e.id)  # "k" — the original record is untouched
+```
+
+`DuplicateRecordError` subclasses both the data-layer `ConcurrencyError` and
+`ValueError`, so code that previously caught `ValueError` on a duplicate id
+keeps working. It carries the colliding id on `.id` and in `context={"id": ...}`.
+
+To overwrite when the id may already exist, use `upsert()` instead of `create()`.
+
+Backend notes:
+
+- **memory, file, SQLite, DuckDB, Postgres, Elasticsearch** enforce the insert
+  through their native uniqueness/constraint mechanism (in-lock check, primary
+  key, or `op_type=create`).
+- **S3** enforces it with a conditional PUT (`If-None-Match`). The atomic
+  guarantee holds against any S3 implementation that honors conditional writes
+  (real AWS S3, recent LocalStack); stores that ignore the header degrade to
+  last-writer-wins.
+- **`create_batch()` fails closed uniformly across every backend**, matching
+  single `create()`: a colliding id — against an existing record or a duplicate
+  within the same batch — raises `DuplicateRecordError`, and `record.id` is
+  honored (minted only when absent). On the transactional SQL backends (SQLite,
+  DuckDB, PostgreSQL) the batch is atomic — a collision rolls back the whole
+  INSERT (nothing written); on Elasticsearch the bulk API is per-item, so — like
+  a `create()` loop — non-colliding rows may be written before the conflict is
+  raised. The *streaming* INSERT path fails closed on every backend too — see the
+  batch-processing / migration guides.
+- **`upsert_batch(records)`** is the batch sibling of `create_batch`, with
+  upsert (insert-or-overwrite) semantics: it honors a caller-supplied
+  `record.id` (minting one only when absent), **overwrites** a colliding id
+  (never raised, never skipped), returns the ids in input order, and carries no
+  version check (a whole batch cannot carry one optimistic-concurrency token).
+  It uses the backend's native bulk verb where one exists — a single
+  `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite / DuckDB / PostgreSQL, a bulk
+  index-by-id on Elasticsearch, a single file-rewrite (file) / single-lock pass
+  (memory) — and the per-record abstract-base loop (per-key PUT) on S3. This is
+  the batch verb the streaming `"upsert"` conflict policy routes through.
+
+#### Allocating a new key under contention
+
+Allocating a *new* immutable record under a monotonic key — a version
+(`<stem>-v{N}`), a sequence number, or any derived key — follows a read →
+compute-next-key → `create()` shape. Because `create()` fails closed on a
+collision (above), two concurrent allocators that compute the same key no longer
+both win: the loser raises `DuplicateRecordError`. That is *safe*, but a
+legitimate second allocator should land the *next* key rather than error.
+
+`allocate()` (and its synchronous twin `allocate_sync()`) close that window with
+a bounded create-on-conflict retry. Supply a `build` callable that does a fresh
+read, computes the next key, and returns a `Record` under it; on a collision the
+helper re-runs `build` — so the retry sees the winner's write and computes a
+fresh key — and each concurrent allocator lands a distinct next key:
+
+```python
+from dataknobs_data import allocate, Record
+
+async def build() -> Record:
+    latest = await highest_existing_version(db, stem)   # fresh read each attempt
+    return Record({"body": text}, id=f"{stem}-v{latest + 1}")
+
+new_id = await allocate(db, build=build)   # concurrent writers each get a distinct -v{N}
+```
+
+The helper is key-agnostic — it never mints or mutates ids, so it works for any
+monotonic scheme the caller expresses through `build`. A single uncontended
+allocation makes exactly one attempt, identical to a direct `create()`; after
+`max_attempts` (default 16) consecutive collisions it re-raises the last
+`DuplicateRecordError`, bounded and fail-closed. `allocate_sync()` is the
+`SyncDatabase` twin with a plain (non-async) `build`.
+
+`allocate()` retries immediately with no delay. Each attempt targets `highest
+existing key + 1`, so the k-th concurrent allocator on one stem needs up to k
+attempts to diverge — and a burst of **more than** `max_attempts` allocators
+contending on the same stem can drive the tail allocators to exhaust the bound
+and fail closed *even though free keys remain*. The seamless guarantee holds only
+up to `max_attempts`-way same-stem contention: size `max_attempts` to the peak
+concurrent allocation you expect on a single stem. (Persistent exhaustion below
+that peak instead means a `build` that does not recompute a fresh key.) A consumer
+facing a thundering herd, or wanting backoff/jitter, can drive the same
+read-compute-create callable through `RetryExecutor` instead, retrying on
+`DuplicateRecordError` — the same idiom the conditional-write recipe below uses:
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+from dataknobs_data import DuplicateRecordError, Record
+
+async def allocate_next() -> str:
+    latest = await highest_existing_version(db, stem)
+    return await db.create(Record({"body": text}, id=f"{stem}-v{latest + 1}"))
+
+new_id = await RetryExecutor(
+    RetryConfig(
+        retry_on_exceptions=[DuplicateRecordError],
+        max_attempts=8,
+        backoff_strategy=BackoffStrategy.JITTER,
+    )
+).execute(allocate_next)
+```
+
+#### Optimistic concurrency (conditional writes)
+
+Optimistic concurrency guards a **conditional update of an existing record** — a
+shared, mutable cell claimed by compare-and-set. It is the wrong tool for
+*allocating a new immutable key* (a version, a sequence number): that case is
+served by the atomic `create()` + retry loop above (`allocate()`), which needs no
+authoritative pointer row. Reach for `expected_version` when a mutable counter or
+head record is CAS-updated to claim a slot; reach for atomic-create + retry for
+append-only/immutable-version allocation.
+
+`update()`, `upsert()`, and `delete()` accept an opt-in, keyword-only
+`expected_version` token so a read-modify-write (or a read-then-delete) can fail
+closed on a concurrent change instead of silently clobbering it. Read the current
+token with `get_version()`, pass it back, and the write becomes a
+compare-and-set:
+
+```python
+from dataknobs_data import ConcurrencyError, Record
+
+token = db.get_version("k")               # opaque, backend-local token
+try:
+    db.update("k", Record({"v": 2}, id="k"), expected_version=token)
+except ConcurrencyError as e:
+    # Someone else wrote "k" since we read the token; e.context has
+    # {"id", "expected_version", "actual_version"}. Re-read and retry —
+    # the RetryExecutor form below automates exactly this loop.
+    ...
+```
+
+Rather than hand-roll the re-read → recompute → conditional-write loop, wrap the
+whole read-modify-write in a callable and drive it with the shipped
+`RetryExecutor` (`dataknobs_common.retry`), retrying on `ConcurrencyError`. Each
+attempt re-reads the token inside the callable, so every try sees fresh state:
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig
+from dataknobs_data import ConcurrencyError, Record
+
+async def bump_counter() -> None:
+    token = await db.get_version("k")                 # re-read every attempt
+    current = await db.read("k")
+    await db.update(
+        "k", Record({"v": current.get_value("v") + 1}, id="k"),
+        expected_version=token,
+    )
+
+await RetryExecutor(
+    RetryConfig(retry_on_exceptions=[ConcurrencyError], max_attempts=5)
+).execute(bump_counter)
+```
+
+The retry *policy* — how many attempts, the backoff, when to give up — is yours,
+expressed through `RetryConfig` (`max_attempts`, `initial_delay`,
+`backoff_strategy`, …). `RetryExecutor.execute` runs sync or async callables, so
+the same shape works from either context.
+
+Semantics:
+
+- **Opt-in and backward-compatible.** Omitting `expected_version` (the default)
+  is an unconditional, last-writer-wins write — byte-identical to prior behavior.
+- **`get_version(id)`** returns an opaque token, or `None` when the id does not
+  exist. Treat it as backend-local; it is not comparable across backends.
+- **`update()` with a token never inserts.** A missing record returns `False`;
+  an existing record with a mismatched token raises `ConcurrencyError`.
+- **`delete()` with a token** removes the record only if the token still
+  matches; a mismatch raises `ConcurrencyError`, and a missing record returns
+  `False` (an absent id never conflicts).
+- **`upsert()` with a token never inserts.** A missing record is itself a
+  conflict (its current version is `None`) and raises `ConcurrencyError`; an
+  existing record with a mismatched token also raises.
+
+Token source and atomicity by backend:
+
+- **memory** — a per-instance monotonic sequence value; the compare-and-set runs
+  under the instance lock. ABA-safe on every path, including delete→recreate at
+  the same id (the token is never reused).
+- **PostgreSQL** — the row's `xmin`; enforced server-side with
+  `WHERE id = … AND xmin = …` (ABA-safe, atomic across connections).
+- **Elasticsearch** — the document's `_seq_no`/`_primary_term`; enforced
+  server-side with `if_seq_no`/`if_primary_term` (ABA-safe).
+- **S3** — the object's `ETag`; enforced with a conditional PUT/DELETE
+  (`If-Match`) against any store that honors it (real AWS S3, recent LocalStack).
+- **file, SQLite, DuckDB** — a deterministic content hash of the stored record.
+  The check is serialized within a single connection/instance. Two caveats: a
+  content hash is subject to the classic **ABA** limitation (an A→B→A cycle
+  yields the original token, so a stale write in that exact scenario is not
+  detected), and the compare-and-set is not hardened across separate
+  processes/connections. Use a native-token backend when either matters.
+
+#### Capability advertisement
+
+The backends advertise their optional consistency features through the
+`CapabilityContract` surface, so a consumer can query support before relying on
+a behavior instead of knowing the backend matrix out-of-band. Every backend
+enforces the conditional-write contract, so `AsyncDatabase` / `SyncDatabase` and
+all 14 backends report `Capability.CONDITIONAL_WRITE`:
+
+```python
+from dataknobs_common import Capability, require_capability
+
+if db.supports(Capability.CONDITIONAL_WRITE):
+    token = db.get_version("k")
+    db.update("k", record, expected_version=token)
+
+# or fail-closed at a boundary:
+require_capability(db, Capability.CONDITIONAL_WRITE)
+```
+
+The advertisement is uniform because every backend enforces the contract; the
+ABA nuance of the content-hash backends (above) is documented rather than
+encoded as a separate capability. Select a native-token backend by reading the
+token-source matrix above when ABA-safety matters.
 
 ### Records
 
@@ -81,6 +339,14 @@ record = Record(
 name = record.get_value("name")
 age = record.get_value("age", default=0)
 
+# Dot-notation for nested fields and metadata
+record2 = Record(
+    data={"config": {"timeout": 30}},
+    metadata={"tenant_id": "T-1"}
+)
+record2.get_value("config.timeout")          # 30
+record2.get_value("metadata.tenant_id")      # "T-1"
+
 # Set values
 record.set_value("email", "alice@example.com")
 
@@ -92,42 +358,10 @@ if record.has_field("email"):
 data_dict = record.to_dict()
 ```
 
-### Enhanced Upsert (New)
-
-The `upsert` method now supports a more intuitive API that can accept just a Record object, leveraging the Record's built-in ID management:
-
-```python
-from dataknobs_data import Database, Record
-
-async def example():
-    db = await Database.create("memory")
-    
-    # Traditional usage (still supported)
-    record = Record({"name": "Alice", "age": 30})
-    await db.upsert("user-123", record)
-    
-    # New: Upsert with record that has an ID field
-    record_with_id = Record({"id": "user-456", "name": "Bob", "age": 25})
-    await db.upsert(record_with_id)  # Uses record's ID
-    
-    # New: Auto-generate ID if record has no ID
-    record_no_id = Record({"name": "Charlie", "age": 35})
-    generated_id = await db.upsert(record_no_id)  # Returns generated UUID
-    print(f"Generated ID: {generated_id}")
-    
-    # ID Priority (when using new signature):
-    # 1. record.storage_id (if set)
-    # 2. record.id (from 'id' field in data)
-    # 3. Generated UUID
-```
-
-This enhancement is available across all database backends:
-- Memory (AsyncMemoryDatabase, SyncMemoryDatabase)
-- File (AsyncFileDatabase, SyncFileDatabase)
-- SQLite (AsyncSQLiteDatabase, SyncSQLiteDatabase)
-- PostgreSQL (AsyncPostgresDatabase, SyncPostgresDatabase)
-- Elasticsearch (AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
-- S3 (AsyncS3Database)
+> **Note:** Dots in field names are always interpreted as path separators.
+> JSON keys that literally contain a dot (e.g. `"my.field"`) cannot be
+> accessed via `get_value()` or filtered on.  This convention is consistent
+> across `Record.get_value()` and the Query/Filter system on all backends.
 
 ### Query
 
@@ -148,6 +382,11 @@ query = (Query()
     .limit(10)
     .offset(20))
 
+# Dot-notation for nested and metadata fields (works on all backends)
+query = (Query()
+    .filter("metadata.tenant_id", Operator.EQ, "T-1")
+    .filter("config.timeout", Operator.GT, 30))
+
 # Available operators
 # Operator.EQ - equals
 # Operator.NEQ - not equals
@@ -161,6 +400,45 @@ query = (Query()
 # Operator.EXISTS - field exists
 # Operator.NOT_EXISTS - field doesn't exist
 # Operator.REGEX - regular expression match
+# Operator.STARTS_WITH - literal, case-sensitive prefix match
+#   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
+```
+
+### Querying by identifier and key prefix
+
+A record's identifier is a first-class query target. `Filter("id", ...)`
+resolves to the record's **storage key** on every backend — equality (`EQ`),
+membership (`IN`), and literal prefix (`STARTS_WITH`) all apply to the key, and
+push down to the backend query engine where it supports them (a SQL range or
+`LIKE ... ESCAPE` on the `id` column, an Elasticsearch `term`/`terms`/`prefix`/
+`range` query on the `id` keyword field), scanning in memory otherwise.
+
+`STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
+`_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
+`LIKE` and `REGEX`, it matches **string values only** — a non-string field value
+never matches, consistently across the SQL and in-memory backends. When a store
+encodes hierarchy into its keys, a whole subtree is one filter:
+
+```python
+from dataknobs_data import Query, Filter, Operator
+
+# Records keyed like "artifacts/{owner}/{path}/{name}".
+subtree = db.search(Query(filters=[
+    Filter("id", Operator.STARTS_WITH, f"artifacts/{owner}/{path}/")
+]))
+# Exactly the keys under that prefix — a '_' in the path matches literally,
+# with no LIKE wildcard false positives.
+```
+
+**Looking up by a secondary identifier.** To query by an identifier that is
+*not* the storage key, either make it the storage key (then `read()` is O(1) and
+`Filter("id", ...)` pushes down), or store it as a data field and filter that
+field directly:
+
+```python
+# The lookup id is an ordinary indexed field.
+db.create(Record({"sku": "SKU-200", "name": "gadget"}, id="row-2"))
+found = db.search(Query(filters=[Filter("sku", Operator.EQ, "SKU-200")]))
 ```
 
 ### Streaming
@@ -173,7 +451,7 @@ from dataknobs_data import StreamConfig, StreamResult
 # Configure streaming
 config = StreamConfig(
     batch_size=100,
-    buffer_size=1000,
+    prefetch=2,
     on_error=lambda e, r: print(f"Error: {e}")
 )
 
@@ -188,6 +466,13 @@ print(f"Successful: {result.successful}")
 print(f"Failed: {result.failed}")
 ```
 
+`StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
+it loads from a plain dict via `StreamConfig.from_dict({"batch_size":
+100})` and is immutable — build a modified copy with
+`dataclasses.replace(config, batch_size=200)` rather than assigning to a
+field. Its `batch_size > 0` / `prefetch >= 0` / positive-`timeout`
+validation fires on both direct construction and `from_dict`.
+
 ## Validation Module
 
 The validation module (`dataknobs_data.validation`) provides schema-based validation with constraints and type coercion.
@@ -197,7 +482,8 @@ The validation module (`dataknobs_data.validation`) provides schema-based valida
 Define validation schemas for your data.
 
 ```python
-from dataknobs_data.validation import Schema, FieldType
+from dataknobs_data import FieldType
+from dataknobs_data.validation import Schema
 from dataknobs_data.validation.constraints import Required, Range, Length, Pattern
 
 # Create schema
@@ -260,7 +546,7 @@ Custom(validate_email, "Invalid email format")
 
 # Composite constraints
 All([Required(), Range(min=0)])  # All must pass
-Any([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
+AnyOf([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
 
 # Constraint composition with operators
 constraint = Required() & Range(min=0, max=100)  # AND
@@ -272,7 +558,8 @@ constraint = Length(min=10) | Pattern(r"^\d{5}$")  # OR
 Type coercion for automatic type conversion:
 
 ```python
-from dataknobs_data.validation import Coercer, FieldType
+from dataknobs_data import FieldType
+from dataknobs_data.validation import Coercer
 
 coercer = Coercer()
 
@@ -296,143 +583,331 @@ The migration module (`dataknobs_data.migration`) provides data transformation a
 
 ### Operations
 
-Define operations to transform records:
+Define reversible operations to transform records:
 
 ```python
-from dataknobs_data.migration.operations import *
+from datetime import datetime
+from dataknobs_data.migration import (
+    AddField, RemoveField, RenameField, TransformField, CompositeOperation,
+)
 
-# Add field
-add_op = AddField("status", default="active")
+# Add a field (uses default_value when the field is absent)
+add_op = AddField("status", default_value="active")
 
-# Remove field
+# Remove a field
 remove_op = RemoveField("deprecated_field")
 
-# Rename field
+# Rename a field
 rename_op = RenameField("old_name", "new_name")
 
-# Transform field
+# Transform a field's value (pass reverse_fn to keep it reversible)
 def uppercase(value):
     return value.upper() if value else value
 transform_op = TransformField("name", uppercase)
 
-# Composite operations
+# Composite operation applies its members in order
 composite = CompositeOperation([
-    AddField("created_at", default=datetime.now()),
+    AddField("created_at", default_value=datetime.now()),
     RemoveField("temp_field"),
-    RenameField("user_name", "username")
+    RenameField("user_name", "username"),
 ])
 ```
 
 ### Migrations
 
-Create migrations to evolve your data:
+A `Migration` is an ordered, reversible set of operations between two versions:
 
 ```python
-from dataknobs_data.migration import Migration
+from dataknobs_data.migration import Migration, AddField, RemoveField
 
-# Create migration
+# Create a migration (from_version, to_version, optional description)
 migration = Migration(
-    name="add_user_status",
-    version="1.0.0",
-    description="Add status field to user records"
+    from_version="1.0.0",
+    to_version="2.0.0",
+    description="Add status field to user records",
 )
 
-# Add operations
-migration.add_operation(AddField("status", default="active"))
-migration.add_operation(RemoveField("legacy_field"))
+# Add operations (fluent — add() returns the migration)
+migration.add(AddField("status", default_value="active"))
+migration.add(RemoveField("legacy_field"))
 
-# Apply to record
+# Apply to a record (returns the migrated Record)
 record = Record({"name": "Alice", "legacy_field": "old"})
-result = migration.apply(record)
-if result.valid:
-    migrated = result.value  # Record with changes applied
+migrated = migration.apply(record)
 
-# Reverse migration
-result = migration.reverse(migrated)
+# Reverse it by applying the operations backwards
+original = migration.apply(migrated, reverse=True)
 ```
 
 ### Migrator
 
-Batch migration for databases:
+`Migrator` is a stateless orchestrator; the source and target are passed per
+call. See the [Batch Processing Guide](batch-processing-guide.md) for the
+streaming write path (`StreamConfig` / `StreamResult`) and the full
+conflict-policy API; `migrate_stream` / `migrate_parallel` / `migrate_async`
+are the streaming siblings of `migrate`.
 
 ```python
 from dataknobs_data.migration import Migrator
 
-# Create migrator
-migrator = Migrator(source_db, target_db)
+migrator = Migrator()
 
-# Configure migration
-migration = Migration("update_schema", "2.0.0")
-migration.add_operation(AddField("version", default=2))
+# A transform may be a Transformer or a Migration; here we evolve schema.
+migration = Migration(from_version="1.0.0", to_version="2.0.0")
+migration.add(AddField("version", default_value=2))
 
-# Run migration
-async def migrate():
-    progress = await migrator.migrate(
-        migration=migration,
-        query=Query().filter("type", Operator.EQ, "user"),
-        batch_size=100,
-        on_progress=lambda p: print(f"Progress: {p.percentage}%")
-    )
-    
-    print(f"Migrated: {progress.successful}")
-    print(f"Failed: {progress.failed}")
-    print(f"Duration: {progress.duration}s")
+# Batched migration is synchronous.
+progress = migrator.migrate(
+    source_db,
+    target_db,
+    transform=migration,
+    query=Query().filter("type", Operator.EQ, "user"),
+    batch_size=100,
+    on_progress=lambda p: print(f"Progress: {p.percent:.0f}%"),
+)
+
+print(f"Migrated: {progress.succeeded}")
+print(f"Failed: {progress.failed}")
+print(f"Duration: {progress.duration:.2f}s")
+
+# Conflict policy for idempotent re-runs into a populated target:
+progress = migrator.migrate(source_db, target_db, on_conflict="upsert")
 ```
 
 ## Backends
+
+The DataKnobs Data Package supports multiple storage backends to fit different use cases. Choose a backend based on your requirements for persistence, performance, scalability, and features.
+
+### Backend Comparison
+
+| Backend | Persistent | Vector Support | Best For | Installation |
+|---------|-----------|----------------|----------|--------------|
+| **Memory** | No | No | Testing, caching, temporary data | Built-in |
+| **File** | Yes | No | Simple storage, JSON/CSV/Parquet files | Built-in |
+| **SQLite** | Yes | Yes (Python) | Embedded database, single-user apps | Built-in |
+| **DuckDB** | Yes | No | Analytics, OLAP, large datasets | `pip install duckdb` |
+| **PostgreSQL** | Yes | Yes (pgvector) | Production, multi-user, ACID | `pip install dataknobs-data[postgres]` |
+| **Elasticsearch** | Yes | Yes (native KNN) | Full-text search, large-scale search | `pip install dataknobs-data[elasticsearch]` |
+| **S3** | Yes | No | Cloud storage, distributed systems | `pip install dataknobs-data[s3]` |
+
+### Choosing the Right Backend
+
+**For development and testing:**
+- Use **Memory** for unit tests and prototyping
+
+**For local file storage:**
+- Use **File** for simple JSON/CSV data persistence
+- Use **SQLite** for transactional workloads with relationships
+- Use **DuckDB** for analytical queries and large datasets
+
+**SQLite vs DuckDB:**
+- Choose **SQLite** when you need:
+  - ACID transactions and concurrent writes
+  - Vector similarity search
+  - Standard SQL database operations (OLTP)
+  - Maximum compatibility
+
+- Choose **DuckDB** when you need:
+  - Fast analytical queries (aggregations, joins, window functions)
+  - Columnar storage efficiency
+  - Reading large datasets (10M+ rows)
+  - Data warehousing and OLAP workloads
+
+**For production:**
+- Use **PostgreSQL** for multi-user applications requiring strong consistency
+- Use **Elasticsearch** for full-text search and complex queries
+- Use **S3** for cloud-native, distributed storage
 
 ### Memory Backend
 
 In-memory storage for testing and development:
 
 ```python
-db = await Database.create("memory")
+from dataknobs_data import DatabaseFactory
+
+# Create and connect
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+# Use the database
+record = Record(data={"name": "Alice", "age": 30})
+record_id = db.create(record)
+
+# Close when done
+db.close()
+```
+
+Or using the async factory:
+
+```python
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+db = factory.create(backend="memory")
+await db.connect()
+
+# Use database
+record_id = await db.create(record)
+
+await db.close()
 ```
 
 ### File Backend
 
-JSON file-based storage:
+File-based storage supporting JSON, CSV, and Parquet formats:
 
 ```python
-db = await Database.create("file", {
-    "path": "/data/records.json",
-    "pretty": True,
-    "backup": True
-})
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
+# JSON format (default)
+db = factory.create(
+    backend="file",
+    path="/data/records.json",
+    format="json",
+    pretty=True,
+    backup=True
+)
+db.connect()
+
+# CSV format
+db = factory.create(
+    backend="file",
+    path="/data/records.csv",
+    format="csv"
+)
+db.connect()
+
+# Parquet format
+db = factory.create(
+    backend="file",
+    path="/data/records.parquet",
+    format="parquet",
+    compression="gzip"
+)
+db.connect()
 ```
 
 ### SQLite Backend
 
-SQLite database storage with full SQL capabilities:
+SQLite database storage with optional vector support:
 
 ```python
-# In-memory database
-db = await Database.create("sqlite", {
-    "path": ":memory:"
-})
+from dataknobs_data import DatabaseFactory
 
-# File-based database
-db = await Database.create("sqlite", {
-    "path": "/data/app.db",
-    "journal_mode": "WAL",  # Better concurrency
-    "synchronous": "NORMAL"  # Balance safety/speed
-})
+factory = DatabaseFactory()
+
+# Basic SQLite database
+db = factory.create(
+    backend="sqlite",
+    path="/data/database.db",
+    table="records"
+)
+db.connect()
+
+# In-memory SQLite database
+db = factory.create(
+    backend="sqlite",
+    path=":memory:"
+)
+db.connect()
+
+# With vector support for similarity search
+db = factory.create(
+    backend="sqlite",
+    path="/data/vector.db",
+    table="records",
+    vector_enabled=True,
+    vector_metric="cosine"  # Options: cosine, euclidean, dot_product
+)
+db.connect()
 ```
+
+### DuckDB Backend
+
+DuckDB database backend optimized for analytical workloads with columnar storage:
+
+```python
+from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory
+
+# Sync version
+factory = DatabaseFactory()
+
+# File-based DuckDB database
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb",
+    table="records"
+)
+db.connect()
+
+# In-memory DuckDB database (fast analytics)
+db = factory.create(
+    backend="duckdb",
+    path=":memory:"
+)
+db.connect()
+
+# With custom configuration
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb",
+    table="records",
+    timeout=10.0,
+    read_only=False
+)
+db.connect()
+
+# Async version
+async_factory = AsyncDatabaseFactory()
+db = async_factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb"
+)
+await db.connect()
+```
+
+**DuckDB Features:**
+- Optimized for analytical (OLAP) workloads
+- Columnar storage for efficient querying
+- 10-100x faster than SQLite for analytics
+- Supports complex queries with aggregations
+- Both file-based and in-memory modes
+- Ideal for data analysis, reporting, and ETL
 
 ### PostgreSQL Backend
 
 PostgreSQL database storage:
 
 ```python
-db = await Database.create("postgres", {
-    "host": "localhost",
-    "port": 5432,
-    "database": "mydb",
-    "user": "user",
-    "password": "pass",
-    "table": "records",
-    "schema": "public"
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    port=5432,
+    database="mydb",
+    user="user",
+    password="pass",
+    table="records"
+)
+await db.connect()
+
+# With vector support (requires pgvector extension)
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    database="mydb",
+    user="user",
+    password="pass",
+    vector_enabled=True,
+    vector_metric="cosine"
+)
+await db.connect()
 ```
 
 ### S3 Backend
@@ -440,13 +915,37 @@ db = await Database.create("postgres", {
 AWS S3 storage:
 
 ```python
-db = await Database.create("s3", {
-    "bucket": "my-bucket",
-    "prefix": "records/",
-    "region": "us-west-2",
-    "aws_access_key_id": "key",
-    "aws_secret_access_key": "secret"
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/",
+    region="us-west-2",
+    access_key_id="key",
+    secret_access_key="secret"
+)
+await db.connect()
+
+# Using IAM role (no credentials needed)
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/"
+)
+await db.connect()
+
+# With custom S3-compatible endpoint (e.g., MinIO)
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    endpoint_url="http://localhost:9000",
+    access_key_id="minioadmin",
+    secret_access_key="minioadmin"
+)
+await db.connect()
 ```
 
 ### Elasticsearch Backend
@@ -454,13 +953,56 @@ db = await Database.create("s3", {
 Elasticsearch storage:
 
 ```python
-db = await Database.create("elasticsearch", {
-    "host": "localhost",
-    "port": 9200,
-    "index": "records",
-    "refresh": True
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+# Basic Elasticsearch connection
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["http://localhost:9200"],
+    index="records"
+)
+await db.connect()
+
+# With authentication
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["https://elastic.example.com:9200"],
+    index="records",
+    username="elastic",
+    password="changeme"
+)
+await db.connect()
+
+# With vector support for KNN search
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["http://localhost:9200"],
+    index="records",
+    vector_enabled=True,
+    vector_metric="cosine"
+)
+await db.connect()
 ```
+
+**Query semantics.** The Elasticsearch backend translates every `Filter` through
+one shared translator, so the sync backend, async backend, and vector/hybrid
+pre-filters agree:
+
+- **`REGEX`** matches the **full field value** (case-sensitive), like the
+  in-memory and SQL backends — not a single analyzed token. Elasticsearch
+  `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
+  look-around), which differs from Python `re`.
+- **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
+  case-insensitively; a literal `*`, `?`, or `\` in the pattern is escaped to
+  match verbatim. The case-insensitive form requires **Elasticsearch ≥ 7.10**.
+- **`Filter("id", ...)`** targets the record's storage key via a stamped
+  top-level `id` keyword field. Records indexed by an older version that did not
+  stamp a *minted* `id` must be reindexed to become `id`-queryable; `read(id)`
+  is unaffected.
+- An operator the translator cannot express raises `ValueError` rather than
+  silently matching every document.
 
 ## Exceptions
 
@@ -494,15 +1036,42 @@ except RecordNotFoundError as e:
 Convenient factory functions for creating databases:
 
 ```python
-from dataknobs_data import database_factory, async_database_factory
+from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory
 
 # Synchronous factory
-db = database_factory("memory")
-db = database_factory("postgres", config)
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+# With configuration
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    database="mydb",
+    user="user",
+    password="pass"
+)
+db.connect()
 
 # Asynchronous factory
-db = await async_database_factory("memory")
-db = await async_database_factory("s3", config)
+async_factory = AsyncDatabaseFactory()
+db = async_factory.create(backend="memory")
+await db.connect()
+
+# With configuration
+db = async_factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/"
+)
+await db.connect()
+
+# Using singleton instances
+from dataknobs_data import database_factory, async_database_factory
+
+# These are pre-instantiated factory objects
+db = database_factory.create(backend="memory")
+db = async_database_factory.create(backend="postgres", host="localhost")
 ```
 
 ## Configuration
@@ -510,33 +1079,65 @@ db = await async_database_factory("s3", config)
 Many components support configuration through dictionaries or environment variables:
 
 ```python
-# From environment variables (using python-dotenv)
-db = await Database.create("postgres")  # Uses .env file
+import os
+from dataknobs_data import AsyncDatabaseFactory
 
-# From explicit config
+factory = AsyncDatabaseFactory()
+
+# From environment variables (using python-dotenv)
+# Assumes you have .env file with DB_HOST, DB_PORT, etc.
+db = factory.create(
+    backend="postgres",
+    host=os.getenv("DB_HOST", "localhost"),
+    port=int(os.getenv("DB_PORT", 5432)),
+    database=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD")
+)
+await db.connect()
+
+# Or use a config dict
 config = {
     "host": os.getenv("DB_HOST"),
     "port": int(os.getenv("DB_PORT", 5432)),
-    "database": os.getenv("DB_NAME")
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD")
 }
-db = await Database.create("postgres", config)
+db = factory.create(backend="postgres", **config)
+await db.connect()
 ```
 
 ## Best Practices
 
 1. **Always close connections**: Use context managers or explicitly call `close()`:
    ```python
-   async with await Database.create("memory") as db:
-       # Use db
-       pass  # Auto-closes
+   from dataknobs_data import AsyncDatabaseFactory
+
+   # Using context manager (recommended)
+   factory = AsyncDatabaseFactory()
+   db = factory.create(backend="memory")
+
+   async with db:
+       # db is auto-connected and will auto-close
+       record = Record(data={"name": "Alice"})
+       await db.create(record)
+
+   # Or manually manage connections
+   db = factory.create(backend="memory")
+   await db.connect()
+   try:
+       await db.create(record)
+   finally:
+       await db.close()
    ```
 
 2. **Use type hints**: The package is fully typed for better IDE support:
    ```python
-   from dataknobs_data import Database, Record
-   
-   async def process_record(db: Database, id: str) -> Record | None:
-       return await db.read(id)
+   from dataknobs_data import AsyncDatabase, Record
+
+   async def process_record(db: AsyncDatabase, record_id: str) -> Record | None:
+       return await db.read(record_id)
    ```
 
 3. **Handle exceptions**: Catch specific exceptions for better error handling:

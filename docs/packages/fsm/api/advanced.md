@@ -581,20 +581,28 @@ resource = CustomResource()
 advanced_fsm.register_resource("custom", resource)
 ```
 
-## Transaction Management
+## Database Atomicity
 
-Configure transaction strategies:
+`AdvancedFSM` does not provide a transaction-strategy coordinator. Database
+atomicity is driven by the dataknobs-data transaction primitives, which stage
+writes and commit them atomically (or discard them all on error):
 
 ```python
-from dataknobs_fsm.core.transactions import TransactionStrategy
+from dataknobs_data import async_database_factory
 
-# Configure transactions
-advanced_fsm.configure_transactions(
-    strategy=TransactionStrategy.BATCH,
-    batch_size=100,
-    commit_interval=10
-)
+db = async_database_factory.create(backend="sqlite", path="workflow.db")
+await db.connect()
+
+# All-or-nothing: both writes commit together, or neither does.
+async with db.transaction(policy="strict") as tx:
+    await tx.create(record_a)
+    await tx.upsert(id_b, record_b)
 ```
+
+Inside FSM workflows, the `DatabaseTransaction` function and
+`BatchCommit(atomicity="require")` provide the same guarantee at the
+transform/state level. See the [database functions
+guide](../guides/database-functions.md).
 
 ## FSM Inspection
 
@@ -965,7 +973,6 @@ for entry in trace:
 | `enable_history(storage, max_depth)` | Enable history tracking | None |
 | `disable_history()` | Disable history tracking | None |
 | `register_resource(name, resource)` | Register resource | None |
-| `configure_transactions(strategy, **config)` | Configure transactions | None |
 | `get_available_transitions(state_name)` | Get available transitions | List[Dict] |
 | `inspect_state(state_name)` | Inspect state config | Dict |
 | `visualize_fsm()` | Generate DOT visualization | str |

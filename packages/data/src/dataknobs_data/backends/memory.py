@@ -6,11 +6,17 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import (
+    AsyncDatabase,
+    SyncDatabase,
+    prepare_atomic_batch,
+    version_conflict_error,
+)
+from ..exceptions import DuplicateRecordError
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 from ..vector import VectorOperationsMixin
@@ -49,6 +55,17 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Optimistic-concurrency token store: per-key value drawn from a
+        # per-instance monotonic sequence (``_version_seq``). Using a
+        # never-reused sequence value (rather than the base content hash, or a
+        # per-key counter that resets on delete) makes the token ABA-safe on
+        # every mutation path: an A->B->A in-place cycle advances the version,
+        # AND a delete->recreate cycle mints a fresh value that cannot collide
+        # with the deleted record's stale token. So a stale conditional write
+        # is always detected. The sequence is never reset (not even by
+        # ``clear()``) so tokens stay unique for the instance's lifetime.
+        self._versions: dict[str, int] = {}
+        self._version_seq = 0
         self._lock = asyncio.Lock()
 
         cfg = self.config
@@ -59,15 +76,46 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
 
+    def _next_version(self) -> int:
+        """Return the next monotonic version value (call while holding the lock).
+
+        Never resets, so a delete->recreate at the same id yields a new token
+        that cannot equal the deleted record's — the ABA guarantee.
+        """
+        self._version_seq += 1
+        return self._version_seq
+
+    def _current_version(self, id: str) -> str | None:
+        """Current token for ``id`` as a string, or ``None`` if absent.
+
+        Reads via ``.get`` (not a bare subscript) so a hypothetical
+        ``_storage``/``_versions`` desync degrades to a ``None`` token — which
+        never matches a real token, so the conditional write fails closed —
+        rather than raising ``KeyError``.
+        """
+        version = self._versions.get(id)
+        return None if version is None else str(version)
+
     async def create(self, record: Record) -> str:
         """Create a new record in memory."""
         async with self._lock:
             # Use centralized method to prepare record
             record_copy, storage_id = self._prepare_record_for_storage(record)
 
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in self._storage:
+                raise DuplicateRecordError(storage_id)
+
             # Store the record
             self._storage[storage_id] = record_copy
+            self._versions[storage_id] = self._next_version()
             return storage_id
+
+    async def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        async with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     async def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -76,30 +124,57 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         async with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
+            return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from memory."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from memory.
+
+        When ``expected_version`` is provided the delete is a compare-and-set:
+        it proceeds only if the record's current token still matches, otherwise
+        it raises ``ConcurrencyError``. A missing record returns ``False``
+        (delete never conflicts on an absent id). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         async with self._lock:
-            if id in self._storage:
-                del self._storage[id]
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            del self._storage[id]
+            self._versions.pop(id, None)
+            return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in memory."""
         async with self._lock:
             return id in self._storage
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -117,7 +192,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         async with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
 
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -158,18 +240,55 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing row or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, so the batch is
+        all-or-nothing. This lets the streaming INSERT fast-path fail closed and
+        retry cleanly per record (see ``run_stream_write``), matching the
+        transactional SQL backends rather than silently overwriting.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored — memory has no native transaction to join.
+        """
+        async with self._lock:
+            prepared = prepare_atomic_batch(
+                records, self._storage, self._prepare_record_for_storage
+            )
+            ids = []
+            for record_copy, storage_id in prepared:
+                self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
+            return ids
+
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records under a single lock.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, versions are bumped per record, and ids are
+        returned in input order. Acquires the lock once for the whole batch.
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
+        if not records:
+            return []
         async with self._lock:
             ids = []
             for record in records:
-                # Use centralized method to prepare record
                 record_copy, storage_id = self._prepare_record_for_storage(record)
-
-                # Store the record
-                self._storage[storage_id] = record_copy
+                self._storage[storage_id] = record_copy  # overwrite (upsert)
+                self._versions[storage_id] = self._next_version()
                 ids.append(storage_id)
             return ids
 
@@ -183,13 +302,20 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 results.append(self._prepare_record_from_storage(record, id))
             return results
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records efficiently."""
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
+        """Delete multiple records efficiently.
+
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
         async with self._lock:
             results = []
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)
@@ -273,6 +399,12 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Per-key optimistic-concurrency token drawn from a per-instance
+        # monotonic sequence (never reset). ABA-safe across both in-place
+        # mutation and delete->recreate; see the async counterpart for the
+        # full rationale.
+        self._versions: dict[str, int] = {}
+        self._version_seq = 0
         self._lock = threading.RLock()
 
         cfg = self.config
@@ -283,13 +415,42 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
 
+    def _next_version(self) -> int:
+        """Return the next monotonic version value (call while holding the lock).
+
+        Never resets, so a delete->recreate at the same id yields a new token
+        that cannot equal the deleted record's — the ABA guarantee.
+        """
+        self._version_seq += 1
+        return self._version_seq
+
+    def _current_version(self, id: str) -> str | None:
+        """Current token for ``id`` as a string, or ``None`` if absent.
+
+        Reads via ``.get`` (not a bare subscript) so a hypothetical
+        ``_storage``/``_versions`` desync fails closed (a ``None`` token never
+        matches) rather than raising ``KeyError``.
+        """
+        version = self._versions.get(id)
+        return None if version is None else str(version)
+
     def create(self, record: Record) -> str:
         """Create a new record in memory."""
         with self._lock:
             # Use record's ID if it has one, otherwise generate a new one
             id = record.id if record.id else self._generate_id()
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if id in self._storage:
+                raise DuplicateRecordError(id)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
+
+    def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -297,30 +458,55 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             record = self._storage.get(id)
             return record.copy(deep=True) if record else None
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
+            return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from memory."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from memory.
+
+        When ``expected_version`` is provided the delete is a compare-and-set:
+        it proceeds only if the record's current token still matches, otherwise
+        it raises ``ConcurrencyError``. A missing record returns ``False``
+        (delete never conflicts on an absent id). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         with self._lock:
-            if id in self._storage:
-                del self._storage[id]
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            del self._storage[id]
+            self._versions.pop(id, None)
+            return True
 
     def exists(self, id: str) -> bool:
         """Check if a record exists in memory."""
         with self._lock:
             return id in self._storage
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -338,7 +524,14 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -379,17 +572,58 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch applies a pre-scanned all-or-nothing batch
+        # (prepare_atomic_batch): a collision raises before any record is
+        # written, so the migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing row or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, so the batch is
+        all-or-nothing. This lets the streaming INSERT fast-path fail closed and
+        retry cleanly per record (see ``run_stream_write``), matching the
+        transactional SQL backends rather than silently overwriting.
+        """
+        with self._lock:
+            # This backend keys on ``record.id`` (falling back to a generated
+            # id) and stores a deep copy without embedding the generated id in
+            # the stored record — preserved here via the prepare callable.
+            prepared = prepare_atomic_batch(
+                records,
+                self._storage,
+                lambda r: (r.copy(deep=True), r.id if r.id else self._generate_id()),
+            )
+            ids = []
+            for record_copy, storage_id in prepared:
+                self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
+            return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records under a single lock.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, versions are bumped per record, and ids are
+        returned in input order. Acquires the lock once for the whole batch.
+        """
+        if not records:
+            return []
         with self._lock:
             ids = []
             for record in records:
-                # Use record's ID if it has one, otherwise generate a new one
-                id = record.id if record.id else self._generate_id()
-                self._storage[id] = record.copy(deep=True)
-                ids.append(id)
+                storage_id = record.id if record.id else self._generate_id()
+                self._storage[storage_id] = record.copy(deep=True)  # overwrite
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
             return ids
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:
@@ -408,6 +642,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)

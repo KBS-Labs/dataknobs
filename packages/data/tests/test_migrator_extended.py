@@ -4,14 +4,17 @@ Extended tests for migrator module to improve coverage.
 
 import pytest
 import asyncio
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
-from typing import Iterator
+from typing import Any
 
+from dataknobs_data.exceptions import OperationError
 from dataknobs_data.records import Record
+from dataknobs_data.database import SyncDatabase
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+from dataknobs_data.backends.duckdb import SyncDuckDBDatabase
 from dataknobs_data.query import Query
-from dataknobs_data.streaming import StreamConfig, StreamResult
+from dataknobs_data.streaming import ConflictPolicy, StreamConfig, StreamResult
 
 from dataknobs_data.migration import (
     Migrator,
@@ -21,6 +24,24 @@ from dataknobs_data.migration import (
     RenameField,
     MigrationProgress,
 )
+
+
+def _disable_batch_verbs(db):
+    """Force the migrator's per-record fallback for a white-box failure test.
+
+    The batched write path tries the target's native bulk verbs
+    (``create_batch`` / ``upsert_batch``) first. A test that simulates a write
+    failure by patching the per-record ``create`` / ``upsert`` must make the
+    bulk verb fail too, so the per-record fallback — the path it pins — is
+    actually reached. Memory ``create_batch`` writes straight to storage without
+    routing through ``create``, so patching ``create`` alone would be bypassed.
+    """
+
+    def _raise(records):
+        raise RuntimeError("batch verb disabled; exercise per-record fallback")
+
+    db.create_batch = _raise
+    db.upsert_batch = _raise
 
 
 class TestMigratorAdvanced:
@@ -85,9 +106,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         migrator = Migrator()
-        
+
         # Test should now raise since no error handler is provided
         with pytest.raises(ValueError, match="Database error"):
             progress = migrator.migrate(
@@ -117,7 +139,8 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         # Error handler that continues
         def error_handler(error, record):
             return True  # Continue processing
@@ -493,9 +516,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         progress = MigrationProgress().start()
-        
+
         # Test without error handler - should raise
         migrator = Migrator()
         with pytest.raises(ValueError, match="Cannot create bad record"):
@@ -505,14 +529,28 @@ class TestMigratorAdvanced:
         assert progress.succeeded == 1
         assert progress.failed == 1
         
-        # Test with error handler that continues
+        # Test with error handler that continues. Use a fresh target so the
+        # "good" records are genuine inserts: create() is an atomic insert and
+        # re-creating an id already written above would (correctly) raise a
+        # DuplicateRecordError rather than silently overwrite.
+        target2 = MemoryDatabase()
+        original_create2 = target2.create
+
+        def failing_create2(record):
+            if record.get_value("value") == "bad":
+                raise ValueError("Cannot create bad record")
+            return original_create2(record)
+
+        target2.create = failing_create2
+        _disable_batch_verbs(target2)  # exercise the per-record fallback
+
         progress2 = MigrationProgress().start()
-        
+
         def error_handler(error, record):
             return True  # Continue processing
-        
-        migrator._write_batch(target, batch, progress2, on_error=error_handler)
-        
+
+        migrator._write_batch(target2, batch, progress2, on_error=error_handler)
+
         # Should process all, with one failure
         assert progress2.succeeded == 2
         assert progress2.failed == 1
@@ -639,6 +677,646 @@ class TestMigratorAdvanced:
         
         # Verify all records were migrated
         assert target.count(Query()) == 15
-        
+
         # Restore original count
         source.count = original_count
+
+
+def _seed(db, ids, value, *, partition=0):
+    """Seed a sync backend with records carrying a stable id + partition_id."""
+    for i in ids:
+        db.create(Record({"v": value, "partition_id": partition}, id=str(i)))
+
+
+async def _aseed(db, ids, value, *, partition=0):
+    """Seed an async backend with records carrying a stable id + partition_id."""
+    for i in ids:
+        await db.create(Record({"v": value, "partition_id": partition}, id=str(i)))
+
+
+def _run_sync(method, src, tgt, policy):
+    """Dispatch a conflict-policy migration through each sync ``migrate*`` path."""
+    m = Migrator()
+    if method == "migrate":
+        return m.migrate(src, tgt, on_conflict=policy)
+    if method == "migrate_stream":
+        return m.migrate_stream(src, tgt, config=StreamConfig(on_conflict=policy))
+    if method == "migrate_parallel":
+        return m.migrate_parallel(src, tgt, partitions=1, on_conflict=policy)
+    raise AssertionError(f"unknown method {method}")
+
+
+class TestMigratorConflictPolicy:
+    """Conflict policy (insert / upsert / skip) across all four migrate paths.
+
+    Built on real in-process memory backends (no mocks). ``create()`` is an
+    atomic insert post-tightening, so a re-run into a populated target has no
+    idempotent path without a policy — these tests pin the default (strict
+    insert) starting point and prove upsert/skip are threaded through every
+    public ``migrate*`` method and both shared write helpers.
+    """
+
+    def test_batched_insert_records_collision_as_failure(self):
+        """RED/pin: default (insert) fails closed on a colliding id (batched)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        # No policy => strict insert. Continue past the failure (on_error → True)
+        # so it is recorded rather than aborting the run.
+        progress = Migrator().migrate(src, tgt, on_error=lambda e, r: True)
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        # The pre-existing target row is untouched.
+        assert tgt.read("2").get_value("v") == "old"
+
+    def test_streaming_insert_fails_closed_on_collision(self):
+        """Streaming INSERT fails closed on a colliding id, like batched migrate().
+
+        Regression: memory ``create_batch`` previously overwrote a colliding id
+        instead of raising, so the streaming INSERT fast-path silently
+        overwrote the target — diverging from batched ``migrate()``, which fails
+        closed. ``create_batch`` now honors ``create``'s atomic-insert contract
+        (raises ``DuplicateRecordError`` before writing), so the streaming
+        fallback records the collision as a failure and leaves the target row
+        untouched.
+        """
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        # Continue past the failure (on_error → True) so it is recorded rather
+        # than aborting the run, matching the batched fail-closed test above.
+        progress = Migrator().migrate_stream(  # default INSERT
+            src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+        )
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        # The pre-existing target row is untouched — not overwritten.
+        assert tgt.read("2").get_value("v") == "old"
+
+    def test_batched_upsert_overwrites(self):
+        """UPSERT overwrites the target row and counts the id as a success."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.failed == 0
+        assert progress.skipped == 0
+        assert progress.succeeded == 3
+        assert tgt.read("2").get_value("v") == "src"
+
+    def test_batched_skip_is_idempotent(self):
+        """SKIP leaves the existing row and re-runs converge to all-skipped."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        m = Migrator()
+
+        first = m.migrate(src, tgt, on_conflict="skip")
+        assert first.skipped == 1
+        assert first.failed == 0
+        assert first.succeeded == 2
+        assert tgt.read("2").get_value("v") == "old"  # untouched
+
+        # Second run: every id already present => all skipped, nothing failed.
+        second = m.migrate(src, tgt, on_conflict="skip")
+        assert second.skipped == 3
+        assert second.failed == 0
+        assert second.succeeded == 0
+        # Rows are byte-identical to the first run.
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("2").get_value("v") == "old"
+
+    @pytest.mark.parametrize("method", ["migrate", "migrate_stream", "migrate_parallel"])
+    def test_all_sync_methods_upsert(self, method):
+        """Every sync path honors upsert (no failures; target matches source)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = _run_sync(method, src, tgt, "upsert")
+        assert progress.failed == 0
+        assert tgt.read("2").get_value("v") == "src"
+        assert tgt.read("1") is not None
+        assert tgt.read("3") is not None
+
+    @pytest.mark.parametrize("method", ["migrate", "migrate_stream", "migrate_parallel"])
+    def test_all_sync_methods_skip(self, method):
+        """Every sync path honors skip (colliding id skipped, old row kept)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = _run_sync(method, src, tgt, "skip")
+        assert progress.failed == 0
+        assert progress.skipped >= 1
+        assert tgt.read("2").get_value("v") == "old"  # skip kept the old row
+        assert tgt.read("1").get_value("v") == "src"
+
+    @pytest.mark.asyncio
+    async def test_async_upsert(self):
+        """migrate_async honors upsert via config.on_conflict."""
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(
+            src, tgt, config=StreamConfig(on_conflict="upsert")
+        )
+        assert progress.failed == 0
+        assert (await tgt.read("2")).get_value("v") == "src"
+
+    @pytest.mark.asyncio
+    async def test_async_skip(self):
+        """migrate_async honors skip via config.on_conflict."""
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(
+            src, tgt, config=StreamConfig(on_conflict="skip")
+        )
+        assert progress.failed == 0
+        assert progress.skipped >= 1
+        assert (await tgt.read("2")).get_value("v") == "old"
+
+    def test_streaming_skip_accounting(self):
+        """StreamResult carries `skipped` and folds into progress.skipped."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = Migrator().migrate_stream(
+            src, tgt, config=StreamConfig(on_conflict="skip")
+        )
+        assert progress.skipped == 1
+
+        # StreamResult itself carries the field and merges it.
+        result = StreamResult(skipped=2)
+        result.merge(StreamResult(skipped=3))
+        assert result.skipped == 5
+
+    def test_str_coercion_and_invalid_rejected(self):
+        """A bare string resolves; an unknown policy fails closed, not silent."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1], "src")
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.failed == 0
+        assert ConflictPolicy("skip") is ConflictPolicy.SKIP
+        with pytest.raises(ValueError):
+            StreamConfig(on_conflict="nonsense")
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_insert_fails_closed_on_collision(self):
+        """Async streaming INSERT fails closed on a colliding id.
+
+        Covers the ``AsyncMemoryDatabase.create_batch`` atomic-insert fix,
+        mirroring the sync ``test_streaming_insert_fails_closed_on_collision``.
+        """
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(  # default INSERT
+            src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+        )
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        assert (await tgt.read("2")).get_value("v") == "old"
+
+    def test_sqlite_streaming_policies_native_backend(self):
+        """SKIP/UPSERT policies thread through a native-SQL backend's stream_write.
+
+        The conflict-policy suite otherwise runs on the memory backend; this
+        covers a native-SQL backend (sqlite) end-to-end rather than relying only
+        on the type-level routing guarantee. For UPSERT/SKIP, sqlite's
+        ``stream_write`` routes per-record (``insert_batch_func=None``) via
+        ``upsert`` / ``create``, so the policy behaves identically to the memory
+        backend. The INSERT policy fails closed via the tightened ``create_batch``
+        fast-path plus a per-record ``create`` fallback; see
+        ``test_sqlite_streaming_insert_fails_closed``.
+        """
+
+        def _pair() -> tuple[SyncSQLiteDatabase, SyncSQLiteDatabase]:
+            src = SyncSQLiteDatabase({"path": ":memory:"})
+            tgt = SyncSQLiteDatabase({"path": ":memory:"})
+            src.connect()
+            tgt.connect()
+            _seed(src, [1, 2, 3], "src")
+            _seed(tgt, [2], "old")
+            return src, tgt
+
+        # SKIP: colliding id skipped, old row kept, the rest migrated.
+        src, tgt = _pair()
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_conflict="skip")
+            )
+            assert progress.failed == 0
+            assert progress.skipped == 1
+            assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+        # UPSERT: colliding id overwritten to match source, no failures.
+        src, tgt = _pair()
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_conflict="upsert")
+            )
+            assert progress.failed == 0
+            assert tgt.read("2").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+    def test_sqlite_streaming_insert_fails_closed(self):
+        """Streaming INSERT into a populated sqlite target fails closed on the
+        colliding id and preserves the source id.
+
+        Their ``stream_write`` routes INSERT through the tightened bulk
+        ``create_batch`` (atomic multi-row INSERT — rolls back on a collision)
+        with a per-record ``create`` fallback that attributes the specific
+        colliding id as a failure. The two non-colliding source rows are written
+        with their source ids; the pre-existing row is untouched.
+        """
+        src = SyncSQLiteDatabase({"path": ":memory:"})
+        tgt = SyncSQLiteDatabase({"path": ":memory:"})
+        src.connect()
+        tgt.connect()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+            )
+            assert progress.failed == 1
+            assert progress.succeeded == 2
+            assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+            assert tgt.read("3").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+    def test_duckdb_streaming_insert_fails_closed(self):
+        """DuckDB streaming INSERT fails closed on a colliding id (sibling of the
+        sqlite case — same tightened ``create_batch`` + per-record fallback)."""
+        src = SyncDuckDBDatabase({"path": ":memory:"})
+        tgt = SyncDuckDBDatabase({"path": ":memory:"})
+        src.connect()
+        tgt.connect()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+            )
+            assert progress.failed == 1
+            assert progress.succeeded == 2
+            assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+            assert tgt.read("3").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+
+class _FilterEven(Transformer):
+    """Transformer that filters out odd-valued records (returns None → skip)."""
+
+    def transform(self, record):
+        result = super().transform(record)
+        if result and result.get_value("v") % 2 == 0:
+            return result
+        return None
+
+
+class TestMigrateStreamProcessedAccounting:
+    """A transformer-filtered record must be counted exactly once in
+    ``progress.processed`` on the streaming path.
+
+    Regression: ``transform_stream`` pre-incremented ``processed`` for every
+    source record, and ``record_skip`` / ``record_failure`` each increment
+    ``processed`` again — so a filtered (or transform-errored) record was
+    double-counted. Six source records with three filtered would report
+    ``processed == 9`` instead of ``6``.
+    """
+
+    def test_migrate_stream_counts_filtered_record_once(self):
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        # values 0..5 → three even (kept), three odd (filtered)
+        for i in range(6):
+            src.create(Record({"v": i}, id=str(i)))
+
+        progress = Migrator().migrate_stream(src, tgt, transform=_FilterEven())
+
+        assert progress.processed == 6  # each source record counted exactly once
+        assert progress.succeeded == 3
+        assert progress.skipped == 3
+        assert progress.failed == 0
+
+    @pytest.mark.asyncio
+    async def test_migrate_async_counts_filtered_record_once(self):
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        for i in range(6):
+            await src.create(Record({"v": i}, id=str(i)))
+
+        progress = await Migrator().migrate_async(
+            src, tgt, transform=_FilterEven()
+        )
+
+        assert progress.processed == 6
+        assert progress.succeeded == 3
+        assert progress.skipped == 3
+        assert progress.failed == 0
+
+
+class _CountingMemoryDatabase(MemoryDatabase):
+    """Real memory backend that tallies which write verbs the migrator invokes.
+
+    No mocks — a genuine ``SyncMemoryDatabase`` subclass whose only addition is a
+    per-verb call counter, so a test can prove the batched migrator rides the
+    native bulk verbs (``create_batch`` / ``upsert_batch``) instead of looping
+    per record.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.calls = {"create": 0, "upsert": 0, "create_batch": 0, "upsert_batch": 0}
+
+    def create(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["create"] += 1
+        return super().create(*args, **kwargs)
+
+    def upsert(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["upsert"] += 1
+        return super().upsert(*args, **kwargs)
+
+    def create_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["create_batch"] += 1
+        return super().create_batch(*args, **kwargs)
+
+    def upsert_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["upsert_batch"] += 1
+        return super().upsert_batch(*args, **kwargs)
+
+
+class TestMigratorBatchedWriteVerbs:
+    """The batched write path (``migrate`` → ``_write_batch``) rides the target's
+    native bulk verbs, matching the streaming path's throughput, with a graceful
+    per-record fallback that preserves per-id accounting and ``on_error``.
+
+    ``migrate_stream`` / ``migrate_parallel`` / ``migrate_async`` already ride the
+    bulk verbs through the streaming write path; only ``migrate`` used a
+    per-record loop before this. Pre-change these throughput assertions failed —
+    ``migrate(on_conflict=upsert)`` called ``upsert`` N times and ``upsert_batch``
+    zero.
+    """
+
+    def test_batched_insert_rides_create_batch(self):
+        """INSERT into an empty target issues one ``create_batch``, no per-record."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        progress = Migrator().migrate(src, tgt)  # default INSERT
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["create_batch"] == 1  # one bulk call for the batch
+        assert tgt.calls["create"] == 0        # no per-record fallback
+        assert tgt.read("3").get_value("v") == "src"
+
+    def test_batched_upsert_rides_upsert_batch(self):
+        """UPSERT issues one ``upsert_batch``, never per-record ``upsert``."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        _seed(tgt, [2], "old")  # a colliding id; upsert overwrites it
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["upsert_batch"] == 1
+        assert tgt.calls["upsert"] == 0
+        assert tgt.read("2").get_value("v") == "src"  # overwritten
+
+    def test_batched_skip_stays_per_record(self):
+        """SKIP has no batch verb: writes per-record ``create``, never batches."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        progress = Migrator().migrate(src, tgt, on_conflict="skip")
+        assert progress.succeeded == 3
+        assert tgt.calls["create"] == 3
+        assert tgt.calls["create_batch"] == 0  # SKIP never batches
+
+    def test_batch_failure_falls_back_to_per_record_attribution(self):
+        """When the bulk verb fails, the per-record fallback attributes each id
+        and fires ``on_error`` per failing record — identical to per-record writes.
+        """
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _disable_batch_verbs(tgt)  # force the per-record fallback
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        seen: list[str] = []
+        progress = Migrator().migrate(
+            src, tgt, on_error=lambda _e, r: seen.append(r.id) or True
+        )
+        assert progress.succeeded == 2  # ids 1, 3
+        assert progress.failed == 1     # id 2
+        assert seen == ["2"]            # on_error fired for the failing id
+        assert any(e["record_id"] == "2" for e in progress.errors)
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+        assert tgt.read("2") is None
+
+    def test_batch_failure_no_handler_raises_immediately(self):
+        """Fail-fast preserved: a per-record failure with no handler re-raises.
+
+        The batch's remaining records are not written.
+        """
+        tgt = MemoryDatabase()
+        _disable_batch_verbs(tgt)
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        # Explicit order so the record after the failing one is unambiguous.
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(ValueError, match="cannot create 2"):
+            Migrator()._write_batch(tgt, batch, progress)
+
+        assert progress.succeeded == 1   # id 1 written before the failure
+        assert progress.failed == 1      # id 2
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3") is None     # record after the failure not written
+
+
+class _NonAtomicBulkMemoryDatabase(MemoryDatabase):
+    """Real memory backend modeling a NON-ATOMIC bulk create (S3 / Elasticsearch).
+
+    ``create_batch`` writes the non-colliding records one at a time and raises
+    ``DuplicateRecordError`` on the first collision — leaving the earlier writes
+    durably applied, exactly as Elasticsearch's per-item bulk API (and the ABC
+    per-record ``create_batch`` loop that S3 inherits) does. Because that bulk
+    verb is not atomic on raise, ``_insert_batch_atomic()`` returns ``False`` so
+    the migrator must route INSERT per-record rather than through the bulk verb
+    (whose partial writes the fallback would re-attempt and mis-count).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.create_batch_calls = 0
+
+    def _insert_batch_atomic(self) -> bool:
+        return False
+
+    def create_batch(self, records):
+        self.create_batch_calls += 1
+        ids = []
+        for record in records:
+            # Per-record: writes each until a collision raises, leaving the
+            # already-written records applied (non-atomic).
+            ids.append(self.create(record))
+        return ids
+
+
+class _ShortCreateBatchMemoryDatabase(MemoryDatabase):
+    """create_batch that confirms fewer ids than it was given (partial success
+    without raising) — the shortfall contract ``MigrationProgressAccountant``
+    guards. Advertises atomic so the migrator uses the bulk verb.
+    """
+
+    def _insert_batch_atomic(self) -> bool:
+        return True
+
+    def create_batch(self, records):
+        written = super().create_batch(records)  # memory writes all, returns all
+        return written[:-1]  # report one fewer id → shortfall of 1
+
+
+class TestMigratorNonAtomicBulkRouting:
+    """migrate() INSERT must not ride a non-atomic bulk create verb.
+
+    Regression guard: the batched write path passes ``target.create_batch`` as
+    the INSERT fast-path only when it is atomic on raise
+    (``_insert_batch_atomic()``). On a backend whose bulk create leaves partial
+    writes on a collision (S3, Elasticsearch), riding it would let the
+    per-record fallback re-write those rows and count them as spurious duplicate
+    failures. Before this guard, ``migrate()`` called ``target.create_batch``
+    unconditionally and these assertions failed.
+    """
+
+    def test_insert_non_atomic_bulk_routes_per_record_for_correct_attribution(self):
+        src, tgt = MemoryDatabase(), _NonAtomicBulkMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")  # id 2 collides with an existing target row
+
+        seen: list[str | None] = []
+        # on_error → True keeps going past the collision so attribution across
+        # the whole batch is observable (INSERT with no handler fails fast).
+        progress = Migrator().migrate(
+            src, tgt, on_error=lambda _e, r: seen.append(r.id if r else None) or True
+        )
+
+        assert progress.succeeded == 2  # ids 1 and 3 genuinely written
+        assert progress.failed == 1     # only id 2 collided
+        assert tgt.create_batch_calls == 0  # the non-atomic bulk verb was NOT used
+        assert seen == ["2"]            # exactly the collider failed, once
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+        assert tgt.read("2").get_value("v") == "old"  # collider left untouched
+        assert [e["record_id"] for e in progress.errors] == ["2"]
+
+    def test_insert_batch_atomic_flag_partitions_backends(self):
+        """Each sync backend reports the correct atomicity of its bulk create.
+
+        Atomic bulk create → override to ``True`` (migrator uses the fast-path);
+        a non-atomic bulk create (S3 base loop, Elasticsearch bulk API) inherits
+        the fail-safe ``False`` default so migrate() routes it per-record.
+        """
+        from dataknobs_data.backends.file import SyncFileDatabase
+        from dataknobs_data.backends.postgres import SyncPostgresDatabase
+        from dataknobs_data.backends.s3 import SyncS3Database
+        from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        base = SyncDatabase._insert_batch_atomic
+        # The ABC default is fail-safe False (its create_batch is a per-record
+        # loop): a backend is treated as non-atomic until it proves otherwise.
+        assert base(MemoryDatabase()) is False
+
+        # Atomic bulk create → overridden to True.
+        for cls in (
+            MemoryDatabase,
+            SyncSQLiteDatabase,
+            SyncPostgresDatabase,
+            SyncDuckDBDatabase,
+            SyncFileDatabase,
+        ):
+            assert cls._insert_batch_atomic is not base
+        assert MemoryDatabase()._insert_batch_atomic() is True
+
+        # Non-atomic bulk create → inherit the fail-safe False default.
+        for cls in (SyncS3Database, SyncElasticsearchDatabase):
+            assert cls._insert_batch_atomic is base
+
+
+class TestMigratorBatchShortfall:
+    """MigrationProgressAccountant.on_batch_success shortfall contract.
+
+    When a bulk verb confirms fewer ids than it was given (partial success
+    without raising), the accountant records the missing count as failures (one
+    aggregate error, not one per record) and offers a single aggregate error to
+    ``on_error`` on the same stop/continue contract as a per-record failure.
+    """
+
+    def test_shortfall_records_single_aggregate_failure_and_continues(self):
+        src, tgt = MemoryDatabase(), _ShortCreateBatchMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+
+        seen: list[tuple[str, str | None]] = []
+
+        def handler(exc, record):
+            seen.append((str(exc), record.id if record is not None else None))
+            return True  # continue
+
+        progress = Migrator().migrate(src, tgt, on_error=handler)
+
+        assert progress.succeeded == 2  # 2 ids confirmed
+        assert progress.failed == 1     # shortfall of 1 counted as failed
+        assert progress.processed == 3  # count invariant preserved
+        # on_error offered exactly one aggregate error, with record=None.
+        assert len(seen) == 1
+        assert "confirmed 2 of 3 records" in seen[0][0]
+        assert seen[0][1] is None
+        # A single aggregate error entry (not one per missing record).
+        assert len(progress.errors) == 1
+        assert progress.errors[0]["record_id"] is None
+        assert progress.errors[0]["count"] == 1
+
+    def test_shortfall_no_handler_raises(self):
+        tgt = _ShortCreateBatchMemoryDatabase()
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(OperationError, match="confirmed 2 of 3 records"):
+            Migrator()._write_batch(tgt, batch, progress)
+        assert progress.failed == 1  # shortfall recorded before the raise
+
+    def test_shortfall_handler_veto_raises(self):
+        tgt = _ShortCreateBatchMemoryDatabase()
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(OperationError, match="confirmed 2 of 3 records"):
+            Migrator()._write_batch(
+                tgt, batch, progress, on_error=lambda _e, _r: False
+            )

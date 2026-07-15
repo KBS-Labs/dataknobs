@@ -6,6 +6,7 @@ import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
+from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query, Operator
 
@@ -363,13 +364,15 @@ async def test_stream_write(es_db, mock_es_client):
             yield Record(data={"name": f"doc{i}"})
     
     result = await es_db.stream_write(generate_records())
-    
+
     assert result.successful == 5
     assert result.failed == 0
     assert result.total_processed == 5
-    
-    # Should have called bulk API
-    mock_es_client.bulk.assert_called()
+
+    # Streaming INSERT routes through per-record create() (option b: the ES bulk
+    # API is non-atomic, so a bulk fast-path + per-record fallback would
+    # double-write). Each record is written via a single-doc index() create op.
+    mock_es_client.index.assert_called()
 
 
 @pytest.mark.asyncio
@@ -425,3 +428,122 @@ async def test_error_without_connection(es_db):
     
     with pytest.raises(RuntimeError, match="not connected"):
         await es_db.search(Query())
+
+
+# ---------------------------------------------------------------------------
+# Bulk per-item error reconciliation — create_batch / upsert_batch must not
+# report an id as written when its bulk operation failed.
+# ---------------------------------------------------------------------------
+def test_extract_bulk_index_ids_upsert_drops_failed_items():
+    """Explicit-id path: a failed item's id is dropped, order preserved.
+
+    Reproduce for the pre-existing bug where async ``upsert_batch`` returned
+    every input id unconditionally — a partial bulk failure was reported as
+    total success. Reconciliation drops only the failed position.
+    """
+    response = {
+        "errors": True,
+        "items": [
+            {"index": {"_id": "a", "status": 201}},
+            {"index": {"_id": "b", "status": 409,
+                       "error": {"type": "version_conflict_engine_exception"}}},
+            {"index": {"_id": "c", "status": 200}},
+        ],
+    }
+    got = AsyncElasticsearchDatabase._extract_bulk_index_ids(
+        response, ["a", "b", "c"]
+    )
+    assert got == ["a", "c"]  # "b" failed → dropped
+
+
+def test_extract_bulk_index_ids_server_id_path_drops_failed():
+    """Server-id path (``ids=None``): ids read from successful items only.
+
+    Both in-tree bulk callers now pass explicit client-minted ids, but the
+    ``ids=None`` branch is retained for a caller relying on server-assigned ids.
+    """
+    response = {
+        "items": [
+            {"index": {"_id": "s1", "status": 201}},
+            {"index": {"_id": "s2", "status": 400,
+                       "error": {"type": "mapper_parsing_exception"}}},
+            {"index": {"_id": "s3", "status": 201}},
+        ],
+    }
+    got = AsyncElasticsearchDatabase._extract_bulk_index_ids(response)
+    assert got == ["s1", "s3"]
+
+
+def test_extract_bulk_index_ids_all_success_and_empty():
+    """All-success returns every id; an empty response returns an empty list."""
+    ok = {"items": [{"index": {"_id": "x", "status": 201}}]}
+    assert AsyncElasticsearchDatabase._extract_bulk_index_ids(ok, ["x"]) == ["x"]
+    assert AsyncElasticsearchDatabase._extract_bulk_index_ids({}, []) == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_batch_drops_failed_item(es_db, mock_es_client):
+    """upsert_batch reports only the ids whose bulk op succeeded."""
+    es_db._client = mock_es_client
+    es_db._connected = True
+    mock_es_client.bulk = AsyncMock(return_value={
+        "errors": True,
+        "items": [
+            {"index": {"_id": "a", "status": 201}},
+            {"index": {"_id": "b", "status": 409,
+                       "error": {"type": "version_conflict_engine_exception"}}},
+        ],
+    })
+
+    ids = await es_db.upsert_batch(
+        [Record({"v": 1}, id="a"), Record({"v": 2}, id="b")]
+    )
+
+    assert ids == ["a"]  # "b" failed → not reported as written
+
+
+@pytest.mark.asyncio
+async def test_create_batch_drops_failed_item(es_db, mock_es_client):
+    """create_batch honors record.id and drops a non-conflict failed item.
+
+    create_batch now uses the bulk ``create`` op keyed on ``record.id`` (no more
+    server-assigned ids); a non-409 per-item failure (e.g. a mapping error) is
+    dropped from the returned ids, while a 409 conflict fails closed (covered by
+    ``test_create_batch_conflict_raises``).
+    """
+    es_db._client = mock_es_client
+    es_db._connected = True
+    mock_es_client.bulk = AsyncMock(return_value={
+        "errors": True,
+        "items": [
+            {"create": {"_id": "a", "status": 201}},
+            {"create": {"_id": "b", "status": 400,
+                        "error": {"type": "mapper_parsing_exception"}}},
+        ],
+    })
+
+    ids = await es_db.create_batch(
+        [Record({"v": 1}, id="a"), Record({"v": 2}, id="b")]
+    )
+
+    assert ids == ["a"]  # failed item dropped
+
+
+@pytest.mark.asyncio
+async def test_create_batch_conflict_raises(es_db, mock_es_client):
+    """create_batch fails closed on a colliding id (bulk 409)."""
+    es_db._client = mock_es_client
+    es_db._connected = True
+    mock_es_client.bulk = AsyncMock(return_value={
+        "errors": True,
+        "items": [
+            {"create": {"_id": "a", "status": 201}},
+            {"create": {"_id": "b", "status": 409,
+                        "error": {"type": "version_conflict_engine_exception"}}},
+        ],
+    })
+
+    with pytest.raises(DuplicateRecordError):
+        await es_db.create_batch(
+            [Record({"v": 1}, id="a"), Record({"v": 2}, id="b")]
+        )

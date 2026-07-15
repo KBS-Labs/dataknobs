@@ -152,7 +152,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         mixin default would hand an out-of-tree backend a read token with
         no enforcement, advertising a conditional-write contract it does
         not keep. Backends that realize both halves override this method
-        and advertise :attr:`~dataknobs_common.Capability.TRANSACTIONAL_METADATA`.
+        and advertise :attr:`~dataknobs_common.Capability.CONDITIONAL_WRITE`.
         See the protocol for the full contract.
         """
         raise NotImplementedError  # pragma: no cover - overridden by backends

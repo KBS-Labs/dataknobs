@@ -75,13 +75,13 @@ _LOCAL_KINDS = ["memory", "file"]
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_advertises_transactional_metadata(
+async def test_advertises_conditional_write(
     kind: str, tmp_path: Path
 ) -> None:
     """Each in-tree backend enforces CAS, so it advertises the capability."""
     backend = await _make_local_backend(kind, tmp_path)
     try:
-        assert backend.supports(Capability.TRANSACTIONAL_METADATA)
+        assert backend.supports(Capability.CONDITIONAL_WRITE)
     finally:
         await backend.close()
 

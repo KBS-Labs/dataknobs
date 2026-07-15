@@ -95,6 +95,7 @@ from .exceptions import (
     DatabaseConnectionError,
     DatabaseOperationError,
     DataknobsDataError,
+    DuplicateRecordError,
     FieldTypeError,
     MigrationError,
     QueryError,
@@ -117,9 +118,10 @@ from .query_logic import (
     QueryBuilder,
 )
 from .records import Record
+from .allocation import DEFAULT_MAX_ATTEMPTS, allocate, allocate_sync
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
-from .streaming import StreamConfig, StreamProcessor, StreamResult
+from .streaming import ConflictPolicy, StreamConfig, StreamProcessor, StreamResult
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 __version__ = "0.5.5"
@@ -137,6 +139,10 @@ __all__ = [
     "Operator",
     "SortOrder",
     "SortSpec",
+    # Allocation
+    "DEFAULT_MAX_ATTEMPTS",
+    "allocate",
+    "allocate_sync",
     # Boolean logic
     "ComplexQuery",
     "QueryBuilder",
@@ -156,6 +162,7 @@ __all__ = [
     "StreamConfig",
     "StreamResult",
     "StreamProcessor",
+    "ConflictPolicy",
     # Transactions
     "BufferedTransaction",
     "VALID_TRANSACTION_POLICIES",
@@ -170,6 +177,7 @@ __all__ = [
     # Exceptions
     "DataknobsDataError",
     "RecordNotFoundError",
+    "DuplicateRecordError",
     "RecordValidationError",
     "FieldTypeError",
     "DatabaseConnectionError",

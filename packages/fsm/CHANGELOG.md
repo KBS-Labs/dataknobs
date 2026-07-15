@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `DatabaseResource.commit_batch`'s idempotent identity path now writes through
+  the data layer's `upsert_batch` batch verb instead of a per-row `upsert` loop,
+  so it uses the backend's native bulk upsert where one exists (a single
+  `ON CONFLICT DO UPDATE` on SQLite/DuckDB/PostgreSQL, a bulk index on
+  Elasticsearch) and a per-record loop elsewhere. Each row is still upserted
+  under its derived id (stamped onto `storage_id`, which takes priority over any
+  `id` field in the row), and a `None` derivation still mints/resolves its own
+  id. On transactional backends (SQLite/DuckDB/PostgreSQL) that whole-batch
+  upsert is a single all-or-nothing statement, so `BatchCommit` /
+  `commit_batch` now honor `atomicity="require"` (and the `use_transaction=True`
+  alias) on this idempotent-upsert path too — committing atomically instead of
+  rejecting it, matching the create-mode path — and reject `require` only on
+  non-transactional backends.
+- The `DatabaseTransaction` function now commits a **multi-kind** staged buffer
+  (e.g. creates and deletes staged across FSM states) all-or-nothing on a
+  transactional backend (SQLite/DuckDB/PostgreSQL): the underlying
+  `AsyncDatabase` buffered transaction runs every coalesced batch inside one
+  native transaction, so a mid-flush failure rolls the whole commit back instead
+  of partially persisting. The Database Functions guide's multi-kind note is
+  updated to match.
+
+### Removed
+
+- **Breaking:** removed the strategy-based FSM transaction coordinator — the
+  `dataknobs_fsm.core.transactions` module (`TransactionManager`,
+  `TransactionStrategy`, and the Single/Batch/Manual managers), the
+  `transaction` configuration block (`TransactionConfig`),
+  `AdvancedFSM.configure_transactions`, and the unused `on_transaction_*`
+  callbacks on `ExecutionHook`. It configured an in-memory coordinator that the
+  execution engines never consulted to drive database commit/rollback, so it
+  delivered no database atomicity. A leftover `transaction:` block in an
+  existing configuration is now ignored (a warning is logged at load time).
+  Database atomicity is provided by the `AsyncDatabase.transaction()` primitive,
+  the `DatabaseTransaction` function, and `BatchCommit(atomicity="require")`.
+
+### Fixed
+
+- Corrected the FSM transaction-mode documentation to the actual supported
+  modes (`NONE`/`PER_RECORD`/`PER_BATCH`/`PER_SESSION`/`DISTRIBUTED`); the
+  `transaction_mode` setting selects in-memory logical bookkeeping only and does
+  not by itself drive database commit/rollback.
+- Corrected the Database Functions guide's transaction guidance to stop
+  directing consumers to a non-existent "backend-native transaction" primitive,
+  and documented at the guide level that `TransactionMode` /
+  `ExecutionContext.transaction_mode` is logical bookkeeping only — no execution
+  engine reads it to drive database commit/rollback; database atomicity comes
+  from `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
+  `AsyncDatabase.transaction()` primitive.
+
 ## v0.2.5 - 2026-07-07
 
 ### Security

@@ -73,7 +73,11 @@ class Capability(str, Enum):
 
     # ---- Consistency ----
     SNAPSHOT_ISOLATION = "snapshot_isolation"
-    TRANSACTIONAL_METADATA = "transactional_metadata"
+    # Backend enforces compare-and-set on update/upsert: a version token
+    # (read via ``get_version`` on a record store, or ``get_state_version``
+    # on a metadata store) is passed back as ``expected_version``; a stale
+    # token raises ``ConcurrencyError`` instead of silent last-writer-wins.
+    CONDITIONAL_WRITE = "conditional_write"
     STREAMING_READS = "streaming_reads"
     STREAMING_WRITES = "streaming_writes"
 
@@ -106,7 +110,7 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     }),
     "consistency": frozenset({
         Capability.SNAPSHOT_ISOLATION,
-        Capability.TRANSACTIONAL_METADATA,
+        Capability.CONDITIONAL_WRITE,
         Capability.STREAMING_READS,
         Capability.STREAMING_WRITES,
     }),

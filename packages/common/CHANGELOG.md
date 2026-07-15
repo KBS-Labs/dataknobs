@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `sweep_stale_test_indices(host, port, *, prefixes=("test_",),
+  min_age_seconds=None, now_ms=None)` in
+  `dataknobs_common.testing.elasticsearch_fixtures`: an age-gated, best-effort
+  reclamation of stale `test_*` Elasticsearch indices. Lists matching indices
+  (a read) and deletes, by exact name, each one older than the threshold
+  (default 300s, overridable via the `min_age_seconds` argument or the
+  `DK_ES_TEST_INDEX_MAX_AGE_SECONDS` env var). Age-gating makes it safe under
+  pytest-xdist — an in-flight index is never touched — and it never raises.
+- `is_elasticsearch_available()` and the `requires_elasticsearch` pytest skip
+  marker (`dataknobs_common.testing`), mirroring the existing
+  `is_postgres_available` / `requires_postgres` pair, for gating
+  Elasticsearch-dependent tests on a reachable cluster.
+- `Capability.CONDITIONAL_WRITE` (consistency family): advertises that a
+  backend enforces compare-and-set on `update`/`upsert`. A version token —
+  read via `get_version` on a record store, or `get_state_version` on a
+  metadata store — is passed back as `expected_version`, and a stale token
+  raises `ConcurrencyError` instead of silent last-writer-wins. This is the
+  single, layer-neutral identifier for the conditional-write contract, shared
+  by the data-record backends and the knowledge-storage backends.
+
+### Changed
+
+- The shared `dataknobs_common_elasticsearch` pytest plugin now sweeps stale
+  `test_*` indices once at session start (from `ensure_elasticsearch_ready`,
+  after the readiness wait). Indices leaked by runs killed before fixture
+  teardown no longer accumulate on the persistent dev/CI cluster volume and
+  exhaust the single-node shard budget. The sweep is age-gated and best-effort,
+  so it never deletes an in-flight index nor fails an otherwise-green run.
+- The `is_redis_available` / `is_postgres_available` / `is_elasticsearch_available`
+  service probes now resolve their host Docker-aware (arg → `$<SVC>_HOST` →
+  the compose service name inside a container, else `localhost`), matching the
+  paired `*_connection_params` fixtures. Previously they hard-coded
+  `localhost`, so inside a container without an explicit host env the probe —
+  and its `requires_*` skip marker — would report the service unavailable and
+  false-skip tests that would actually run. Behavior on the host is unchanged.
+
+### Removed
+
+- `Capability.TRANSACTIONAL_METADATA`. The conditional-write /
+  optimistic-concurrency contract it described is now advertised under the
+  layer-neutral `Capability.CONDITIONAL_WRITE`; the former name read as
+  metadata-document-specific and did not fit a general record store. This is
+  a breaking change for any code referencing the member by name.
+
 ## v1.5.2 - 2026-07-07
 
 ### Added

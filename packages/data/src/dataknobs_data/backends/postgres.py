@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
+import psycopg2
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
 from ..query import Operator, Query
@@ -21,8 +23,9 @@ from ..query_logic import ComplexQuery
 from ..streaming import (
     StreamConfig,
     StreamResult,
-    async_process_batch_with_fallback,
-    process_batch_with_fallback,
+    async_run_stream_write,
+    resolve_conflict_write,
+    run_stream_write,
 )
 from ..vector.mixins import VectorOperationsMixin
 from .config import PostgresDatabaseConfig
@@ -324,7 +327,10 @@ class SyncPostgresDatabase(
         INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES (%(id)s, %(data)s, %(metadata)s)
         """
-        self.db.execute(sql, row)
+        try:
+            self.db.execute(sql, row)
+        except psycopg2.errors.UniqueViolation as e:
+            raise DuplicateRecordError(id) from e
         return id
 
     def read(self, id: str) -> Record | None:
@@ -343,18 +349,68 @@ class SyncPostgresDatabase(
         row = df.iloc[0].to_dict()
         return self._row_to_record(row)
 
-    def update(self, id: str, record: Record) -> bool:
+    def get_version(self, id: str) -> str | None:
+        """Return the row's ``xmin`` transaction id as the version token.
+
+        ``xmin`` is PostgreSQL's system column holding the id of the
+        transaction that last inserted/updated the row; it advances on every
+        UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
+        the base content-hash default this overrides.
+        """
+        self._check_connection()
+        sql = f"""
+        SELECT xmin::text AS version
+        FROM {self._q_qualified}
+        WHERE id = %(id)s
+        """
+        df = self.db.query(sql, {"id": id})
+        if df.empty:
+            return None
+        return str(df.iloc[0]["version"])
+
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional ``xmin`` token from ``get_version(id)``.
+                When provided, the ``UPDATE`` carries an ``AND xmin = …``
+                predicate so the compare-and-set is enforced atomically by the
+                server; a stale token raises ``ConcurrencyError``. When ``None``
+                the update is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current ``xmin`` token.
         """
         self._check_connection()
         row = self._record_to_row(record, id)
+
+        if expected_version is not None:
+            sql = f"""
+            UPDATE {self._q_qualified}
+            SET data = %(data)s, metadata = %(metadata)s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s AND xmin::text = %(expected_version)s
+            """
+            params = dict(row)
+            params["expected_version"] = expected_version
+            result = self.db.execute(sql, params)
+            rows_affected = result if isinstance(result, int) else 0
+            if rows_affected == 0:
+                # The atomic UPDATE matched nothing: either the row is gone
+                # (update never inserts -> False) or the token is stale
+                # (concurrent modification -> raise). A follow-up read only
+                # picks the right disposition/message; the CAS itself already
+                # happened server-side.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
 
         sql = f"""
         UPDATE {self._q_qualified}
@@ -371,9 +427,37 @@ class SyncPostgresDatabase(
 
         return rows_affected > 0
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the ``DELETE`` carries an
+        ``AND xmin = …`` predicate so the compare-and-set is enforced
+        atomically by the server; a stale token raises ``ConcurrencyError``
+        and a missing row returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            sql = f"""
+            DELETE FROM {self._q_qualified}
+            WHERE id = %(id)s AND xmin::text = %(expected_version)s
+            """
+            result = self.db.execute(
+                sql, {"id": id, "expected_version": expected_version}
+            )
+            rows_affected = result if isinstance(result, int) else 0
+            if rows_affected == 0:
+                # The atomic DELETE matched nothing: either the row is gone
+                # (delete of an absent id -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition; the CAS already happened server-side.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
+
         sql = f"""
         DELETE FROM {self._q_qualified}
         WHERE id = %(id)s
@@ -392,15 +476,25 @@ class SyncPostgresDatabase(
         df = self.db.query(sql, {"id": id})
         return not df.empty
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ``xmin`` token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
         self._check_connection()
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             id = id_or_record
@@ -413,17 +507,32 @@ class SyncPostgresDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
-        if self.exists(id):
-            self.update(id, record)
-        else:
-            # Insert with specific ID
-            row = self._record_to_row(record, id)
-            sql = f"""
-            INSERT INTO {self._q_qualified} (id, data, metadata)
-            VALUES (%(id)s, %(data)s, %(metadata)s)
-            """
-            self.db.execute(sql, row)
+
+        # Conditional upsert: delegate to update()'s atomic xmin
+        # compare-and-set. A True return is the update; a stale token raises
+        # straight out; a False return means the row is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent row without logging, so this stays
+        # quiet on the miss.
+        if expected_version is not None:
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of claiming a false success (the old code ignored
+        # update()'s return). Gating update() behind exists() also skips a
+        # doomed UPDATE (and its log) on the common insert path.
+        if self.exists(id) and self.update(id, record):
+            return id
+        # Insert with specific ID (unconditional upsert of an absent row).
+        row = self._record_to_row(record, id)
+        sql = f"""
+        INSERT INTO {self._q_qualified} (id, data, metadata)
+        VALUES (%(id)s, %(data)s, %(metadata)s)
+        """
+        self.db.execute(sql, row)
         return id
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -479,6 +588,12 @@ class SyncPostgresDatabase(
 
         return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch is a single multi-value INSERT: the whole statement
+        # commits or aborts as a unit, so a colliding id writes nothing and the
+        # migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
         
@@ -499,7 +614,8 @@ class SyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params_list, ids = query_builder.build_batch_create_query(records)
 
         # Build params dict for psycopg2
@@ -507,12 +623,47 @@ class SyncPostgresDatabase(
         for i, param in enumerate(params_list):
             params_dict[f"p{i}"] = param
 
-        # Execute the batch insert and get returned IDs
-        result_df = self.db.query(query, params_dict)
+        # Execute the batch insert and get returned IDs. Like create(), a
+        # colliding id fails closed: the single INSERT is transactional, so the
+        # unique-violation aborts the whole batch (nothing written).
+        try:
+            result_df = self.db.query(query, params_dict)
+        except psycopg2.errors.UniqueViolation as e:
+            colliding = next(
+                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+            )
+            raise DuplicateRecordError(colliding) from e
 
         # PostgreSQL RETURNING clause gives us the actual inserted IDs
         if not result_df.empty:
             return result_df['id'].tolist()
+        return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in a single statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
+        query, params_list, ids = query_builder.build_batch_upsert_query(records)
+
+        params_dict = {}
+        for i, param in enumerate(params_list):
+            params_dict[f"p{i}"] = param
+
+        # RETURNING order is not guaranteed under ON CONFLICT, so return the
+        # builder's input-order ids rather than the result-set order.
+        self.db.query(query, params_dict)
         return ids
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -656,49 +807,38 @@ class SyncPostgresDatabase(
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into PostgreSQL."""
+        """Stream records into PostgreSQL.
+
+        Honors ``config.on_conflict``: INSERT uses the batch fast-path
+        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
+        write per-record via ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                continue_processing = process_batch_with_fallback(
-                    batch,
-                    self._write_batch,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            process_batch_with_fallback(
-                batch,
-                self._write_batch,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self._write_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def _write_batch(self, records: list[Record]) -> list[str]:
-        """Write a batch of records to the database.
-        
+        """Write a batch of records with a single multi-row INSERT.
+
+        The INSERT fast-path for the streaming INSERT policy. Like ``create()``,
+        it honors a caller-supplied ``record.id`` (minting only when absent) and
+        fails closed on a colliding id — the single INSERT is atomic, so the
+        unique-violation aborts the whole batch and the streaming loop falls back
+        to per-record ``create()`` to attribute the specific collision.
+
         Returns:
             List of created record IDs
         """
@@ -708,7 +848,7 @@ class SyncPostgresDatabase(
         ids = []
 
         for i, record in enumerate(records):
-            id = str(uuid.uuid4())
+            id = record.id if record.id else str(uuid.uuid4())
             ids.append(id)
             row = self._record_to_row(record, id)
             values.append(f"(%(id_{i})s, %(data_{i})s, %(metadata_{i})s)")
@@ -720,7 +860,13 @@ class SyncPostgresDatabase(
         INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES {', '.join(values)}
         """
-        self.db.execute(sql, params)
+        try:
+            self.db.execute(sql, params)
+        except psycopg2.errors.UniqueViolation as e:
+            colliding = next(
+                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+            )
+            raise DuplicateRecordError(colliding) from e
         return ids
 
     def vector_search(
@@ -1238,8 +1384,11 @@ class AsyncPostgresDatabase(
         VALUES ({', '.join(placeholders)})
         """
 
-        async with self._pool.acquire() as conn:
-            await conn.execute(sql, *values)
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(sql, *values)
+        except asyncpg.exceptions.UniqueViolationError as e:
+            raise DuplicateRecordError(id) from e
 
         return id
 
@@ -1260,15 +1409,44 @@ class AsyncPostgresDatabase(
 
         return self._row_to_record(row)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def get_version(self, id: str) -> str | None:
+        """Return the row's ``xmin`` transaction id as the version token.
+
+        ``xmin`` is PostgreSQL's system column holding the id of the
+        transaction that last inserted/updated the row; it advances on every
+        UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
+        the base content-hash default this overrides.
+        """
+        self._check_connection()
+        sql = f"""
+        SELECT xmin::text AS version
+        FROM {self._q_qualified}
+        WHERE id = $1
+        """
+        async with self._pool.acquire() as conn:
+            version = await conn.fetchval(sql, id)
+        return None if version is None else str(version)
+
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional ``xmin`` token from ``get_version(id)``.
+                When provided, the ``UPDATE`` carries an ``AND xmin = …``
+                predicate so the compare-and-set is enforced atomically by the
+                server; a stale token raises ``ConcurrencyError``. When ``None``
+                the update is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current ``xmin`` token.
         """
         self._check_connection()
 
@@ -1285,10 +1463,15 @@ class AsyncPostgresDatabase(
             set_clauses.append(f"{q_col} = {placeholder}")
         values.extend(vec_values)
 
+        where = "WHERE id = $1"
+        if expected_version is not None:
+            where += f" AND xmin::text = ${len(values) + 1}"
+            values.append(expected_version)
+
         sql = f"""
         UPDATE {self._q_qualified}
         SET {', '.join(set_clauses)}
-        WHERE id = $1
+        {where}
         """
 
         async with self._pool.acquire() as conn:
@@ -1298,13 +1481,52 @@ class AsyncPostgresDatabase(
         rows_affected = int(result.split()[-1])
 
         if rows_affected == 0:
+            if expected_version is not None:
+                # The atomic UPDATE matched nothing: either the row is gone
+                # (update never inserts -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition/message; the CAS already happened
+                # server-side.
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
             logger.warning("Update affected 0 rows for id=%s. Record may not exist.", id)
 
         return rows_affected > 0
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the ``DELETE`` carries an
+        ``AND xmin = …`` predicate so the compare-and-set is enforced
+        atomically by the server; a stale token raises ``ConcurrencyError``
+        and a missing row returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            sql = f"""
+            DELETE FROM {self._q_qualified}
+            WHERE id = $1 AND xmin::text = $2
+            """
+            async with self._pool.acquire() as conn:
+                result = await conn.execute(sql, id, expected_version)
+            rows_affected = int(result.split()[-1])
+            if rows_affected == 0:
+                # The atomic DELETE matched nothing: either the row is gone
+                # (delete of an absent id -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition; the CAS already happened server-side.
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
+
         sql = f"""
         DELETE FROM {self._q_qualified}
         WHERE id = $1
@@ -1330,12 +1552,23 @@ class AsyncPostgresDatabase(
 
         return row is not None
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
 
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ``xmin`` token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts, so it
+        takes the explicit compare-and-set path rather than ``ON CONFLICT``.
         """
         self._check_connection()
 
@@ -1351,6 +1584,17 @@ class AsyncPostgresDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
+
+        if expected_version is not None:
+            # A conditional upsert never inserts. Delegate to update()'s atomic
+            # xmin compare-and-set: a True return is the update; a stale token
+            # raises straight out; a False return means the row is absent
+            # (decided server-side), which for a conditional upsert is itself a
+            # conflict. Acting on the return (not a separate exists() probe)
+            # closes the exists()->update() TOCTOU.
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
@@ -1446,14 +1690,54 @@ class AsyncPostgresDatabase(
         """Postgres batch ops are atomic (single multi-row DML statement)."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Pin one pooled connection in a transaction spanning a commit flush.
+
+        Acquires a single connection from the pool and opens a
+        ``conn.transaction()`` on it, yielding the connection as the handle. The
+        batch methods run their DML on this exact connection (via
+        :meth:`_acquire`) and skip opening a nested transaction, so a multi-kind
+        buffered-transaction flush commits (or rolls back) as one unit. Pinning
+        the connection is why the batch methods **must** route through the
+        threaded handle: a fall-through to a second ``self._pool.acquire()`` while
+        this one is held would deadlock a size-1 pool.
+        """
+        self._check_connection()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
+
+    @asynccontextmanager
+    async def _acquire(self, _tx: Any) -> AsyncIterator[Any]:
+        """Yield the threaded flush connection, or acquire a fresh pooled one.
+
+        When ``_tx`` is supplied (inside a :meth:`_transaction` flush) it is the
+        pinned connection — yield it directly and never acquire a second one
+        (the size-1-pool deadlock trap). When ``None`` (the direct path) acquire
+        a fresh pooled connection for the batch's own implicit transaction, the
+        pre-existing behavior.
+        """
+        if _tx is not None:
+            yield _tx
+        else:
+            async with self._pool.acquire() as conn:
+                yield conn
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently using a single query.
 
         Uses multi-value INSERT with RETURNING for better performance.
-        
+
         Args:
             records: List of records to create
-            
+            _tx: Internal. When supplied (a multi-kind buffered-transaction
+                flush), the DML runs on that pinned connection inside the outer
+                :meth:`_transaction`; when ``None`` a fresh pooled connection
+                runs it as an implicit transaction (the pre-existing path).
+
         Returns:
             List of created record IDs
         """
@@ -1466,26 +1750,76 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = query_builder.build_batch_create_query(records)
 
-        # Execute the batch insert with RETURNING
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, *params)
+        # Execute the batch insert with RETURNING. Like create(), a colliding id
+        # fails closed: the single INSERT is atomic, so the unique-violation
+        # aborts the whole batch (nothing written).
+        try:
+            async with self._acquire(_tx) as conn:
+                rows = await conn.fetch(query, *params)
+        except asyncpg.exceptions.UniqueViolationError as e:
+            colliding = ids[0]
+            # Precise colliding-id naming needs a probe on a *fresh* connection.
+            # That is safe only off the pinned-tx path: inside a flush the pool
+            # connection is held (a probe could exhaust a size-1 pool) and the
+            # aborted transaction cannot be queried anyway. On the ``_tx`` path
+            # report the first batch id and let the outer transaction roll back.
+            if _tx is None:
+                for record in records:
+                    if record.id and await self.exists(record.id):
+                        colliding = record.id
+                        break
+            raise DuplicateRecordError(colliding) from e
 
         # Return the actual inserted IDs from RETURNING clause
         if rows:
             return [row["id"] for row in rows]
         return ids  # Fallback to generated IDs
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
+        """Insert-or-overwrite multiple records in a single statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order. When ``_tx`` is
+        supplied the DML runs on the pinned flush connection (see
+        :meth:`create_batch`).
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres"
+        )
+        query, params, ids = query_builder.build_batch_upsert_query(records)
+
+        async with self._acquire(_tx) as conn:
+            await conn.execute(query, *params)
+
+        # RETURNING order is not guaranteed under ON CONFLICT, so return the
+        # builder's input-order ids.
+        return ids
+
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause and RETURNING for verification.
-        
+
         Args:
             ids: List of record IDs to delete
-            
+            _tx: Internal. When supplied the DML runs on the pinned flush
+                connection (see :meth:`create_batch`).
+
         Returns:
             List of success flags for each deletion
         """
@@ -1502,7 +1836,7 @@ class AsyncPostgresDatabase(
         query, params = query_builder.build_batch_delete_query(ids)
 
         # Execute the batch delete with RETURNING
-        async with self._pool.acquire() as conn:
+        async with self._acquire(_tx) as conn:
             rows = await conn.fetch(query, *params)
 
         # Convert returned rows to set of deleted IDs
@@ -1956,69 +2290,56 @@ class AsyncPostgresDatabase(
         records: AsyncIterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into PostgreSQL using batch inserts."""
+        """Stream records into PostgreSQL using batch inserts.
+
+        Honors ``config.on_conflict``: INSERT uses the COPY batch fast-path with
+        a ``create`` per-record fallback; UPSERT/SKIP write per-record via
+        ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
 
-        batch = []
-        async for record in records:
-            batch.append(record)
+        async def insert_batch(b):
+            # _write_batch returns the authoritative ids (minting a uuid where
+            # record.id is absent), so return them directly rather than reading
+            # back r.id, which is None for id-less records.
+            return await self._write_batch(b)
 
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                # Use lambda wrapper for _write_batch
-                async def batch_func(b):
-                    await self._write_batch(b)
-                    return [r.id for r in b]
-
-                continue_processing = await async_process_batch_with_fallback(
-                    batch,
-                    batch_func,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            async def batch_func(b):
-                await self._write_batch(b)
-                return [r.id for r in b]
-
-            await async_process_batch_with_fallback(
-                batch,
-                batch_func,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=insert_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     async def _write_batch(self, records: list[Record]) -> list[str]:
         """Write a batch of records using COPY for performance.
-        
+
+        The INSERT fast-path for the streaming INSERT policy. Like ``create()``,
+        it honors a caller-supplied ``record.id`` (minting only when absent) and
+        fails closed on a colliding id — ``COPY`` runs in one transaction, so the
+        unique-violation aborts the whole batch and the streaming loop falls back
+        to per-record ``create()`` to attribute the specific collision.
+
         Returns:
             List of created record IDs
         """
         if not records:
             return []
 
-        # Prepare data for COPY
+        # Prepare data for COPY; honor record.id (mint only when absent).
         rows = []
         ids = []
         for record in records:
-            row_data = self._record_to_row(record)
+            row_data = self._record_to_row(record, record.id)
             ids.append(row_data["id"])
             rows.append((
                 row_data["id"],
@@ -2027,13 +2348,21 @@ class AsyncPostgresDatabase(
             ))
 
         # Use COPY for efficient bulk insert
-        async with self._pool.acquire() as conn:
-            await conn.copy_records_to_table(
-                self.table_name,
-                schema_name=self.schema_name or None,
-                records=rows,
-                columns=["id", "data", "metadata"]
-            )
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.copy_records_to_table(
+                    self.table_name,
+                    schema_name=self.schema_name or None,
+                    records=rows,
+                    columns=["id", "data", "metadata"]
+                )
+        except asyncpg.exceptions.UniqueViolationError as e:
+            colliding = ids[0]
+            for record in records:
+                if record.id and await self.exists(record.id):
+                    colliding = record.id
+                    break
+            raise DuplicateRecordError(colliding) from e
 
         return ids
 

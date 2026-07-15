@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from collections.abc import Generator
+from urllib.parse import quote
 from typing import Any, Dict, List, TextIO, Union
 
 # import os
@@ -17,6 +18,21 @@ import dataknobs_utils.pandas_utils as pd_utils
 from dataknobs_utils import requests_utils
 
 logger = logging.getLogger(__name__)
+
+
+class ElasticsearchConflictError(Exception):
+    """Raised when an ``op_type="create"`` index request hits an existing id.
+
+    Elasticsearch returns HTTP 409 when a document with the target id already
+    exists and the request forbids overwriting it. Surfacing this as an
+    exception (rather than a sentinel return value) lets callers handle a
+    create-conflict with the same ``try``/``except`` shape the native async
+    client uses, so the sync and async paths stay in lockstep.
+    """
+
+    def __init__(self, doc_id: str | None = None):
+        self.doc_id = doc_id
+        super().__init__(f"Document id already exists: {doc_id!r}")
 
 
 def build_field_query_dict(
@@ -555,9 +571,22 @@ class ElasticsearchIndex:
         return resp
 
 
+def _encode_doc_id(doc_id: str) -> str:
+    """Percent-encode a document id for use in a REST path segment.
+
+    Elasticsearch document ids may contain any character (hierarchical keys
+    like ``artifacts/alice/report/final`` are common), but an unencoded ``/``
+    in the ``_doc/<id>`` path is parsed by ES as extra route segments, so the
+    document is silently rejected. Encoding with ``safe=""`` turns ``/`` into
+    ``%2F`` (and likewise escapes ``#``/``?``/space/…); the URL builder does no
+    path encoding of its own, so there is no double-encoding.
+    """
+    return quote(doc_id, safe="")
+
+
 class SimplifiedElasticsearchIndex:
     """Simplified Elasticsearch index wrapper for single index operations.
-    
+
     This class provides a simpler API for working with a single Elasticsearch index,
     suitable for use as a database backend.
     """
@@ -621,7 +650,7 @@ class SimplifiedElasticsearchIndex:
         """
         if doc_id:
             # Check if document exists
-            response = self._request("head", f"_doc/{doc_id}")
+            response = self._request("head", f"_doc/{_encode_doc_id(doc_id)}")
             return response.succeeded
         else:
             # Check if index exists
@@ -647,18 +676,49 @@ class SimplifiedElasticsearchIndex:
         )
         return response.succeeded
 
-    def delete(self, doc_id: str | None = None) -> bool:
+    def delete(
+        self,
+        doc_id: str | None = None,
+        if_seq_no: int | None = None,
+        if_primary_term: int | None = None,
+    ) -> bool:
         """Delete the index or a document.
-        
+
         Args:
             doc_id: If provided, delete document. Otherwise delete entire index.
-            
+            if_seq_no: Optional optimistic-concurrency guard — the sequence
+                number the document must currently carry. Pair with
+                ``if_primary_term``. When both are set the delete is a
+                compare-and-set: a stale token is a 409 raised as
+                ``ElasticsearchConflictError``; a missing document is a 404 that
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id).
+            if_primary_term: Optional optimistic-concurrency guard — the primary
+                term the document must currently carry. Pair with ``if_seq_no``.
+
         Returns:
             True if deleted successfully
+
+        Raises:
+            ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
+                are supplied and the document exists with different values
+                (HTTP 409).
         """
         if doc_id:
             # Delete document
-            response = self._request("delete", f"_doc/{doc_id}")
+            params: Dict[str, Any] = {}
+            if if_seq_no is not None:
+                params["if_seq_no"] = if_seq_no
+            if if_primary_term is not None:
+                params["if_primary_term"] = if_primary_term
+            response = self._request(
+                "delete", f"_doc/{_encode_doc_id(doc_id)}", params=params or None
+            )
+            # A conditional delete (guards supplied) surfaces a stale-token 409
+            # as a distinct conflict; the unconditional path keeps its bool
+            # contract (and a missing doc is a 404 -> False).
+            if if_seq_no is not None and response.status == 409:
+                raise ElasticsearchConflictError(doc_id)
             return response.succeeded
         else:
             # Delete index
@@ -672,6 +732,7 @@ class SimplifiedElasticsearchIndex:
         refresh: bool = False,
         max_retries: int = 3,
         initial_delay: float = 0.5,
+        op_type: str | None = None,
     ) -> Dict[str, Any]:
         """Index a document with retry for transient server errors.
 
@@ -681,22 +742,47 @@ class SimplifiedElasticsearchIndex:
             refresh: Whether to refresh immediately for search visibility
             max_retries: Maximum retry attempts for 5xx errors
             initial_delay: Initial backoff delay in seconds (doubles each retry)
+            op_type: Optional index op type. Pass ``"create"`` for an atomic
+                insert that fails with a 409 conflict if the document id
+                already exists; the conflict is raised as
+                ``ElasticsearchConflictError`` rather than returned.
 
         Returns:
             Response with created document ID
+
+        Raises:
+            ElasticsearchConflictError: When ``op_type="create"`` targets an id
+                that already exists (HTTP 409).
         """
-        path = f"_doc/{doc_id}" if doc_id else "_doc"
-        params = {"refresh": "true"} if refresh else None
+        path = f"_doc/{_encode_doc_id(doc_id)}" if doc_id else "_doc"
+        params: Dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if op_type:
+            params["op_type"] = op_type
         method = "put" if doc_id else "post"
 
         delay = initial_delay
         for attempt in range(max_retries + 1):
-            response = self._request(method, path, body, params)
+            response = self._request(method, path, body, params or None)
 
             if response.succeeded and response.json:
                 return response.json
 
             status = response.status
+
+            # A create conflict (op_type="create" against an existing id) is a
+            # definitive 409 — raise distinctly and do not retry.
+            #
+            # Note on at-least-once semantics: if a prior attempt's PUT actually
+            # succeeded server-side but its response was lost (transient 5xx /
+            # dropped connection), the retry below sees a genuine 409 for the
+            # record it just created and reports it as a conflict. This is
+            # inherent to at-least-once retry and is acceptable — the record is
+            # persisted; the caller simply learns of it as a duplicate.
+            if status == 409:
+                raise ElasticsearchConflictError(doc_id)
+
             is_server_error = status is not None and status >= 500
             has_retries_left = attempt < max_retries
 
@@ -723,25 +809,57 @@ class SimplifiedElasticsearchIndex:
         Returns:
             Document data or None if not found
         """
-        response = self._request("get", f"_doc/{doc_id}")
+        response = self._request("get", f"_doc/{_encode_doc_id(doc_id)}")
 
         if response.succeeded and response.json:
             return response.json
         return None
 
-    def update(self, doc_id: str, body: Dict[str, Any], refresh: bool = False) -> bool:
+    def update(
+        self,
+        doc_id: str,
+        body: Dict[str, Any],
+        refresh: bool = False,
+        if_seq_no: int | None = None,
+        if_primary_term: int | None = None,
+    ) -> bool:
         """Update a document.
-        
+
         Args:
             doc_id: Document ID
             body: Update body (should contain "doc" field with partial update)
             refresh: Whether to refresh immediately
-            
+            if_seq_no: Optional optimistic-concurrency guard — the sequence
+                number the document must currently carry. Pair with
+                ``if_primary_term``. When both are set the update is a
+                compare-and-set: a mismatch (or a missing document) is a 409
+                raised as ``ElasticsearchConflictError`` instead of returning
+                ``False``.
+            if_primary_term: Optional optimistic-concurrency guard — the primary
+                term the document must currently carry. Pair with ``if_seq_no``.
+
         Returns:
             True if updated successfully
+
+        Raises:
+            ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
+                are supplied and do not match the document's current values
+                (HTTP 409).
         """
-        params = {"refresh": "true"} if refresh else None
-        response = self._request("post", f"_update/{doc_id}", body, params)
+        params: Dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if if_seq_no is not None:
+            params["if_seq_no"] = if_seq_no
+        if if_primary_term is not None:
+            params["if_primary_term"] = if_primary_term
+        response = self._request(
+            "post", f"_update/{_encode_doc_id(doc_id)}", body, params or None
+        )
+        # A conditional update (guards supplied) surfaces a stale-token 409 as
+        # a distinct conflict; the unconditional path keeps its bool contract.
+        if if_seq_no is not None and response.status == 409:
+            raise ElasticsearchConflictError(doc_id)
         return response.succeeded
 
     def search(self, body: Dict[str, Any] | None = None) -> Any:
