@@ -173,14 +173,19 @@ new_id = await allocate(db, build=build)   # concurrent writers each get a disti
 The helper is key-agnostic — it never mints or mutates ids, so it works for any
 monotonic scheme the caller expresses through `build`. A single uncontended
 allocation makes exactly one attempt, identical to a direct `create()`; after
-`max_attempts` (default 8) consecutive collisions it re-raises the last
-`DuplicateRecordError`, bounded and fail-closed (persistent exhaustion means real
-contention beyond the bound, or a `build` that does not recompute a fresh key).
-`allocate_sync()` is the `SyncDatabase` twin with a plain (non-async) `build`.
+`max_attempts` (default 16) consecutive collisions it re-raises the last
+`DuplicateRecordError`, bounded and fail-closed. `allocate_sync()` is the
+`SyncDatabase` twin with a plain (non-async) `build`.
 
-`allocate()` retries immediately with no delay: each attempt recomputes a fresh
-key, so N concurrent allocators diverge in O(N) attempts. A consumer wanting
-backoff or jitter under a thundering herd of allocators can drive the same
+`allocate()` retries immediately with no delay. Each attempt targets `highest
+existing key + 1`, so the k-th concurrent allocator on one stem needs up to k
+attempts to diverge — and a burst of **more than** `max_attempts` allocators
+contending on the same stem can drive the tail allocators to exhaust the bound
+and fail closed *even though free keys remain*. The seamless guarantee holds only
+up to `max_attempts`-way same-stem contention: size `max_attempts` to the peak
+concurrent allocation you expect on a single stem. (Persistent exhaustion below
+that peak instead means a `build` that does not recompute a fresh key.) A consumer
+facing a thundering herd, or wanting backoff/jitter, can drive the same
 read-compute-create callable through `RetryExecutor` instead, retrying on
 `DuplicateRecordError` — the same idiom the conditional-write recipe below uses:
 

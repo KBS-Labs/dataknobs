@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -120,6 +120,51 @@ async def _async_build(db: object, stem: str = _STEM) -> Record:
     return Record({"body": f"content-{n + 1}"}, id=f"{stem}-v{n + 1}")
 
 
+class _Rendezvous:
+    """Two-party barrier: ``wait()`` blocks until every party has arrived, then
+    releases them together.
+
+    Placing the wait *after* the read inside ``build`` forces both allocators to
+    observe the same pre-write state, so both compute the same first key and
+    exactly one must collide and retry. That makes the contention deterministic
+    on *every* backend — including memory, whose uncontended ``asyncio.Lock``
+    never suspends on its own, so a plain ``asyncio.gather`` would otherwise run
+    the two allocators sequentially and no collision would occur.
+    """
+
+    def __init__(self, parties: int) -> None:
+        self._remaining = parties
+        self._all_arrived = asyncio.Event()
+
+    async def wait(self) -> None:
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._all_arrived.set()
+        await self._all_arrived.wait()
+
+
+def _make_gated_async_build(
+    db: object, rendezvous: _Rendezvous, counts: dict[str, int], label: str
+) -> Callable[[], Awaitable[Record]]:
+    """A ``build`` whose *first* call gates on ``rendezvous`` after its read (so
+    the reads race and both compute the same key), then behaves like a normal
+    fresh-read build on every retry. ``counts[label]`` records how many times
+    this allocator's ``build`` ran, so the test can prove one allocator retried.
+    """
+    gated = False
+
+    async def build() -> Record:
+        nonlocal gated
+        counts[label] = counts.get(label, 0) + 1
+        n = await _async_highest_version(db, _STEM)
+        if not gated:
+            gated = True
+            await rendezvous.wait()  # hold after the read so both see the same state
+        return Record({"body": f"content-{n + 1}"}, id=f"{_STEM}-v{n + 1}")
+
+    return build
+
+
 # ---------------------------------------------------------------------------
 # RED — direct create races fail closed (pins the friction the helper closes)
 # ---------------------------------------------------------------------------
@@ -173,14 +218,25 @@ def test_sync_allocate_seamless_sequential(sync_db: object) -> None:
 
 @pytest.mark.asyncio
 async def test_async_allocate_seamless_concurrent(async_db: object) -> None:
-    """Two allocators via asyncio.gather each land a distinct consecutive key;
-    the loser's collision is retried into the next slot rather than raised.
+    """Two allocators forced (via a rendezvous) to read the same pre-write state
+    both compute ``-v1``, so exactly one collides and retries into ``-v2`` rather
+    than raising.
+
+    The rendezvous makes the collision deterministic on *every* backend —
+    including memory, whose uncontended lock never suspends — so a no-retry
+    ``allocate`` would surface the loser's ``DuplicateRecordError`` out of
+    ``gather`` and fail this test. ``build`` call counts prove the retry engaged:
+    the winner built once, the loser built twice.
     """
+    rendezvous = _Rendezvous(parties=2)
+    counts: dict[str, int] = {}
     ids = await asyncio.gather(
-        allocate(async_db, build=lambda: _async_build(async_db)),
-        allocate(async_db, build=lambda: _async_build(async_db)),
+        allocate(async_db, build=_make_gated_async_build(async_db, rendezvous, counts, "a")),
+        allocate(async_db, build=_make_gated_async_build(async_db, rendezvous, counts, "b")),
     )
     assert sorted(ids) == [f"{_STEM}-v1", f"{_STEM}-v2"]
+    # One allocator collided and retried: 1 build (winner) + 2 builds (loser).
+    assert sorted(counts.values()) == [1, 2]
     assert await async_db.exists(f"{_STEM}-v1") is True
     assert await async_db.exists(f"{_STEM}-v2") is True
     bodies = {(await async_db.read(id)).get_value("body") for id in ids}

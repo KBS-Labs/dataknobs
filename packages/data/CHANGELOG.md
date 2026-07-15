@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction; the helper re-runs it on `DuplicateRecordError` and retries. A
   bounded create-on-conflict loop over the atomic `create()` — a single
   uncontended allocation makes exactly one attempt, and after `max_attempts`
-  (default 8) collisions it re-raises the last collision, fail-closed. Key-agnostic
+  (default 16) collisions it re-raises the last collision, fail-closed. Key-agnostic
   (never mints or mutates ids) and backend-agnostic (composes over the shared
   `create()` contract, no backend-specific path).
 

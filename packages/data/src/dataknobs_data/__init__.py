@@ -118,7 +118,7 @@ from .query_logic import (
     QueryBuilder,
 )
 from .records import Record
-from .allocation import allocate, allocate_sync
+from .allocation import DEFAULT_MAX_ATTEMPTS, allocate, allocate_sync
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import ConflictPolicy, StreamConfig, StreamProcessor, StreamResult
@@ -140,6 +140,7 @@ __all__ = [
     "SortOrder",
     "SortSpec",
     # Allocation
+    "DEFAULT_MAX_ATTEMPTS",
     "allocate",
     "allocate_sync",
     # Boolean logic
