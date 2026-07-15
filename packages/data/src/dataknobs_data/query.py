@@ -60,6 +60,7 @@ class Operator(Enum):
     LIKE = "like"  # String pattern matching (SQL LIKE)
     NOT_LIKE = "not_like"  # String pattern not matching (SQL NOT LIKE)
     REGEX = "regex"  # Regular expression matching
+    STARTS_WITH = "starts_with"  # Literal, case-sensitive prefix match (escape-safe)
     EXISTS = "exists"  # Field exists
     NOT_EXISTS = "not_exists"  # Field does not exist
     BETWEEN = "between"  # Value between two bounds (inclusive)
@@ -168,6 +169,10 @@ class Filter:
             import re
 
             return bool(re.search(self.value, record_value))
+        elif self.operator == Operator.STARTS_WITH:
+            # Literal, case-sensitive prefix match. Unlike LIKE, the prefix is
+            # matched verbatim (a ``_`` or ``%`` in it is not a wildcard).
+            return isinstance(record_value, str) and record_value.startswith(self.value)
         else:
             # This should never be reached as all operators are handled above
             raise ValueError(f"Unknown operator: {self.operator}")
@@ -426,6 +431,8 @@ class Query:
                 "like": Operator.LIKE,
                 "LIKE": Operator.LIKE,
                 "regex": Operator.REGEX,
+                "starts_with": Operator.STARTS_WITH,
+                "STARTS_WITH": Operator.STARTS_WITH,
                 "exists": Operator.EXISTS,
                 "not_exists": Operator.NOT_EXISTS,
                 "between": Operator.BETWEEN,

@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (never mints or mutates ids) and backend-agnostic (composes over the shared
   `create()` contract, no backend-specific path).
 
+- `Operator.STARTS_WITH`: a literal, case-sensitive, escape-safe prefix
+  predicate — a `_` or `%` in the prefix matches literally, unlike `LIKE`. It
+  pushes down to the backend query engine where available (a SQL range or
+  `LIKE ... ESCAPE`, an Elasticsearch `prefix` query) and scans in memory
+  otherwise. Record identifiers are first-class query targets: `Filter("id", ...)`
+  resolves to the storage key — equality, membership, and literal prefix —
+  uniformly across all backends, so a store that encodes hierarchy into its keys
+  can scan a subtree with one filter instead of fetching coarsely and filtering
+  in Python.
+
 ### Changed
 
 - The `Migrator`'s batched write path (`migrate()`) now writes each batch
@@ -211,6 +221,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation kind per transaction for all-or-nothing on a transactional backend,
   and use optimistic concurrency (`update` / `upsert` with `expected_version`)
   for a read-modify-write invariant.
+- `Filter("id", ...)` on the async S3 and async Elasticsearch backends now
+  resolves to the record's storage key, matching every other backend; it
+  previously matched a data field named `id` (so an id filter returned the wrong
+  rows or none). The async S3 backend now also honors `BETWEEN` / `NOT_BETWEEN` /
+  `EXISTS` / `NOT_EXISTS` / `REGEX` filters it previously ignored — its filter
+  matching now delegates to the shared `Filter.matches` matcher rather than a
+  narrower inline operator switch.
+- The sync Elasticsearch backend's `count()` now honors `BETWEEN` / `NOT_BETWEEN`
+  filters. Its query translation is now shared with `search()` (both route
+  through one per-filter translator); previously `count()` carried a separate
+  translation that omitted these operators, so a `BETWEEN`-only count fell back
+  to matching everything and returned the total instead of the filtered count.
 
 ### Notes
 

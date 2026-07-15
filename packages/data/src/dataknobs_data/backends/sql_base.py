@@ -32,6 +32,57 @@ def validate_field_name(field: str) -> None:
         )
 
 
+def escape_like_prefix(prefix: str) -> str:
+    r"""Escape a literal string for use as a ``LIKE ... ESCAPE '\'`` prefix.
+
+    Escapes the LIKE metacharacters ``%`` and ``_`` and the escape character
+    ``\`` itself so that the prefix is matched *verbatim* — a ``_`` or ``%``
+    in the caller's prefix matches a literal ``_`` or ``%``, not a wildcard.
+    The caller appends the trailing ``%`` wildcard after escaping.
+
+    Args:
+        prefix: The literal prefix string.
+
+    Returns:
+        The prefix with ``\\``, ``%``, and ``_`` backslash-escaped.
+    """
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def prefix_upper_bound(prefix: str) -> str | None:
+    """Compute the exclusive upper bound for a literal-prefix range scan.
+
+    Returns the smallest string strictly greater than every string that begins
+    with *prefix*, formed by incrementing the last code point of *prefix*. A
+    half-open range ``value >= prefix AND value < upper_bound`` then matches
+    exactly the strings with that literal prefix, using a plain index range
+    scan under BINARY collation (case-sensitive).
+
+    Edge cases:
+    - An empty prefix has no upper bound (every string starts with it) →
+      returns ``None``; callers emit an always-true clause instead.
+    - A prefix whose final code point is the maximum representable
+      (``U+10FFFF``) cannot be incremented in place; the last incrementable
+      code point is advanced and the maximal tail is dropped. If every code
+      point is maximal, returns ``None`` (unbounded above).
+
+    Args:
+        prefix: The literal prefix string.
+
+    Returns:
+        The exclusive upper-bound string, or ``None`` if the prefix has no
+        finite upper bound.
+    """
+    if not prefix:
+        return None
+    # Walk from the end, incrementing the first code point that is not already
+    # the maximum. Everything after it (all maximal code points) is dropped.
+    for i in range(len(prefix) - 1, -1, -1):
+        if ord(prefix[i]) < 0x10FFFF:
+            return prefix[:i] + chr(ord(prefix[i]) + 1)
+    return None
+
+
 def is_duplicate_key_error(exc: BaseException) -> bool:
     """Return True if a SQL integrity/constraint error is a primary-key
     (duplicate-id) collision rather than another column-constraint violation.
@@ -975,8 +1026,47 @@ class SQLQueryBuilder:
                 return f"regexp_matches({field_expr}, {param_placeholder})", [value]
             else:
                 return f"{field_expr} REGEXP {param_placeholder}", [value]
+        elif op == Operator.STARTS_WITH:
+            return self._build_starts_with_clause(field_expr, value, param_start)
         else:
             raise ValueError(f"Unsupported operator: {op}")
+
+    def _build_starts_with_clause(
+        self, field_expr: str, value: Any, param_start: int,
+    ) -> tuple[str, list[Any]]:
+        r"""Build a case-sensitive literal-prefix clause for ``STARTS_WITH``.
+
+        Case-sensitivity parity with the in-memory ``str.startswith`` matcher
+        is the constraint, and it drives a per-dialect shape:
+
+        - **postgres / duckdb** — ``LIKE '<escaped-prefix>%' ESCAPE '\'``.
+          ``LIKE`` is case-sensitive on both engines, and the literal prefix is
+          escaped so ``%``/``_`` in it match verbatim.
+        - **sqlite** — a half-open range ``field >= prefix AND field <
+          upper_bound``. SQLite ``LIKE`` is case-*insensitive* for ASCII, so it
+          cannot be used here; ``>=``/``<`` on TEXT use BINARY collation
+          (case-sensitive) and ride the ``id`` primary-key index. An empty
+          prefix (or an all-maximal-code-point prefix) has no finite upper
+          bound → emit an always-true clause with no bound parameters.
+        """
+        if self.dialect in ("postgres", "duckdb"):
+            placeholder = self._get_param_placeholder(param_start)
+            escaped = escape_like_prefix(str(value)) + "%"
+            return f"{field_expr} LIKE {placeholder} ESCAPE '\\'", [escaped]
+
+        # sqlite (and any other dialect): case-sensitive half-open range scan.
+        prefix = str(value)
+        upper = prefix_upper_bound(prefix)
+        if upper is None:
+            # No finite upper bound (empty or all-maximal prefix) → match all
+            # non-null values, with no bound parameters consumed.
+            return f"{field_expr} IS NOT NULL", []
+        placeholder1 = self._get_param_placeholder(param_start)
+        placeholder2 = self._get_param_placeholder(param_start + 1)
+        return (
+            f"({field_expr} >= {placeholder1} AND {field_expr} < {placeholder2})",
+            [prefix, upper],
+        )
 
     def _build_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
         """Build a WHERE clause for a single filter.

@@ -813,6 +813,16 @@ class SyncElasticsearchDatabase(
             return {"bool": {"must_not": {"exists": {"field": field_path}}}}
         elif filter_obj.operator == Operator.REGEX:
             return {"regexp": {field_path: filter_obj.value}}
+        elif filter_obj.operator == Operator.STARTS_WITH:
+            # Literal, case-sensitive prefix on a keyword field. For the id
+            # field, target the top-level ``id`` keyword (a prefix query on the
+            # ``_id`` metafield is not reliably supported); it mirrors the
+            # storage key. Non-id fields use the ``.keyword`` sub-field.
+            if filter_obj.field == "id":
+                prefix_field = "id"
+            else:
+                prefix_field = f"data.{filter_obj.field}.keyword"
+            return {"prefix": {prefix_field: filter_obj.value}}
         elif filter_obj.operator == Operator.BETWEEN:
             if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
                 lower, upper = filter_obj.value
@@ -835,106 +845,12 @@ upper}}}}}
             else:
                 es_query = {"match_all": {}}
         else:
-            # Build Elasticsearch query from simple Query object
-            es_query = {"bool": {"must": []}}
-
-            # Apply filters
-            for filter_obj in query.filters:
-                # Special handling for 'id' field - use _id in Elasticsearch
-                if filter_obj.field == 'id':
-                    field_path = "_id"
-                    # _id field doesn't need .keyword suffix
-                else:
-                    field_path = f"data.{filter_obj.field}"
-
-                    # For string fields in exact match queries, use .keyword suffix
-                    # LIKE and REGEX need to use the text field, not keyword
-                    if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                        if isinstance(filter_obj.value, str) or (
-                            isinstance(filter_obj.value, list) and
-                            filter_obj.value and
-                            isinstance(filter_obj.value[0], str)
-                        ):
-                            field_path = f"{field_path}.keyword"
-                    elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                        # Wildcard needs .keyword for proper matching
-                        if isinstance(filter_obj.value, str):
-                            field_path = f"{field_path}.keyword"
-
-                if filter_obj.operator == Operator.EQ:
-                    # Handle boolean values correctly
-                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                    es_query["bool"]["must"].append({"term": {field_path: value}})
-                elif filter_obj.operator == Operator.NEQ:
-                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
-                elif filter_obj.operator == Operator.GT:
-                    es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
-                elif filter_obj.operator == Operator.GTE:
-                    es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LT:
-                    es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LTE:
-                    es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
-                elif filter_obj.operator == Operator.LIKE:
-                    # Convert SQL LIKE pattern to Elasticsearch wildcard
-                    # Wildcard queries should use the keyword field for exact matching
-                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                    # Use the base field path for LIKE (already has .keyword added above if string)
-                    es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
-                elif filter_obj.operator == Operator.NOT_LIKE:
-                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
-                elif filter_obj.operator == Operator.IN:
-                    # Special handling for _id field - use ids query instead of terms
-                    if filter_obj.field == 'id':
-                        es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
-                    else:
-                        es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
-                elif filter_obj.operator == Operator.NOT_IN:
-                    # Special handling for _id field
-                    if filter_obj.field == 'id':
-                        es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
-                    else:
-                        es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
-                elif filter_obj.operator == Operator.EXISTS:
-                    es_query["bool"]["must"].append({"exists": {"field": field_path}})
-                elif filter_obj.operator == Operator.NOT_EXISTS:
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
-                elif filter_obj.operator == Operator.REGEX:
-                    es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-                elif filter_obj.operator == Operator.BETWEEN:
-                    # Use Elasticsearch's native range query for efficient BETWEEN
-                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                        lower, upper = filter_obj.value
-                        es_query["bool"]["must"].append({
-                            "range": {
-                                field_path: {
-                                    "gte": lower,
-                                    "lte": upper
-                                }
-                            }
-                        })
-                elif filter_obj.operator == Operator.NOT_BETWEEN:
-                    # NOT BETWEEN using bool must_not with range
-                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                        lower, upper = filter_obj.value
-                        es_query["bool"]["must"].append({
-                            "bool": {
-                                "must_not": {
-                                    "range": {
-                                        field_path: {
-                                            "gte": lower,
-                                            "lte": upper
-                                        }
-                                    }
-                                }
-                            }
-                        })
-
-        # If no filters, match all
-        if not es_query["bool"]["must"]:
-            es_query = {"match_all": {}}
+            # Translate each filter through the single per-filter translator
+            # (``_build_filter_es_query``) shared with the ComplexQuery and
+            # count() paths, so the three cannot drift apart. An empty filter
+            # list matches all documents.
+            must = [self._build_filter_es_query(f) for f in query.filters]
+            es_query = {"bool": {"must": must}} if must else {"match_all": {}}
 
         # Build sort
         sort = []
@@ -1017,74 +933,12 @@ upper}}}}}
         if not query or not query.filters:
             return self._count_all()
 
-        # Build Elasticsearch query from Query object (same as search)
-        es_query = {"bool": {"must": []}}
-
-        for filter_obj in query.filters:
-            # Special handling for 'id' field - use _id in Elasticsearch
-            if filter_obj.field == 'id':
-                field_path = "_id"
-                # _id field doesn't need .keyword suffix
-            else:
-                field_path = f"data.{filter_obj.field}"
-
-                # For string fields in exact match queries, use .keyword suffix
-                # LIKE and REGEX need different handling
-                if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                    if isinstance(filter_obj.value, str) or (
-                        isinstance(filter_obj.value, list) and
-                        filter_obj.value and
-                        isinstance(filter_obj.value[0], str)
-                    ):
-                        field_path = f"{field_path}.keyword"
-                elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
-                    # Wildcard needs .keyword for proper matching
-                    if isinstance(filter_obj.value, str):
-                        field_path = f"{field_path}.keyword"
-
-            if filter_obj.operator == Operator.EQ:
-                # Handle boolean values correctly
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"term": {field_path: value}})
-            elif filter_obj.operator == Operator.NEQ:
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
-            elif filter_obj.operator == Operator.GT:
-                es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.GTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LT:
-                es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LIKE:
-                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
-            elif filter_obj.operator == Operator.NOT_LIKE:
-                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
-            elif filter_obj.operator == Operator.IN:
-                # Special handling for _id field - use ids query instead of terms
-                if filter_obj.field == 'id':
-                    es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
-                else:
-                    es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
-            elif filter_obj.operator == Operator.NOT_IN:
-                # Special handling for _id field
-                if filter_obj.field == 'id':
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
-                else:
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
-            elif filter_obj.operator == Operator.EXISTS:
-                es_query["bool"]["must"].append({"exists": {"field": field_path}})
-            elif filter_obj.operator == Operator.NOT_EXISTS:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
-            elif filter_obj.operator == Operator.REGEX:
-                es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-
-        # If no filters were added, use match_all
-        if not es_query["bool"]["must"]:
-            es_query = {"match_all": {}}
+        # Translate each filter through the shared per-filter translator so
+        # count() cannot drift from search()/ComplexQuery. (The former inline
+        # loop omitted BETWEEN/NOT_BETWEEN, so a BETWEEN-only count fell back to
+        # match_all and returned the total instead of the filtered count.)
+        must = [self._build_filter_es_query(f) for f in query.filters]
+        es_query = {"bool": {"must": must}} if must else {"match_all": {}}
 
         # Count with the query
         return self.es_index.count(body={"query": es_query})

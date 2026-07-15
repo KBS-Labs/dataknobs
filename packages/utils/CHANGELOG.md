@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Omitting them preserves the existing unconditional `bool`-returning behavior
   exactly.
 
+### Fixed
+
+- `SimplifiedElasticsearchIndex` now percent-encodes the document id in the REST
+  path for `index()`, `get()`, `update()`, `delete()`, and `exists()`. A document
+  id containing `/` (hierarchical keys such as `artifacts/alice/report/final`),
+  or any other path-reserved character, was previously interpolated raw into the
+  `_doc/<id>` path, so Elasticsearch parsed it as extra route segments and the
+  operation silently failed (`index()` returned `{"_id": None, "result": "error"}`).
+  Ids are now encoded with `safe=""`, so slash-delimited and other special-char
+  ids round-trip correctly.
+
 ## v1.2.15 - 2026-07-07
 
 ### Security

@@ -662,13 +662,22 @@ class AsyncElasticsearchDatabase(
         es_query = {"bool": {"must": []}}
 
         for filter in query.filters:
-            field_path = f"data.{filter.field}"
+            # The 'id' field is the storage key: the document carries it as a
+            # top-level ``id`` keyword mirroring ``_id``, so filters on it resolve
+            # to the storage key rather than a data field named ``id``.
+            is_id = filter.field == "id"
+            field_path = "id" if is_id else f"data.{filter.field}"
 
             if filter.operator == Operator.EQ:
                 # For string values, use keyword field for exact matching
-                if isinstance(filter.value, str):
+                # (the 'id' field is already a keyword — no suffix needed).
+                if isinstance(filter.value, str) and not is_id:
                     field_path = f"{field_path}.keyword"
                 es_query["bool"]["must"].append({"term": {field_path: filter.value}})
+            elif filter.operator == Operator.STARTS_WITH:
+                # Literal, case-sensitive prefix on a keyword field.
+                prefix_field = "id" if is_id else f"data.{filter.field}.keyword"
+                es_query["bool"]["must"].append({"prefix": {prefix_field: filter.value}})
             elif filter.operator == Operator.NEQ:
                 es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
                 es_query["bool"]["must_not"].append({"term": {field_path: filter.value}})
@@ -775,12 +784,18 @@ class AsyncElasticsearchDatabase(
         es_query: dict[str, Any] = {"bool": {"must": []}}
 
         for filter_obj in query.filters:
-            field_path = f"data.{filter_obj.field}"
+            # The 'id' field is the storage key (top-level ``id`` keyword
+            # mirroring ``_id``), so filters on it resolve to the storage key.
+            is_id = filter_obj.field == "id"
+            field_path = "id" if is_id else f"data.{filter_obj.field}"
 
             if filter_obj.operator == Operator.EQ:
-                if isinstance(filter_obj.value, str):
+                if isinstance(filter_obj.value, str) and not is_id:
                     field_path = f"{field_path}.keyword"
                 es_query["bool"]["must"].append({"term": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.STARTS_WITH:
+                prefix_field = "id" if is_id else f"data.{filter_obj.field}.keyword"
+                es_query["bool"]["must"].append({"prefix": {prefix_field: filter_obj.value}})
             elif filter_obj.operator == Operator.NEQ:
                 es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
                 es_query["bool"]["must_not"].append({"term": {field_path: filter_obj.value}})
