@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `RetryExecutor.execute_sync`: a synchronous entry point for the bounded-retry
+  engine — the same backoff, `retry_on_exceptions`, `retry_on_result`, and
+  `on_retry` / `on_failure` hook policy as `execute`, but it blocks the calling
+  thread between attempts instead of awaiting, for callers with no event loop.
+  Raises `TypeError` on a coroutine callable (which would create an un-awaited
+  coroutine that never runs — use `execute` for those).
+
+### Changed
+
+- `RetryExecutor` now detects async-ness at the **result** level rather than
+  only via `iscoroutinefunction` on the callable. `execute` awaits any awaitable
+  result, so async callable objects (`async def __call__`) and sync callables
+  returning a coroutine are handled correctly instead of being returned
+  un-awaited; `execute_sync` rejects such callables with `TypeError` (closing the
+  rejected coroutine so no "never awaited" warning leaks) rather than handing
+  back an un-awaited coroutine.
+- `RetryConfig` now validates `max_attempts` at construction, raising
+  `ValueError` when it is `< 1` (including via `from_dict`). Previously a
+  non-positive bound ran zero attempts and fell through to an obscure
+  `RuntimeError`; it now fails loud on the misconfiguration for every consumer.
+
 ## v1.6.0 - 2026-07-15
 
 ### Added

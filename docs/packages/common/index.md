@@ -404,7 +404,7 @@ if is_deserializable(MyClass):
 
 ### 4. Retry
 
-Configurable retry execution with multiple backoff strategies. Supports both sync and async callables, exception filtering, result-based retry, and lifecycle hooks.
+Configurable retry execution with multiple backoff strategies. Supports both sync and async callables, exception filtering, result-based retry, and lifecycle hooks. Two entry points share one retry policy: `execute()` (async — awaits any awaitable result) and `execute_sync()` (blocking — for callers with no event loop).
 
 #### Basic Usage
 
@@ -420,6 +420,9 @@ config = RetryConfig(
 
 executor = RetryExecutor(config)
 result = await executor.execute(fetch_data, url)
+
+# No event loop? Use the blocking twin — same backoff/filtering/hooks:
+result = executor.execute_sync(parse_json, raw_text)
 ```
 
 #### Backoff Strategies

@@ -21,8 +21,10 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -84,6 +86,19 @@ class RetryConfig(StructuredConfig):
     on_retry: Callable[[int, Exception], None] | None = None
     on_failure: Callable[[Exception], None] | None = None
 
+    def __post_init__(self) -> None:
+        """Reject a non-positive attempt bound at construction.
+
+        ``max_attempts < 1`` runs zero attempts and falls through the retry
+        loop to a ``RuntimeError`` — an obscure failure for what is really a
+        misconfiguration. Validating here fails loud at config-construction for
+        every consumer (including ``from_dict`` loading and downstream helpers
+        such as ``allocate``), so the guard lives once on the config rather than
+        being re-implemented at each call site.
+        """
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+
 
 def compute_backoff_delay(
     strategy: BackoffStrategy,
@@ -141,11 +156,28 @@ def compute_backoff_delay(
     return min(delay, max_delay)
 
 
+def _discard_awaitable(value: Any) -> None:
+    """Close a rejected coroutine so Python does not warn that it was never
+    awaited. Non-coroutine awaitables (Futures, objects with ``__await__``)
+    own no such warning and have nothing to close.
+    """
+    if inspect.iscoroutine(value):
+        value.close()
+
+
 class RetryExecutor:
     """Executes a callable with retry logic and configurable backoff.
 
-    Supports both sync and async callables. Sync callables are invoked directly;
-    async callables are awaited.
+    :meth:`execute` is the async entry point: it invokes the callable and
+    awaits the result whenever it is awaitable, so plain functions, coroutine
+    functions, and async callable objects are all handled, yielding
+    cooperatively between attempts. :meth:`execute_sync` is its synchronous
+    twin for callers with no event loop; it blocks the calling thread between
+    attempts and rejects any callable that produces an awaitable. Both detect
+    async-ness at the *result* level (not merely via
+    ``iscoroutinefunction`` on the callable) and share one retry policy core,
+    so backoff, ``retry_on_exceptions``, ``retry_on_result``, and the hooks
+    behave identically across the two entry points.
 
     Example:
         ```python
@@ -157,6 +189,9 @@ class RetryExecutor:
 
         # Sync callable also works (called from async context)
         result = await executor.execute(parse_json, raw_text)
+
+        # Synchronous entry point (no event loop)
+        result = executor.execute_sync(parse_json, raw_text)
         ```
     """
 
@@ -186,11 +221,69 @@ class RetryExecutor:
             previous_delay=previous_delay,
         )
 
+    def _should_retry_on_result(self, attempt: int, result: Any) -> bool:
+        """Whether a result value should trigger a retry.
+
+        True only when a result predicate is configured, it matches the
+        result, and the attempt bound has not been reached. At the bound this
+        returns False so the caller returns the (unsatisfactory) result,
+        preserving the "returns the last result if attempts are exhausted"
+        contract.
+        """
+        return bool(
+            self.config.retry_on_result
+            and self.config.retry_on_result(result)
+            and attempt < self.config.max_attempts
+        )
+
+    def _delay_before_retry_on_result(
+        self, attempt: int, previous_delay: float | None
+    ) -> float:
+        """Compute and log the delay before a result-triggered retry.
+
+        Result-based retries fire no ``on_retry`` hook (that hook is
+        exception-scoped), matching the established behavior.
+        """
+        delay = self._calculate_delay(attempt, previous_delay)
+        logger.debug(
+            "Retry on result (attempt %d/%d), delay=%.2fs",
+            attempt, self.config.max_attempts, delay,
+        )
+        return delay
+
+    def _delay_before_retry_on_exception(
+        self, attempt: int, e: Exception, previous_delay: float | None
+    ) -> float:
+        """Decide the fate of a failed attempt.
+
+        Re-raises ``e`` immediately when it is not a retryable type, or when
+        the attempt bound is reached (firing ``on_failure`` first). Otherwise
+        fires ``on_retry`` and returns the delay before the next attempt.
+        """
+        if self.config.retry_on_exceptions and not any(
+            isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions
+        ):
+            raise e
+        if attempt >= self.config.max_attempts:
+            if self.config.on_failure:
+                self.config.on_failure(e)
+            raise e
+        delay = self._calculate_delay(attempt, previous_delay)
+        if self.config.on_retry:
+            self.config.on_retry(attempt, e)
+        logger.debug(
+            "Retry after exception (attempt %d/%d), delay=%.2fs: %s",
+            attempt, self.config.max_attempts, delay, e,
+        )
+        return delay
+
     async def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute a callable with retry logic.
 
         Args:
-            func: The callable to execute. May be sync or async.
+            func: The callable to execute. May be sync or async — any
+                awaitable it returns is awaited, so plain functions, coroutine
+                functions, and async callable objects are all supported.
             *args: Positional arguments forwarded to func.
             **kwargs: Keyword arguments forwarded to func.
 
@@ -201,55 +294,92 @@ class RetryExecutor:
             Exception: The exception from the final failed attempt, or any
                 non-retryable exception immediately.
         """
-        last_exception: Exception | None = None
         previous_delay: float | None = None
-        is_coro = asyncio.iscoroutinefunction(func)
 
         for attempt in range(1, self.config.max_attempts + 1):
             try:
-                result = await func(*args, **kwargs) if is_coro else func(*args, **kwargs)
-
-                # Check if we should retry based on the result value
-                if self.config.retry_on_result and self.config.retry_on_result(result):
-                    if attempt < self.config.max_attempts:
-                        delay = self._calculate_delay(attempt, previous_delay)
-                        previous_delay = delay
-                        logger.debug(
-                            "Retry on result (attempt %d/%d), delay=%.2fs",
-                            attempt, self.config.max_attempts, delay,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-
-                return result
-
+                result = func(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                if not self._should_retry_on_result(attempt, result):
+                    return result
+                previous_delay = self._delay_before_retry_on_result(
+                    attempt, previous_delay
+                )
             except Exception as e:
-                last_exception = e
+                previous_delay = self._delay_before_retry_on_exception(
+                    attempt, e, previous_delay
+                )
+            await asyncio.sleep(previous_delay)
 
-                # If exception filtering is configured, only retry matching types
-                if self.config.retry_on_exceptions:
-                    if not any(
-                        isinstance(e, exc_type)
-                        for exc_type in self.config.retry_on_exceptions
-                    ):
-                        raise
+        # The final attempt always returns (a good result, or a bad result at
+        # the bound) or raises (an exhausted exception via the helper), so the
+        # loop never falls through. This satisfies the type checker only.
+        raise RuntimeError("retry loop exited without return or raise")
 
-                if attempt < self.config.max_attempts:
-                    delay = self._calculate_delay(attempt, previous_delay)
-                    previous_delay = delay
+    def execute_sync(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        """Execute a synchronous callable with retry logic, blocking the thread.
 
-                    if self.config.on_retry:
-                        self.config.on_retry(attempt, e)
+        The synchronous twin of :meth:`execute`: same bounded-retry, backoff,
+        ``retry_on_exceptions``, ``retry_on_result``, and hook policy, but it
+        sleeps the calling thread between attempts instead of awaiting. Use it
+        from code that has no event loop.
 
-                    logger.debug(
-                        "Retry after exception (attempt %d/%d), delay=%.2fs: %s",
-                        attempt, self.config.max_attempts, delay, e,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    if self.config.on_failure:
-                        self.config.on_failure(e)
-                    raise
+        Args:
+            func: A synchronous callable to execute.
+            *args: Positional arguments forwarded to func.
+            **kwargs: Keyword arguments forwarded to func.
 
-        # Should not be reached, but satisfies type checker
-        raise last_exception  # type: ignore[misc]
+        Returns:
+            The return value of func on a successful attempt.
+
+        Raises:
+            TypeError: If ``func`` is a coroutine function, or any callable
+                whose return value is awaitable (an async callable object, or a
+                sync callable returning a coroutine) — awaiting is impossible
+                without an event loop, so it would otherwise return an
+                un-awaited coroutine that never runs. Use :meth:`execute`.
+            Exception: The exception from the final failed attempt, or any
+                non-retryable exception immediately.
+        """
+        if asyncio.iscoroutinefunction(func):
+            # Fast reject for ``async def`` (and coroutine ``partial``s) before
+            # invoking func, so an obvious misuse never runs side effects.
+            raise TypeError(
+                "execute_sync requires a synchronous callable; "
+                "use execute() for coroutine functions"
+            )
+        previous_delay: float | None = None
+
+        for attempt in range(1, self.config.max_attempts + 1):
+            try:
+                result = func(*args, **kwargs)
+            except Exception as e:
+                previous_delay = self._delay_before_retry_on_exception(
+                    attempt, e, previous_delay
+                )
+                time.sleep(previous_delay)
+                continue
+
+            # Value-level guard: a callable whose *return* is awaitable (an
+            # async callable object, or a sync function returning a coroutine)
+            # slips past the iscoroutinefunction() check above. Reject it rather
+            # than hand back an un-awaited coroutine. Raised outside the except
+            # so the retry loop never swallows or retries it.
+            if inspect.isawaitable(result):
+                _discard_awaitable(result)
+                raise TypeError(
+                    "execute_sync requires a synchronous callable; "
+                    "the callable returned an awaitable — use execute() instead"
+                )
+            if not self._should_retry_on_result(attempt, result):
+                return result
+            previous_delay = self._delay_before_retry_on_result(
+                attempt, previous_delay
+            )
+            time.sleep(previous_delay)
+
+        # Unreachable — see execute(); satisfies the type checker only.
+        raise RuntimeError("retry loop exited without return or raise")

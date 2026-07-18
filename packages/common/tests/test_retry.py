@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import inspect
 import random
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,22 @@ from dataknobs_common.retry import (
 )
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
+
+
+class _AsyncCallableObject:
+    """A callable whose ``__call__`` is ``async`` — ``iscoroutinefunction``
+    returns False for the *instance*, so calling it produces a coroutine even
+    though function-level async detection misses it. Used to exercise the
+    executor's result-level (not function-level) async detection.
+    """
+
+    def __init__(self, result: object = "ok") -> None:
+        self.calls = 0
+        self._result = result
+
+    async def __call__(self) -> object:
+        self.calls += 1
+        return self._result
 
 # ---------------------------------------------------------------------------
 # BackoffStrategy delay calculation
@@ -313,6 +330,49 @@ class TestRetryExecutorAsyncExecution:
             await executor.execute(fail_with_value_error)
         assert call_count == 3
 
+    async def test_awaits_async_callable_object_result(self):
+        """execute() detects async-ness at the result level, not just via
+        iscoroutinefunction() on the callable.
+
+        An object with ``async def __call__`` is not a coroutine *function*,
+        so the old function-level check returned its (un-awaited) coroutine as
+        the result. execute() must await the awaitable and return the value.
+        """
+        config = RetryConfig(max_attempts=2, initial_delay=0.0)
+        executor = RetryExecutor(config)
+        obj = _AsyncCallableObject("done")
+
+        result = await executor.execute(obj)
+
+        assert result == "done"
+        assert not inspect.iscoroutine(result)
+        assert obj.calls == 1
+
+    async def test_retries_async_callable_object_on_exception(self):
+        """A retryable async callable object is awaited each attempt, so the
+        exception raised inside its coroutine body is caught and retried.
+        """
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+        )
+        executor = RetryExecutor(config)
+
+        class _FlakyAsyncObject:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def __call__(self) -> str:
+                self.calls += 1
+                if self.calls < 3:
+                    raise ValueError("not yet")
+                return "ok"
+
+        obj = _FlakyAsyncObject()
+        assert await executor.execute(obj) == "ok"
+        assert obj.calls == 3
+
 
 # ---------------------------------------------------------------------------
 # Sync callable execution
@@ -468,6 +528,258 @@ class TestRetryHooks:
 
         await executor.execute(succeed)
         assert len(failure_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Synchronous execution entry point (execute_sync)
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteSync:
+    """RetryExecutor.execute_sync — the synchronous twin of execute().
+
+    Behavioral parity with execute() (bounded retry, exception filtering,
+    result-based retry, hooks) plus the coroutine-function guard. All tests are
+    synchronous — execute_sync has no event loop.
+    """
+
+    def test_success_on_first_attempt(self):
+        config = RetryConfig(max_attempts=3, initial_delay=0.0)
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def succeed():
+            nonlocal call_count
+            call_count += 1
+            return "ok"
+
+        assert executor.execute_sync(succeed) == "ok"
+        assert call_count == 1
+
+    def test_retries_on_exception_then_succeeds(self):
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def fail_then_succeed():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ValueError("not yet")
+            return "ok"
+
+        assert executor.execute_sync(fail_then_succeed) == "ok"
+        assert call_count == 3
+
+    def test_raises_after_max_attempts_exhausted(self):
+        config = RetryConfig(max_attempts=2, initial_delay=0.0)
+        executor = RetryExecutor(config)
+
+        def always_fail():
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            executor.execute_sync(always_fail)
+
+    def test_no_retry_on_non_matching_exception(self):
+        config = RetryConfig(
+            max_attempts=5,
+            initial_delay=0.0,
+            retry_on_exceptions=[ValueError],
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def raise_type_error():
+            nonlocal call_count
+            call_count += 1
+            raise TypeError("wrong type")
+
+        with pytest.raises(TypeError, match="wrong type"):
+            executor.execute_sync(raise_type_error)
+        assert call_count == 1
+
+    def test_retries_only_matching_exceptions(self):
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            retry_on_exceptions=[ValueError],
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def fail_with_value_error():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("retry me")
+
+        with pytest.raises(ValueError, match="retry me"):
+            executor.execute_sync(fail_with_value_error)
+        assert call_count == 3
+
+    def test_returns_last_result_if_max_attempts_exhausted(self):
+        config = RetryConfig(
+            max_attempts=2,
+            initial_delay=0.0,
+            retry_on_result=lambda r: r == "bad",
+        )
+        executor = RetryExecutor(config)
+
+        def always_bad():
+            return "bad"
+
+        # Result-based retry at the bound returns the (unsatisfactory) result.
+        assert executor.execute_sync(always_bad) == "bad"
+
+    def test_retries_when_result_predicate_returns_true(self):
+        config = RetryConfig(
+            max_attempts=4,
+            initial_delay=0.0,
+            retry_on_result=lambda r: r is None,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def return_none_then_value():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return None
+            return "got it"
+
+        assert executor.execute_sync(return_none_then_value) == "got it"
+        assert call_count == 3
+
+    def test_on_retry_and_on_failure_hooks_fire(self):
+        retry_calls = []
+        failure_calls = []
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            on_retry=lambda attempt, exc: retry_calls.append((attempt, str(exc))),
+            on_failure=lambda exc: failure_calls.append(str(exc)),
+        )
+        executor = RetryExecutor(config)
+
+        def always_fail():
+            raise RuntimeError("final boom")
+
+        with pytest.raises(RuntimeError, match="final boom"):
+            executor.execute_sync(always_fail)
+
+        # on_retry fires for attempts 1 and 2; on_failure once at exhaustion.
+        assert retry_calls == [(1, "final boom"), (2, "final boom")]
+        assert failure_calls == ["final boom"]
+
+    def test_coroutine_function_raises_type_error(self):
+        config = RetryConfig(max_attempts=3, initial_delay=0.0)
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        async def async_func():
+            nonlocal call_count
+            call_count += 1
+            return "never"
+
+        with pytest.raises(TypeError, match="synchronous callable"):
+            executor.execute_sync(async_func)
+        # The guard fires before invoking func — no un-awaited coroutine created.
+        assert call_count == 0
+
+    def test_async_callable_object_raises_type_error(self):
+        """A callable object with ``async def __call__`` is not a coroutine
+        *function*, so it slips past the up-front iscoroutinefunction() reject.
+        The result-level guard must still reject it (rather than hand back an
+        un-awaited coroutine) once the awaitable result is observed.
+        """
+        config = RetryConfig(max_attempts=3, initial_delay=0.0)
+        executor = RetryExecutor(config)
+        obj = _AsyncCallableObject()
+
+        with pytest.raises(TypeError, match="awaitable|synchronous callable"):
+            executor.execute_sync(obj)
+
+    def test_sync_callable_returning_coroutine_raises_type_error(self):
+        """A plain sync callable whose *return value* is a coroutine is also
+        rejected at the result level — the returned coroutine is never handed
+        back un-awaited.
+        """
+        config = RetryConfig(max_attempts=3, initial_delay=0.0)
+        executor = RetryExecutor(config)
+
+        async def _inner() -> str:
+            return "never"
+
+        def returns_coroutine() -> object:
+            return _inner()  # a coroutine object, not awaited
+
+        with pytest.raises(TypeError, match="awaitable|synchronous callable"):
+            executor.execute_sync(returns_coroutine)
+
+    def test_sleeps_between_attempts(self, monkeypatch):
+        """A positive initial_delay sleeps once per retry, via time.sleep."""
+        sleeps: list[float] = []
+        monkeypatch.setattr(
+            "dataknobs_common.retry.time.sleep", lambda d: sleeps.append(d)
+        )
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.5,
+            backoff_strategy=BackoffStrategy.FIXED,
+        )
+        executor = RetryExecutor(config)
+
+        def always_fail():
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            executor.execute_sync(always_fail)
+        # Two retries between three attempts, each sleeping the FIXED delay.
+        assert sleeps == [0.5, 0.5]
+
+
+# ---------------------------------------------------------------------------
+# RetryConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestRetryConfigValidation:
+    """RetryConfig self-validates max_attempts at construction.
+
+    A non-positive bound would run zero attempts and fall through the retry
+    loop to an obscure RuntimeError. The config rejects it up front so every
+    consumer — direct construction, ``from_dict`` loading, and downstream
+    helpers like ``allocate`` — fails loud on the misconfiguration.
+    """
+
+    def test_zero_max_attempts_rejected(self):
+        with pytest.raises(ValueError, match="max_attempts"):
+            RetryConfig(max_attempts=0)
+
+    def test_negative_max_attempts_rejected(self):
+        with pytest.raises(ValueError, match="max_attempts"):
+            RetryConfig(max_attempts=-3)
+
+    def test_from_dict_rejects_nonpositive_max_attempts(self):
+        with pytest.raises(ValueError, match="max_attempts"):
+            RetryConfig.from_dict({"max_attempts": 0})
+
+    def test_one_attempt_is_allowed(self):
+        """The boundary value (a single attempt, no retries) is valid."""
+        config = RetryConfig(max_attempts=1)
+        assert config.max_attempts == 1
+
+    def test_executor_cannot_be_built_with_nonpositive_bound(self):
+        """With the config guarding max_attempts, a RetryExecutor can never be
+        built around a zero bound and fall through its loop to the
+        type-checker-only RuntimeError — the config is rejected first.
+        """
+        with pytest.raises(ValueError, match="max_attempts"):
+            RetryExecutor(RetryConfig(max_attempts=0))
 
 
 # ---------------------------------------------------------------------------

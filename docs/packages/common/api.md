@@ -1058,7 +1058,7 @@ class RetryConfig:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `max_attempts` | `int` | `3` | Maximum execution attempts (including the first) |
+| `max_attempts` | `int` | `3` | Maximum execution attempts (including the first). Must be `>= 1`; a lower value raises `ValueError` at construction |
 | `initial_delay` | `float` | `1.0` | Base delay in seconds before the first retry |
 | `max_delay` | `float` | `60.0` | Upper bound on delay in seconds |
 | `backoff_strategy` | `BackoffStrategy` | `EXPONENTIAL` | Algorithm for computing delay |
@@ -1091,6 +1091,7 @@ Executes a callable with retry logic and configurable backoff.
 class RetryExecutor:
     def __init__(self, config: RetryConfig) -> None: ...
     async def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
+    def execute_sync(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
 ```
 
 **Constructor:**
@@ -1101,11 +1102,13 @@ class RetryExecutor:
 
 ##### `async execute(func, *args, **kwargs) -> Any`
 
-Execute a callable with retry logic. Supports both sync and async callables.
+Execute a callable with retry logic. Supports both sync and async callables —
+any awaitable the callable returns is awaited, so plain functions, coroutine
+functions, and async callable objects (`async def __call__`) are all handled.
 
 **Parameters:**
 
-- `func` (`Callable`): The callable to execute (sync or async)
+- `func` (`Callable`): The callable to execute (sync or async; any awaitable result is awaited)
 - `*args`: Positional arguments forwarded to func
 - `**kwargs`: Keyword arguments forwarded to func
 
@@ -1133,6 +1136,39 @@ result = await executor.execute(fetch_data, url)
 
 # Sync callable (also works from async context)
 result = await executor.execute(parse_json, raw_text)
+```
+
+##### `execute_sync(func, *args, **kwargs) -> Any`
+
+Synchronous entry point for the same bounded-retry engine. Applies the same
+backoff, `retry_on_exceptions`, `retry_on_result`, and hook policy as `execute`,
+but **blocks the calling thread** between attempts instead of awaiting — use it
+from code that has no event loop.
+
+**Parameters:**
+
+- `func` (`Callable`): A synchronous callable to execute
+- `*args`: Positional arguments forwarded to func
+- `**kwargs`: Keyword arguments forwarded to func
+
+**Returns:**
+
+- The return value of `func` on a successful attempt
+
+**Raises:**
+
+- `TypeError`: If `func` is a coroutine function, or any callable whose return
+  value is awaitable (an async callable object, or a sync callable returning a
+  coroutine) — it cannot be awaited without an event loop, so it would otherwise
+  return an un-awaited coroutine that never runs. Use `execute` instead.
+- The exception from the final failed attempt, or any non-retryable exception immediately
+
+**Example:**
+```python
+executor = RetryExecutor(config)
+
+# Synchronous entry point (no event loop)
+result = executor.execute_sync(parse_json, raw_text)
 ```
 
 ### `compute_backoff_delay`
