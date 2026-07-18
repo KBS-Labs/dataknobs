@@ -42,25 +42,15 @@ if TYPE_CHECKING:
 DEFAULT_MAX_ATTEMPTS = 16
 
 
-def _validate_max_attempts(max_attempts: int) -> None:
-    """Reject a non-positive attempt bound before any read or create runs.
-
-    Shared by both twins so the guard and its message cannot drift.
-    ``RetryExecutor`` does not itself guard ``max_attempts < 1`` (a zero bound
-    would silently run zero attempts), so allocate keeps this pre-flight check
-    to fail loud before any ``build`` runs.
-    """
-    if max_attempts < 1:
-        raise ValueError("max_attempts must be >= 1")
-
-
 def _conflict_retry_config(max_attempts: int) -> RetryConfig:
     """Zero-delay bounded retry scoped to id collisions.
 
     ``FIXED`` with ``initial_delay=0.0`` preserves allocate's immediate-retry
     loop, and ``retry_on_exceptions`` confines retries to
     :class:`~dataknobs_data.DuplicateRecordError` so any other create error
-    propagates on the first attempt.
+    propagates on the first attempt. Building this config also validates
+    ``max_attempts`` (``RetryConfig`` rejects ``< 1`` in ``__post_init__``),
+    so a non-positive bound fails loud here — before any ``build`` runs.
     """
     return RetryConfig(
         max_attempts=max_attempts,
@@ -116,7 +106,6 @@ async def allocate(
         DuplicateRecordError: If every attempt collides (fail-closed after the
             bound).
     """
-    _validate_max_attempts(max_attempts)
 
     async def _attempt() -> str:
         return await db.create(await build())
@@ -150,7 +139,6 @@ def allocate_sync(
         DuplicateRecordError: If every attempt collides (fail-closed after the
             bound).
     """
-    _validate_max_attempts(max_attempts)
 
     def _attempt() -> str:
         return db.create(build())

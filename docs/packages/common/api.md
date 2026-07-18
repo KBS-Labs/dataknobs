@@ -1058,7 +1058,7 @@ class RetryConfig:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `max_attempts` | `int` | `3` | Maximum execution attempts (including the first) |
+| `max_attempts` | `int` | `3` | Maximum execution attempts (including the first). Must be `>= 1`; a lower value raises `ValueError` at construction |
 | `initial_delay` | `float` | `1.0` | Base delay in seconds before the first retry |
 | `max_delay` | `float` | `60.0` | Upper bound on delay in seconds |
 | `backoff_strategy` | `BackoffStrategy` | `EXPONENTIAL` | Algorithm for computing delay |
@@ -1102,11 +1102,13 @@ class RetryExecutor:
 
 ##### `async execute(func, *args, **kwargs) -> Any`
 
-Execute a callable with retry logic. Supports both sync and async callables.
+Execute a callable with retry logic. Supports both sync and async callables —
+any awaitable the callable returns is awaited, so plain functions, coroutine
+functions, and async callable objects (`async def __call__`) are all handled.
 
 **Parameters:**
 
-- `func` (`Callable`): The callable to execute (sync or async)
+- `func` (`Callable`): The callable to execute (sync or async; any awaitable result is awaited)
 - `*args`: Positional arguments forwarded to func
 - `**kwargs`: Keyword arguments forwarded to func
 
@@ -1155,8 +1157,10 @@ from code that has no event loop.
 
 **Raises:**
 
-- `TypeError`: If `func` is a coroutine function (it would create an un-awaited
-  coroutine that never runs — use `execute` instead)
+- `TypeError`: If `func` is a coroutine function, or any callable whose return
+  value is awaitable (an async callable object, or a sync callable returning a
+  coroutine) — it cannot be awaited without an event loop, so it would otherwise
+  return an un-awaited coroutine that never runs. Use `execute` instead.
 - The exception from the final failed attempt, or any non-retryable exception immediately
 
 **Example:**
