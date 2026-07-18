@@ -968,6 +968,20 @@ class TestRetryConfigValidation:
                 }
             )
 
+    def test_predicate_with_empty_type_filter_is_allowed(self):
+        """The mutual-exclusion guard tests ``retry_on_exceptions`` for
+        truthiness, not ``is not None`` — an empty list is a no-op filter
+        (``_exception_is_retryable`` treats it as "no type filter"), so pairing
+        it with the predicate is not a genuine both-set conflict and must not
+        raise. This deliberate asymmetry is pinned here as a regression guard.
+        """
+        config = RetryConfig(
+            retry_on_exception=lambda e: True,
+            retry_on_exceptions=[],
+        )
+        assert config.retry_on_exception is not None
+        assert config.retry_on_exceptions == []
+
     def test_predicate_alone_is_allowed(self):
         config = RetryConfig(retry_on_exception=lambda e: True)
         assert config.retry_on_exception is not None
