@@ -20,7 +20,11 @@ from typing import Any, ClassVar
 
 import pytest
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    NotFoundError,
+    OperationError,
+)
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import (
     StructuredConfig,
@@ -510,3 +514,124 @@ class TestSetComponents:
         c.set_components({})
         assert c.components["dep"] is original
         assert dict(c.components) == {"dep": original}
+
+
+class _ExpectingConsumer(StructuredConfigConsumer[_Cfg]):
+    """Declares a required (expected) injected collaborator."""
+
+    CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"dep"})
+
+
+class _ExpectingInternalConsumer(StructuredConfigConsumer[_Cfg]):
+    """Declares a collaborator that is BOTH required and internal.
+
+    Pins the cross-product: ``fsm`` is required (must be present) AND
+    internal (never forwarded); ``dep`` is required-only (forwardable).
+    """
+
+    CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"dep", "fsm"})
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"fsm"})
+
+
+# ── Advertise-half: EXPECTED_COMPONENTS + expected/missing/require ────
+class TestExpectedComponents:
+    def test_expected_components_defaults_empty(self) -> None:
+        # A plain consumer requires nothing — zero-behavior-change default.
+        assert _SyncDepConsumer.expected_components() == frozenset()
+
+    def test_expected_components_returns_declared_set(self) -> None:
+        # Works as a classmethod (no instance) — the tooling / config-lint
+        # access path a composing parent uses before construction.
+        assert _ExpectingConsumer.expected_components() == frozenset({"dep"})
+
+    def test_missing_components_from_own_components(self) -> None:
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        # No collaborator injected → the required one is missing.
+        assert c.missing_components() == frozenset({"dep"})
+        # The 182 write seam satisfies it; missing_components reads live.
+        c.set_component("dep", object())
+        assert c.missing_components() == frozenset()
+
+    def test_missing_components_explicit_available(self) -> None:
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        # An explicit available-set: the composing-parent candidate check.
+        assert c.missing_components({"dep"}) == frozenset()
+        assert c.missing_components({"other"}) == frozenset({"dep"})
+
+    def test_missing_from_classmethod_no_instance(self) -> None:
+        # The pre-construction candidate check: a composing parent tests the
+        # collaborators it would forward against the child class WITHOUT
+        # building the child. No instance exists.
+        assert _ExpectingConsumer.missing_from({"dep"}) == frozenset()
+        assert _ExpectingConsumer.missing_from(set()) == frozenset({"dep"})
+        assert _ExpectingConsumer.missing_from({"other"}) == frozenset({"dep"})
+        # A consumer that requires nothing is satisfied by anything.
+        assert _SyncDepConsumer.missing_from(set()) == frozenset()
+
+    def test_missing_components_delegates_to_missing_from(self) -> None:
+        # The instance method is the live-default wrapper over the classmethod:
+        # both agree for the same available-set.
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        assert c.missing_components({"other"}) == _ExpectingConsumer.missing_from(
+            {"other"}
+        )
+
+    def test_require_components_treats_none_value_as_present(self) -> None:
+        # Presence-of-key, not truthiness: an injected None satisfies the
+        # requirement (matches set_component's presence semantics).
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        c.set_component("dep", None)
+        assert c.missing_components() == frozenset()
+        assert c.require_components() is None
+
+    def test_require_components_raises_when_missing(self) -> None:
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        with pytest.raises(ConfigurationError, match="dep") as exc_info:
+            c.require_components()
+        assert exc_info.value.context["missing"] == ["dep"]
+        assert exc_info.value.context["consumer"] == "_ExpectingConsumer"
+
+    def test_require_components_passes_when_satisfied(self) -> None:
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        c.set_component("dep", object())
+        # Returns None (no raise) — the write-seam + read-check pairing.
+        assert c.require_components() is None
+
+    def test_require_components_not_auto_called_at_construction(self) -> None:
+        # Constructing WITHOUT the required collaborator must NOT raise —
+        # the check is opt-in, never a constructor guard. This guards the
+        # circular-dependency and post-construction-injection shapes.
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        assert isinstance(c, _ExpectingConsumer)
+        assert c.missing_components() == frozenset({"dep"})
+
+    def test_expected_and_internal_are_orthogonal(self) -> None:
+        c = _ExpectingInternalConsumer.from_config({"label": "a"})
+        c.set_component("dep", object())
+        c.set_component("fsm", object())
+        # Both required collaborators present → require_components passes.
+        assert c.require_components() is None
+        forwardable = c.forwardable_components()
+        # fsm is internal (not forwarded) yet still satisfies the requirement.
+        assert "fsm" not in forwardable
+        assert "dep" in forwardable
+        assert c.missing_components() == frozenset()
+
+    def test_no_mro_union_for_expected_components(self) -> None:
+        # A subclass declaring its own set does NOT implicitly union the base's.
+        class _Sub(_ExpectingConsumer):
+            EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"other"})
+
+        assert _Sub.expected_components() == frozenset({"other"})
+        assert "dep" not in _Sub.expected_components()
+
+    def test_expected_components_explicit_union_recipe(self) -> None:
+        # The documented explicit-union recipe recovers the base's set.
+        class _SubUnion(_ExpectingConsumer):
+            EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = (
+                _ExpectingConsumer.EXPECTED_COMPONENTS | {"other"}
+            )
+
+        assert _SubUnion.expected_components() == frozenset({"dep", "other"})

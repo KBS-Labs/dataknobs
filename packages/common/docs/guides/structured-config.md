@@ -768,6 +768,87 @@ depends on when that subsystem reads its collaborators:
   consume the collaborator lazily per-operation (read `self.components[name]`
   at use-time) rather than binding it in `_ainit`.
 
+#### Declaring required collaborators: `EXPECTED_COMPONENTS`
+
+A consumer that cannot function without a particular injected collaborator
+can declare it. `EXPECTED_COMPONENTS` is the read-side counterpart to
+`INTERNAL_COMPONENTS`: where `INTERNAL_COMPONENTS` declares *"collaborators
+I consume and must not forward to children"*, `EXPECTED_COMPONENTS` declares
+*"collaborators I require to be present"*.
+
+```python
+class Strategy(StructuredConfigConsumer[StrategyConfig]):
+    CONFIG_CLS: ClassVar[type[StrategyConfig]] = StrategyConfig
+    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"clip_service"})
+```
+
+The two sets are orthogonal and may overlap or be disjoint. A collaborator
+can be **both** (consumed internally *and* required — a composing strategy's
+FSM handle it both keeps to itself and cannot run without), **expected-only**
+(required but forwarded to children unchanged), or **internal-only** (a cache
+the consumer builds itself, required of no injector). Declare each set for its
+own concern rather than conflating them.
+
+Three read-side helpers consume the declaration:
+
+```python
+# Advertise (classmethod — no instance needed, e.g. for a config lint):
+Strategy.expected_components()          # frozenset({"clip_service"})
+
+# Pre-construction candidate check (classmethod — no instance): does the set a
+# composing parent would forward satisfy the child's requirements?
+Strategy.missing_from({"clip_service"}) # frozenset()  (nothing missing)
+Strategy.missing_from(set())            # frozenset({"clip_service"})
+
+consumer = Strategy.from_config({...})
+
+# Pure diff against the live instance — required collaborators not yet present:
+consumer.missing_components()           # frozenset({"clip_service"})
+
+# ... consumer wires the collaborator (construction arg or set_component) ...
+consumer.set_component("clip_service", service)
+
+# Loud check — raises ConfigurationError naming any still-missing collaborator:
+consumer.require_components()           # returns None once satisfied
+```
+
+`missing_components()` returns the set of required-but-absent names rather
+than raising, so **the caller picks the policy** — log a warning off the
+diff, or call `require_components()` to raise a `ConfigurationError`. It
+defaults to checking the consumer's own live `components`; pass an explicit
+`available` iterable to diff against this instance's class. For the
+pre-construction case — a composing parent testing the collaborators it would
+forward *before* it builds the child — call the `missing_from(available)`
+**classmethod**, which runs the same diff without an instance. The check is
+**presence-of-key, not truthiness**: a collaborator injected as `None`
+satisfies the requirement (matching `set_component`'s presence semantics), so
+it guards against an *un-injected* collaborator, not a `None`-valued one.
+
+`require_components()` is **opt-in — never auto-called at construction.** The
+mixin does not enforce the declared set from `__init__` / `from_config` /
+`from_components` / `_ainit`, because a required collaborator may legitimately
+be absent at construction time: a circular dependency injected afterward via
+`set_component`, or a lifespan-scoped resource. Call `require_components()` at
+*your own* wiring boundary, **after** any `set_component` — for a circular
+dependency, after injecting the collaborator, never at construction.
+
+`expected_components()` returns the most-derived class's own
+`EXPECTED_COMPONENTS` — there is **no MRO auto-union** (matching
+`forwardable_components()` reading `INTERNAL_COMPONENTS`, and the
+`CapabilityMixin` convention). A subclass extending the set unions explicitly:
+
+```python
+class ExtendedStrategy(Strategy):
+    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = (
+        Strategy.EXPECTED_COMPONENTS | {"project_store"}
+    )
+```
+
+A composing parent (e.g. `WizardReasoning`) forwards collaborators to its
+children opaquely via `forwardable_components()` and does **not** yet
+auto-enforce a child's declared `EXPECTED_COMPONENTS` — enforcement is the
+consumer's own opt-in call.
+
 #### Async registry dispatch: `create_async`
 
 When a registry dispatches polymorphic, asynchronously-constructed
