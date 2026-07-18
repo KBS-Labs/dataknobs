@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `RetryExecutor.execute_sync`: a synchronous entry point for the bounded-retry
+  engine — the same backoff, `retry_on_exceptions`, `retry_on_result`, and
+  `on_retry` / `on_failure` hook policy as `execute`, but it blocks the calling
+  thread between attempts instead of awaiting, for callers with no event loop.
+  Raises `TypeError` on a coroutine callable (which would create an un-awaited
+  coroutine that never runs — use `execute` for those).
+
 ## v1.6.0 - 2026-07-15
 
 ### Added

@@ -1091,6 +1091,7 @@ Executes a callable with retry logic and configurable backoff.
 class RetryExecutor:
     def __init__(self, config: RetryConfig) -> None: ...
     async def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
+    def execute_sync(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
 ```
 
 **Constructor:**
@@ -1133,6 +1134,37 @@ result = await executor.execute(fetch_data, url)
 
 # Sync callable (also works from async context)
 result = await executor.execute(parse_json, raw_text)
+```
+
+##### `execute_sync(func, *args, **kwargs) -> Any`
+
+Synchronous entry point for the same bounded-retry engine. Applies the same
+backoff, `retry_on_exceptions`, `retry_on_result`, and hook policy as `execute`,
+but **blocks the calling thread** between attempts instead of awaiting — use it
+from code that has no event loop.
+
+**Parameters:**
+
+- `func` (`Callable`): A synchronous callable to execute
+- `*args`: Positional arguments forwarded to func
+- `**kwargs`: Keyword arguments forwarded to func
+
+**Returns:**
+
+- The return value of `func` on a successful attempt
+
+**Raises:**
+
+- `TypeError`: If `func` is a coroutine function (it would create an un-awaited
+  coroutine that never runs — use `execute` instead)
+- The exception from the final failed attempt, or any non-retryable exception immediately
+
+**Example:**
+```python
+executor = RetryExecutor(config)
+
+# Synchronous entry point (no event loop)
+result = executor.execute_sync(parse_json, raw_text)
 ```
 
 ### `compute_backoff_delay`

@@ -206,6 +206,32 @@ new_id = await RetryExecutor(
 ).execute(allocate_next)
 ```
 
+A consumer that composes over a **higher-level store** — a thin policy layer that
+holds no `AsyncDatabase` of its own and exposes its own create verb (raising its
+own translated collision error) — applies the same read-compute-create-retry
+recipe over that store's create verb rather than `db.create`. Drive `RetryExecutor`
+(or its synchronous `execute_sync`) with `retry_on_exceptions=[YourCollisionError]`
+and a zero-delay `FIXED` config — the same policy `allocate()` itself composes:
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+
+cfg = RetryConfig(
+    max_attempts=16,
+    initial_delay=0.0,
+    backoff_strategy=BackoffStrategy.FIXED,
+    retry_on_exceptions=[AcmeItemExistsError],
+)
+
+async def allocate_item() -> AcmeItem:
+    # fresh read → compute next key → create through the store's own verb
+    return await store.create_item(compute_next_key())
+
+item = await RetryExecutor(cfg).execute(allocate_item)
+# Synchronous store? Same config, blocking twin:
+#   item = RetryExecutor(cfg).execute_sync(allocate_item_sync)
+```
+
 #### Optimistic concurrency (conditional writes)
 
 Optimistic concurrency guards a **conditional update of an existing record** — a

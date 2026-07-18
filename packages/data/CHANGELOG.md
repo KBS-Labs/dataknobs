@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `allocate` / `allocate_sync` now retry on a colliding id raised **anywhere in
+  the read-compute-create cycle** — including from inside the caller's `build`
+  callable — not only from the final `create()`. A `build` that probes-and-creates
+  and raises `DuplicateRecordError` triggers a re-build and retry, so a collision
+  is handled wherever it surfaces. The public signatures, the `max_attempts`
+  bound, and the fail-closed exhaustion behavior are unchanged.
+
 ## v0.6.0 - 2026-07-15
 
 ### Added

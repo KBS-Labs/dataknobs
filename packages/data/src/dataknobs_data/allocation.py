@@ -15,12 +15,19 @@ caller's ``build`` callable — a fresh read, next-key computation, and record
 construction — and retry the insert, so each concurrent allocator lands a
 distinct next key. The helper is key-agnostic: it never mints or mutates ids, so
 it works for any monotonic scheme the caller expresses through ``build``.
+
+Both twins compose the shared bounded-retry engine
+(:class:`dataknobs_common.retry.RetryExecutor`) with a zero-delay ``FIXED``
+config scoped to :class:`~dataknobs_data.DuplicateRecordError`, so the retry
+policy lives in one place rather than a hand-rolled loop.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+
+from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
 
 from .exceptions import DuplicateRecordError
 
@@ -39,9 +46,28 @@ def _validate_max_attempts(max_attempts: int) -> None:
     """Reject a non-positive attempt bound before any read or create runs.
 
     Shared by both twins so the guard and its message cannot drift.
+    ``RetryExecutor`` does not itself guard ``max_attempts < 1`` (a zero bound
+    would silently run zero attempts), so allocate keeps this pre-flight check
+    to fail loud before any ``build`` runs.
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be >= 1")
+
+
+def _conflict_retry_config(max_attempts: int) -> RetryConfig:
+    """Zero-delay bounded retry scoped to id collisions.
+
+    ``FIXED`` with ``initial_delay=0.0`` preserves allocate's immediate-retry
+    loop, and ``retry_on_exceptions`` confines retries to
+    :class:`~dataknobs_data.DuplicateRecordError` so any other create error
+    propagates on the first attempt.
+    """
+    return RetryConfig(
+        max_attempts=max_attempts,
+        initial_delay=0.0,
+        backoff_strategy=BackoffStrategy.FIXED,
+        retry_on_exceptions=[DuplicateRecordError],
+    )
 
 
 async def allocate(
@@ -91,19 +117,11 @@ async def allocate(
             bound).
     """
     _validate_max_attempts(max_attempts)
-    # Every attempt but the last swallows a colliding id and rebuilds against the
-    # winner's write; the final attempt lets a collision propagate directly. That
-    # keeps the fail-closed bound exact and re-raises the real last-collision
-    # error without stashing an exception or relying on an ``assert`` (which
-    # ``python -O`` strips) to prove one was captured.
-    for _ in range(max_attempts - 1):
-        record = await build()
-        try:
-            return await db.create(record)
-        except DuplicateRecordError:
-            pass  # colliding id — rebuild and retry
-    record = await build()
-    return await db.create(record)
+
+    async def _attempt() -> str:
+        return await db.create(await build())
+
+    return await RetryExecutor(_conflict_retry_config(max_attempts)).execute(_attempt)
 
 
 def allocate_sync(
@@ -133,12 +151,8 @@ def allocate_sync(
             bound).
     """
     _validate_max_attempts(max_attempts)
-    # See :func:`allocate` for why the final attempt is uncaught.
-    for _ in range(max_attempts - 1):
-        record = build()
-        try:
-            return db.create(record)
-        except DuplicateRecordError:
-            pass  # colliding id — rebuild and retry
-    record = build()
-    return db.create(record)
+
+    def _attempt() -> str:
+        return db.create(build())
+
+    return RetryExecutor(_conflict_retry_config(max_attempts)).execute_sync(_attempt)

@@ -313,6 +313,66 @@ def test_sync_allocate_recovers_on_second_attempt(sync_db: object) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Retry spans the whole read-compute-create cycle — a colliding id raised from
+# inside ``build`` (not only from the final ``create``) triggers a retry
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_async_allocate_retries_collision_raised_in_build(async_db: object) -> None:
+    """A ``build`` that itself raises ``DuplicateRecordError`` on its first call
+    (e.g. a build that probes-and-creates) then returns a fresh record: the
+    collision is retried wherever in the cycle it surfaces, so allocation
+    succeeds on the second attempt rather than aborting on the first.
+    """
+    calls = 0
+
+    async def build() -> Record:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DuplicateRecordError("free")
+        return Record({"body": "y"}, id="free")
+
+    result = await allocate(async_db, build=build, max_attempts=3)
+    assert result == "free"
+    assert calls == 2
+    assert (await async_db.read("free")).get_value("body") == "y"
+
+
+def test_sync_allocate_retries_collision_raised_in_build(sync_db: object) -> None:
+    calls = 0
+
+    def build() -> Record:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DuplicateRecordError("free")
+        return Record({"body": "y"}, id="free")
+
+    result = allocate_sync(sync_db, build=build, max_attempts=3)
+    assert result == "free"
+    assert calls == 2
+    assert sync_db.read("free").get_value("body") == "y"
+
+
+# ---------------------------------------------------------------------------
+# Exhaustion re-raises the real collision, carrying the colliding id
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_async_allocate_exhaustion_preserves_collision_id(async_db: object) -> None:
+    """The re-raised exhaustion error is the real ``DuplicateRecordError`` and
+    still carries ``.id`` after flowing through the shared retry engine.
+    """
+    await async_db.create(Record({"body": "x"}, id="fixed"))
+
+    async def build() -> Record:
+        return Record({"body": "y"}, id="fixed")
+
+    with pytest.raises(DuplicateRecordError) as excinfo:
+        await allocate(async_db, build=build, max_attempts=2)
+    assert excinfo.value.id == "fixed"
+
+
+# ---------------------------------------------------------------------------
 # Single-writer byte-identity — one attempt, same stored record as direct create
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
