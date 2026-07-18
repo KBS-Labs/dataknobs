@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction do not. `allow_overwrite=False` gives inject-only semantics (bulk
   writes are all-or-nothing on a clash — a partial write never half-wires the
   consumer).
+- `StructuredConfigConsumer.EXPECTED_COMPONENTS` (`ClassVar[frozenset[str]]`):
+  declare the injected collaborators a consumer requires to function — the
+  read-side counterpart to `INTERNAL_COMPONENTS` (which declares what NOT to
+  forward). Consumed by three new read-side helpers: `expected_components()`
+  (classmethod advertise query — no instance needed, for tooling / config lint /
+  a composing parent), `missing_components(available=None)` (pure diff of
+  required-but-absent collaborators, returned not raised so the caller picks
+  warn-vs-raise), and `require_components(available=None)` (raises
+  `ConfigurationError` naming any missing collaborator). Together they let a
+  consumer turn a missing or mis-wired collaborator into a clear wiring-time
+  error instead of a silent no-op. Opt-in — `require_components()` is never
+  auto-called at construction (so circular-dependency and post-construction
+  `set_component` wiring stay valid); call it at your own wiring boundary after
+  any `set_component`. Defaults to empty (zero behavior change for existing
+  consumers); no MRO auto-union (a subclass extends the set explicitly).
 - `RetryConfig.retry_on_exception`: a value-based exception-retry predicate —
   called with the raised exception, return `True` to retry or `False` to
   re-raise it immediately. The general form of `retry_on_exceptions` for

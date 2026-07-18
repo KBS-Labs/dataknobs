@@ -49,7 +49,7 @@ import inspect
 import logging
 import threading
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -1204,6 +1204,31 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         return types.MappingProxyType(self._components)
 
+    #: Names of injected collaborators THIS consumer requires to function.
+    #: The read-side counterpart to :attr:`INTERNAL_COMPONENTS` (which
+    #: declares what NOT to forward); this declares what MUST be present.
+    #: Machine-readable for tooling / config-lint / a composing parent, and
+    #: consumed by :meth:`missing_components` / :meth:`require_components`.
+    #: Defaults to empty (zero behavior change for every existing consumer).
+    #:
+    #: Orthogonal to :attr:`INTERNAL_COMPONENTS` — the two sets may overlap
+    #: or be disjoint. A collaborator can be **both** (consumed internally
+    #: AND required — e.g. an FSM handle a composing strategy both keeps to
+    #: itself and cannot run without), **expected-only** (a required
+    #: collaborator this consumer forwards to children unchanged), or
+    #: **internal-only** (a cache the consumer builds itself, required of no
+    #: injector). Declare each set for its own concern rather than conflating
+    #: them.
+    #:
+    #: No MRO auto-union: :meth:`expected_components` returns the
+    #: most-derived class's own ``EXPECTED_COMPONENTS`` (matching how
+    #: :meth:`forwardable_components` reads :attr:`INTERNAL_COMPONENTS` and
+    #: the ``CapabilityMixin`` / ``SUPPORTED_CAPABILITIES`` convention). A
+    #: subclass extending the set must union explicitly::
+    #:
+    #:     EXPECTED_COMPONENTS = Base.EXPECTED_COMPONENTS | {"extra_dep"}
+    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset()
+
     #: Names of injected collaborators THIS class consumes itself.
     #: Excluded from :meth:`forwardable_components` so children built
     #: by composing strategies do not inherit their parent's own
@@ -1333,6 +1358,80 @@ class StructuredConfigConsumer(Generic[ConfigT]):
                     "replace them."
                 )
         self._components.update(values)
+
+    @classmethod
+    def expected_components(cls) -> frozenset[str]:
+        """Return the collaborator names this consumer requires (advertise).
+
+        The advertise query for :attr:`EXPECTED_COMPONENTS`. Class-level (no
+        instance needed) so tooling, config-lint, or a composing parent can
+        ask what a consumer requires *before* constructing it. Returns the
+        most-derived class's own ``EXPECTED_COMPONENTS`` — no MRO auto-union
+        (see :attr:`EXPECTED_COMPONENTS` for the explicit-union recipe).
+        """
+        return cls.EXPECTED_COMPONENTS
+
+    def missing_components(
+        self, available: Iterable[str] | None = None
+    ) -> frozenset[str]:
+        """Expected collaborators not currently present (pure diff, no raise).
+
+        The composable building block behind :meth:`require_components`.
+        ``available`` defaults to this consumer's own injected collaborators
+        (:attr:`components` keys), so it reads live and reflects any
+        :meth:`set_component` write. Pass an explicit ``available`` to test a
+        candidate set against the class without constructing it — e.g. a
+        composing parent checking whether the collaborators it would forward
+        satisfy a child's requirements.
+
+        Returns the set of required-but-absent names rather than raising —
+        this hands the warn-vs-raise policy to the caller (log a warning off
+        the diff, or call :meth:`require_components` to raise).
+        """
+        present = set(self._components) if available is None else set(available)
+        return self.expected_components() - present
+
+    def require_components(
+        self, available: Iterable[str] | None = None
+    ) -> None:
+        """Raise ``ConfigurationError`` if any required collaborator is missing.
+
+        The blessed loud check — the reference impl of "raise if under-wired",
+        named for the ``require_capability`` convention (``require_*`` = "raise
+        if not satisfied"). A missing required collaborator is a wiring /
+        configuration error, so it raises :class:`ConfigurationError` naming the
+        absent collaborator(s). ``available`` behaves as on
+        :meth:`missing_components` (defaults to this consumer's own components).
+
+        **Opt-in — NEVER auto-called at construction.** The mixin does not
+        invoke this from ``__init__`` / :meth:`from_config` /
+        :meth:`from_components` / :meth:`_ainit`. Three shipped realities make
+        an automatic construction-time check wrong:
+
+        1. A required collaborator may be a **circular dependency** that depends
+           on the fully-built consumer and thus does not exist at construction —
+           it is injected afterward via :meth:`set_component`.
+        2. :meth:`set_component` may satisfy an expected component *after*
+           ``__init__`` returns.
+        3. Only the consumer knows when its wiring is complete (the read-once
+           boundary documented on :meth:`set_component`).
+
+        Call it at *your* wiring boundary, after any :meth:`set_component`. For a
+        circular-dependency expected component, call it *after* injecting the
+        collaborator — never at construction (impossible then; consume such a
+        collaborator lazily per-operation instead).
+        """
+        missing = self.missing_components(available)
+        if missing:
+            raise ConfigurationError(
+                f"{type(self).__name__} is missing required component(s): "
+                f"{sorted(missing)!r}. Inject them via from_config(...), "
+                "from_components(...), or set_component(...) before use.",
+                context={
+                    "missing": sorted(missing),
+                    "consumer": type(self).__name__,
+                },
+            )
 
     @classmethod
     def _coerce_config(
