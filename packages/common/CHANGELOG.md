@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `StructuredConfigConsumer.set_component(name, value, *, allow_overwrite=True)`
+  and bulk `set_components(mapping, *, allow_overwrite=True)`: a supported
+  post-construction path to inject or replace injected collaborator(s) — for
+  collaborators that cannot exist at construction time (a circular dependency on
+  the built consumer, or a lifespan-scoped resource). The value is visible via
+  the read-only `components` view and included in `forwardable_components()`;
+  consumers that read `components` per operation (e.g. a per-turn rebuild) pick
+  it up on their next read, while consumers that consume a collaborator once at
+  construction do not. `allow_overwrite=False` gives inject-only semantics (bulk
+  writes are all-or-nothing on a clash — a partial write never half-wires the
+  consumer).
 - `RetryConfig.retry_on_exception`: a value-based exception-retry predicate —
   called with the raised exception, return `True` to retry or `False` to
   re-raise it immediately. The general form of `retry_on_exceptions` for
