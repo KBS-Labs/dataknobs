@@ -450,6 +450,21 @@ executor = RetryExecutor(config)
 result = await executor.execute(call_api, endpoint)
 ```
 
+When retryability depends on an *attribute* of the error rather than its type —
+an HTTP status, a SQLSTATE class, an `errno` — use `retry_on_exception`, the
+value-based form of the type filter. It returns `True` to retry and `False` to
+re-raise immediately, and is mutually exclusive with `retry_on_exceptions`:
+
+```python
+config = RetryConfig(
+    max_attempts=5,
+    # Retry transient 5xx responses; a 404 re-raises on the first attempt.
+    retry_on_exception=lambda exc: getattr(exc, "status_code", 0) >= 500,
+)
+executor = RetryExecutor(config)
+result = await executor.execute(call_api, endpoint)
+```
+
 #### Result-Based Retry
 
 Retry when a result value is unsatisfactory:

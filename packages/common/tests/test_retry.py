@@ -33,6 +33,18 @@ class _AsyncCallableObject:
         self.calls += 1
         return self._result
 
+
+class _FakeHTTPError(Exception):
+    """A real exception carrying a status code — the kind of attribute-encoded
+    retryability (``code >= 500``) that a value predicate discriminates but a
+    single exception type cannot. A concrete class, not a mock.
+    """
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"HTTP {code}")
+        self.code = code
+
+
 # ---------------------------------------------------------------------------
 # BackoffStrategy delay calculation
 # ---------------------------------------------------------------------------
@@ -330,6 +342,96 @@ class TestRetryExecutorAsyncExecution:
             await executor.execute(fail_with_value_error)
         assert call_count == 3
 
+    async def test_retries_when_exception_predicate_true(self):
+        """A value predicate retries on the attribute-encoded condition it
+        matches (HTTP 5xx), letting a flaky call recover.
+        """
+        config = RetryConfig(
+            max_attempts=5,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+            retry_on_exception=lambda e: getattr(e, "code", 0) >= 500,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        async def fail_then_succeed():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise _FakeHTTPError(503)
+            return "ok"
+
+        assert await executor.execute(fail_then_succeed) == "ok"
+        assert call_count == 3
+
+    async def test_raises_immediately_when_exception_predicate_false(self):
+        """The value analogue of a non-matching type: a predicate returning
+        False re-raises on the first attempt, no retry.
+        """
+        config = RetryConfig(
+            max_attempts=5,
+            initial_delay=0.0,
+            retry_on_exception=lambda e: getattr(e, "code", 0) >= 500,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        async def raise_404():
+            nonlocal call_count
+            call_count += 1
+            raise _FakeHTTPError(404)
+
+        with pytest.raises(_FakeHTTPError, match="HTTP 404"):
+            await executor.execute(raise_404)
+        assert call_count == 1
+
+    async def test_exhaustion_with_predicate_fires_on_failure(self):
+        """A predicate-retryable exception flows through the full exhaustion
+        path: re-raised after the bound, on_failure fired once.
+        """
+        failures: list[Exception] = []
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+            retry_on_exception=lambda e: True,
+            on_failure=failures.append,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        async def always_fail():
+            nonlocal call_count
+            call_count += 1
+            raise _FakeHTTPError(503)
+
+        with pytest.raises(_FakeHTTPError, match="HTTP 503"):
+            await executor.execute(always_fail)
+        assert call_count == 3
+        assert len(failures) == 1
+
+    async def test_raising_predicate_propagates(self):
+        """A predicate that itself raises is a caller bug — its exception
+        propagates rather than being wrapped or swallowed.
+        """
+
+        def boom(_e: Exception) -> bool:
+            raise KeyError("predicate blew up")
+
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            retry_on_exception=boom,
+        )
+        executor = RetryExecutor(config)
+
+        async def raise_value_error():
+            raise ValueError("original")
+
+        with pytest.raises(KeyError, match="predicate blew up"):
+            await executor.execute(raise_value_error)
+
     async def test_awaits_async_callable_object_result(self):
         """execute() detects async-ness at the result level, not just via
         iscoroutinefunction() on the callable.
@@ -621,6 +723,69 @@ class TestExecuteSync:
             executor.execute_sync(fail_with_value_error)
         assert call_count == 3
 
+    def test_retries_when_exception_predicate_true(self):
+        """The value predicate reaches execute_sync through the same gate as
+        execute — a matching (5xx) error retries then succeeds.
+        """
+        config = RetryConfig(
+            max_attempts=5,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+            retry_on_exception=lambda e: getattr(e, "code", 0) >= 500,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def fail_then_succeed():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise _FakeHTTPError(503)
+            return "ok"
+
+        assert executor.execute_sync(fail_then_succeed) == "ok"
+        assert call_count == 3
+
+    def test_raises_immediately_when_exception_predicate_false(self):
+        config = RetryConfig(
+            max_attempts=5,
+            initial_delay=0.0,
+            retry_on_exception=lambda e: getattr(e, "code", 0) >= 500,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def raise_404():
+            nonlocal call_count
+            call_count += 1
+            raise _FakeHTTPError(404)
+
+        with pytest.raises(_FakeHTTPError, match="HTTP 404"):
+            executor.execute_sync(raise_404)
+        assert call_count == 1
+
+    def test_exhaustion_with_predicate_fires_on_failure(self):
+        failures: list[Exception] = []
+        config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.0,
+            backoff_strategy=BackoffStrategy.FIXED,
+            retry_on_exception=lambda e: True,
+            on_failure=failures.append,
+        )
+        executor = RetryExecutor(config)
+        call_count = 0
+
+        def always_fail():
+            nonlocal call_count
+            call_count += 1
+            raise _FakeHTTPError(503)
+
+        with pytest.raises(_FakeHTTPError, match="HTTP 503"):
+            executor.execute_sync(always_fail)
+        assert call_count == 3
+        assert len(failures) == 1
+
     def test_returns_last_result_if_max_attempts_exhausted(self):
         config = RetryConfig(
             max_attempts=2,
@@ -781,6 +946,38 @@ class TestRetryConfigValidation:
         with pytest.raises(ValueError, match="max_attempts"):
             RetryExecutor(RetryConfig(max_attempts=0))
 
+    def test_predicate_and_type_filter_mutually_exclusive(self):
+        """The value predicate is the general form of the type filter, so
+        setting both has no unambiguous meaning and is rejected at construction.
+        """
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            RetryConfig(
+                retry_on_exception=lambda e: True,
+                retry_on_exceptions=[ValueError],
+            )
+
+    def test_from_dict_rejects_both_predicate_and_type_filter(self):
+        """The mutual-exclusion invariant holds on the load path too, like the
+        max_attempts guard.
+        """
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            RetryConfig.from_dict(
+                {
+                    "retry_on_exception": lambda e: True,
+                    "retry_on_exceptions": [ValueError],
+                }
+            )
+
+    def test_predicate_alone_is_allowed(self):
+        config = RetryConfig(retry_on_exception=lambda e: True)
+        assert config.retry_on_exception is not None
+        assert config.retry_on_exceptions is None
+
+    def test_type_filter_alone_is_allowed(self):
+        config = RetryConfig(retry_on_exceptions=[ValueError])
+        assert config.retry_on_exceptions == [ValueError]
+        assert config.retry_on_exception is None
+
 
 # ---------------------------------------------------------------------------
 # RetryConfig defaults
@@ -799,6 +996,7 @@ class TestRetryConfigDefaults:
         assert config.backoff_multiplier == 2.0
         assert config.jitter_range == 0.1
         assert config.retry_on_exceptions is None
+        assert config.retry_on_exception is None
         assert config.retry_on_result is None
         assert config.on_retry is None
         assert config.on_failure is None
@@ -866,6 +1064,15 @@ class TestRetryConfigStructured:
         assert_structured_config_roundtrip(
             RetryConfig(retry_on_exceptions=[ValueError])
         )
+
+    def test_roundtrip_with_exception_predicate(self):
+        """The value predicate round-trips by identity like the other callable
+        fields (retry_on_result, hooks) — an in-process dict, not JSON.
+        """
+        predicate = lambda e: getattr(e, "code", 0) >= 500  # noqa: E731
+        config = RetryConfig(retry_on_exception=predicate)
+        assert_structured_config_roundtrip(config)
+        assert config.from_dict(config.to_dict()).retry_on_exception is predicate
 
     def test_backoff_strategy_enum_roundtrips(self):
         config = RetryConfig(backoff_strategy=BackoffStrategy.EXPONENTIAL)

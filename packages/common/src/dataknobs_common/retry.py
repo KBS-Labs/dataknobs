@@ -67,6 +67,12 @@ class RetryConfig(StructuredConfig):
         jitter_range: Fractional jitter range for the JITTER strategy (e.g. 0.1 = +/-10%).
         retry_on_exceptions: If set, only retry when the exception is an instance of one of
             these types. Other exceptions propagate immediately.
+        retry_on_exception: If set, called with the raised exception; return True to retry,
+            False to re-raise it immediately. The general, value-based form of
+            retry_on_exceptions — use it when retryability depends on an attribute of the
+            error (e.g. an HTTP status or SQLSTATE class) rather than its type. Mutually
+            exclusive with retry_on_exceptions (a ValueError is raised if both are set); an
+            exception raised by the predicate itself propagates.
         retry_on_result: If set, called with the result value. Return True to trigger a retry
             (e.g. to retry on empty or sentinel results).
         on_retry: Hook called before each retry sleep with (attempt_number, exception).
@@ -81,13 +87,14 @@ class RetryConfig(StructuredConfig):
     jitter_range: float = 0.1
 
     retry_on_exceptions: list[type] | None = None
+    retry_on_exception: Callable[[Exception], bool] | None = None
     retry_on_result: Callable[[Any], bool] | None = None
 
     on_retry: Callable[[int, Exception], None] | None = None
     on_failure: Callable[[Exception], None] | None = None
 
     def __post_init__(self) -> None:
-        """Reject a non-positive attempt bound at construction.
+        """Reject an invalid retry configuration at construction.
 
         ``max_attempts < 1`` runs zero attempts and falls through the retry
         loop to a ``RuntimeError`` — an obscure failure for what is really a
@@ -95,9 +102,20 @@ class RetryConfig(StructuredConfig):
         every consumer (including ``from_dict`` loading and downstream helpers
         such as ``allocate``), so the guard lives once on the config rather than
         being re-implemented at each call site.
+
+        Also enforces that ``retry_on_exception`` (the value predicate) and
+        ``retry_on_exceptions`` (the type filter) are mutually exclusive: the
+        predicate is the general form of the type filter, so setting both has no
+        unambiguous meaning.
         """
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
+        if self.retry_on_exception is not None and self.retry_on_exceptions:
+            raise ValueError(
+                "retry_on_exception and retry_on_exceptions are mutually "
+                "exclusive; retry_on_exception is the value-based form of the "
+                "type filter — set only one"
+            )
 
 
 def compute_backoff_delay(
@@ -176,8 +194,9 @@ class RetryExecutor:
     attempts and rejects any callable that produces an awaitable. Both detect
     async-ness at the *result* level (not merely via
     ``iscoroutinefunction`` on the callable) and share one retry policy core,
-    so backoff, ``retry_on_exceptions``, ``retry_on_result``, and the hooks
-    behave identically across the two entry points.
+    so backoff, ``retry_on_exceptions``, ``retry_on_exception``,
+    ``retry_on_result``, and the hooks behave identically across the two entry
+    points.
 
     Example:
         ```python
@@ -236,6 +255,23 @@ class RetryExecutor:
             and attempt < self.config.max_attempts
         )
 
+    def _exception_is_retryable(self, e: Exception) -> bool:
+        """Whether a raised exception should trigger a retry (before the bound).
+
+        A value predicate (``retry_on_exception``) takes the decision directly;
+        the type filter (``retry_on_exceptions``) is its list-of-types sugar.
+        With neither configured, every exception is retryable (the historical
+        default). The two are mutually exclusive by construction
+        (:meth:`RetryConfig.__post_init__`).
+        """
+        if self.config.retry_on_exception is not None:
+            return bool(self.config.retry_on_exception(e))
+        if self.config.retry_on_exceptions:
+            return any(
+                isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions
+            )
+        return True
+
     def _delay_before_retry_on_result(
         self, attempt: int, previous_delay: float | None
     ) -> float:
@@ -256,13 +292,12 @@ class RetryExecutor:
     ) -> float:
         """Decide the fate of a failed attempt.
 
-        Re-raises ``e`` immediately when it is not a retryable type, or when
-        the attempt bound is reached (firing ``on_failure`` first). Otherwise
-        fires ``on_retry`` and returns the delay before the next attempt.
+        Re-raises ``e`` immediately when it is not retryable (per the value
+        predicate or the type filter), or when the attempt bound is reached
+        (firing ``on_failure`` first). Otherwise fires ``on_retry`` and returns
+        the delay before the next attempt.
         """
-        if self.config.retry_on_exceptions and not any(
-            isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions
-        ):
+        if not self._exception_is_retryable(e):
             raise e
         if attempt >= self.config.max_attempts:
             if self.config.on_failure:
@@ -323,9 +358,9 @@ class RetryExecutor:
         """Execute a synchronous callable with retry logic, blocking the thread.
 
         The synchronous twin of :meth:`execute`: same bounded-retry, backoff,
-        ``retry_on_exceptions``, ``retry_on_result``, and hook policy, but it
-        sleeps the calling thread between attempts instead of awaiting. Use it
-        from code that has no event loop.
+        ``retry_on_exceptions``, ``retry_on_exception``, ``retry_on_result``,
+        and hook policy, but it sleeps the calling thread between attempts
+        instead of awaiting. Use it from code that has no event loop.
 
         Args:
             func: A synchronous callable to execute.

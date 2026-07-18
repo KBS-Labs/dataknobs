@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RetryConfig.retry_on_exception`: a value-based exception-retry predicate —
+  called with the raised exception, return `True` to retry or `False` to
+  re-raise it immediately. The general form of `retry_on_exceptions` for
+  retryability that depends on an error attribute (HTTP status, SQLSTATE class,
+  `errno`) rather than the exception type; mutually exclusive with the type
+  filter (a `ValueError` is raised if both are set). Applies to both
+  `RetryExecutor.execute` and `execute_sync`.
 - `RetryExecutor.execute_sync`: a synchronous entry point for the bounded-retry
   engine — the same backoff, `retry_on_exceptions`, `retry_on_result`, and
   `on_retry` / `on_failure` hook policy as `execute`, but it blocks the calling
