@@ -1371,6 +1371,22 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         return cls.EXPECTED_COMPONENTS
 
+    @classmethod
+    def missing_from(cls, available: Iterable[str]) -> frozenset[str]:
+        """Expected collaborators absent from a candidate set (class-level diff).
+
+        The instance-free pure diff: ``expected_components() - available``. Use
+        it to test a candidate collaborator set against the class *without
+        constructing it* — e.g. a composing parent checking whether the
+        collaborators it would forward satisfy a child's requirements before it
+        builds the child. Pairs with the :meth:`expected_components` classmethod
+        as the pre-construction half of the advertise surface.
+
+        The instance :meth:`missing_components` delegates here, defaulting
+        ``available`` to the consumer's own live components.
+        """
+        return cls.expected_components() - set(available)
+
     def missing_components(
         self, available: Iterable[str] | None = None
     ) -> frozenset[str]:
@@ -1380,16 +1396,16 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         ``available`` defaults to this consumer's own injected collaborators
         (:attr:`components` keys), so it reads live and reflects any
         :meth:`set_component` write. Pass an explicit ``available`` to test a
-        candidate set against the class without constructing it — e.g. a
-        composing parent checking whether the collaborators it would forward
-        satisfy a child's requirements.
+        candidate set against *this instance's* class. To run the same diff
+        without an instance (the pre-construction case), call the
+        :meth:`missing_from` classmethod directly.
 
         Returns the set of required-but-absent names rather than raising —
         this hands the warn-vs-raise policy to the caller (log a warning off
         the diff, or call :meth:`require_components` to raise).
         """
-        present = set(self._components) if available is None else set(available)
-        return self.expected_components() - present
+        present = self._components if available is None else available
+        return type(self).missing_from(present)
 
     def require_components(
         self, available: Iterable[str] | None = None
@@ -1402,6 +1418,13 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         configuration error, so it raises :class:`ConfigurationError` naming the
         absent collaborator(s). ``available`` behaves as on
         :meth:`missing_components` (defaults to this consumer's own components).
+
+        The check is **presence-of-key, not truthiness**: a collaborator
+        injected as ``None`` (a sentinel, or a mis-wire that resolved to
+        ``None``) counts as satisfied — it matches :meth:`set_component`'s
+        presence semantics and avoids guessing what "empty" means for an
+        arbitrary collaborator. This guards against an *un-injected*
+        collaborator, not against a ``None``-valued one.
 
         **Opt-in — NEVER auto-called at construction.** The mixin does not
         invoke this from ``__init__`` / :meth:`from_config` /

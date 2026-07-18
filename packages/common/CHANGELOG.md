@@ -23,12 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StructuredConfigConsumer.EXPECTED_COMPONENTS` (`ClassVar[frozenset[str]]`):
   declare the injected collaborators a consumer requires to function — the
   read-side counterpart to `INTERNAL_COMPONENTS` (which declares what NOT to
-  forward). Consumed by three new read-side helpers: `expected_components()`
+  forward). Consumed by four new read-side helpers: `expected_components()`
   (classmethod advertise query — no instance needed, for tooling / config lint /
-  a composing parent), `missing_components(available=None)` (pure diff of
-  required-but-absent collaborators, returned not raised so the caller picks
-  warn-vs-raise), and `require_components(available=None)` (raises
-  `ConfigurationError` naming any missing collaborator). Together they let a
+  a composing parent), `missing_from(available)` (classmethod pure diff — the
+  pre-construction candidate check a composing parent runs against a child class
+  before building it), `missing_components(available=None)` (instance pure diff
+  of required-but-absent collaborators, defaulting to the consumer's own live
+  components, returned not raised so the caller picks warn-vs-raise), and
+  `require_components(available=None)` (raises `ConfigurationError` naming any
+  missing collaborator; presence-of-key, not truthiness — a collaborator
+  injected as `None` counts as satisfied). Together they let a
   consumer turn a missing or mis-wired collaborator into a clear wiring-time
   error instead of a silent no-op. Opt-in — `require_components()` is never
   auto-called at construction (so circular-dependency and post-construction

@@ -795,9 +795,14 @@ Three read-side helpers consume the declaration:
 # Advertise (classmethod — no instance needed, e.g. for a config lint):
 Strategy.expected_components()          # frozenset({"clip_service"})
 
+# Pre-construction candidate check (classmethod — no instance): does the set a
+# composing parent would forward satisfy the child's requirements?
+Strategy.missing_from({"clip_service"}) # frozenset()  (nothing missing)
+Strategy.missing_from(set())            # frozenset({"clip_service"})
+
 consumer = Strategy.from_config({...})
 
-# Pure diff — required collaborators not yet present (no raise):
+# Pure diff against the live instance — required collaborators not yet present:
 consumer.missing_components()           # frozenset({"clip_service"})
 
 # ... consumer wires the collaborator (construction arg or set_component) ...
@@ -809,11 +814,15 @@ consumer.require_components()           # returns None once satisfied
 
 `missing_components()` returns the set of required-but-absent names rather
 than raising, so **the caller picks the policy** — log a warning off the
-diff, or call `require_components()` to raise a `ConfigurationError`. Both
-default to checking the consumer's own `components`; pass an explicit
-`available` iterable to test a candidate set against the class (e.g. a
-composing parent checking whether the collaborators it would forward satisfy
-a child's requirements).
+diff, or call `require_components()` to raise a `ConfigurationError`. It
+defaults to checking the consumer's own live `components`; pass an explicit
+`available` iterable to diff against this instance's class. For the
+pre-construction case — a composing parent testing the collaborators it would
+forward *before* it builds the child — call the `missing_from(available)`
+**classmethod**, which runs the same diff without an instance. The check is
+**presence-of-key, not truthiness**: a collaborator injected as `None`
+satisfies the requirement (matching `set_component`'s presence semantics), so
+it guards against an *un-injected* collaborator, not a `None`-valued one.
 
 `require_components()` is **opt-in — never auto-called at construction.** The
 mixin does not enforce the declared set from `__init__` / `from_config` /

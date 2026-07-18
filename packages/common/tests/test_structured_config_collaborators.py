@@ -560,6 +560,32 @@ class TestExpectedComponents:
         assert c.missing_components({"dep"}) == frozenset()
         assert c.missing_components({"other"}) == frozenset({"dep"})
 
+    def test_missing_from_classmethod_no_instance(self) -> None:
+        # The pre-construction candidate check: a composing parent tests the
+        # collaborators it would forward against the child class WITHOUT
+        # building the child. No instance exists.
+        assert _ExpectingConsumer.missing_from({"dep"}) == frozenset()
+        assert _ExpectingConsumer.missing_from(set()) == frozenset({"dep"})
+        assert _ExpectingConsumer.missing_from({"other"}) == frozenset({"dep"})
+        # A consumer that requires nothing is satisfied by anything.
+        assert _SyncDepConsumer.missing_from(set()) == frozenset()
+
+    def test_missing_components_delegates_to_missing_from(self) -> None:
+        # The instance method is the live-default wrapper over the classmethod:
+        # both agree for the same available-set.
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        assert c.missing_components({"other"}) == _ExpectingConsumer.missing_from(
+            {"other"}
+        )
+
+    def test_require_components_treats_none_value_as_present(self) -> None:
+        # Presence-of-key, not truthiness: an injected None satisfies the
+        # requirement (matches set_component's presence semantics).
+        c = _ExpectingConsumer.from_config({"label": "a"})
+        c.set_component("dep", None)
+        assert c.missing_components() == frozenset()
+        assert c.require_components() is None
+
     def test_require_components_raises_when_missing(self) -> None:
         c = _ExpectingConsumer.from_config({"label": "a"})
         with pytest.raises(ConfigurationError, match="dep") as exc_info:
