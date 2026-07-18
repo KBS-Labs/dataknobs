@@ -61,10 +61,10 @@ Dataknobs is open-source because we believe in **democratizing access to data** 
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.9.0 |
-| [dataknobs-common](packages/common/index.md) | Foundation library with exceptions, registries, serialization, and event bus | 1.6.0 |
+| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.9.1 |
+| [dataknobs-common](packages/common/index.md) | Foundation library with exceptions, registries, serialization, and event bus | 1.6.1 |
 | [dataknobs-config](packages/config/index.md) | Modular configuration system with environment variable overrides and factories | 0.4.2 |
-| [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.6.0 |
+| [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.6.1 |
 | [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows with data modes and resource management | 0.3.0 |
 | [dataknobs-llm](packages/llm/index.md) | Unified LLM abstraction with prompt management and conversations | 0.6.6 |
 | [dataknobs-structures](packages/structures/index.md) | Core data structures for AI knowledge bases and document processing | 1.0.13 |
