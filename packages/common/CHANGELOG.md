@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.6.1 - 2026-07-18
+
 ### Added
 
 - `StructuredConfigConsumer.set_component(name, value, *, allow_overwrite=True)`

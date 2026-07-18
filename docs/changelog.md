@@ -5,6 +5,33 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-18
+
+### dataknobs-common [1.6.1]
+
+#### Added
+- added missing_from classmethod; document require_components presence semantics
+- added post-construction component injection to StructuredConfigConsumer
+- added value-based exception-retry predicate to RetryConfig
+- added RetryExecutor.execute_sync; compose allocate over the shared engine
+
+#### Fixed
+- hardened RetryExecutor at the result level; validate max_attempts on RetryConfig
+
+### dataknobs-data [0.6.1]
+
+#### Added
+- added RetryExecutor.execute_sync; compose allocate over the shared engine
+
+#### Fixed
+- hardened RetryExecutor at the result level; validate max_attempts on RetryConfig
+
+### dataknobs-bots [0.9.1]
+
+#### Added
+- added post-construction component injection to StructuredConfigConsumer
+
+
 ## Release - 2026-07-15
 
 ### dataknobs-common [1.6.0]

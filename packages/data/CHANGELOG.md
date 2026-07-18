@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.1 - 2026-07-18
+
 ### Changed
 
 - `allocate` / `allocate_sync` now retry on a colliding id raised **anywhere in

@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
-    "dataknobs-common>=1.6.0",
+    "dataknobs-common>=1.6.1",
 ]
 
 [project.optional-dependencies]
