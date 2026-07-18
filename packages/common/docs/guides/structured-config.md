@@ -712,6 +712,62 @@ short-circuit when `self._prebuilt` is `True`. `config` defaults to
 required-field config raises a clear `ValueError` naming the class and
 the remedy, not a cryptic dataclass `TypeError`).
 
+#### Post-construction injection: `set_component`
+
+Construction-time injection covers collaborators that exist when the
+consumer is built. Two shapes cannot be construction-time arguments:
+
+- **Circular dependency** — a collaborator that itself holds a reference
+  to the fully-built consumer (e.g. a service that calls back into it)
+  cannot exist at construction time; the consumer must be built first,
+  then the collaborator, then injected back.
+- **Lifespan-scoped resource** — a store or service built later at
+  application-lifespan or scenario-setup time, after the consumer exists.
+
+`set_component` (and its bulk companion `set_components`) is the supported
+write path for these — it writes the private backing store behind the
+read-only `components` view:
+
+```python
+consumer = Strategy.from_config({"store": {...}})
+
+# Circular dependency: build the service against the consumer, inject back.
+service = ClipService(strategy=consumer)
+consumer.set_component("clip_service", service)
+assert consumer.components["clip_service"] is service
+
+# Bulk form — the shape you would otherwise reach around for as
+# `consumer._components.update(...)`:
+consumer.set_components({"clip_service": service, "project_store": store})
+```
+
+`allow_overwrite` defaults to `True` (inject-or-replace). Pass
+`allow_overwrite=False` for inject-only semantics — a re-inject of an
+existing key then raises `ValueError`. For `set_components` the
+no-overwrite check is **all-or-nothing**: one clashing key aborts the whole
+write, so a partial bulk write never leaves the consumer half-wired.
+Setting a name listed in `INTERNAL_COMPONENTS` affects only this consumer
+and is never forwarded to children.
+
+**Read-once boundary.** Whether the write *reaches* a consuming subsystem
+depends on when that subsystem reads its collaborators:
+
+- A consumer that re-reads `components` / `forwardable_components()` afresh
+  per operation observes the update on its next read. `WizardReasoning`
+  rebuilds its per-stage sub-strategies from config **every turn** (a
+  fresh, cacheless `get_registry().create(...)` that reads
+  `forwardable_components()` live), so a `set_component` on the wizard
+  reaches the **next turn's** sub-strategies. Inject runtime collaborators
+  this way — **not** via a post-construction setter on a per-stage *step
+  instance*, which is silently discarded before the next turn's rebuild.
+- A consumer that reads a collaborator **once** in `_setup` / `_ainit` /
+  `_adopt_components` folds it into derived state at construction and does
+  **not** re-consume it. For those, call `set_component` before that first
+  read. This is impossible for a genuine circular dependency (the
+  collaborator does not exist when `_ainit` runs) — such a consumer must
+  consume the collaborator lazily per-operation (read `self.components[name]`
+  at use-time) rather than binding it in `_ainit`.
+
 #### Async registry dispatch: `create_async`
 
 When a registry dispatches polymorphic, asynchronously-constructed

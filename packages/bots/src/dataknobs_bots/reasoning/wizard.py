@@ -161,6 +161,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         _extraction: WizardExtractor handling the extraction pipeline
         _strict_validation: Whether to enforce schema validation
         _hooks: Optional WizardHooks for lifecycle events
+
+    Injecting a runtime collaborator after construction:
+        Per-stage pipeline steps are **rebuilt from config on every turn** (a
+        fresh, cacheless ``get_registry().create(...)`` per turn via
+        :meth:`WizardResponder._resolve_stage_strategy`), so a post-construction
+        setter on a *step instance* is silently discarded before the next turn.
+        Inject a runtime collaborator through the components channel instead —
+        :meth:`StructuredConfigConsumer.set_component` (name, value) on this
+        strategy — which :meth:`forwardable_components` reads live on each
+        rebuild, so the collaborator reaches the next turn's per-stage
+        sub-strategies. Do NOT use post-construction setters on step instances.
     """
 
     #: Typed config pointer (read by the reasoning validation resolver and

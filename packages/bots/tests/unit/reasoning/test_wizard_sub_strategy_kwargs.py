@@ -245,6 +245,57 @@ def test_strict_from_config_raises_when_forwarded_unknown_kwarg() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Post-construction injection: set_component reaches the next rebuild
+# ---------------------------------------------------------------------------
+
+
+def test_set_component_reaches_next_stage_rebuild() -> None:
+    """A ``set_component`` after construction reaches the NEXT per-stage
+    rebuild.
+
+    Each ``_resolve_stage_strategy`` call is the real cacheless per-turn
+    rebuild path (``get_registry().create(...)`` reading
+    ``forwardable_components()`` live). A collaborator injected via
+    ``set_component`` between two rebuilds is absent from the first build's
+    kwargs and present in the second — proving the write behind the
+    read-only ``components`` view is observed on the next live read.
+    """
+    wizard = _build_wizard_with_capture_stage()
+
+    # First "turn": the collaborator has not been injected yet.
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
+    assert "live_dep" not in _CaptureStrategy.last_kwargs
+
+    # Inject the runtime collaborator through the components channel.
+    live_dep = object()
+    wizard.set_component("live_dep", live_dep)
+
+    # Second "turn": the rebuild reads forwardable_components() live and
+    # forwards the newly-injected collaborator to the sub-strategy.
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
+    assert _CaptureStrategy.last_kwargs.get("live_dep") is live_dep
+
+
+def test_set_component_wizard_internal_not_forwarded() -> None:
+    """Setting an ``INTERNAL_COMPONENTS`` name post-construction affects only
+    the wizard, never the forwarded sub-strategy kwargs.
+
+    ``wizard_fsm`` is in the wizard's ``INTERNAL_COMPONENTS``; re-setting it
+    via ``set_component`` updates ``self.components`` but is still filtered
+    out of ``forwardable_components()``, so a rebuild never leaks it to a
+    sub-strategy.
+    """
+    wizard = _build_wizard_with_capture_stage()
+    replacement_fsm = object()
+    wizard.set_component("wizard_fsm", replacement_fsm)
+
+    assert wizard.components["wizard_fsm"] is replacement_fsm
+
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
+    assert "wizard_fsm" not in _CaptureStrategy.last_kwargs
+
+
+# ---------------------------------------------------------------------------
 # Sanity: registry still exposes _CaptureStrategy and _StrictStrategy
 # ---------------------------------------------------------------------------
 

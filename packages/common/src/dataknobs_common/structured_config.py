@@ -1246,6 +1246,94 @@ class StructuredConfigConsumer(Generic[ConfigT]):
             if k not in self.INTERNAL_COMPONENTS
         }
 
+    def set_component(
+        self, name: str, value: Any, *, allow_overwrite: bool = True
+    ) -> None:
+        """Inject or replace an injected collaborator after construction.
+
+        Construction-time injection (:meth:`from_config`,
+        :meth:`from_components`) covers collaborators that exist when the
+        consumer is built. Some do not: a collaborator that itself depends
+        on the fully-built consumer (a circular dependency), or a resource
+        built later at application-lifespan / setup time. ``set_component``
+        is the supported write path for those — it writes the private
+        backing store behind the read-only :attr:`components` view.
+
+        The value is immediately visible via :attr:`components` and included
+        in :meth:`forwardable_components` (unless ``name`` is in
+        :attr:`INTERNAL_COMPONENTS`, which is never forwarded to children —
+        setting such a name affects only this consumer).
+
+        **Read-once boundary.** Whether this write *reaches* a consuming
+        subsystem depends on when that subsystem reads its collaborators. A
+        consumer that re-reads :attr:`components` / :meth:`forwardable_components`
+        afresh per operation (e.g. a per-turn rebuild) observes the update on
+        its next read. A consumer that reads a collaborator **once** in
+        :meth:`_setup` / :meth:`_ainit` / :meth:`_adopt_components` folds it
+        into derived state at construction and does **not** re-consume it — for
+        those, ``set_component`` must be called before that first read. Note
+        this is impossible for a genuine circular dependency (the collaborator
+        does not exist when ``_ainit`` runs); such a consumer must consume the
+        collaborator lazily per-operation instead.
+
+        **Threading.** The write is *not* synchronized. It mutates the plain
+        ``dict`` that :attr:`components` / :meth:`forwardable_components` read,
+        so it must occur on the same thread that reads those — inject before the
+        consumer begins serving, or from the same event-loop thread. Calling
+        ``set_component`` from a background thread while another thread iterates
+        :meth:`forwardable_components` can raise ``RuntimeError: dictionary
+        changed size during iteration``. Cross-thread injection is not supported.
+
+        Args:
+            name: Collaborator key (as it would appear in :attr:`components`).
+            value: The collaborator object.
+            allow_overwrite: When ``False``, raise ``ValueError`` if ``name``
+                is already present (inject-only). Defaults to ``True``
+                (inject-or-replace).
+
+        Raises:
+            ValueError: ``allow_overwrite=False`` and ``name`` already present.
+        """
+        if not allow_overwrite and name in self._components:
+            raise ValueError(
+                f"Component {name!r} already present on {type(self).__name__}; "
+                "pass allow_overwrite=True to replace it."
+            )
+        self._components[name] = value
+
+    def set_components(
+        self, values: Mapping[str, Any], *, allow_overwrite: bool = True
+    ) -> None:
+        """Inject or replace several injected collaborators at once.
+
+        Bulk form of :meth:`set_component` — the shape a caller previously
+        expressed as ``self._components.update(values)`` (reaching past the
+        read-only view). The read-once boundary documented on
+        :meth:`set_component` applies identically.
+
+        With ``allow_overwrite=False`` the write is **all-or-nothing**: if
+        *any* key in ``values`` is already present, a ``ValueError`` is raised
+        and **no** entries are applied — a partial bulk write never leaves the
+        consumer half-wired.
+
+        Args:
+            values: Collaborator key → object mapping.
+            allow_overwrite: When ``False``, raise ``ValueError`` if any key in
+                ``values`` is already present. Defaults to ``True``.
+
+        Raises:
+            ValueError: ``allow_overwrite=False`` and any key already present.
+        """
+        if not allow_overwrite:
+            clashes = [name for name in values if name in self._components]
+            if clashes:
+                raise ValueError(
+                    f"Component(s) {clashes!r} already present on "
+                    f"{type(self).__name__}; pass allow_overwrite=True to "
+                    "replace them."
+                )
+        self._components.update(values)
+
     @classmethod
     def _coerce_config(
         cls, config: Mapping[str, Any] | StructuredConfig

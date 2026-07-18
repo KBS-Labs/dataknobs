@@ -404,3 +404,109 @@ class TestBackwardCompatibility:
         c = await _PlainAsync.from_config_async({"n": 4})
         assert c.ready is True
         assert dict(c.components) == {}
+
+
+class _InternalConsumer(StructuredConfigConsumer[_Cfg]):
+    """Declares an internal (non-forwardable) collaborator name."""
+
+    CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"internal"})
+
+
+# ── Post-construction injection: set_component / set_components ────────
+class TestSetComponent:
+    def test_set_component_visible_in_components_view(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        obj = object()
+        c.set_component("dep", obj)
+        assert c.components["dep"] is obj
+
+    def test_set_component_replaces_existing(self) -> None:
+        old, new = object(), object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=old)
+        c.set_component("dep", new)
+        assert c.components["dep"] is new
+
+    def test_set_component_no_overwrite_raises(self) -> None:
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        with pytest.raises(ValueError, match="already present"):
+            c.set_component("dep", object(), allow_overwrite=False)
+        # The original value is untouched by the refused write.
+        assert c.components["dep"] is original
+
+    def test_set_component_no_overwrite_allows_new_key(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        obj = object()
+        c.set_component("fresh", obj, allow_overwrite=False)
+        assert c.components["fresh"] is obj
+
+    def test_components_view_still_read_only(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        c.set_component("dep", object())
+        with pytest.raises(TypeError):
+            c.components["dep"] = "mutated"  # type: ignore[index]
+
+    def test_set_component_reflected_in_forwardable(self) -> None:
+        c = _InternalConsumer.from_config({"label": "a"})
+        fwd_obj, internal_obj = object(), object()
+        c.set_component("fwd", fwd_obj)
+        c.set_component("internal", internal_obj)
+        forwardable = c.forwardable_components()
+        assert forwardable["fwd"] is fwd_obj
+        assert "internal" not in forwardable
+        # The internal collaborator is still on this consumer, just not forwarded.
+        assert c.components["internal"] is internal_obj
+
+    def test_forwardable_reads_set_component_live(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        baseline = c.forwardable_components()
+        assert "late" not in baseline
+        obj = object()
+        c.set_component("late", obj)
+        assert c.forwardable_components()["late"] is obj
+
+
+class TestSetComponents:
+    def test_set_components_bulk_applies_all(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        a, b = object(), object()
+        c.set_components({"a": a, "b": b})
+        assert c.components["a"] is a
+        assert c.components["b"] is b
+
+    def test_set_components_no_overwrite_all_or_nothing(self) -> None:
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        with pytest.raises(ValueError, match="already present"):
+            c.set_components(
+                {"dep": object(), "b": object()}, allow_overwrite=False
+            )
+        # A single clash aborts the whole write — no partial subset applied.
+        assert c.components["dep"] is original
+        assert "b" not in c.components
+
+    def test_set_components_no_overwrite_all_new_keys_succeeds(self) -> None:
+        c = _SyncDepConsumer.from_config({"label": "a"})
+        a, b = object(), object()
+        c.set_components({"a": a, "b": b}, allow_overwrite=False)
+        assert c.components["a"] is a
+        assert c.components["b"] is b
+
+    def test_set_components_bulk_overwrite_replaces_existing(self) -> None:
+        # The bulk overwrite branch differs behaviorally from the no-overwrite
+        # clash path: with the default allow_overwrite=True an existing key is
+        # replaced in place rather than aborting the write.
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        replacement, fresh = object(), object()
+        c.set_components({"dep": replacement, "b": fresh})
+        assert c.components["dep"] is replacement
+        assert c.components["b"] is fresh
+
+    def test_set_components_empty_mapping_is_noop(self) -> None:
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        c.set_components({})
+        assert c.components["dep"] is original
+        assert dict(c.components) == {"dep": original}
