@@ -1276,6 +1276,14 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         does not exist when ``_ainit`` runs); such a consumer must consume the
         collaborator lazily per-operation instead.
 
+        **Threading.** The write is *not* synchronized. It mutates the plain
+        ``dict`` that :attr:`components` / :meth:`forwardable_components` read,
+        so it must occur on the same thread that reads those — inject before the
+        consumer begins serving, or from the same event-loop thread. Calling
+        ``set_component`` from a background thread while another thread iterates
+        :meth:`forwardable_components` can raise ``RuntimeError: dictionary
+        changed size during iteration``. Cross-thread injection is not supported.
+
         Args:
             name: Collaborator key (as it would appear in :attr:`components`).
             value: The collaborator object.

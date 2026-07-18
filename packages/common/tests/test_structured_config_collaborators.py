@@ -492,3 +492,21 @@ class TestSetComponents:
         c.set_components({"a": a, "b": b}, allow_overwrite=False)
         assert c.components["a"] is a
         assert c.components["b"] is b
+
+    def test_set_components_bulk_overwrite_replaces_existing(self) -> None:
+        # The bulk overwrite branch differs behaviorally from the no-overwrite
+        # clash path: with the default allow_overwrite=True an existing key is
+        # replaced in place rather than aborting the write.
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        replacement, fresh = object(), object()
+        c.set_components({"dep": replacement, "b": fresh})
+        assert c.components["dep"] is replacement
+        assert c.components["b"] is fresh
+
+    def test_set_components_empty_mapping_is_noop(self) -> None:
+        original = object()
+        c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
+        c.set_components({})
+        assert c.components["dep"] is original
+        assert dict(c.components) == {"dep": original}
