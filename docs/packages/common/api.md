@@ -1049,6 +1049,7 @@ class RetryConfig:
     backoff_multiplier: float = 2.0
     jitter_range: float = 0.1
     retry_on_exceptions: list[type] | None = None
+    retry_on_exception: Callable[[Exception], bool] | None = None
     retry_on_result: Callable[[Any], bool] | None = None
     on_retry: Callable[[int, Exception], None] | None = None
     on_failure: Callable[[Exception], None] | None = None
@@ -1065,6 +1066,7 @@ class RetryConfig:
 | `backoff_multiplier` | `float` | `2.0` | Multiplier for exponential/jitter strategies |
 | `jitter_range` | `float` | `0.1` | Fractional jitter range for JITTER strategy (0.1 = +/-10%) |
 | `retry_on_exceptions` | `list[type] \| None` | `None` | Only retry these exception types; others propagate immediately |
+| `retry_on_exception` | `Callable \| None` | `None` | Called with the raised exception; return `True` to retry, `False` to re-raise. The value-based form of `retry_on_exceptions` for retryability that depends on an error attribute (HTTP status, SQLSTATE). Mutually exclusive with `retry_on_exceptions` |
 | `retry_on_result` | `Callable \| None` | `None` | Return `True` to trigger retry based on result value |
 | `on_retry` | `Callable \| None` | `None` | Hook called before retry sleep: `(attempt, exception)` |
 | `on_failure` | `Callable \| None` | `None` | Hook called when all attempts exhausted: `(exception)` |
@@ -1141,9 +1143,9 @@ result = await executor.execute(parse_json, raw_text)
 ##### `execute_sync(func, *args, **kwargs) -> Any`
 
 Synchronous entry point for the same bounded-retry engine. Applies the same
-backoff, `retry_on_exceptions`, `retry_on_result`, and hook policy as `execute`,
-but **blocks the calling thread** between attempts instead of awaiting — use it
-from code that has no event loop.
+backoff, `retry_on_exceptions`, `retry_on_exception`, `retry_on_result`, and hook
+policy as `execute`, but **blocks the calling thread** between attempts instead of
+awaiting — use it from code that has no event loop.
 
 **Parameters:**
 
