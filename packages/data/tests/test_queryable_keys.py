@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_data import Filter, Operator, Query, Record
+from dataknobs_data import Filter, Operator, Query, Record, SortOrder, SortSpec
 from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase, SyncDuckDBDatabase
 from dataknobs_data.backends.file import AsyncFileDatabase, SyncFileDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
@@ -304,6 +304,50 @@ async def test_async_data_id_field_is_shadowed_by_filter_id(async_db: object) ->
     assert _ids(
         await async_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))
     ) == {"row-1"}
+
+
+# ---------------------------------------------------------------------------
+# 4b. Sort on the reserved id field resolves to the storage key (parity + shadow)
+# ---------------------------------------------------------------------------
+def test_sort_by_id_orders_by_storage_key(sync_db: object) -> None:
+    """``SortSpec("id", ...)`` orders by the storage key on every backend.
+
+    The sort translation consults the same reserved-name policy as filtering, so
+    ordering by ``id`` follows the storage key uniformly — the parity that guards
+    against a sort site drifting away from the filter sites.
+    """
+    _seed_keys(sync_db, ["c", "a", "b"])
+    asc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
+    assert asc == ["a", "b", "c"]
+    desc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.DESC)]))]
+    assert desc == ["c", "b", "a"]
+
+
+def test_data_id_field_is_not_orderable_by_sort_id(sync_db: object) -> None:
+    """Negative direction for sort: a ``data`` field named ``id`` is shadowed.
+
+    ``SortSpec("id", ...)`` orders by the storage key, never by a value stored
+    under ``data["id"]`` — pinning the shadowing hazard on the ordering path too.
+    """
+    # Storage keys sort ascending as row-a, row-b; the ``data["id"]`` values sort
+    # the opposite way, so an order driven by ``data["id"]`` would be reversed.
+    sync_db.create(Record({"id": "zzz", "name": "widget"}, id="row-a"))
+    sync_db.create(Record({"id": "aaa", "name": "gadget"}, id="row-b"))
+
+    asc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
+    assert asc == ["row-a", "row-b"]  # storage-key order, NOT data["id"] order
+
+
+@pytest.mark.asyncio
+async def test_async_sort_by_id_orders_by_storage_key(async_db: object) -> None:
+    """Async twin of the sort parity pin — the async in-process backends order by
+    the storage key when sorting on the reserved ``id`` field."""
+    await _aseed_keys(async_db, ["c", "a", "b"])
+    asc = [
+        r.id
+        for r in await async_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))
+    ]
+    assert asc == ["a", "b", "c"]
 
 
 # ---------------------------------------------------------------------------

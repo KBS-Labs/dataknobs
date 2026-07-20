@@ -17,6 +17,7 @@ from ..database import (
     version_conflict_error,
 )
 from ..exceptions import DuplicateRecordError
+from ..query import is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 from ..vector import VectorOperationsMixin
@@ -215,8 +216,8 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    # Special handling for 'id' field
-                    if filter.field == 'id':
+                    # The reserved storage-key field routes to the storage key.
+                    if is_storage_key_field(filter.field):
                         field_value = id
                     else:
                         field_value = record.get_value(filter.field)
@@ -547,8 +548,8 @@ class SyncMemoryDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    # Special handling for 'id' field
-                    if filter.field == 'id':
+                    # The reserved storage-key field routes to the storage key.
+                    if is_storage_key_field(filter.field):
                         field_value = id
                     else:
                         field_value = record.get_value(filter.field)

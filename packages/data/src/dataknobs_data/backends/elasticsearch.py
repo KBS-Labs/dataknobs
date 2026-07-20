@@ -15,7 +15,7 @@ from dataknobs_utils.elasticsearch_utils import (
 
 from ..database import SyncDatabase, version_conflict_error
 from ..exceptions import DatabaseError, DuplicateRecordError
-from ..query import Query, SortOrder
+from ..query import Query, SortOrder, is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector.types import DistanceMetric, VectorSearchResult
@@ -709,7 +709,7 @@ class SyncElasticsearchDatabase(
                 # Special handling for 'id' field - sort by the id field in source data
                 # We can't sort by _id directly as it requires fielddata which is disabled by default
                 # The id field is already of type keyword, so no .keyword suffix needed
-                if sort_spec.field == 'id':
+                if is_storage_key_field(sort_spec.field):
                     field_path = "id"
                 else:
                     field_path = f"data.{sort_spec.field}"

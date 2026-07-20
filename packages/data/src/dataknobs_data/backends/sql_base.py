@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..exceptions import DuplicateRecordError
-from ..query import Filter, Operator, Query, SortOrder
+from ..query import Filter, Operator, Query, SortOrder, is_storage_key_field
 from ..records import Record
 
 # Field name segments must be valid identifiers to prevent SQL injection.
@@ -837,7 +837,7 @@ class SQLQueryBuilder:
         Returns:
             A SQL expression suitable for ORDER BY.
         """
-        if field == "id":
+        if is_storage_key_field(field):
             return "id"
 
         if field.startswith("metadata."):
@@ -1148,8 +1148,8 @@ class SQLQueryBuilder:
         # None (unguarded).
         json_target: tuple[str, str] | None = None
 
-        # Special handling for 'id' field — it's a real column, not inside JSON
-        if field == 'id':
+        # The reserved storage-key field is a real column, not inside JSON.
+        if is_storage_key_field(field):
             field_expr = 'id'
         # Route metadata.* fields to the metadata JSONB column
         elif field.startswith("metadata."):

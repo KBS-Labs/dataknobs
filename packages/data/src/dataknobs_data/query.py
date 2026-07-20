@@ -74,6 +74,29 @@ class SortOrder(Enum):
     DESC = "desc"
 
 
+RESERVED_KEY_FIELD = "id"
+"""The single query/sort field name routed to a record's storage key.
+
+Both ``Filter(RESERVED_KEY_FIELD, ...)`` and ``SortSpec(RESERVED_KEY_FIELD, ...)``
+target the record's storage key on every backend — never a value stored under the
+same name in the record's ``data``. This is the only reserved *bare* field name:
+``metadata.<x>`` is a separate SQL-only prefix that routes to the metadata column,
+and any ``<entity>_id`` (e.g. ``node_id``, ``sku``) is an ordinary data field. To
+query a secondary identifier held in ``data``, name that field something other
+than ``id`` so it is not shadowed by the storage-key routing.
+"""
+
+
+def is_storage_key_field(field_name: str) -> bool:
+    """Return True if ``field_name`` addresses the record's storage key.
+
+    The single source of truth every backend's filter/sort translation consults
+    instead of comparing ``field == "id"`` inline, so all backends agree on the
+    reserved name by construction.
+    """
+    return field_name == RESERVED_KEY_FIELD
+
+
 @dataclass
 class Filter:
     """Represents a filter condition.

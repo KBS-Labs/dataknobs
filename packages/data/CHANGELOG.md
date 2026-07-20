@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `RESERVED_KEY_FIELD` and `is_storage_key_field(field)` exported from
+  `dataknobs_data`: the single source of truth for the reserved query/sort field
+  name (`id`) that every backend routes to a record's storage key. Every
+  backend's filter and sort translation now consults the predicate instead of
+  comparing `field == "id"` inline, so all backends agree on the reserved name by
+  construction. Code that generates field names can assert against
+  `is_storage_key_field()` to avoid the storage-key shadowing footgun. Behavior
+  is unchanged — a behavior-preserving consolidation of the existing contract.
+
 ## v0.6.1 - 2026-07-18
 
 ### Changed
