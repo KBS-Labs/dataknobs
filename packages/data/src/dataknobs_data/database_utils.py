@@ -1,7 +1,7 @@
 """Utility functions for database operations."""
 
 
-from .query import Query
+from .query import Query, is_storage_key_field
 from .records import Record
 
 
@@ -50,8 +50,8 @@ def process_search_results(
     if query.sort_specs:
         for sort_spec in reversed(query.sort_specs):
             reverse = sort_spec.order.value == "desc"
-            # Special handling for 'id' field
-            if sort_spec.field == 'id':
+            # The reserved storage-key field sorts by the storage key.
+            if is_storage_key_field(sort_spec.field):
                 results.sort(
                     key=lambda x: x[0] or "",  # x[0] is the record ID
                     reverse=reverse

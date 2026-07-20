@@ -14,7 +14,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_data.database import SyncDatabase, version_conflict_error
 from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
-from dataknobs_data.query import Query
+from dataknobs_data.query import Query, is_storage_key_field
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import (
     StreamConfig,
@@ -483,8 +483,8 @@ class SyncS3Database(  # type: ignore[misc]
 
             # Apply filters
             for filter in query.filters:
-                # Special handling for 'id' field
-                if filter.field == 'id':
+                # The reserved storage-key field routes to the storage key.
+                if is_storage_key_field(filter.field):
                     field_value = record.id
                 else:
                     field_value = record.get_value(filter.field)

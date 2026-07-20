@@ -169,16 +169,31 @@ retrieved.fields["name"].value = "Updated"
 success = await db.update(retrieved.id, retrieved)  # Uses storage_id correctly
 ```
 
-### Searching by User ID
+### Searching by a User-Defined Identifier
+
+`Filter("id", ...)` is **reserved to the record's storage key** on every backend
+— it does **not** search a `data` field named `id`. A "User ID" stored under
+`data["id"]` (see [The Two-ID Concept](#the-two-id-concept)) is reachable through
+the Record API (`record.get_user_id()` / `record.get_value("id")`) but is
+**shadowed** for querying: `Filter("id", ...)` matches the storage key instead,
+so the query silently returns no rows.
+
+To make a user-defined identifier **queryable**, store it under a field name
+**other than `id`** and filter that field directly:
 
 ```python
-# Find records by user-defined ID field
-from dataknobs_data import Query
+# Find records by a user-defined identifier — store it under a non-reserved name.
+from dataknobs_data import Query, Filter, Operator, Record
 
-query = Query().filter("id", "==", "user-123")
-results = await db.search(query)
-# This searches the "id" field in data, not storage_id
+await db.create(Record({"user_id": "user-123", "name": "Test"}))
+
+query = Query(filters=[Filter("user_id", Operator.EQ, "user-123")])
+results = await db.search(query)   # matches the data field "user_id"
 ```
+
+If you actually want to filter on the storage key, `Filter("id", ...)` is
+exactly that. See the query reference for the reserved-name contract and the
+secondary-identifier recipe.
 
 ## Benefits
 
@@ -195,7 +210,9 @@ results = await db.search(query)
 Most existing code requires no changes:
 - `record.id` continues to work, with smarter behavior
 - Database operations remain unchanged
-- Search queries on "id" field work as before
+- `Filter("id", ...)` resolves to the storage key on every backend (see
+  [Searching by a User-Defined Identifier](#searching-by-a-user-defined-identifier));
+  to query a business identifier, store it under a non-`id` field name
 
 ### For New Applications
 

@@ -11,11 +11,48 @@ from typing import Any, TYPE_CHECKING
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..exceptions import DuplicateRecordError
-from ..query import Filter, Operator, Query, SortOrder
+from ..query import Filter, Operator, Query, SortOrder, is_storage_key_field
 from ..records import Record
 
 # Field name segments must be valid identifiers to prevent SQL injection.
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# A field prefixed ``metadata.`` addresses the metadata JSONB column; any other
+# (non-storage-key) field addresses the data JSONB column.
+_METADATA_FIELD_PREFIX = "metadata."
+
+
+def resolve_json_column_and_path(field: str) -> tuple[str, str]:
+    """Resolve the JSON column and nested path for a non-storage-key field.
+
+    A ``metadata.<path>`` field addresses the ``metadata`` JSONB column at
+    ``<path>``; every other field addresses the ``data`` column at the field
+    itself. The single source of truth for the ``metadata.`` prefix routing that
+    every SQL filter/sort translator consults instead of testing the prefix
+    inline, so the filter and sort paths cannot disagree on where a field lives.
+
+    The reserved storage-key field addresses the record's ``id`` column, not a
+    JSON column, so callers MUST gate on :func:`is_storage_key_field` first; the
+    precondition is enforced (a fail-loud ``ValueError`` rather than a silent
+    mis-route to ``("data", "id")``) so a future caller cannot reopen the
+    storage-key-shadowing footgun.
+
+    Returns:
+        A ``(column, nested_path)`` pair naming the target JSONB column and the
+        dot-notation path within it.
+
+    Raises:
+        ValueError: if *field* is the reserved storage-key field.
+    """
+    if is_storage_key_field(field):
+        raise ValueError(
+            f"resolve_json_column_and_path() is for non-storage-key fields, but "
+            f"{field!r} is the reserved storage-key field (it addresses the 'id' "
+            f"column, not a JSON column). Gate the call on is_storage_key_field()."
+        )
+    if field.startswith(_METADATA_FIELD_PREFIX):
+        return "metadata", field[len(_METADATA_FIELD_PREFIX):]
+    return "data", field
 
 
 def validate_field_name(field: str) -> None:
@@ -837,16 +874,10 @@ class SQLQueryBuilder:
         Returns:
             A SQL expression suitable for ORDER BY.
         """
-        if field == "id":
+        if is_storage_key_field(field):
             return "id"
 
-        if field.startswith("metadata."):
-            nested_path = field[len("metadata."):]
-            column = "metadata"
-        else:
-            nested_path = field
-            column = "data"
-
+        column, nested_path = resolve_json_column_and_path(field)
         return self._build_json_field_expr(nested_path, column=column, as_text=False)
 
     def _build_json_field_expr(
@@ -1148,20 +1179,16 @@ class SQLQueryBuilder:
         # None (unguarded).
         json_target: tuple[str, str] | None = None
 
-        # Special handling for 'id' field — it's a real column, not inside JSON
-        if field == 'id':
+        # The reserved storage-key field is a real column, not inside JSON.
+        if is_storage_key_field(field):
             field_expr = 'id'
-        # Route metadata.* fields to the metadata JSONB column
-        elif field.startswith("metadata."):
-            nested_path = field[len("metadata."):]
-            base_expr = self._build_json_field_expr(nested_path, column="metadata")
-            field_expr = self._apply_type_cast(base_expr, op, value)
-            json_target = ("metadata", nested_path)
         else:
-            # Everything else targets the data JSONB column (supports dot-notation)
-            base_expr = self._build_json_field_expr(field, column="data")
+            # Non-storage-key fields target the data JSONB column, or the
+            # metadata column when prefixed ``metadata.`` (dot-notation nesting).
+            column, nested_path = resolve_json_column_and_path(field)
+            base_expr = self._build_json_field_expr(nested_path, column=column)
             field_expr = self._apply_type_cast(base_expr, op, value)
-            json_target = ("data", field)
+            json_target = (column, nested_path)
 
         clause, params = self._build_operator_clause(field_expr, op, value, param_start)
 

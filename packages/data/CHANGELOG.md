@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Storing a record whose data carries a top-level field named `id` now emits a
+  one-time diagnostic signal. That name is reserved for the record's storage key,
+  so a `Filter`/`SortSpec` on `id` resolves to the storage key and the stored
+  value is unreachable by query — a silent footgun with no error and zero
+  matching rows. Every record-persisting verb of every backend — single
+  (`create`, `upsert`, `update`) and bulk (`create_batch`, `upsert_batch`,
+  `update_batch`) — passes through the signal, so it fires regardless of which
+  verb or backend performs the write. The signal is `DEBUG` by default (silent
+  under normal configuration, visible when a consumer raises verbosity to
+  investigate an empty result) and promotes to `WARNING` when the environment
+  variable `DK_WARN_SHADOWED_ID` is set to `true` (case-insensitive; any other
+  value keeps it at `DEBUG`). It fires at most once per process (thread-safe
+  under concurrent writers). Rename the field to an entity-qualified name such
+  as `entity_id` to keep it queryable.
+- `RESERVED_KEY_FIELD` and `is_storage_key_field(field)` exported from
+  `dataknobs_data`: the single source of truth for the reserved query/sort field
+  name (`id`) that every backend routes to a record's storage key. Every
+  backend's filter and sort translation now consults the predicate instead of
+  comparing `field == "id"` inline, so all backends agree on the reserved name by
+  construction. Code that generates field names can assert against
+  `is_storage_key_field()` to avoid the storage-key shadowing footgun.
+  Consolidating the flat-`Query` and native-SQL/Elasticsearch translation sites
+  is behavior-preserving; the in-memory boolean-query path is additionally
+  corrected — see Fixed.
+
+### Fixed
+
+- Boolean `ComplexQuery` (OR / NOT / nested logic) resolved on the shared
+  in-memory scan path — the memory backend, and any backend without native
+  boolean-query translation — now routes the reserved `id` field to the record's
+  storage key for both filtering and sorting, matching the flat-`Query` path and
+  the native-SQL/Elasticsearch translations. Previously a boolean query such as
+  `Filter("id", EQ, key) OR ...` (and `SortSpec("id", ...)` on such a query)
+  resolved `id` to a shadowed `data["id"]` value on this path, silently diverging
+  from the SQL backends that resolved it to the storage key — the exact
+  cross-backend drift the reserved-name consolidation exists to prevent.
+
 ## v0.6.1 - 2026-07-18
 
 ### Changed

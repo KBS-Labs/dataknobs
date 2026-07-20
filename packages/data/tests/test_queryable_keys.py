@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_data import Filter, Operator, Query, Record
+from dataknobs_data import Filter, Operator, Query, Record, SortOrder, SortSpec
 from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase, SyncDuckDBDatabase
 from dataknobs_data.backends.file import AsyncFileDatabase, SyncFileDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
@@ -100,6 +100,28 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
             db = AsyncMemoryDatabase()
         elif kind == "file":
             db = AsyncFileDatabase({"path": str(Path(d) / "records.json")})
+        elif kind == "sqlite":
+            db = AsyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
+            await db.connect()
+        else:
+            db = AsyncDuckDBDatabase({"path": str(Path(d) / "records.duckdb"), "table": "records"})
+            await db.connect()
+        try:
+            yield db
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                await close()
+
+
+@pytest.fixture(params=_COMPLEX_QUERY_BACKENDS)
+async def async_cq_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
+    """Async backends whose search() supports a boolean ComplexQuery."""
+    kind = request.param
+    with tempfile.TemporaryDirectory() as d:
+        db: object
+        if kind == "memory":
+            db = AsyncMemoryDatabase()
         elif kind == "sqlite":
             db = AsyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
             await db.connect()
@@ -265,6 +287,89 @@ def test_secondary_key_lookup_via_field(sync_db: object) -> None:
     hits = sync_db.search(Query(filters=[Filter("sku", Operator.EQ, "SKU-200")]))
     assert _ids(hits) == {"row-2"}
     assert hits[0].get_value("name") == "gadget"
+
+
+def test_data_id_field_is_shadowed_by_filter_id(sync_db: object) -> None:
+    """Reserved-name footgun: a ``data`` field named ``id`` is shadowed.
+
+    ``Filter("id", ...)`` resolves to the record's *storage key* on every
+    backend, so a value stored under ``data["id"]`` is unreachable by query — the
+    filter matches the storage key and silently returns no rows. This pins the
+    hazard the API reference now documents at the secondary-identifier recipe, so
+    a future refactor cannot quietly change the semantics without a test failing.
+    """
+    # Storage key is "row-1"/"row-2" (the ``id=`` arg); the ``data["id"]`` value
+    # is an ordinary field that happens to collide with the reserved name.
+    sync_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    sync_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    # Negative direction: filtering on the data value matches nothing — the
+    # filter compared against the storage key, never ``data["id"]``.
+    assert sync_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")])) == []
+
+    # Proof the filter resolved to the storage key: filtering on the key hits.
+    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))) == {
+        "row-1"
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_data_id_field_is_shadowed_by_filter_id(async_db: object) -> None:
+    """Async twin of the shadowing pin — the async in-process backends (where the
+    181 audit found the sync/async drift) agree that ``data["id"]`` is shadowed."""
+    await async_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    await async_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    assert (
+        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")]))
+    ) == []
+    assert _ids(
+        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))
+    ) == {"row-1"}
+
+
+# ---------------------------------------------------------------------------
+# 4b. Sort on the reserved id field resolves to the storage key (parity + shadow)
+# ---------------------------------------------------------------------------
+def test_sort_by_id_orders_by_storage_key(sync_db: object) -> None:
+    """``SortSpec("id", ...)`` orders by the storage key on every backend.
+
+    The sort translation consults the same reserved-name policy as filtering, so
+    ordering by ``id`` follows the storage key uniformly — the parity that guards
+    against a sort site drifting away from the filter sites.
+    """
+    _seed_keys(sync_db, ["c", "a", "b"])
+    asc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
+    assert asc == ["a", "b", "c"]
+    desc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.DESC)]))]
+    assert desc == ["c", "b", "a"]
+
+
+def test_data_id_field_is_not_orderable_by_sort_id(sync_db: object) -> None:
+    """Negative direction for sort: a ``data`` field named ``id`` is shadowed.
+
+    ``SortSpec("id", ...)`` orders by the storage key, never by a value stored
+    under ``data["id"]`` — pinning the shadowing hazard on the ordering path too.
+    """
+    # Storage keys sort ascending as row-a, row-b; the ``data["id"]`` values sort
+    # the opposite way, so an order driven by ``data["id"]`` would be reversed.
+    sync_db.create(Record({"id": "zzz", "name": "widget"}, id="row-a"))
+    sync_db.create(Record({"id": "aaa", "name": "gadget"}, id="row-b"))
+
+    asc = [r.id for r in sync_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
+    assert asc == ["row-a", "row-b"]  # storage-key order, NOT data["id"] order
+
+
+@pytest.mark.asyncio
+async def test_async_sort_by_id_orders_by_storage_key(async_db: object) -> None:
+    """Async twin of the sort parity pin — the async in-process backends order by
+    the storage key when sorting on the reserved ``id`` field."""
+    await _aseed_keys(async_db, ["c", "a", "b"])
+    asc = [
+        r.id
+        for r in await async_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))
+    ]
+    assert asc == ["a", "b", "c"]
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +567,107 @@ def test_starts_with_in_complex_query(sync_cq_db: object) -> None:
         )
     )
     assert _ids(sync_cq_db.search(cq)) == {"1"}
+
+
+# ---------------------------------------------------------------------------
+# 8b. Reserved ``id`` inside a boolean ComplexQuery resolves to the storage key
+#
+# A top-level OR/NOT ComplexQuery cannot collapse to a simple Query, so the
+# memory backend falls into the shared in-memory scan path
+# (``AsyncDatabase._search_with_complex_query`` + ``FilterCondition.matches``),
+# while the SQL backends translate natively. These tests pin that BOTH routes
+# resolve the reserved ``id`` field to the storage key — the parity the flat-Query
+# path already guarantees. Reproduce-first: before the scan path consulted the
+# reserved-name policy, the memory parametrization failed (it resolved ``id`` to
+# the shadowed ``data["id"]``) while the SQL parametrizations passed.
+# ---------------------------------------------------------------------------
+def _or_with_id(id_value: str) -> ComplexQuery:
+    """An OR that can't simplify: ``id == id_value`` OR an always-miss clause."""
+    return ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("id", Operator.EQ, id_value)),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        )
+    )
+
+
+def test_id_filter_in_complex_query_resolves_to_storage_key(sync_cq_db: object) -> None:
+    """``Filter("id", ...)`` inside a boolean ComplexQuery targets the storage key.
+
+    The scan-path memory backend and the native-SQL backends must agree; before
+    the fix the memory parametrization resolved ``id`` to ``data["id"]`` and
+    returned no rows for the storage-key value.
+    """
+    sync_cq_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    sync_cq_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    # Positive: the storage key resolves and matches.
+    assert _ids(sync_cq_db.search(_or_with_id("row-1"))) == {"row-1"}
+    # Negative: the shadowed ``data["id"]`` value matches nothing.
+    assert sync_cq_db.search(_or_with_id("node-abc")) == []
+
+
+def test_sort_by_id_in_complex_query_orders_by_storage_key(sync_cq_db: object) -> None:
+    """``SortSpec("id", ...)`` on a ComplexQuery orders by the storage key.
+
+    The condition matches via a non-id field so the ordering is isolated from the
+    filter path; before the fix the scan-path sort keyed on ``data["id"]`` and
+    reversed the result on the memory backend.
+    """
+    # Storage keys sort ascending row-a, row-b; the ``data["id"]`` values sort the
+    # opposite way, so an order driven by ``data["id"]`` would be reversed.
+    sync_cq_db.create(Record({"grp": "g", "id": "zzz"}, id="row-a"))
+    sync_cq_db.create(Record({"grp": "g", "id": "aaa"}, id="row-b"))
+    cq = ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("grp", Operator.EQ, "g")),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        ),
+        sort_specs=[SortSpec("id", SortOrder.ASC)],
+    )
+    assert [r.id for r in sync_cq_db.search(cq)] == ["row-a", "row-b"]
+
+
+@pytest.mark.asyncio
+async def test_async_id_filter_in_complex_query_resolves_to_storage_key(
+    async_cq_db: object,
+) -> None:
+    """Async twin: the reserved ``id`` inside a ComplexQuery targets the storage key.
+
+    Covers the async scan path (``AsyncDatabase._search_with_complex_query``) that
+    the async memory backend falls into for a boolean query.
+    """
+    await async_cq_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    await async_cq_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    assert _ids(await async_cq_db.search(_or_with_id("row-1"))) == {"row-1"}
+    assert (await async_cq_db.search(_or_with_id("node-abc"))) == []
+
+
+@pytest.mark.asyncio
+async def test_async_sort_by_id_in_complex_query_orders_by_storage_key(
+    async_cq_db: object,
+) -> None:
+    """Async twin of the ComplexQuery sort-parity pin."""
+    await async_cq_db.create(Record({"grp": "g", "id": "zzz"}, id="row-a"))
+    await async_cq_db.create(Record({"grp": "g", "id": "aaa"}, id="row-b"))
+    cq = ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("grp", Operator.EQ, "g")),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        ),
+        sort_specs=[SortSpec("id", SortOrder.ASC)],
+    )
+    assert [r.id for r in await async_cq_db.search(cq)] == ["row-a", "row-b"]
 
 
 # ---------------------------------------------------------------------------

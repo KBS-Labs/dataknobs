@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from .query import Filter, Operator, VectorQuery
+from .query import Filter, Operator, VectorQuery, is_storage_key_field
 
 if TYPE_CHECKING:
     import numpy as np
@@ -53,7 +53,15 @@ class FilterCondition(Condition):
         from .records import Record
 
         if isinstance(record, Record):
-            value = record.get_value(self.filter.field)
+            # The reserved storage-key field routes to the record's storage key,
+            # never a ``data`` field named ``id`` (which it would shadow). This
+            # mirrors every backend's flat-Query filter translation so a boolean
+            # ComplexQuery resolved on this shared in-memory scan path agrees
+            # with the native-SQL and Elasticsearch translations.
+            if is_storage_key_field(self.filter.field):
+                value = record.storage_id
+            else:
+                value = record.get_value(self.filter.field)
         elif isinstance(record, dict):
             # Support nested field access for dicts
             value = record

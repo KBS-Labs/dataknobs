@@ -59,7 +59,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..query import Operator
+from ..query import Operator, is_storage_key_field
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -99,7 +99,7 @@ def _field_path(filter_obj: Filter) -> str:
     ``data.<field>`` with the ``.keyword`` suffix appended where exact matching
     on a string applies.
     """
-    if filter_obj.field == "id":
+    if is_storage_key_field(filter_obj.field):
         # Already a keyword — never suffixed.
         return "id"
 

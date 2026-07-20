@@ -17,7 +17,7 @@ from ..pooling.elasticsearch import (
     create_async_elasticsearch_client,
     validate_elasticsearch_client,
 )
-from ..query import Query, SortOrder
+from ..query import Query, SortOrder, is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import (
     StreamConfig,
@@ -698,7 +698,11 @@ class AsyncElasticsearchDatabase(
                 # keyword (mirroring ``_id``), not a data field named ``id``,
                 # matching the sync backend. ``_id`` itself is unsortable
                 # (fielddata disabled by default), so the keyword mirror is used.
-                sort_path = "id" if sort_spec.field == "id" else f"data.{sort_spec.field}"
+                sort_path = (
+                    "id"
+                    if is_storage_key_field(sort_spec.field)
+                    else f"data.{sort_spec.field}"
+                )
                 sort.append({sort_path: {"order": direction}})
 
         # Build request body

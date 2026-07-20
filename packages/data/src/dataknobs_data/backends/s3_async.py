@@ -15,7 +15,7 @@ from ..database import AsyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
-from ..query import Query
+from ..query import Query, is_storage_key_field
 from ..records import Record
 from ..streaming import (
     StreamConfig,
@@ -508,8 +508,8 @@ class AsyncS3Database(  # type: ignore[misc]
         ``EXISTS`` / ``REGEX`` / ``STARTS_WITH`` — is honored uniformly.
         """
         for filter in filters:
-            # Special handling for 'id' field — it's the storage key, not a data field.
-            if filter.field == "id":
+            # The reserved storage-key field routes to the storage key.
+            if is_storage_key_field(filter.field):
                 field_value = record.id
             else:
                 field_value = record.get_value(filter.field)
