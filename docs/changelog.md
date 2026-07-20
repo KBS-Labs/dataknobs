@@ -5,6 +5,54 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-20
+
+### dataknobs-config [0.4.3]
+
+#### Changed
+- maintenance release
+
+### dataknobs-structures [1.0.14]
+
+#### Changed
+- maintenance release
+
+### dataknobs-utils [1.2.17]
+
+#### Changed
+- maintenance release
+
+### dataknobs-xization [1.3.13]
+
+#### Changed
+- maintenance release
+
+### dataknobs-data [0.6.2]
+
+#### Added
+- signal a write under the reserved storage-key name
+
+#### Fixed
+- extend the shadowed-id write signal to update/update_batch
+- honor the reserved id field on the in-memory ComplexQuery scan path
+- consolidate the SQL metadata.-prefix routing into one helper
+- fix Query API names in reserved-field notes and examples
+
+### dataknobs-fsm [0.3.1]
+
+#### Changed
+- maintenance release
+
+### dataknobs-legacy [0.1.10]
+
+#### Changed
+- maintenance release
+
+### dataknobs-llm [0.6.7]
+
+#### Changed
+- maintenance release
+
 ## Release - 2026-07-18
 
 ### dataknobs-common [1.6.1]
