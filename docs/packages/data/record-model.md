@@ -64,7 +64,7 @@ record4 = Record(metadata={"id": "legacy_id"})
 print(record4.id)  # "legacy_id" - reads from metadata if not set
 ```
 
-> **`id` is reserved for querying.** `Filter("id", ...)` and `Sort("id", ...)`
+> **`id` is reserved for querying.** `Filter("id", ...)` and `SortSpec("id", ...)`
 > target the record's **storage key** on every backend — not a `data` field
 > named `id`. A value stored under `data["id"]` is reachable through the Record
 > API above but is **shadowed** for queries (the filter matches the storage key

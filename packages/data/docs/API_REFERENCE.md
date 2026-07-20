@@ -440,11 +440,11 @@ push down to the backend query engine where it supports them (a SQL range or
 `range` query on the `id` keyword field), scanning in memory otherwise.
 
 > **Reserved query field name.** `id` is the **only** reserved *bare* field
-> name. On every backend, both `Filter("id", ...)` and `Sort("id", ...)` target
+> name. On every backend, both `Filter("id", ...)` and `SortSpec("id", ...)` target
 > the record's **storage key** — never a `data` value stored under the key `id`.
 > A record that carries a top-level `data` value named `id` is therefore
 > **shadowed**: the filter matches the storage key instead and **silently
-> returns no rows** (no error, no warning), and `Sort("id", ...)` orders by the
+> returns no rows** (no error, no warning), and `SortSpec("id", ...)` orders by the
 > key rather than that value. No other bare name is reserved — `_id`,
 > `storage_id`, and any `<entity>_id` are ordinary data fields. (Dotted paths
 > such as `metadata.tenant_id` or `config.timeout` address nested / metadata
@@ -480,7 +480,7 @@ found = db.search(Query(filters=[Filter("sku", Operator.EQ, "SKU-200")]))
 ```
 
 > ⚠️ **The promoted field must not be named `id`.** `Filter("id", ...)` (and
-> `Sort("id", ...)`) are reserved to the record's storage key on every backend,
+> `SortSpec("id", ...)`) are reserved to the record's storage key on every backend,
 > so a `data` field named `id` is unreachable — the filter matches the storage
 > key instead and **silently returns no rows** (no error, no warning). Name it
 > `node_id`, `sku`, or `<entity>_id`.

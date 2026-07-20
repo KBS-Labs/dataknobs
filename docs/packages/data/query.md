@@ -30,7 +30,7 @@ query = Query(filters=[
 ```
 
 > **`id` is a reserved filter/sort field name.** `Filter("id", ...)` and
-> `Sort("id", ...)` target the record's **storage key** on every backend, not a
+> `SortSpec("id", ...)` target the record's **storage key** on every backend, not a
 > `data` field named `id`. A value stored under `data["id"]` is **shadowed** — the
 > filter matches the storage key and silently returns no rows. To query a
 > secondary identifier, name the field something other than `id`. See the
@@ -193,13 +193,13 @@ from dataknobs_data import Query, SortSpec, SortOrder
 # Sort by single field
 query = Query(
     filters=[Filter("type", Operator.EQ, "reading")],
-    sort=[SortSpec("timestamp", SortOrder.DESC)]
+    sort_specs=[SortSpec("timestamp", SortOrder.DESC)]
 )
 
 # Multi-field sorting
 query = Query(
     filters=[Filter("status", Operator.EQ, "active")],
-    sort=[
+    sort_specs=[
         SortSpec("priority", SortOrder.DESC),
         SortSpec("created_at", SortOrder.ASC)
     ]
@@ -212,7 +212,7 @@ query = Query(
 # Limit results
 query = Query(
     filters=[Filter("type", Operator.EQ, "log")],
-    limit=100
+    limit_value=100
 )
 
 # Offset for pagination
@@ -220,8 +220,8 @@ page_size = 20
 page = 3
 query = Query(
     filters=[Filter("status", Operator.EQ, "active")],
-    limit=page_size,
-    offset=(page - 1) * page_size
+    limit_value=page_size,
+    offset_value=(page - 1) * page_size
 )
 ```
 
@@ -281,7 +281,7 @@ def get_statistics_query(
             Filter("metric_name", Operator.EQ, metric),
             Filter("timestamp", Operator.BETWEEN, time_range)
         ],
-        sort=[SortSpec(group_by, SortOrder.ASC)]
+        sort_specs=[SortSpec(group_by, SortOrder.ASC)]
     )
 ```
 
