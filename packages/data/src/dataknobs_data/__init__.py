@@ -108,7 +108,15 @@ from .factory import AsyncDatabaseFactory, DatabaseFactory, async_database_facto
 
 # Import core modules
 from .fields import Field, FieldType, VectorField
-from .query import Filter, Operator, Query, SortOrder, SortSpec
+from .query import (
+    RESERVED_KEY_FIELD,
+    Filter,
+    Operator,
+    Query,
+    SortOrder,
+    SortSpec,
+    is_storage_key_field,
+)
 from .query_logic import (
     ComplexQuery,
     Condition,
@@ -139,6 +147,8 @@ __all__ = [
     "Operator",
     "SortOrder",
     "SortSpec",
+    "RESERVED_KEY_FIELD",
+    "is_storage_key_field",
     # Allocation
     "DEFAULT_MAX_ATTEMPTS",
     "allocate",

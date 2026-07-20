@@ -450,6 +450,10 @@ push down to the backend query engine where it supports them (a SQL range or
 > such as `metadata.tenant_id` or `config.timeout` address nested / metadata
 > values, as shown above, and are unaffected.) To query by a secondary
 > identifier, name the field anything other than `id` — see the recipe below.
+> The reserved name is exported as `RESERVED_KEY_FIELD`, with an
+> `is_storage_key_field(field)` predicate, so code that generates field names can
+> assert against it (`assert not is_storage_key_field(name)`) instead of
+> hardcoding the literal.
 
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
 `_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like

@@ -23,7 +23,7 @@ from ..database import (
     prepare_atomic_batch,
 )
 from ..exceptions import DuplicateRecordError
-from ..query import Query
+from ..query import Query, is_storage_key_field
 from ..records import Record
 from ..streaming import (
     AsyncStreamingMixin,
@@ -629,8 +629,8 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    # Special handling for 'id' field
-                    if filter.field == 'id':
+                    # The reserved storage-key field routes to the storage key.
+                    if is_storage_key_field(filter.field):
                         field_value = record_id
                     else:
                         field_value = record.get_value(filter.field)
@@ -1037,8 +1037,8 @@ class SyncFileDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    # Special handling for 'id' field
-                    if filter.field == 'id':
+                    # The reserved storage-key field routes to the storage key.
+                    if is_storage_key_field(filter.field):
                         field_value = record_id
                     else:
                         field_value = record.get_value(filter.field)
