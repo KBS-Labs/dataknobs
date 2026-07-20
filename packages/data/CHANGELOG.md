@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.2 - 2026-07-20
+
 ### Added
 
 - Storing a record whose data carries a top-level field named `id` now emits a

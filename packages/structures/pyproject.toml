@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-structures"
-version = "1.0.13"
+version = "1.0.14"
 description = "Data structures for AI knowledge bases"
 readme = "README.md"
 authors = [
