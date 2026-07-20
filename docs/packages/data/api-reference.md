@@ -453,7 +453,11 @@ push down to the backend query engine where it supports them (a SQL range or
 > The reserved name is exported as `RESERVED_KEY_FIELD`, with an
 > `is_storage_key_field(field)` predicate, so code that generates field names can
 > assert against it (`assert not is_storage_key_field(name)`) instead of
-> hardcoding the literal.
+> hardcoding the literal. At **write** time, storing a record with such a
+> shadowed field emits a one-time diagnostic signal (`DEBUG` by default, so it is
+> silent under normal configuration; set `DK_WARN_SHADOWED_ID=true` to raise it
+> to `WARNING`) so the otherwise-silent footgun is discoverable when a query
+> returns nothing.
 
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
 `_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
