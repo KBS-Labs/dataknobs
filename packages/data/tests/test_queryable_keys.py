@@ -267,6 +267,45 @@ def test_secondary_key_lookup_via_field(sync_db: object) -> None:
     assert hits[0].get_value("name") == "gadget"
 
 
+def test_data_id_field_is_shadowed_by_filter_id(sync_db: object) -> None:
+    """Reserved-name footgun: a ``data`` field named ``id`` is shadowed.
+
+    ``Filter("id", ...)`` resolves to the record's *storage key* on every
+    backend, so a value stored under ``data["id"]`` is unreachable by query — the
+    filter matches the storage key and silently returns no rows. This pins the
+    hazard the API reference now documents at the secondary-identifier recipe, so
+    a future refactor cannot quietly change the semantics without a test failing.
+    """
+    # Storage key is "row-1"/"row-2" (the ``id=`` arg); the ``data["id"]`` value
+    # is an ordinary field that happens to collide with the reserved name.
+    sync_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    sync_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    # Negative direction: filtering on the data value matches nothing — the
+    # filter compared against the storage key, never ``data["id"]``.
+    assert sync_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")])) == []
+
+    # Proof the filter resolved to the storage key: filtering on the key hits.
+    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))) == {
+        "row-1"
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_data_id_field_is_shadowed_by_filter_id(async_db: object) -> None:
+    """Async twin of the shadowing pin — the async in-process backends (where the
+    181 audit found the sync/async drift) agree that ``data["id"]`` is shadowed."""
+    await async_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    await async_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    assert (
+        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")]))
+    ) == []
+    assert _ids(
+        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))
+    ) == {"row-1"}
+
+
 # ---------------------------------------------------------------------------
 # 5. Pushdown proof — the SQL builder emits a pushed-down predicate, not a scan
 # ---------------------------------------------------------------------------

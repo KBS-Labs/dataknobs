@@ -29,6 +29,13 @@ query = Query(filters=[
 ])
 ```
 
+> **`id` is a reserved filter/sort field name.** `Filter("id", ...)` and
+> `Sort("id", ...)` target the record's **storage key** on every backend, not a
+> `data` field named `id`. A value stored under `data["id"]` is **shadowed** — the
+> filter matches the storage key and silently returns no rows. To query a
+> secondary identifier, name the field something other than `id`. See the
+> [reserved query field name note](api-reference.md#querying-by-identifier-and-key-prefix).
+
 ### Available Operators
 
 | Operator | Description | Example |
