@@ -439,6 +439,18 @@ push down to the backend query engine where it supports them (a SQL range or
 `LIKE ... ESCAPE` on the `id` column, an Elasticsearch `term`/`terms`/`prefix`/
 `range` query on the `id` keyword field), scanning in memory otherwise.
 
+> **Reserved query field name.** `id` is the **only** reserved *bare* field
+> name. On every backend, both `Filter("id", ...)` and `SortSpec("id", ...)` target
+> the record's **storage key** — never a `data` value stored under the key `id`.
+> A record that carries a top-level `data` value named `id` is therefore
+> **shadowed**: the filter matches the storage key instead and **silently
+> returns no rows** (no error, no warning), and `SortSpec("id", ...)` orders by the
+> key rather than that value. No other bare name is reserved — `_id`,
+> `storage_id`, and any `<entity>_id` are ordinary data fields. (Dotted paths
+> such as `metadata.tenant_id` or `config.timeout` address nested / metadata
+> values, as shown above, and are unaffected.) To query by a secondary
+> identifier, name the field anything other than `id` — see the recipe below.
+
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
 `_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
 `LIKE` and `REGEX`, it matches **string values only** — a non-string field value
@@ -466,6 +478,12 @@ field directly:
 db.create(Record({"sku": "SKU-200", "name": "gadget"}, id="row-2"))
 found = db.search(Query(filters=[Filter("sku", Operator.EQ, "SKU-200")]))
 ```
+
+> ⚠️ **The promoted field must not be named `id`.** `Filter("id", ...)` (and
+> `SortSpec("id", ...)`) are reserved to the record's storage key on every backend,
+> so a `data` field named `id` is unreachable — the filter matches the storage
+> key instead and **silently returns no rows** (no error, no warning). Name it
+> `node_id`, `sku`, or `<entity>_id`.
 
 ### Streaming
 
@@ -1024,9 +1042,12 @@ pre-filters agree:
   case-insensitively; a literal `*`, `?`, or `\` in the pattern is escaped to
   match verbatim. The case-insensitive form requires **Elasticsearch ≥ 7.10**.
 - **`Filter("id", ...)`** targets the record's storage key via a stamped
-  top-level `id` keyword field. Records indexed by an older version that did not
-  stamp a *minted* `id` must be reindexed to become `id`-queryable; `read(id)`
-  is unaffected.
+  top-level `id` keyword field. This is the cross-backend reserved-name contract
+  (see [Querying by identifier and key prefix](#querying-by-identifier-and-key-prefix)
+  for the full note, including how a `data` field named `id` is shadowed); the
+  detail here is only the ES-specific mechanism. Records indexed by an older
+  version that did not stamp a *minted* `id` must be reindexed to become
+  `id`-queryable; `read(id)` is unaffected.
 - An operator the translator cannot express raises `ValueError` rather than
   silently matching every document.
 
