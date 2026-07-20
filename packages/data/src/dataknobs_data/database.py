@@ -7,8 +7,12 @@ different backend database implementations.
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
 import json
+import logging
+import os
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -24,7 +28,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
 from .exceptions import ConcurrencyError, DuplicateRecordError
-from .query import Query, is_storage_key_field
+from .query import Query, RESERVED_KEY_FIELD, is_storage_key_field
 from .schema import DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
@@ -34,6 +38,153 @@ if TYPE_CHECKING:
     from .query_logic import ComplexQuery
     from .records import Record
     from .streaming import StreamConfig, StreamResult
+
+
+logger = logging.getLogger(__name__)
+
+
+# Every record-persisting verb on the base classes passes through a pre-write
+# inspection point. These are wrapped at class-definition time (see
+# ``_install_write_inspection`` and ``__init_subclass__``) so a value stored
+# under the reserved storage-key name is signalled uniformly, regardless of
+# which verb — or which backend — performs the write.
+_WRITE_METHODS = ("create", "upsert", "create_batch", "upsert_batch")
+
+# Environment flag that promotes the shadowed-storage-key signal from DEBUG to
+# WARNING. Fail-closed: only the exact value ``"true"`` (case-insensitive)
+# promotes; anything else keeps the signal at DEBUG.
+_WARN_SHADOWED_ID_ENV = "DK_WARN_SHADOWED_ID"
+
+# One-time-per-process latch so a bulk write of shadowed records — or repeated
+# writes across a long-lived process — emits a single line, not a flood. Held
+# in a mutable container so the helpers mutate its contents rather than rebind a
+# module global.
+_shadowed_id_state = {"warned": False}
+
+
+def _reset_shadowed_id_warning_state() -> None:
+    """Reset the one-time shadowed-storage-key signal latch.
+
+    Test hook only. Production code never needs this; the latch is meant to
+    fire at most once per process.
+    """
+    _shadowed_id_state["warned"] = False
+
+
+def _maybe_warn_shadowed_id(record: Any) -> None:
+    """Signal, at most once per process, a record stored under the reserved key.
+
+    A top-level data field named :data:`RESERVED_KEY_FIELD` is shadowed by the
+    record's storage key on every backend: a ``Filter``/``SortSpec`` on that
+    name resolves to the storage key, never to the stored value, so the value
+    is silently unreachable by query. This emits a one-time signal at DEBUG
+    (silent under normal config, visible when a consumer raises verbosity to
+    investigate an empty result), promoted to WARNING via
+    :data:`_WARN_SHADOWED_ID_ENV`. The level is read at emit time so a
+    debugging session needs no restart.
+    """
+    if _shadowed_id_state["warned"]:
+        return
+    has_field = getattr(record, "has_field", None)
+    if has_field is None or not has_field(RESERVED_KEY_FIELD):
+        return
+    _shadowed_id_state["warned"] = True
+    level = (
+        logging.WARNING
+        if os.environ.get(_WARN_SHADOWED_ID_ENV, "").lower() == "true"
+        else logging.DEBUG
+    )
+    logger.log(
+        level,
+        "Stored a record carrying a top-level data field named %r; that name is "
+        "reserved for the record's storage key, so the value is unreachable via "
+        "Filter/SortSpec (a query on %r resolves to the storage key, not this "
+        "value). Rename it to an entity-qualified key (e.g. 'entity_id') to keep "
+        "it queryable.",
+        RESERVED_KEY_FIELD,
+        RESERVED_KEY_FIELD,
+    )
+
+
+def _iter_write_records(
+    name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> Iterator[Any]:
+    """Yield the record(s) a write verb persists, for pre-write inspection.
+
+    Argument shapes differ per verb; this reads the record(s) from the
+    forwarded ``*args``/``**kwargs`` without disturbing them. ``self`` is
+    already bound, so ``args`` begins at the first real parameter.
+    """
+    if name in ("create_batch", "upsert_batch"):
+        records = args[0] if args else kwargs.get("records")
+        if records:
+            yield from records
+    elif name == "upsert":
+        # upsert(id_or_record, record=None, ...): the first arg is either an
+        # id string (record is the second) or the record itself.
+        first = args[0] if args else kwargs.get("id_or_record")
+        if isinstance(first, str):
+            rec = args[1] if len(args) > 1 else kwargs.get("record")
+            if rec is not None:
+                yield rec
+        elif first is not None:
+            yield first
+    else:  # create and any single-leading-record verb
+        rec = args[0] if args else kwargs.get("record")
+        if rec is not None:
+            yield rec
+
+
+def _wrap_write(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a write method with the pre-write inspection point.
+
+    Prepends the shadowed-storage-key inspection, then calls the original
+    method and returns its result verbatim — every backend-specific kwarg
+    (``_tx``, ``expected_version``, ...) is forwarded untouched, so the write
+    body's behavior is preserved exactly. Async methods get an async shim.
+    """
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            for record in _iter_write_records(name, args, kwargs):
+                _maybe_warn_shadowed_id(record)
+            return await fn(self, *args, **kwargs)
+
+        async_wrapper._write_inspected = True  # type: ignore[attr-defined]
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        for record in _iter_write_records(name, args, kwargs):
+            _maybe_warn_shadowed_id(record)
+        return fn(self, *args, **kwargs)
+
+    wrapper._write_inspected = True  # type: ignore[attr-defined]
+    return wrapper
+
+
+def _install_write_inspection(cls: type) -> None:
+    """Wrap the write methods a class defines with the inspection point.
+
+    Wraps only methods present in ``cls.__dict__`` (i.e. defined or overridden
+    on this exact class), skipping abstract declarations and already-wrapped
+    methods. Called from each base's ``__init_subclass__`` for every backend,
+    and once directly on each base to cover the bases' own concrete defaults
+    (which ``__init_subclass__`` — running only for *subclasses* — cannot see).
+    A subclass inheriting a base default resolves to the already-wrapped base
+    method; an overriding subclass gets its override wrapped. Either way,
+    coverage is total and no method is double-wrapped.
+    """
+    for name in _WRITE_METHODS:
+        fn = cls.__dict__.get(name)
+        if fn is None:
+            continue
+        if getattr(fn, "__isabstractmethod__", False):
+            continue
+        if getattr(fn, "_write_inspected", False):
+            continue
+        setattr(cls, name, _wrap_write(name, fn))
 
 
 def hash_record_version(record: Record) -> str:
@@ -214,6 +365,16 @@ class AsyncDatabase(CapabilityMixin, ABC):
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
         Capability.CONDITIONAL_WRITE,
     })
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Wrap every subclass's write methods with the pre-write inspection.
+
+        Runs at class-definition time for each backend, so a value stored under
+        the reserved storage-key name is signalled on every backend without any
+        per-backend code — a new backend cannot forget to opt in.
+        """
+        super().__init_subclass__(**kwargs)
+        _install_write_inspection(cls)
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -1036,6 +1197,16 @@ class SyncDatabase(CapabilityMixin, ABC):
         Capability.CONDITIONAL_WRITE,
     })
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Wrap every subclass's write methods with the pre-write inspection.
+
+        Runs at class-definition time for each backend, so a value stored under
+        the reserved storage-key name is signalled on every backend without any
+        per-backend code — a new backend cannot forget to opt in.
+        """
+        super().__init_subclass__(**kwargs)
+        _install_write_inspection(cls)
+
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
 
@@ -1700,3 +1871,11 @@ class SyncDatabase(CapabilityMixin, ABC):
         instance = backend_class(config)
         instance.connect()
         return instance
+
+
+# Wrap the bases' own concrete write defaults (``upsert`` / ``create_batch`` /
+# ``upsert_batch``). ``__init_subclass__`` runs only for *subclasses*, so it
+# never sees these — a backend that inherits a default would otherwise bypass
+# the inspection. ``create`` is abstract on both bases and is skipped.
+_install_write_inspection(AsyncDatabase)
+_install_write_inspection(SyncDatabase)

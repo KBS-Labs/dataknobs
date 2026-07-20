@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Storing a record whose data carries a top-level field named `id` now emits a
+  one-time diagnostic signal. That name is reserved for the record's storage key,
+  so a `Filter`/`SortSpec` on `id` resolves to the storage key and the stored
+  value is unreachable by query — a silent footgun with no error and zero
+  matching rows. Every write verb of every backend (`create`, `upsert`,
+  `create_batch`, `upsert_batch`) passes through the signal, so it fires
+  regardless of which verb or backend performs the write. The signal is `DEBUG`
+  by default (silent under normal configuration, visible when a consumer raises
+  verbosity to investigate an empty result) and promotes to `WARNING` when the
+  environment variable `DK_WARN_SHADOWED_ID` is set to `true` (case-insensitive;
+  any other value keeps it at `DEBUG`). It fires at most once per process. Rename
+  the field to an entity-qualified name such as `entity_id` to keep it queryable.
 - `RESERVED_KEY_FIELD` and `is_storage_key_field(field)` exported from
   `dataknobs_data`: the single source of truth for the reserved query/sort field
   name (`id`) that every backend routes to a record's storage key. Every
