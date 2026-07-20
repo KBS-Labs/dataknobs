@@ -11,10 +11,11 @@ see the cause.
 
 These tests are the reproduce-first anchor: the uniform-coverage matrix fails
 against any backend whose write body bypasses the inspection (e.g. a bulk
-``upsert_batch`` that never calls per-record ``upsert``, or a ``create`` that
-inlines its own id logic) and passes only when the seam covers every verb on
-every backend. The structural guard is a second, source-text-independent check
-that a new backend cannot silently miss the seam.
+``upsert_batch``/``update_batch`` that never calls the per-record verb, or a
+``create``/``update`` that inlines its own id logic) and passes only when the
+seam covers every record-persisting verb -- single and bulk -- on every
+backend. The structural guard is a second, source-text-independent check that a
+new backend cannot silently miss the seam.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import threading
 
 import pytest
 
@@ -41,7 +43,14 @@ from dataknobs_data.database import (
 
 _LOGGER_NAME = "dataknobs_data.database"
 _SIGNAL_MARKER = "reserved for the record's storage key"
-_WRITE_VERBS = ("create", "upsert", "create_batch", "upsert_batch")
+_WRITE_VERBS = (
+    "create",
+    "upsert",
+    "update",
+    "create_batch",
+    "upsert_batch",
+    "update_batch",
+)
 
 
 # ---- backend builders (real in-process backends, no mocks) ------------------
@@ -89,10 +98,16 @@ def _write_sync(db: SyncDatabase, verb: str, records: list[Record]) -> None:
         db.create(records[0])
     elif verb == "upsert":
         db.upsert(records[0])
+    elif verb == "update":
+        # The inspection fires pre-write, so a not-yet-persisted id is fine —
+        # what matters is that the update verb routes through the seam.
+        db.update(records[0].storage_id, records[0])
     elif verb == "create_batch":
         db.create_batch(records)
-    else:  # upsert_batch
+    elif verb == "upsert_batch":
         db.upsert_batch(records)
+    else:  # update_batch
+        db.update_batch([(r.storage_id, r) for r in records])
 
 
 async def _write_async(db: AsyncDatabase, verb: str, records: list[Record]) -> None:
@@ -100,10 +115,16 @@ async def _write_async(db: AsyncDatabase, verb: str, records: list[Record]) -> N
         await db.create(records[0])
     elif verb == "upsert":
         await db.upsert(records[0])
+    elif verb == "update":
+        # The inspection fires pre-write, so a not-yet-persisted id is fine —
+        # what matters is that the update verb routes through the seam.
+        await db.update(records[0].storage_id, records[0])
     elif verb == "create_batch":
         await db.create_batch(records)
-    else:  # upsert_batch
+    elif verb == "upsert_batch":
         await db.upsert_batch(records)
+    else:  # update_batch
+        await db.update_batch([(r.storage_id, r) for r in records])
 
 
 @pytest.fixture(autouse=True)
@@ -234,6 +255,33 @@ def test_one_time_per_process_across_repeated_writes(
     db = SyncMemoryDatabase()
     for i in range(3):
         db.create(_shadowed_record(f"sk-{i}"))
+    assert len(_signals(caplog)) == 1
+
+
+def test_one_time_signal_is_thread_safe(caplog: pytest.LogCaptureFixture) -> None:
+    """Concurrent writers still emit exactly one signal.
+
+    The latch's check-then-set is lock-guarded, so "at most once per process"
+    holds even when many threads race into the inspection simultaneously. A
+    barrier forces maximal contention on the transition. Without the lock this
+    can emit more than one line (racily); with it, exactly one.
+    """
+    caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+    thread_count = 32
+    barrier = threading.Barrier(thread_count)
+    db = SyncMemoryDatabase()
+
+    def worker(index: int) -> None:
+        barrier.wait()  # release all threads into the check-then-set at once
+        db.create(_shadowed_record(f"sk-{index}"))
+
+    threads = [
+        threading.Thread(target=worker, args=(i,)) for i in range(thread_count)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
     assert len(_signals(caplog)) == 1
 
 
