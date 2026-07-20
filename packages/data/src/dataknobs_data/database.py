@@ -24,7 +24,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
 from .exceptions import ConcurrencyError, DuplicateRecordError
-from .query import Query
+from .query import Query, is_storage_key_field
 from .schema import DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
@@ -520,10 +520,19 @@ class AsyncDatabase(CapabilityMixin, ABC):
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
-                    results.sort(
-                        key=lambda r: r.get_value(sort_spec.field, ""),
-                        reverse=reverse
-                    )
+                    # The reserved storage-key field sorts by the storage key,
+                    # matching the flat-Query sort path (process_search_results),
+                    # never a shadowed ``data["id"]`` value.
+                    if is_storage_key_field(sort_spec.field):
+                        results.sort(
+                            key=lambda r: r.storage_id or "",
+                            reverse=reverse,
+                        )
+                    else:
+                        results.sort(
+                            key=lambda r: r.get_value(sort_spec.field, ""),
+                            reverse=reverse,
+                        )
 
             # Apply offset and limit.  ``is not None`` so ``limit=0``
             # is honored as Python-slice semantics (empty result) and
@@ -1362,10 +1371,19 @@ class SyncDatabase(CapabilityMixin, ABC):
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
-                    results.sort(
-                        key=lambda r: r.get_value(sort_spec.field, ""),
-                        reverse=reverse
-                    )
+                    # The reserved storage-key field sorts by the storage key,
+                    # matching the flat-Query sort path (process_search_results),
+                    # never a shadowed ``data["id"]`` value.
+                    if is_storage_key_field(sort_spec.field):
+                        results.sort(
+                            key=lambda r: r.storage_id or "",
+                            reverse=reverse,
+                        )
+                    else:
+                        results.sort(
+                            key=lambda r: r.get_value(sort_spec.field, ""),
+                            reverse=reverse,
+                        )
 
             # Apply offset and limit.  ``is not None`` so ``limit=0``
             # is honored as Python-slice semantics (empty result) and

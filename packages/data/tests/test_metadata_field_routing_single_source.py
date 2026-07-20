@@ -17,7 +17,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 import dataknobs_data
+from dataknobs_data import RESERVED_KEY_FIELD
 from dataknobs_data.backends.sql_base import resolve_json_column_and_path
 
 _SRC = Path(dataknobs_data.__file__).parent
@@ -55,3 +58,16 @@ def test_resolve_json_column_and_path_routes_metadata_and_data() -> None:
     assert resolve_json_column_and_path("status") == ("data", "status")
     # A field merely containing (not prefixed by) "metadata" is a data field.
     assert resolve_json_column_and_path("metadata_id") == ("data", "metadata_id")
+
+
+def test_resolve_json_column_and_path_rejects_the_storage_key_field() -> None:
+    """The reserved storage-key field addresses the ``id`` column, not JSON.
+
+    The helper is for non-storage-key fields only. Passing the reserved field is
+    a fail-loud ``ValueError``, not a silent mis-route to ``("data", "id")`` —
+    the precondition is enforced so a future caller cannot reopen the
+    storage-key-shadowing footgun. Both current callers gate on
+    ``is_storage_key_field()`` first, so this guard never fires in normal use.
+    """
+    with pytest.raises(ValueError, match="reserved storage-key field"):
+        resolve_json_column_and_path(RESERVED_KEY_FIELD)

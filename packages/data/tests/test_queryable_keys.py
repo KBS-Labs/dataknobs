@@ -114,6 +114,28 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
                 await close()
 
 
+@pytest.fixture(params=_COMPLEX_QUERY_BACKENDS)
+async def async_cq_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
+    """Async backends whose search() supports a boolean ComplexQuery."""
+    kind = request.param
+    with tempfile.TemporaryDirectory() as d:
+        db: object
+        if kind == "memory":
+            db = AsyncMemoryDatabase()
+        elif kind == "sqlite":
+            db = AsyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
+            await db.connect()
+        else:
+            db = AsyncDuckDBDatabase({"path": str(Path(d) / "records.duckdb"), "table": "records"})
+            await db.connect()
+        try:
+            yield db
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                await close()
+
+
 def _seed_keys(db: object, keys: list[str]) -> None:
     """Create one record per storage key (the key IS the record id)."""
     for k in keys:
@@ -545,6 +567,107 @@ def test_starts_with_in_complex_query(sync_cq_db: object) -> None:
         )
     )
     assert _ids(sync_cq_db.search(cq)) == {"1"}
+
+
+# ---------------------------------------------------------------------------
+# 8b. Reserved ``id`` inside a boolean ComplexQuery resolves to the storage key
+#
+# A top-level OR/NOT ComplexQuery cannot collapse to a simple Query, so the
+# memory backend falls into the shared in-memory scan path
+# (``AsyncDatabase._search_with_complex_query`` + ``FilterCondition.matches``),
+# while the SQL backends translate natively. These tests pin that BOTH routes
+# resolve the reserved ``id`` field to the storage key — the parity the flat-Query
+# path already guarantees. Reproduce-first: before the scan path consulted the
+# reserved-name policy, the memory parametrization failed (it resolved ``id`` to
+# the shadowed ``data["id"]``) while the SQL parametrizations passed.
+# ---------------------------------------------------------------------------
+def _or_with_id(id_value: str) -> ComplexQuery:
+    """An OR that can't simplify: ``id == id_value`` OR an always-miss clause."""
+    return ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("id", Operator.EQ, id_value)),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        )
+    )
+
+
+def test_id_filter_in_complex_query_resolves_to_storage_key(sync_cq_db: object) -> None:
+    """``Filter("id", ...)`` inside a boolean ComplexQuery targets the storage key.
+
+    The scan-path memory backend and the native-SQL backends must agree; before
+    the fix the memory parametrization resolved ``id`` to ``data["id"]`` and
+    returned no rows for the storage-key value.
+    """
+    sync_cq_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    sync_cq_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    # Positive: the storage key resolves and matches.
+    assert _ids(sync_cq_db.search(_or_with_id("row-1"))) == {"row-1"}
+    # Negative: the shadowed ``data["id"]`` value matches nothing.
+    assert sync_cq_db.search(_or_with_id("node-abc")) == []
+
+
+def test_sort_by_id_in_complex_query_orders_by_storage_key(sync_cq_db: object) -> None:
+    """``SortSpec("id", ...)`` on a ComplexQuery orders by the storage key.
+
+    The condition matches via a non-id field so the ordering is isolated from the
+    filter path; before the fix the scan-path sort keyed on ``data["id"]`` and
+    reversed the result on the memory backend.
+    """
+    # Storage keys sort ascending row-a, row-b; the ``data["id"]`` values sort the
+    # opposite way, so an order driven by ``data["id"]`` would be reversed.
+    sync_cq_db.create(Record({"grp": "g", "id": "zzz"}, id="row-a"))
+    sync_cq_db.create(Record({"grp": "g", "id": "aaa"}, id="row-b"))
+    cq = ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("grp", Operator.EQ, "g")),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        ),
+        sort_specs=[SortSpec("id", SortOrder.ASC)],
+    )
+    assert [r.id for r in sync_cq_db.search(cq)] == ["row-a", "row-b"]
+
+
+@pytest.mark.asyncio
+async def test_async_id_filter_in_complex_query_resolves_to_storage_key(
+    async_cq_db: object,
+) -> None:
+    """Async twin: the reserved ``id`` inside a ComplexQuery targets the storage key.
+
+    Covers the async scan path (``AsyncDatabase._search_with_complex_query``) that
+    the async memory backend falls into for a boolean query.
+    """
+    await async_cq_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
+    await async_cq_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
+
+    assert _ids(await async_cq_db.search(_or_with_id("row-1"))) == {"row-1"}
+    assert (await async_cq_db.search(_or_with_id("node-abc"))) == []
+
+
+@pytest.mark.asyncio
+async def test_async_sort_by_id_in_complex_query_orders_by_storage_key(
+    async_cq_db: object,
+) -> None:
+    """Async twin of the ComplexQuery sort-parity pin."""
+    await async_cq_db.create(Record({"grp": "g", "id": "zzz"}, id="row-a"))
+    await async_cq_db.create(Record({"grp": "g", "id": "aaa"}, id="row-b"))
+    cq = ComplexQuery(
+        condition=LogicCondition(
+            operator=LogicOperator.OR,
+            conditions=[
+                FilterCondition(Filter("grp", Operator.EQ, "g")),
+                FilterCondition(Filter("name", Operator.EQ, "__never__")),
+            ],
+        ),
+        sort_specs=[SortSpec("id", SortOrder.ASC)],
+    )
+    assert [r.id for r in await async_cq_db.search(cq)] == ["row-a", "row-b"]
 
 
 # ---------------------------------------------------------------------------

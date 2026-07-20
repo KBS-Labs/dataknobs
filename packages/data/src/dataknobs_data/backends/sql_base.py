@@ -31,10 +31,25 @@ def resolve_json_column_and_path(field: str) -> tuple[str, str]:
     every SQL filter/sort translator consults instead of testing the prefix
     inline, so the filter and sort paths cannot disagree on where a field lives.
 
+    The reserved storage-key field addresses the record's ``id`` column, not a
+    JSON column, so callers MUST gate on :func:`is_storage_key_field` first; the
+    precondition is enforced (a fail-loud ``ValueError`` rather than a silent
+    mis-route to ``("data", "id")``) so a future caller cannot reopen the
+    storage-key-shadowing footgun.
+
     Returns:
         A ``(column, nested_path)`` pair naming the target JSONB column and the
         dot-notation path within it.
+
+    Raises:
+        ValueError: if *field* is the reserved storage-key field.
     """
+    if is_storage_key_field(field):
+        raise ValueError(
+            f"resolve_json_column_and_path() is for non-storage-key fields, but "
+            f"{field!r} is the reserved storage-key field (it addresses the 'id' "
+            f"column, not a JSON column). Gate the call on is_storage_key_field()."
+        )
     if field.startswith(_METADATA_FIELD_PREFIX):
         return "metadata", field[len(_METADATA_FIELD_PREFIX):]
     return "data", field
