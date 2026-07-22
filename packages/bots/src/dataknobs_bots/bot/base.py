@@ -1757,20 +1757,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     )
                 break
 
-            # Wall-clock timeout guard.  Add a system message so the LLM
-            # knows the loop was truncated during the synthesis call.
+            # Wall-clock timeout guard.  When an iterative strategy has a
+            # pending (unexecuted) tool call, breaking here leaves an
+            # assistant tool_use dangling in history.  Correctness is
+            # handled at the synthesis chokepoint: the strategy's
+            # finalize_turn pairs any orphan tool_use with a tool_result
+            # (see reasoning/react.py::_pair_orphan_tool_calls).  No
+            # mid-conversation role="system" notice is appended here — it
+            # would be hoisted out of the message array by adapters that
+            # lift system messages to a top-level param (e.g. Anthropic),
+            # leaving the tool_use dangling.
             if time.monotonic() - loop_start >= self._tool_loop_timeout:
                 logger.warning("Phased tool loop exceeded timeout")
-                if result.iterate:
-                    await turn.manager.add_message(
-                        content=(
-                            "System notice: The tool execution loop was "
-                            "stopped due to a time limit. Please use the "
-                            "results already available in the conversation "
-                            "to respond to the user."
-                        ),
-                        role="system",
-                    )
                 break
 
             # Determine execution mode based on iterate flag.

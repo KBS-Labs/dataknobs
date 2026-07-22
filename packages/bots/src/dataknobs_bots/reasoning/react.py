@@ -22,6 +22,65 @@ from .react_config import ReActReasoningConfig
 
 logger = logging.getLogger(__name__)
 
+#: Guidance carried by a synthetic ``tool_result`` when a tool call was
+#: never executed (loop ended abnormally).  It both satisfies the provider
+#: ``tool_use`` → ``tool_result`` pairing contract *and* informs the
+#: synthesis call, subsuming the intent of the former ``role="system"``
+#: "loop ended, use existing results" notices.
+_UNEXECUTED_TOOL_RESULT = (
+    "[Tool result unavailable: the reasoning loop ended before this call "
+    "was executed. Use the results already in the conversation to respond "
+    "to the user.]"
+)
+
+
+async def _pair_orphan_tool_calls(manager: Any) -> None:
+    """Pair any dangling assistant ``tool_use`` with a ``tool_result``.
+
+    Invoked on the synthesis branch of every ReAct finalize path (i.e.
+    when the loop ended abnormally — duplicate break, max iterations, or a
+    DynaBot-level tool-loop timeout — rather than returning a stored final
+    answer).  Before re-sending conversation history to
+    ``complete()``/``stream_complete()``, it guarantees the history contains
+    no assistant ``tool_use`` lacking a following ``tool_result``.
+
+    Providers differ in how strictly they enforce the pairing — Anthropic's
+    Messages API rejects a dangling ``tool_use`` with a 400, while others
+    tolerate it — so the invariant is enforced here, at the message-sequence
+    layer, on every backend.  For each unanswered tool call, a ``role="tool"``
+    result is appended so the provider request is structurally valid.
+
+    Uses only the public ``ConversationManager`` API and mirrors the
+    adapters' own pairing key (``tc.id or tc.name``), so it pairs correctly
+    whether or not the provider assigned tool-call ids.  Idempotent: an
+    already-answered ``tool_use`` is skipped, so it is safe to call even when
+    some calls in the turn were already paired.
+
+    Args:
+        manager: Conversation manager whose history is about to be
+            re-sent to a synthesis completion call.
+    """
+    history = await manager.get_history()
+    answered = {
+        (m.tool_call_id or m.name)
+        for m in history
+        if m.role == "tool"
+    }
+    for msg in history:
+        if msg.role != "assistant" or not msg.tool_calls:
+            continue
+        for tc in msg.tool_calls:
+            key = tc.id or tc.name
+            if key in answered:
+                continue
+            await manager.add_message(
+                role="tool",
+                content=_UNEXECUTED_TOOL_RESULT,
+                name=tc.name,
+                tool_call_id=tc.id,
+            )
+            answered.add(key)
+
 
 @dataclass
 class ReActTurnHandle(TurnHandle):
@@ -382,16 +441,13 @@ class ReActReasoning(
                     "duplicate_calls": [tc.name for tc in response.tool_calls],
                 },
             )
-            tool_names = [tc.name for tc in response.tool_calls]
-            await handle.manager.add_message(
-                content=(
-                    f"System notice: The tools {tool_names} were already "
-                    "called with identical parameters in the previous step. "
-                    "Their results are already in the conversation above. "
-                    "Please use those results to respond to the user."
-                ),
-                role="system",
-            )
+            # No mid-conversation notice is appended here: finalize_turn's
+            # _pair_orphan_tool_calls guarantees the abandoned tool_use is
+            # paired with a tool_result that carries the "use existing
+            # results" guidance inline, at the correct position.  A
+            # role="system" append would be hoisted out of the message array
+            # by adapters that lift system messages to a top-level param
+            # (e.g. Anthropic), leaving the tool_use dangling.
             handle.final_response = None  # finalize_turn does synthesis
             if handle.trace is not None:
                 iteration_trace["status"] = "duplicate_tool_calls_detected"
@@ -448,7 +504,11 @@ class ReActReasoning(
         if handle.final_response is not None:
             return handle.final_response
 
-        # Otherwise: final synthesis (max iterations or duplicate break)
+        # Otherwise: final synthesis (max iterations, duplicate break, or a
+        # DynaBot-level tool-loop timeout).  Guarantee no dangling tool_use
+        # is left in history before re-sending it to the provider.
+        await _pair_orphan_tool_calls(handle.manager)
+
         if self._prompt_refresher is not None:
             handle.kwargs["system_prompt_override"] = self._prompt_refresher()
 
@@ -495,7 +555,11 @@ class ReActReasoning(
             )
             return
 
-        # Otherwise: stream synthesis (max iterations or duplicate break)
+        # Otherwise: stream synthesis (max iterations, duplicate break, or a
+        # DynaBot-level tool-loop timeout).  Guarantee no dangling tool_use
+        # is left in history before re-sending it to the provider.
+        await _pair_orphan_tool_calls(handle.manager)
+
         if self._prompt_refresher is not None:
             handle.kwargs["system_prompt_override"] = self._prompt_refresher()
 
@@ -645,19 +709,13 @@ class ReActReasoning(
                     },
                 )
 
-                # Add explanatory message so the final LLM call doesn't
-                # see dangling tool_calls with no corresponding observations.
-                tool_names = [tc.name for tc in response.tool_calls]
-                await manager.add_message(
-                    content=(
-                        f"System notice: The tools {tool_names} were already "
-                        "called with identical parameters in the previous step. "
-                        "Their results are already in the conversation above. "
-                        "Please use those results to respond to the user."
-                    ),
-                    role="system",
-                )
-
+                # No mid-conversation notice is appended here: the final
+                # synthesis calls _pair_orphan_tool_calls, which pairs the
+                # abandoned tool_use with a tool_result carrying the "use
+                # existing results" guidance inline.  A role="system" append
+                # would be hoisted out of the message array by adapters that
+                # lift system messages to a top-level param (e.g. Anthropic),
+                # leaving the tool_use dangling.
                 if trace is not None:
                     iteration_trace["status"] = "duplicate_tool_calls_detected"
                     trace.append(iteration_trace)
@@ -813,6 +871,11 @@ class ReActReasoning(
             if trace is not None:
                 trace.append({"status": "max_iterations_reached"})
                 await self._store_trace(manager, trace)
+
+        # Guarantee no dangling tool_use is left in history (e.g. a
+        # duplicate-break abandoned the current call) before the final
+        # synthesis re-sends history to the provider.
+        await _pair_orphan_tool_calls(manager)
 
         # Refresh prompt for the final complete() call as well.
         if self._prompt_refresher is not None:
