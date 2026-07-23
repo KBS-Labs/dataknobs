@@ -11,10 +11,11 @@ turn. Diagnosing it from the consumer side was a production forensics session.
 Fix: a shared ``LLMResponse.truncated`` / ``LLMStreamResponse.truncated`` flag
 that every provider populates from its own truncation stop reason, plus a base
 ``_warn_if_truncated`` hook that logs loudly on a truncated tool-call turn. The
-Anthropic adapter additionally normalizes ``finish_reason`` onto the canonical
-vocabulary its docstring advertises (``max_tokens`` → ``length``, ``tool_use``
-→ ``tool_calls``, ``end_turn`` → ``stop``), preserving the raw value on
-``metadata['raw_finish_reason']``.
+Claude-family adapters (Anthropic, Bedrock) additionally normalize
+``finish_reason`` onto the canonical vocabulary its docstring advertises
+(``max_tokens`` → ``length``, ``tool_use`` → ``tool_calls``, ``end_turn`` →
+``stop``) through one shared ``normalize_claude_stop_reason`` helper, preserving
+the raw value on ``metadata['raw_finish_reason']``.
 
 These reproduce-first tests FAIL against HEAD (no ``truncated`` field, no
 normalization, no warning) and pass after the fix. Provider responses are built
@@ -27,15 +28,21 @@ from __future__ import annotations
 
 import logging
 import types
-from typing import Self
+from typing import Any, Self
 
 import pytest
 
 from dataknobs_llm import EchoProvider
-from dataknobs_llm.llm.base import LLMConfig, LLMResponse, LLMStreamResponse
+from dataknobs_llm.llm.base import (
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    ToolCall,
+)
 from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter, AnthropicProvider
 from dataknobs_llm.llm.providers.bedrock import BedrockConverseAdapter
-from dataknobs_llm.llm.providers.ollama import OllamaAdapter
+from dataknobs_llm.llm.providers.ollama import OllamaAdapter, OllamaProvider
 from dataknobs_llm.llm.providers.openai import OpenAIAdapter
 from dataknobs_llm.testing import (
     llm_response_from_dict,
@@ -243,9 +250,18 @@ class TestOllamaAdaptResponse:
 
 
 class TestBedrockAdaptResponse:
-    """Bedrock ``stopReason == 'max_tokens'`` sets the truncation flag."""
+    """Bedrock ``stopReason == 'max_tokens'`` sets the truncation flag.
 
-    def test_max_tokens_is_truncated(self) -> None:
+    Bedrock runs Claude, so it shares the native Anthropic stop-reason
+    vocabulary verbatim and normalizes ``finish_reason`` through the same shared
+    ``normalize_claude_stop_reason`` helper — so ``finish_reason`` reads
+    identically whether a Claude model is served via the native Anthropic API or
+    Bedrock Converse (the raw ``stopReason`` is preserved on
+    ``metadata['raw_finish_reason']``). Reproduce-first for the normalization:
+    FAILS against the pre-fix adapter (raw ``max_tokens`` passthrough).
+    """
+
+    def test_max_tokens_is_truncated_and_normalized(self) -> None:
         parsed = BedrockConverseAdapter().adapt_response(
             {
                 "output": {"message": {"content": [{"text": "cut"}]}},
@@ -254,10 +270,12 @@ class TestBedrockAdaptResponse:
             model="anthropic.claude-3-haiku-20240307-v1:0",
         )
         assert parsed.truncated is True
-        # Bedrock keeps the raw stopReason (existing consumers rely on it).
-        assert parsed.finish_reason == "max_tokens"
+        # Normalized onto the canonical vocabulary, raw stopReason preserved —
+        # identical to the native Anthropic provider for the same event.
+        assert parsed.finish_reason == "length"
+        assert parsed.metadata["raw_finish_reason"] == "max_tokens"
 
-    def test_end_turn_not_truncated(self) -> None:
+    def test_end_turn_normalized_to_stop_not_truncated(self) -> None:
         parsed = BedrockConverseAdapter().adapt_response(
             {
                 "output": {"message": {"content": [{"text": "done"}]}},
@@ -266,6 +284,135 @@ class TestBedrockAdaptResponse:
             model="anthropic.claude-3-haiku-20240307-v1:0",
         )
         assert parsed.truncated is False
+        assert parsed.finish_reason == "stop"
+
+    def test_tool_use_normalized_to_tool_calls(self) -> None:
+        parsed = BedrockConverseAdapter().adapt_response(
+            {
+                "output": {
+                    "message": {
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "s", "input": {}}}
+                        ]
+                    }
+                },
+                "stopReason": "tool_use",
+            },
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+        )
+        assert parsed.truncated is False
+        assert parsed.finish_reason == "tool_calls"
+
+
+# ---------------------------------------------------------------------------
+# Rebuild / deprecated-function_call paths preserve the flag
+#
+# The buffered/streaming complete paths route the response through
+# _analyze_response, but two paths rebuild the response and could silently drop
+# a newly-added field (or skip the warn hook): Ollama's <think>-tag extraction,
+# and the deprecated function_call() entry point that surfaces a legacy dict.
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaThinkTagReconstruction:
+    """Ollama's ``<think>``-extraction rebuild must not drop the flag.
+
+    A reasoning model (DeepSeek-R1, Qwen3) emits ``<think>...</think>`` then
+    starts its visible answer and hits ``max_tokens`` mid-answer:
+    ``done_reason == "length"`` → the adapter sets ``truncated=True``, and the
+    ``<think>`` extraction then rebuilds the response to strip the thinking
+    block. Reproduce-first: FAILS when the rebuild lists fields explicitly and
+    omits ``truncated`` (silently False, warning lost), passes when it copies
+    every field via ``dataclasses.replace``.
+    """
+
+    def _provider(self) -> OllamaProvider:
+        return OllamaProvider(LLMConfig(provider="ollama", model="deepseek-r1"))
+
+    def test_truncated_survives_think_extraction(self) -> None:
+        response = LLMResponse(
+            content="<think>reasoning</think>partial ans",
+            model="deepseek-r1",
+            finish_reason="length",
+            truncated=True,
+        )
+        result = self._provider()._analyze_response(response)
+        assert result.content == "partial ans"
+        assert result.metadata["thinking"] == "reasoning"
+        # The whole point of the flag: it must survive the rebuild.
+        assert result.truncated is True
+
+    def test_truncated_tool_call_survives_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        response = LLMResponse(
+            content="<think>plan</think>",
+            model="deepseek-r1",
+            finish_reason="length",
+            truncated=True,
+            tool_calls=[ToolCall(name="submit", parameters={"x": 1})],
+        )
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
+            result = self._provider()._analyze_response(response)
+        assert result.truncated is True
+        assert any(
+            "mid tool-call" in r.message and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
+
+
+class TestAnthropicFunctionCallTruncation:
+    """The deprecated ``function_call()`` path preserves truncation + warns.
+
+    ``function_call()`` parses via ``adapt_response`` (which sets ``truncated``
+    and ``metadata['raw_finish_reason']``) then surfaces a legacy
+    ``function_call`` dict. Reproduce-first: FAILS when it rebuilds a fresh
+    ``LLMResponse`` dropping ``truncated`` / ``metadata`` and skipping the warn
+    hook; passes when it routes through the shared ``_analyze_response`` choke
+    point.
+    """
+
+    def _provider_returning(self, response: object) -> AnthropicProvider:
+        provider = AnthropicProvider(
+            LLMConfig(provider="anthropic", model="claude-3-sonnet")
+        )
+
+        class _Client:
+            def __init__(self) -> None:
+                self.messages = self
+
+            async def create(self, **_kw: Any) -> object:
+                return response
+
+        provider._client = _Client()
+        provider._is_initialized = True
+        return provider
+
+    async def test_truncated_tool_call_preserved_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = self._provider_returning(
+            make_anthropic_response(
+                [{"type": "tool_use", "id": "t1", "name": "submit", "input": {}}],
+                stop_reason="max_tokens",
+            )
+        )
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
+            with pytest.warns(DeprecationWarning):
+                result = await provider.function_call(
+                    [LLMMessage(role="user", content="go")],
+                    [{"name": "submit", "description": "d", "parameters": {}}],
+                )
+        assert result.truncated is True
+        assert result.finish_reason == "length"
+        assert result.metadata["raw_finish_reason"] == "max_tokens"
+        # Legacy dict still surfaced for backward compatibility.
+        assert result.function_call == {"name": "submit", "arguments": {}}
+        # The dangerous truncated tool-call turn warned.
+        assert any(
+            "mid tool-call" in r.message and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------

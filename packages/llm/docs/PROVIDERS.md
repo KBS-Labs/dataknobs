@@ -320,12 +320,15 @@ A truncated tool-call turn is logged at `warning`; a truncated plain-text turn
 at `info`. The HuggingFace inference path returns no stop-reason signal, so
 `truncated` is always `False` there.
 
-The `AnthropicProvider` also normalizes `finish_reason` onto the canonical
-vocabulary the `LLMResponse` docstring advertises (`max_tokens` → `length`,
-`tool_use` → `tool_calls`, `end_turn`/`stop_sequence` → `stop`); the raw
-Anthropic value is preserved on `metadata["raw_finish_reason"]`. Other
-providers already report the canonical vocabulary (OpenAI) or keep their raw
-stop reason (Bedrock), so only Anthropic normalizes.
+The Claude-family providers (`AnthropicProvider` and `BedrockProvider`) also
+normalize `finish_reason` onto the canonical vocabulary the `LLMResponse`
+docstring advertises (`max_tokens` → `length`, `tool_use` → `tool_calls`,
+`end_turn`/`stop_sequence` → `stop`); the raw provider value is preserved on
+`metadata["raw_finish_reason"]`. They share Claude's stop-reason vocabulary
+verbatim (Bedrock runs Claude), so both route through a single shared helper
+(`normalize_claude_stop_reason`) rather than each maintaining its own table.
+OpenAI and Ollama already report the canonical vocabulary directly, so
+`finish_reason` reads identically across every provider.
 
 ## Amazon Bedrock
 

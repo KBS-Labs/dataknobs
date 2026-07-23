@@ -412,7 +412,12 @@ class LLMResponse:
     Attributes:
         content: Generated text content
         model: Model identifier that generated the response
-        finish_reason: Why generation stopped - 'stop', 'length', 'function_call'
+        finish_reason: Why generation stopped, on the canonical vocabulary
+            'stop' / 'length' / 'tool_calls' / 'function_call'. Every provider
+            reports these tokens: OpenAI and Ollama emit them natively, and the
+            Claude-family providers (Anthropic, Bedrock) normalize their raw
+            stop reason onto them via ``normalize_claude_stop_reason`` — with
+            the raw value preserved on ``metadata['raw_finish_reason']``.
         truncated: ``True`` when the provider cut generation off at the token
             budget (Anthropic ``stop_reason == "max_tokens"``, OpenAI/Ollama
             ``finish_reason``/``done_reason == "length"``, Bedrock
@@ -762,6 +767,59 @@ class LLMConfig(StructuredConfig):
         return params
 
 
+#: Maps the Claude-family provider-native stop-reason vocabulary onto the
+#: canonical :attr:`LLMResponse.finish_reason` tokens (``'stop'`` / ``'length'``
+#: / ``'tool_calls'``) the docstring advertises. The native Anthropic Messages
+#: API and Bedrock Converse share this vocabulary **verbatim** (Bedrock runs
+#: Claude), so both providers normalize through this one table and
+#: ``finish_reason`` reads identically regardless of which endpoint served the
+#: model. The raw value is preserved on ``metadata['raw_finish_reason']``. An
+#: unmapped value passes through unchanged.
+CLAUDE_STOP_REASON_NORMALIZATION: Dict[str, str] = {
+    "max_tokens": "length",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "tool_use": "tool_calls",
+}
+
+#: Claude-family stop-reason tokens that mean generation was cut off at the
+#: token budget (the response is incomplete — see :attr:`LLMResponse.truncated`).
+CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
+
+
+def normalize_claude_stop_reason(
+    raw_stop_reason: str | None,
+) -> tuple[str | None, bool, Dict[str, Any]]:
+    """Normalize a Claude-family stop reason (Anthropic / Bedrock Converse).
+
+    Anthropic and Bedrock (Claude-on-Bedrock) emit the identical stop-reason
+    vocabulary, so both route through this single helper to normalize
+    ``finish_reason`` onto the canonical tokens and detect token-budget
+    truncation — keeping the two providers from drifting.
+
+    Args:
+        raw_stop_reason: The provider-native stop reason (Anthropic
+            ``stop_reason`` / Bedrock ``stopReason``), or ``None``.
+
+    Returns:
+        ``(finish_reason, truncated, metadata)`` where ``finish_reason`` is the
+        normalized canonical token (raw value passes through when unmapped),
+        ``truncated`` is ``True`` for a token-budget cut-off, and ``metadata``
+        carries ``raw_finish_reason`` **only** when normalization changed the
+        value (so a caller needing the exact provider token can still read it).
+    """
+    if raw_stop_reason is None:
+        return None, False, {}
+    finish_reason = CLAUDE_STOP_REASON_NORMALIZATION.get(
+        raw_stop_reason, raw_stop_reason
+    )
+    metadata: Dict[str, Any] = {}
+    if raw_stop_reason != finish_reason:
+        metadata["raw_finish_reason"] = raw_stop_reason
+    truncated = raw_stop_reason in CLAUDE_TRUNCATION_STOP_REASONS
+    return finish_reason, truncated, metadata
+
+
 def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> "LLMConfig":
     """Normalize various config formats to LLMConfig.
 
@@ -1075,6 +1133,23 @@ class LLMProvider(ABC):
                 "output is incomplete.",
                 response.model,
             )
+
+    @staticmethod
+    def _attach_legacy_function_call(response: "LLMResponse") -> "LLMResponse":
+        """Surface the first tool call as the legacy ``function_call`` dict.
+
+        Backward-compat shim for the deprecated :meth:`function_call` entry
+        point: the modern path returns ``tool_calls``, but legacy callers read
+        the single ``function_call`` dict. Providers whose ``function_call``
+        override needs this shape call it, then route the result through
+        :meth:`_analyze_response` — the shared post-processing choke point that
+        preserves ``truncated`` / ``metadata`` and fires
+        :meth:`_warn_if_truncated`. Mutates and returns ``response``.
+        """
+        if response.tool_calls:
+            tc = response.tool_calls[0]
+            response.function_call = {"name": tc.name, "arguments": tc.parameters}
+        return response
 
     @property
     def is_initialized(self) -> bool:

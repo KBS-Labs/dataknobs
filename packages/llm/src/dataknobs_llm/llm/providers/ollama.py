@@ -92,6 +92,7 @@ import logging
 import os
 import re
 import warnings
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -542,18 +543,11 @@ class OllamaProvider(AsyncLLMProvider):
                 visible_text = match.group(2).strip()
                 if thinking_text:
                     response.metadata["thinking"] = thinking_text
-                response = LLMResponse(
-                    content=visible_text,
-                    model=response.model,
-                    finish_reason=response.finish_reason,
-                    usage=response.usage,
-                    function_call=response.function_call,
-                    tool_calls=response.tool_calls,
-                    metadata=response.metadata,
-                    created_at=response.created_at,
-                    cost_usd=response.cost_usd,
-                    cumulative_cost_usd=response.cumulative_cost_usd,
-                )
+                # replace() copies every field (including ``truncated`` and any
+                # field added to LLMResponse later), so extracting the visible
+                # answer can never silently drop one — only ``content`` changes,
+                # and ``metadata`` was already mutated in place above.
+                response = replace(response, content=visible_text)
         return super()._analyze_response(response)
 
     def _messages_to_ollama(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:

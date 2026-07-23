@@ -70,7 +70,7 @@ from dataknobs_common.exceptions import (
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
     AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
-    normalize_llm_config
+    normalize_claude_stop_reason, normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -104,24 +104,9 @@ _SAMPLING_PARAMS: tuple[str, ...] = (
     "presence_penalty",
 )
 
-#: Maps Anthropic ``stop_reason`` values onto the canonical
-#: :attr:`~dataknobs_llm.llm.base.LLMResponse.finish_reason` vocabulary its
-#: docstring advertises (``'stop'`` / ``'length'`` / ``'tool_calls'``), so a
-#: consumer reading ``finish_reason`` gets the same tokens across providers
-#: instead of Anthropic's raw ``'max_tokens'`` / ``'end_turn'`` / ``'tool_use'``.
-#: The raw value is preserved on ``metadata['raw_finish_reason']``. An
-#: unmapped value passes through unchanged.
-_STOP_REASON_NORMALIZATION: Dict[str, str] = {
-    "max_tokens": "length",
-    "end_turn": "stop",
-    "stop_sequence": "stop",
-    "tool_use": "tool_calls",
-}
-
-#: Anthropic ``stop_reason`` values that mean generation was cut off at the
-#: token budget (the response is incomplete — see
-#: :attr:`~dataknobs_llm.llm.base.LLMResponse.truncated`).
-_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
+#: The Claude stop-reason normalization table + truncation detection live in
+#: ``dataknobs_llm.llm.base`` (:func:`normalize_claude_stop_reason`), shared
+#: verbatim with the Bedrock Converse adapter since Bedrock runs Claude.
 
 #: Process-level cache of sampling params discovered — via a 400 at request
 #: time — to be rejected by a given model, keyed by lowercased model id. The
@@ -265,21 +250,15 @@ class AnthropicAdapter(LLMAdapter):
                 ),
             }
 
-        raw_stop_reason = response.stop_reason
-        finish_reason = _STOP_REASON_NORMALIZATION.get(
-            raw_stop_reason, raw_stop_reason
+        finish_reason, truncated, metadata = normalize_claude_stop_reason(
+            response.stop_reason
         )
-        metadata: Dict[str, Any] = {}
-        if raw_stop_reason is not None and raw_stop_reason != finish_reason:
-            # Preserve the un-normalized provider value for any caller that
-            # needs the exact Anthropic stop_reason.
-            metadata["raw_finish_reason"] = raw_stop_reason
 
         return LLMResponse(
             content=content,
             model=response.model,
             finish_reason=finish_reason,
-            truncated=raw_stop_reason in _TRUNCATION_STOP_REASONS,
+            truncated=truncated,
             usage=usage,
             tool_calls=tool_calls if tool_calls else None,
             metadata=metadata,
@@ -923,19 +902,13 @@ class AnthropicProvider(AsyncLLMProvider):
 
             parsed = self.adapter.adapt_response(response)
 
-            # Legacy function_call format: extract first tool call as
-            # function_call dict for backward compatibility.
-            tool_use = None
-            if parsed.tool_calls:
-                tc = parsed.tool_calls[0]
-                tool_use = {"name": tc.name, "arguments": tc.parameters}
-
-            return LLMResponse(
-                content=parsed.content,
-                model=parsed.model,
-                finish_reason=parsed.finish_reason,
-                usage=parsed.usage,
-                function_call=tool_use,
+            # Surface the first tool call as the legacy function_call dict and
+            # route through the shared _analyze_response choke point, so this
+            # path preserves truncated / raw_finish_reason and fires the
+            # truncation warning — exactly like complete()/stream_complete().
+            # Rebuilding a fresh LLMResponse here would silently drop them.
+            return self._analyze_response(
+                self._attach_legacy_function_call(parsed)
             )
 
         except ValidationError as e:
