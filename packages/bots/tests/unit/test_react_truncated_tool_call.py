@@ -275,6 +275,117 @@ class TestTruncatedToolCallMonolithic:
 
 
 # =========================================================================
+# Truncation on a NON-first iteration
+# =========================================================================
+
+
+class TestTruncatedToolCallAfterSuccessfulCall:
+    """A truncated call on a *later* iteration abandons only that call — the
+    earlier successful tool result survives into the tool-less synthesis.
+
+    Extends the first-iteration coverage: proves (a) an earlier well-formed
+    call still executes and its real observation reaches synthesis, and (b) the
+    truncated orphan carries the *generic* ``_UNEXECUTED_TOOL_RESULT`` guidance
+    (its incomplete args give it a different ``(name, params)`` signature from
+    the answered call, so it is not misclassified as a duplicate-break orphan).
+    """
+
+    @pytest.mark.asyncio
+    async def test_truncated_on_second_iteration(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                # iter0: normal call — executes.
+                tool_call_response("echo_tool", {"message": "first"}),
+                # iter1: truncated mid-call, different (incomplete) args —
+                # abandoned, not executed.
+                tool_call_response(
+                    "echo_tool", {"message": "second"}, truncated=True
+                ),
+                # synthesis after the abandoned second call.
+                text_response("Synthesized answer"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Use the echo tool")
+
+        # Only the first (complete) call ran.
+        assert tool.call_count == 1
+        assert result.response == "Synthesized answer"
+
+        messages = _synthesis_messages(harness.provider)
+        _assert_no_dangling_tool_use(messages)
+
+        # The first call's REAL observation reaches synthesis (a role="tool"
+        # message that is not a synthetic pairing).
+        real_obs = [
+            m
+            for m in messages
+            if m.role == "tool"
+            and isinstance(m.content, str)
+            and not m.content.startswith(_SYNTHETIC_PREFIX)
+        ]
+        assert real_obs, "first tool's real observation must reach synthesis"
+
+        # The truncated orphan carries GENERIC (not duplicate) guidance — its
+        # signature differs from the answered call.
+        assert _UNEXECUTED_TOOL_RESULT in _synthetic_pairing_contents(messages)
+
+
+# =========================================================================
+# Multi-block partial truncation (all-or-nothing abandonment)
+# =========================================================================
+
+
+class TestTruncatedMultiBlockAbandonsAll:
+    """A truncated turn with multiple ``tool_use`` blocks abandons *every*
+    block, not just the incomplete one — ``truncated`` is response-level, so a
+    truncated turn's block completeness cannot be trusted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_truncated_multiblock_none_executed(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                tool_call_response(
+                    "echo_tool",
+                    {"message": "a"},
+                    truncated=True,
+                    additional_tools=[("echo_tool", {"message": "b"})],
+                ),
+                text_response("Synthesized answer"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Use the echo tool")
+
+        # Neither block executed — the second (complete) block is abandoned too.
+        assert tool.call_count == 0
+        assert result.response == "Synthesized answer"
+
+        messages = _synthesis_messages(harness.provider)
+        _assert_no_dangling_tool_use(messages)
+
+        # Both blocks paired with generic guidance (distinct ids → 2 results).
+        pairings = _synthetic_pairing_contents(messages)
+        assert len(pairings) == 2
+        assert all(c == _UNEXECUTED_TOOL_RESULT for c in pairings)
+
+
+# =========================================================================
 # No-false-positive guards
 # =========================================================================
 

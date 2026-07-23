@@ -70,6 +70,10 @@ def _is_truncated_tool_call(response: Any) -> bool:
     as-is) and is deliberately not matched here.  The provider layer has
     already logged the truncation warning; this is the react-layer behavioral
     reaction to :attr:`~dataknobs_llm.LLMResponse.truncated`.
+
+    ``truncated`` is response-level, so a turn carrying multiple ``tool_use``
+    blocks is abandoned in full — including any complete blocks — since a
+    truncated turn's block completeness (and array parse) cannot be trusted.
     """
     return bool(
         getattr(response, "truncated", False)
