@@ -93,7 +93,7 @@ import os
 import re
 import warnings
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Union, AsyncIterator
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -663,6 +663,57 @@ class OllamaProvider(AsyncLLMProvider):
 
         return detected
 
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw aiohttp transport error into a dataknobs exception.
+
+        Lets consumers catch by a dataknobs exception type instead of coupling
+        to ``aiohttp``. Ollama has no SDK — it speaks HTTP over
+        ``aiohttp``, so the gate is aiohttp's error hierarchy plus
+        ``asyncio.TimeoutError``. Extracts the status (from a
+        ``ClientResponseError`` raised by ``raise_for_status()``; ``None`` for a
+        connection error or timeout) and defers the status→type policy to
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
+
+        - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`,
+        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 401/403 / other status / connection / timeout →
+          :class:`~dataknobs_common.exceptions.OperationError`.
+
+        Returns ``None`` for a non-transport exception so the caller re-raises
+        it unchanged — this is what lets the domain-specific
+        :class:`~dataknobs_llm.exceptions.ToolsNotSupportedError` (raised for a
+        400 "does not support tools" body) pass through untranslated. The
+        original error is preserved on ``__cause__`` — callers raise
+        ``... from exc``.
+        """
+        import aiohttp
+        if isinstance(exc, aiohttp.ClientResponseError):
+            retry_after = self._retry_after_from_headers(
+                getattr(exc, "headers", None)
+            )
+            return self._dataknobs_error_for_status(
+                exc.status, f"Ollama API error: {exc}", retry_after=retry_after
+            )
+        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
+            return self._dataknobs_error_for_status(
+                None, f"Ollama API error: {exc}"
+            )
+        return None
+
+    def _raise_translated(self, exc: Exception) -> NoReturn:
+        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
+
+        The S4 choke point for the ``aiohttp`` call sites (chat / stream /
+        embeddings). A non-transport error (including
+        :class:`~dataknobs_llm.exceptions.ToolsNotSupportedError`) is re-raised
+        as-is; a transport error is raised as its dataknobs type ``from`` the
+        original.
+        """
+        translated = self._translate_api_error(exc)
+        if translated is None:
+            raise exc
+        raise translated from exc
+
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -718,27 +769,31 @@ class OllamaProvider(AsyncLLMProvider):
         if think is not None:
             payload['think'] = bool(think)
 
-        async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-            if response.status != 200:
-                error_text = await response.text()
+        try:
+            async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
+                if response.status != 200:
+                    error_text = await response.text()
 
-                # Handle tools not supported — raise explicit error
-                if response.status == 400 and "does not support tools" in error_text:
-                    from ...exceptions import ToolsNotSupportedError
-                    model_name = runtime_config.model
-                    raise ToolsNotSupportedError(
-                        model=model_name,
-                        suggestion=(
-                            "For tool support, use: llama3.1:8b, qwen3:8b, "
-                            "mistral:7b, or command-r:latest"
-                        ),
-                    )
+                    # Handle tools not supported — raise explicit error
+                    if response.status == 400 and "does not support tools" in error_text:
+                        from ...exceptions import ToolsNotSupportedError
+                        model_name = runtime_config.model
+                        raise ToolsNotSupportedError(
+                            model=model_name,
+                            suggestion=(
+                                "For tool support, use: llama3.1:8b, qwen3:8b, "
+                                "mistral:7b, or command-r:latest"
+                            ),
+                        )
+                    else:
+                        logger.error("Ollama API error (status %s): %s", response.status, error_text)
+                        logger.error("Request payload: %s", json.dumps(payload, indent=2))
+                        response.raise_for_status()
                 else:
-                    logger.error("Ollama API error (status %s): %s", response.status, error_text)
-                    logger.error("Request payload: %s", json.dumps(payload, indent=2))
-                    response.raise_for_status()
-            else:
-                data = await response.json()
+                    data = await response.json()
+        except Exception as exc:
+            # ToolsNotSupportedError (non-transport) passes through untranslated.
+            self._raise_translated(exc)
 
         parsed = self.adapter.adapt_response(data)
         # Override model with runtime config model (adapter uses response model)
@@ -803,34 +858,37 @@ class OllamaProvider(AsyncLLMProvider):
         if think is not None:
             payload['think'] = bool(think)
 
-        async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-            response.raise_for_status()
+        try:
+            async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
+                response.raise_for_status()
 
-            async for line in response.content:
-                if line:
-                    data = json.loads(line.decode('utf-8'))
-                    msg = data.get('message', {})
-                    done = data.get('done', False)
+                async for line in response.content:
+                    if line:
+                        data = json.loads(line.decode('utf-8'))
+                        msg = data.get('message', {})
+                        done = data.get('done', False)
 
-                    if done:
-                        # Use adapter for final chunk parsing
-                        parsed = self.adapter.adapt_response(data)
-                        final_chunk = LLMStreamResponse(
-                            delta=msg.get('content', ''),
-                            is_final=True,
-                            finish_reason=parsed.finish_reason,
-                            truncated=parsed.truncated,
-                            usage=parsed.usage,
-                            tool_calls=parsed.tool_calls,
-                            model=runtime_config.model,
-                        )
-                        self._warn_if_truncated(final_chunk)
-                        yield final_chunk
-                    else:
-                        yield LLMStreamResponse(
-                            delta=msg.get('content', ''),
-                            is_final=False,
-                        )
+                        if done:
+                            # Use adapter for final chunk parsing
+                            parsed = self.adapter.adapt_response(data)
+                            final_chunk = LLMStreamResponse(
+                                delta=msg.get('content', ''),
+                                is_final=True,
+                                finish_reason=parsed.finish_reason,
+                                truncated=parsed.truncated,
+                                usage=parsed.usage,
+                                tool_calls=parsed.tool_calls,
+                                model=runtime_config.model,
+                            )
+                            self._warn_if_truncated(final_chunk)
+                            yield final_chunk
+                        else:
+                            yield LLMStreamResponse(
+                                delta=msg.get('content', ''),
+                                is_final=False,
+                            )
+        except Exception as exc:
+            self._raise_translated(exc)
 
     async def embed(
         self,
@@ -854,10 +912,13 @@ class OllamaProvider(AsyncLLMProvider):
                 'prompt': text
             }
 
-            async with self._session.post(f"{self.base_url}/api/embeddings", json=payload) as response:
-                response.raise_for_status()
-                data = await response.json()
-                embeddings.append(data['embedding'])
+            try:
+                async with self._session.post(f"{self.base_url}/api/embeddings", json=payload) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    embeddings.append(data['embedding'])
+            except Exception as exc:
+                self._raise_translated(exc)
 
         return embeddings[0] if single else embeddings
 

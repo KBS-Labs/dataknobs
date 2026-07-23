@@ -3,7 +3,7 @@
 import asyncio
 import os
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -79,6 +79,51 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         return capabilities
 
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw aiohttp transport error into a dataknobs exception.
+
+        Lets consumers catch by a dataknobs exception type instead of coupling
+        to ``aiohttp``. The HuggingFace Inference API is spoken over ``aiohttp``
+        (no vendor SDK), so the gate is aiohttp's error hierarchy plus
+        ``asyncio.TimeoutError``. Extracts the status (from a
+        ``ClientResponseError`` raised by ``raise_for_status()``; ``None`` for a
+        connection error or timeout) and defers the status→type policy to
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`
+        (429 → ``RateLimitError``, 400 → ``ValidationError``, everything else →
+        ``OperationError``).
+
+        Returns ``None`` for a non-transport exception so the caller re-raises
+        it unchanged. The original error is preserved on ``__cause__`` — callers
+        raise ``... from exc``.
+        """
+        import aiohttp
+        if isinstance(exc, aiohttp.ClientResponseError):
+            retry_after = self._retry_after_from_headers(
+                getattr(exc, "headers", None)
+            )
+            return self._dataknobs_error_for_status(
+                exc.status,
+                f"HuggingFace API error: {exc}",
+                retry_after=retry_after,
+            )
+        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
+            return self._dataknobs_error_for_status(
+                None, f"HuggingFace API error: {exc}"
+            )
+        return None
+
+    def _raise_translated(self, exc: Exception) -> NoReturn:
+        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
+
+        The S4 choke point for the ``aiohttp`` call sites (completion /
+        embeddings). A non-transport error is re-raised as-is; a transport
+        error is raised as its dataknobs type ``from`` the original.
+        """
+        translated = self._translate_api_error(exc)
+        if translated is None:
+            raise exc
+        raise translated from exc
+
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -131,9 +176,12 @@ class HuggingFaceProvider(AsyncLLMProvider):
             'parameters': parameters,
         }
 
-        async with self._session.post(url, json=payload) as response:
-            response.raise_for_status()
-            data = await response.json()
+        try:
+            async with self._session.post(url, json=payload) as response:
+                response.raise_for_status()
+                data = await response.json()
+        except Exception as exc:
+            self._raise_translated(exc)
 
         # Parse response
         if isinstance(data, list) and len(data) > 0:
@@ -198,9 +246,12 @@ class HuggingFaceProvider(AsyncLLMProvider):
         url = f"{self.base_url}/{self.config.model}"
         payload = {'inputs': texts}
 
-        async with self._session.post(url, json=payload) as response:
-            response.raise_for_status()
-            embeddings = await response.json()
+        try:
+            async with self._session.post(url, json=payload) as response:
+                response.raise_for_status()
+                embeddings = await response.json()
+        except Exception as exc:
+            self._raise_translated(exc)
 
         return embeddings[0] if single else embeddings
 

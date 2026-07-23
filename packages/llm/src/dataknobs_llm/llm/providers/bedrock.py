@@ -67,7 +67,7 @@ import logging
 import time
 import warnings
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.exceptions import ConfigurationError
@@ -753,6 +753,57 @@ class BedrockProvider(AsyncLLMProvider):
             capabilities.append(ModelCapability.VISION)
         return capabilities
 
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw botocore error into a dataknobs exception.
+
+        Lets consumers catch by a dataknobs exception type instead of coupling
+        to ``botocore``. Bedrock's status lives *nested* in a
+        ``ClientError.response`` dict (``["ResponseMetadata"]["HTTPStatusCode"]``);
+        the throttling *codes* (``ThrottlingException`` /
+        ``TooManyRequestsException``) are normalized to 429 even when the HTTP
+        status is ambiguous. A ``BotoCoreError`` (connection / endpoint /
+        read-timeout — no HTTP status) maps to ``OperationError``. The
+        status→type policy is deferred to
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`
+        (429 → ``RateLimitError``, 400 → ``ValidationError``, else →
+        ``OperationError``). Bedrock does not surface a ``retry-after`` header on
+        the exception, so ``retry_after`` stays ``None``.
+
+        Returns ``None`` for a non-botocore exception so the caller re-raises it
+        unchanged. The original error is preserved on ``__cause__`` — callers
+        raise ``... from exc``.
+        """
+        try:
+            from botocore.exceptions import BotoCoreError, ClientError
+        except ImportError:  # pragma: no cover - botocore installed post-init
+            return None
+        if isinstance(exc, ClientError):
+            response = getattr(exc, "response", None) or {}
+            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            code = response.get("Error", {}).get("Code", "")
+            if code in ("ThrottlingException", "TooManyRequestsException"):
+                status = 429
+            return self._dataknobs_error_for_status(
+                status, f"Bedrock API error: {exc}"
+            )
+        if isinstance(exc, BotoCoreError):
+            return self._dataknobs_error_for_status(
+                None, f"Bedrock API error: {exc}"
+            )
+        return None
+
+    def _raise_translated(self, exc: Exception) -> NoReturn:
+        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
+
+        The S4 choke point for the ``converse`` / ``converse_stream`` /
+        ``invoke_model`` call sites. A non-botocore error is re-raised as-is; a
+        botocore error is raised as its dataknobs type ``from`` the original.
+        """
+        translated = self._translate_api_error(exc)
+        if translated is None:
+            raise exc
+        raise translated from exc
+
     async def complete(
         self,
         messages: str | list[LLMMessage],
@@ -780,7 +831,10 @@ class BedrockProvider(AsyncLLMProvider):
             "bedrock-runtime",
             **self._client_kwargs(read_timeout=runtime_config.timeout),
         ) as client:
-            response = await client.converse(**request)
+            try:
+                response = await client.converse(**request)
+            except Exception as exc:
+                self._raise_translated(exc)
 
         result = self._analyze_response(
             self.adapter.adapt_response(response, model=runtime_config.model)
@@ -831,7 +885,10 @@ class BedrockProvider(AsyncLLMProvider):
             "bedrock-runtime",
             **self._client_kwargs(read_timeout=self._stream_read_timeout()),
         ) as client:
-            response = await client.converse_stream(**request)
+            try:
+                response = await client.converse_stream(**request)
+            except Exception as exc:
+                self._raise_translated(exc)
 
             # Accumulate partial-JSON tool inputs per content-block index,
             # mirroring OpenAI's streamed tool-call accumulation.
@@ -954,13 +1011,16 @@ class BedrockProvider(AsyncLLMProvider):
             "bedrock-runtime",
             **self._client_kwargs(read_timeout=self.config.timeout),
         ) as client:
-            vectors = await embed_fn(
-                client,
-                model,
-                text_list,
-                self.config,
-                max_concurrency=max_concurrency,
-            )
+            try:
+                vectors = await embed_fn(
+                    client,
+                    model,
+                    text_list,
+                    self.config,
+                    max_concurrency=max_concurrency,
+                )
+            except Exception as exc:
+                self._raise_translated(exc)
 
         logger.debug(
             "Bedrock embed complete (model=%s, count=%d, latency_ms=%d)",
@@ -1015,7 +1075,10 @@ class BedrockProvider(AsyncLLMProvider):
             "bedrock-runtime",
             **self._client_kwargs(read_timeout=runtime_config.timeout),
         ) as client:
-            response = await client.converse(**request)
+            try:
+                response = await client.converse(**request)
+            except Exception as exc:
+                self._raise_translated(exc)
 
         parsed = self.adapter.adapt_response(
             response, model=runtime_config.model

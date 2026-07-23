@@ -66,7 +66,9 @@ from typing import (
     Callable, Protocol
 )
 
-from dataknobs_common.exceptions import ResourceError
+from dataknobs_common.exceptions import (
+    OperationError, RateLimitError, ResourceError, ValidationError,
+)
 from dataknobs_common.structured_config import StructuredConfig
 from datetime import datetime
 
@@ -926,6 +928,66 @@ class LLMProvider(ABC):
                 f"Invalid prompt_type: {prompt_type}. "
                 f"Must be 'system', 'user', or 'both'"
             )
+
+    def _dataknobs_error_for_status(
+        self,
+        status: int | None,
+        message: str,
+        *,
+        retry_after: float | None = None,
+    ) -> Exception:
+        """Map an HTTP-ish status to a dataknobs exception (pure dispatch).
+
+        The single place the vendor-error status policy lives, shared by every
+        provider's ``_translate_api_error``. Each provider does the SDK-specific
+        gate + extraction (which is where the vendor coupling belongs) and then
+        defers the status→type decision here, so the policy stays consistent
+        across providers and this method stays import-free of any vendor SDK.
+
+        - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
+          (carrying ``retry_after`` when a provider could extract it),
+        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 401/403 and anything else (other status, connection, timeout, or an
+          unknown ``None`` status) →
+          :class:`~dataknobs_common.exceptions.OperationError`.
+
+        Args:
+            status: HTTP status code, or ``None`` when the transport gave none
+                (connection error, timeout).
+            message: Human-readable error message for the raised exception.
+            retry_after: Seconds to wait, when known (429 only).
+
+        Returns:
+            A dataknobs exception instance (not raised — the caller raises it
+            ``from`` the original SDK error to preserve ``__cause__``).
+        """
+        if status == 429:
+            return RateLimitError(message, retry_after=retry_after)
+        if status == 400:
+            return ValidationError(message)
+        return OperationError(message)  # 401/403 and everything else
+
+    @staticmethod
+    def _retry_after_from_headers(headers: Any) -> float | None:
+        """Best-effort ``retry-after`` seconds from a header mapping.
+
+        Accepts anything with a ``.get(key)`` accessor (an SDK response's
+        ``headers`` mapping — anthropic, openai, and aiohttp all expose one).
+        Returns ``None`` when the mapping is absent, the header is missing, or
+        the value is not a parseable number of seconds.
+        """
+        if not headers:
+            return None
+        get = getattr(headers, "get", None)
+        if get is None:
+            return None
+        raw = get("retry-after")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     @abstractmethod
     def initialize(self) -> None:
