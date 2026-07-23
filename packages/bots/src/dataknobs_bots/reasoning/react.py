@@ -53,6 +53,30 @@ async def _pair_orphan_tool_calls(manager: Any) -> None:
         )
 
 
+def _is_truncated_tool_call(response: Any) -> bool:
+    """Whether ``response`` is a tool-call turn the provider truncated.
+
+    The provider cut generation off at the token budget *mid-tool-call*
+    (Anthropic ``stop_reason == "max_tokens"``, OpenAI
+    ``finish_reason == "length"``), so the ``tool_use`` is incomplete — its
+    arguments may be missing or malformed even though the call looks
+    well-formed.  Executing it would surface downstream as a masked
+    "argument required" error, and the model would retry the identical
+    oversized call until the duplicate-breaker fires.
+
+    Such a turn is abandoned (not executed) and routed to final synthesis —
+    the same terminal handling as a duplicate-tool-call break.  A truncated
+    *text* turn (no tool calls) is already terminal (returned to the caller
+    as-is) and is deliberately not matched here.  The provider layer has
+    already logged the truncation warning; this is the react-layer behavioral
+    reaction to :attr:`~dataknobs_llm.LLMResponse.truncated`.
+    """
+    return bool(
+        getattr(response, "truncated", False)
+        and getattr(response, "tool_calls", None)
+    )
+
+
 @dataclass
 class ReActTurnHandle(TurnHandle):
     """ReAct-specific turn handle carrying iteration state.
@@ -378,6 +402,31 @@ class ReActReasoning(
                 await self._store_trace(handle.manager, handle.trace)
             return ProcessResult(action="final_answer")
 
+        # Truncated mid-tool-call → terminal, not executed.  The tool_use is
+        # incomplete; abandon it exactly like a duplicate break (leave
+        # final_response=None so finalize_turn pairs the orphan and synthesizes
+        # a final answer without tools).  The provider already logged the
+        # truncation warning.
+        if _is_truncated_tool_call(response):
+            logger.warning(
+                "ReAct: Response truncated mid-tool-call (token budget) — "
+                "abandoning the incomplete tool call and synthesizing a "
+                "final answer",
+                extra={
+                    "conversation_id": getattr(
+                        handle.manager, "conversation_id", None
+                    ),
+                    "iteration": handle.iteration + 1,
+                    "tools": [tc.name for tc in response.tool_calls],
+                },
+            )
+            handle.final_response = None  # finalize_turn does the synthesis
+            if handle.trace is not None:
+                iteration_trace["status"] = "truncated_tool_call"
+                handle.trace.append(iteration_trace)
+                await self._store_trace(handle.manager, handle.trace)
+            return ProcessResult(action="truncated")
+
         num_tool_calls = len(response.tool_calls)
         logger.log(
             log_level,
@@ -650,6 +699,27 @@ class ReActReasoning(
                     await self._store_trace(manager, trace)
 
                 return response
+
+            # Truncated mid-tool-call → terminal, not executed.  Abandon the
+            # incomplete tool call the same way a duplicate break does: break
+            # to the shared orphan-pairing + synthesis after the loop.  The
+            # provider already logged the truncation warning.
+            if _is_truncated_tool_call(response):
+                logger.warning(
+                    "ReAct: Response truncated mid-tool-call (token budget) — "
+                    "abandoning the incomplete tool call and synthesizing a "
+                    "final answer",
+                    extra={
+                        "conversation_id": manager.conversation_id,
+                        "iteration": iteration + 1,
+                        "tools": [tc.name for tc in response.tool_calls],
+                    },
+                )
+                if trace is not None:
+                    iteration_trace["status"] = "truncated_tool_call"
+                    trace.append(iteration_trace)
+                    await self._store_trace(manager, trace)
+                break
 
             num_tool_calls = len(response.tool_calls)
             logger.log(

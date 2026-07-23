@@ -282,18 +282,30 @@ LOOP:
   process_input → one LLM call (iterate=True, needs_tool_execution=True)
                 → [DynaBot executes tools — middleware fires per-tool!]
                 → loop back to process_input
-  (until: no tool_calls, max iterations, or duplicate detection)
+  (until: no tool_calls, max iterations, duplicate detection, or a
+   truncated tool call)
 finalize_turn         → return stored response or final synthesis call
 stream_finalize_turn  → yield stored response as chunk or stream synthesis
 ```
 
-When the loop ends abnormally (duplicate detection, max iterations, or a
-DynaBot-level `tool_loop_timeout`) with an unexecuted tool call, the
-assistant `tool_use` would otherwise be left in history with no following
-`tool_result` — which some providers (notably Anthropic) reject. Before the
-synthesis call, `finalize_turn`/`stream_finalize_turn` pair any such orphan
-`tool_use` with a synthetic `tool_result` (`_pair_orphan_tool_calls`), so the
-re-sent history is structurally valid on every backend.
+When the loop ends abnormally (duplicate detection, max iterations, a
+DynaBot-level `tool_loop_timeout`, or a **truncated tool call**) with an
+unexecuted tool call, the assistant `tool_use` would otherwise be left in
+history with no following `tool_result` — which some providers (notably
+Anthropic) reject. Before the synthesis call,
+`finalize_turn`/`stream_finalize_turn` pair any such orphan `tool_use` with a
+synthetic `tool_result` (`_pair_orphan_tool_calls`), so the re-sent history is
+structurally valid on every backend.
+
+A **truncated tool call** is the provider cutting generation off at the token
+budget mid-`tool_use` (surfaced as `LLMResponse.truncated`; Anthropic
+`stop_reason == "max_tokens"`, OpenAI `finish_reason == "length"`). The
+arguments are incomplete, so the loop treats the turn as terminal and does
+**not** execute the call — feeding a partial call to the tool would surface a
+masked "argument required" error, and the model would otherwise retry the
+identical oversized call until the duplicate-breaker fires. The turn is
+abandoned like a duplicate break, and a final answer is synthesized without
+tools.
 
 **Wizard Phased Flow**:
 ```
