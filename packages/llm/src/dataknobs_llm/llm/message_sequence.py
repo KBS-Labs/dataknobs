@@ -60,12 +60,21 @@ def _duplicate_tool_result(name: str) -> str:
     )
 
 
-def _tool_call_signature(tc: Any) -> tuple[str, str]:
+def tool_call_signature(tc: Any) -> tuple[str, str]:
     """Canonical ``(name, params)`` identity of a tool call.
 
-    Mirrors a reasoning loop's own duplicate-detection key
-    (``json.dumps(parameters, sort_keys=True)``) so "is this orphan a
-    duplicate?" matches "did the loop break on a duplicate?" exactly.
+    The single source of truth for a tool call's duplicate-detection key
+    (``name`` + ``json.dumps(parameters, sort_keys=True)``). Both this module's
+    orphan-pairing ("is this orphan a duplicate of an answered call?") and a
+    reasoning loop's own duplicate-break guard ("did this iteration repeat the
+    previous one's calls?") key on it, so the two agree by construction rather
+    than by two copies of the same expression drifting apart.
+
+    Args:
+        tc: A tool call exposing ``name`` and ``parameters``.
+
+    Returns:
+        ``(name, canonical-params-json)`` — stable across dict ordering.
     """
     return (tc.name, json.dumps(tc.parameters, sort_keys=True))
 
@@ -133,7 +142,7 @@ def pair_orphan_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     # Canonical signatures of the calls that DID get answered, so an orphan
     # repeating one is recognized as the abandoned half of a duplicate break.
     answered_signatures: set[tuple[str, str]] = {
-        _tool_call_signature(tc)
+        tool_call_signature(tc)
         for m in messages
         if m.role == "assistant" and m.tool_calls
         for tc in m.tool_calls
@@ -150,7 +159,7 @@ def pair_orphan_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
                 continue
             content = (
                 _duplicate_tool_result(tc.name)
-                if _tool_call_signature(tc) in answered_signatures
+                if tool_call_signature(tc) in answered_signatures
                 else _UNEXECUTED_TOOL_RESULT
             )
             results.append(

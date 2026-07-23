@@ -176,6 +176,13 @@ class TestInlinePolicy:
         ``inline`` MUST NOT produce consecutive same-role messages, and the
         ``tool_result`` MUST stay adjacent/paired to the ``tool_use`` — the
         exact structural condition Anthropic's API rejects with a 400.
+
+        Reproduce-first: Anthropic requires every ``tool_result`` block to come
+        **first** in a user turn's content array (text after). Before the
+        ordering fix the inlined-notice ``text`` block landed *before* the
+        consolidated ``tool_result`` — a documented 400 — so the
+        ``tool_result``-before-``text`` assertion below fails against the
+        pre-fix adapter and passes after.
         """
         adapter = AnthropicAdapter(system_message_policy="inline")
         messages = [
@@ -211,9 +218,78 @@ class TestInlinePolicy:
         types = [b["type"] for b in final_blocks]
         assert "text" in types
         assert "tool_result" in types
+        # Anthropic requires tool_result blocks first, text after — else 400.
+        assert types.index("tool_result") < types.index("text"), types
         result = next(b for b in final_blocks if b["type"] == "tool_result")
         assert result["tool_use_id"] == "t1"
         assert "Loop timed out" in _flatten_text(msgs)
+
+    def test_inline_notice_after_tool_result_keeps_result_first(self) -> None:
+        """Adversarial ordering: notice arriving *after* the tool_result.
+
+        ``[user, assistant(tool_use), tool(result), system(notice)]`` — the
+        notice inlines onto the same user turn that already holds the
+        ``tool_result``. The result must stay first, the notice text after.
+        """
+        adapter = AnthropicAdapter(system_message_policy="inline")
+        messages = [
+            LLMMessage(role="user", content="Do the thing"),
+            LLMMessage(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(name="search", parameters={"q": "x"}, id="t1"),
+                ],
+            ),
+            LLMMessage(
+                role="tool",
+                content='{"r": 1}',
+                name="search",
+                tool_call_id="t1",
+            ),
+            LLMMessage(role="system", content="Now summarize."),
+        ]
+        _, msgs = adapter.adapt_messages(messages)
+
+        assert _no_consecutive_same_role(msgs), [m["role"] for m in msgs]
+        assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+        types = [b["type"] for b in msgs[2]["content"]]
+        assert types.index("tool_result") < types.index("text"), types
+        assert "Now summarize." in _flatten_text(msgs)
+
+    def test_inline_notice_between_multi_tool_use_and_results(self) -> None:
+        """Adversarial ordering: notice before *two* tool results.
+
+        ``[user, assistant(tool_use t1, tool_use t2), system(notice),
+        tool(t1), tool(t2)]`` — both results must land first, in first-seen
+        order, with the notice text last.
+        """
+        adapter = AnthropicAdapter(system_message_policy="inline")
+        messages = [
+            LLMMessage(role="user", content="Do two things"),
+            LLMMessage(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(name="a", parameters={}, id="t1"),
+                    ToolCall(name="b", parameters={}, id="t2"),
+                ],
+            ),
+            LLMMessage(role="system", content="Loop ended; use results."),
+            LLMMessage(role="tool", content="r1", name="a", tool_call_id="t1"),
+            LLMMessage(role="tool", content="r2", name="b", tool_call_id="t2"),
+        ]
+        _, msgs = adapter.adapt_messages(messages)
+
+        assert _no_consecutive_same_role(msgs), [m["role"] for m in msgs]
+        final_blocks = msgs[-1]["content"]
+        types = [b["type"] for b in final_blocks]
+        # Both tool_results first, in order; the notice text after them.
+        assert types == ["tool_result", "tool_result", "text"], types
+        assert [
+            b["tool_use_id"] for b in final_blocks if b["type"] == "tool_result"
+        ] == ["t1", "t2"]
+        assert "Loop ended" in _flatten_text(msgs)
 
     def test_consecutive_tool_results_still_consolidated(self) -> None:
         """The pre-existing tool_result consolidation is preserved."""

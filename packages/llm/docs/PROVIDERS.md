@@ -354,7 +354,7 @@ config = LLMConfig(
 
 | Policy | Mid-conversation `role="system"` behavior |
 |--------|-------------------------------------------|
-| `inline` (**default**) | Convert to a `user` message **at its position**, preserving the in-context meaning. Content blocks are consolidated so the request stays valid (no consecutive same-role messages; every `tool_result` stays adjacent/paired to its `tool_use`). |
+| `inline` (**default**) | Convert to a `user` message **at its position**, preserving the in-context meaning. Content blocks are consolidated so the request stays valid: no consecutive same-role messages; every `tool_result` stays adjacent/paired to its `tool_use`; and `tool_result` blocks are kept **first** in a user turn (with the inlined notice text after them), as Anthropic's Messages API requires. |
 | `hoist` | Merge into the top-level `system` param (legacy behavior; positionally lossy but byte-for-byte back-compatible). |
 | `warn` | Log a warning naming the message, then hoist — makes the lossy case visible without changing structure. |
 | `reject` | Raise `ValidationError` — treat a mid-conversation system message as a configuration error. |

@@ -13,7 +13,10 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.exceptions import ToolsNotSupportedError
 from dataknobs_llm.llm.base import LLMResponse
-from dataknobs_llm.llm.message_sequence import pair_orphan_tool_calls
+from dataknobs_llm.llm.message_sequence import (
+    pair_orphan_tool_calls,
+    tool_call_signature,
+)
 from dataknobs_llm.tools import ToolExecutionContext
 
 from dataknobs_bots.bot.turn import ToolExecution
@@ -389,10 +392,10 @@ class ReActReasoning(
             },
         )
 
-        # Duplicate detection
+        # Duplicate detection — keyed on the shared tool_call_signature so the
+        # loop's duplicate-break guard and the orphan-pairing repair agree.
         current_calls = [
-            (tc.name, json.dumps(tc.parameters, sort_keys=True))
-            for tc in response.tool_calls
+            tool_call_signature(tc) for tc in response.tool_calls
         ]
 
         if (
@@ -660,11 +663,10 @@ class ReActReasoning(
                 },
             )
 
-            # Duplicate detection: compare (name, sorted params JSON)
-            # with previous iteration to avoid infinite loops
+            # Duplicate detection: compare the shared tool_call_signature
+            # with the previous iteration to avoid infinite loops
             current_calls = [
-                (tc.name, json.dumps(tc.parameters, sort_keys=True))
-                for tc in response.tool_calls
+                tool_call_signature(tc) for tc in response.tool_calls
             ]
 
             if prev_tool_calls is not None and current_calls == prev_tool_calls:

@@ -253,7 +253,14 @@ class AnthropicAdapter(LLMAdapter):
                     )
                 elif self.accepts_inline_system:
                     # The family accepts an inline system message — leave it in
-                    # place rather than hoisting or converting.
+                    # place rather than hoisting or converting. RESERVED: no
+                    # current Claude model accepts a role="system" entry in the
+                    # Messages `messages` array (it is a 400), so this branch is
+                    # dormant for every model AnthropicAdapter serves today. It
+                    # exists only for a hypothetical future Claude family that
+                    # sets accepts_inline_system=True via S1 constraints; do NOT
+                    # force constraints={"accepts_inline_system": True} for a
+                    # current model — use policy 'inline' instead.
                     anthropic_messages.append(
                         {"role": "system", "content": msg.content}
                     )
@@ -365,13 +372,25 @@ class AnthropicAdapter(LLMAdapter):
         anthropic_messages: List[Dict[str, Any]],
         block: Dict[str, Any],
     ) -> None:
-        """Append a content block to the current ``user`` turn.
+        """Add a content block to the current ``user`` turn, order-safely.
 
         Consolidates into the preceding message when it is a ``user`` turn so
         the adapted sequence never has two consecutive ``user`` messages and a
         ``tool_result`` stays adjacent to the ``tool_use`` it answers. A
         plain-string ``user`` turn is promoted to a content-block list so the
         new block can join it; otherwise a fresh ``user`` message is started.
+
+        Anthropic's Messages API additionally requires every ``tool_result``
+        block to come **first** in a user turn's content array — any ``text``
+        must follow all tool results, or the request is a 400. So a
+        ``tool_result`` is spliced in *after the last existing* ``tool_result``
+        (keeping the tool results grouped at the front, in first-seen order)
+        rather than appended blindly onto the end past an inlined-notice
+        ``text`` block; every other block appends at the end, already after the
+        tool results. This keeps the headline case — a mid-conversation system
+        notice inlined between an assistant ``tool_use`` and its following
+        ``tool_result`` — a valid request instead of an invalid
+        ``[text, tool_result]`` ordering.
         """
         if anthropic_messages and anthropic_messages[-1]["role"] == "user":
             last = anthropic_messages[-1]
@@ -381,7 +400,14 @@ class AnthropicAdapter(LLMAdapter):
                     [{"type": "text", "text": content}] if content else []
                 )
                 last["content"] = content
-            content.append(block)
+            if block.get("type") == "tool_result":
+                insert_at = 0
+                for i, existing in enumerate(content):
+                    if existing.get("type") == "tool_result":
+                        insert_at = i + 1
+                content.insert(insert_at, block)
+            else:
+                content.append(block)
         else:
             anthropic_messages.append({"role": "user", "content": [block]})
 
@@ -638,6 +664,12 @@ class AnthropicProvider(AsyncLLMProvider):
         # (False for Anthropic — resolved from self.config so a constraints
         # override is honored). Both are passed to the adapter, keeping the
         # LLMAdapter.adapt_messages ABC signature stable for other adapters.
+        # Both are captured once here at construction rather than resolved
+        # per-call: for Anthropic accepts_inline_system is model-invariant
+        # (False for every model) and system_message_policy is not a per-call
+        # config_overrides surface, so construction-time capture is correct. A
+        # future family whose accepts_inline_system varied by model would need
+        # this resolved per-call in adapt_messages instead.
         policy = str(
             llm_config.options.get(
                 "system_message_policy", _DEFAULT_SYSTEM_MESSAGE_POLICY
