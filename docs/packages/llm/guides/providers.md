@@ -198,6 +198,82 @@ Both factory functions support all registered providers:
 | HuggingFace | `"huggingface"` | Built-in |
 | Echo | `"echo"` | Built-in (testing) |
 
+## Model constraints (request-shape rules)
+
+Some model families reject request parameters that others accept. The **Claude
+5 family rejects `temperature`** with a hard 400, while the Claude 4.x family
+(`claude-opus-4-8`, `claude-haiku-4-5-…`) still accepts it. A provider surfaces
+these as a resolved `ModelConstraints` value (orthogonal to `ModelCapability`:
+capabilities are the feature set; constraints are request-shape rules).
+
+`ModelConstraints` carries:
+
+| Field | Meaning |
+|-------|---------|
+| `rejected_params` | Generation/sampling params the family rejects — the provider **drops them before the call and logs a warning** (drop-and-warn, never silent). |
+| `accepts_inline_system` | Whether the family accepts a `role="system"` message at a non-leading position (Anthropic hoists all system messages, so `False`). |
+| `max_tokens_ceiling` | Reserved upper bound on `max_tokens` (unpopulated today). |
+
+The `AnthropicProvider` auto-detects the Claude 5 → `temperature`-rejection rule,
+so a Claude-5-family config no longer 400s when it carries `temperature:` — the
+param is dropped with a warning naming it and the model:
+
+```python
+from dataknobs_llm import create_llm_provider
+
+# temperature is dropped (with a logged warning) — no 400
+provider = create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "temperature": 0.3,
+})
+```
+
+Because the family table can go stale, the rule is **config-overridable** — a
+consumer can declare a new rejected param or withdraw a stale one at runtime,
+without waiting for a dataknobs release, via `LLMConfig.constraints` (a loose
+dict overlaid onto the auto-detected defaults, mirroring `capabilities`):
+
+```python
+# Add a rejected param the built-in table doesn't know about yet:
+create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-6-future",
+    "constraints": {"rejected_params": ["temperature", "top_p"]},
+})
+
+# Withdraw a stale rule (send temperature to a Claude 5 model anyway):
+create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "temperature": 0.3,
+    "constraints": {"rejected_params": []},
+})
+```
+
+### Vendor-error translation and the 400-retry safety net (Anthropic)
+
+The `AnthropicProvider` translates raw `anthropic` SDK errors into
+`dataknobs_common.exceptions` types, so a consumer catches by a dataknobs type
+without coupling to the SDK (the original error is preserved on `__cause__`):
+
+| Anthropic error | dataknobs exception |
+|-----------------|---------------------|
+| 400 (bad request) | `ValidationError` |
+| 429 (rate limit) | `RateLimitError` (with `retry_after` when the header is present) |
+| 401 / 403 (auth) | `OperationError` |
+| other status / connection / timeout | `OperationError` |
+
+Non-Anthropic exceptions propagate unchanged (a bug in caller code is never
+masked as an API error).
+
+As a safety net for a **model family the constraint table doesn't know yet**, an
+"unsupported sampling parameter" 400 is recovered once: the offending param is
+dropped, the request retried, a warning logged, and the discovery memoized for
+the process so subsequent requests to that model drop it up front (≤1 wasted
+round-trip per model). Declaring the param in `constraints` pre-empts even that
+first round-trip.
+
 ## Amazon Bedrock
 
 Amazon Bedrock is registered as the `"bedrock"` provider. A single

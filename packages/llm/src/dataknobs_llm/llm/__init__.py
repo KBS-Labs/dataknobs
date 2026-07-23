@@ -14,6 +14,7 @@ from .base import (
     LLMStreamResponse,
     CompletionMode,
     ModelCapability,
+    ModelConstraints,
     ToolCall,
     normalize_llm_config,
 )
@@ -56,6 +57,7 @@ __all__ = [
     'LLMStreamResponse',
     'CompletionMode',
     'ModelCapability',
+    'ModelConstraints',
     'ToolCall',
     'normalize_llm_config',
     # Providers
