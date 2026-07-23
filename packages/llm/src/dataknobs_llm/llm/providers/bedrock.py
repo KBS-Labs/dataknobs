@@ -371,6 +371,11 @@ class BedrockConverseAdapter(LLMAdapter):
             content=content,
             model=model or "",
             finish_reason=response.get("stopReason"),
+            # Bedrock Converse signals a token-budget cut-off with
+            # stopReason == "max_tokens" (Claude-on-Bedrock has the same
+            # silent-truncation hazard as the native Anthropic provider).
+            # finish_reason is left as the raw Converse stopReason.
+            truncated=response.get("stopReason") == "max_tokens",
             usage=usage,
             tool_calls=tool_calls or None,
             cost_usd=_estimate_cost(model or "", usage),
@@ -883,14 +888,17 @@ class BedrockProvider(AsyncLLMProvider):
                 (usage or {}).get("total_tokens"),
                 int((time.perf_counter() - stream_start) * 1000),
             )
-            yield LLMStreamResponse(
+            final_chunk = LLMStreamResponse(
                 delta="",
                 is_final=True,
                 finish_reason=stop_reason,
+                truncated=stop_reason == "max_tokens",
                 tool_calls=tool_calls,
                 usage=usage,
                 model=runtime_config.model,
             )
+            self._warn_if_truncated(final_chunk)
+            yield final_chunk
 
     async def embed(
         self,

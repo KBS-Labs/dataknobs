@@ -87,6 +87,7 @@ def text_response(
     *,
     model: str = "test-model",
     finish_reason: str = "stop",
+    truncated: bool = False,
     usage: dict[str, int] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> LLMResponse:
@@ -96,6 +97,9 @@ def text_response(
         content: Response text content
         model: Model identifier (default: "test-model")
         finish_reason: Why generation stopped (default: "stop")
+        truncated: Whether the provider cut generation off at the token budget
+            (default: False). Set to script a truncated response for tests
+            exercising :attr:`LLMResponse.truncated` handling.
         usage: Optional token usage dict
         metadata: Optional metadata dict
 
@@ -111,6 +115,7 @@ def text_response(
         content=content,
         model=model,
         finish_reason=finish_reason,
+        truncated=truncated,
         usage=usage,
         metadata=metadata or {},
     )
@@ -123,6 +128,7 @@ def tool_call_response(
     tool_id: str | None = None,
     content: str = "",
     model: str = "test-model",
+    truncated: bool = False,
     additional_tools: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> LLMResponse:
     """Create an LLMResponse with tool call(s).
@@ -133,6 +139,9 @@ def tool_call_response(
         tool_id: Unique ID for the tool call (auto-generated if not provided)
         content: Optional text content alongside tool call
         model: Model identifier (default: "test-model")
+        truncated: Whether the provider cut generation off at the token budget
+            (default: False). Set to script the dangerous truncated-tool-call
+            case — a well-formed-looking call with incomplete arguments.
         additional_tools: Additional tool calls as (name, args) tuples
 
     Returns:
@@ -175,6 +184,7 @@ def tool_call_response(
         content=content,
         model=model,
         finish_reason="tool_calls",
+        truncated=truncated,
         tool_calls=tools,
     )
 
@@ -561,6 +571,10 @@ def llm_response_to_dict(resp: LLMResponse) -> dict[str, Any]:
     d: dict[str, Any] = {"content": resp.content, "model": resp.model}
     if resp.finish_reason is not None:
         d["finish_reason"] = resp.finish_reason
+    if resp.truncated:
+        # Omit-when-falsy: the key only appears on a truncated response, so
+        # existing capture fixtures stay byte-identical.
+        d["truncated"] = True
     if resp.usage is not None:
         d["usage"] = resp.usage
     if resp.function_call is not None:
@@ -591,6 +605,7 @@ def llm_response_from_dict(d: dict[str, Any]) -> LLMResponse:
         content=d["content"],
         model=d["model"],
         finish_reason=d.get("finish_reason"),
+        truncated=d.get("truncated", False),
         usage=d.get("usage"),
         function_call=d.get("function_call"),
         tool_calls=tool_calls,

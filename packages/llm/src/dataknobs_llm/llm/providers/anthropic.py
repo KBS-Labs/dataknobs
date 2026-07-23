@@ -104,6 +104,25 @@ _SAMPLING_PARAMS: tuple[str, ...] = (
     "presence_penalty",
 )
 
+#: Maps Anthropic ``stop_reason`` values onto the canonical
+#: :attr:`~dataknobs_llm.llm.base.LLMResponse.finish_reason` vocabulary its
+#: docstring advertises (``'stop'`` / ``'length'`` / ``'tool_calls'``), so a
+#: consumer reading ``finish_reason`` gets the same tokens across providers
+#: instead of Anthropic's raw ``'max_tokens'`` / ``'end_turn'`` / ``'tool_use'``.
+#: The raw value is preserved on ``metadata['raw_finish_reason']``. An
+#: unmapped value passes through unchanged.
+_STOP_REASON_NORMALIZATION: Dict[str, str] = {
+    "max_tokens": "length",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "tool_use": "tool_calls",
+}
+
+#: Anthropic ``stop_reason`` values that mean generation was cut off at the
+#: token budget (the response is incomplete — see
+#: :attr:`~dataknobs_llm.llm.base.LLMResponse.truncated`).
+_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
+
 #: Process-level cache of sampling params discovered — via a 400 at request
 #: time — to be rejected by a given model, keyed by lowercased model id. The
 #: safety net for families the static table doesn't know yet: the first request
@@ -246,12 +265,24 @@ class AnthropicAdapter(LLMAdapter):
                 ),
             }
 
+        raw_stop_reason = response.stop_reason
+        finish_reason = _STOP_REASON_NORMALIZATION.get(
+            raw_stop_reason, raw_stop_reason
+        )
+        metadata: Dict[str, Any] = {}
+        if raw_stop_reason is not None and raw_stop_reason != finish_reason:
+            # Preserve the un-normalized provider value for any caller that
+            # needs the exact Anthropic stop_reason.
+            metadata["raw_finish_reason"] = raw_stop_reason
+
         return LLMResponse(
             content=content,
             model=response.model,
-            finish_reason=response.stop_reason,
+            finish_reason=finish_reason,
+            truncated=raw_stop_reason in _TRUNCATION_STOP_REASONS,
             usage=usage,
             tool_calls=tool_calls if tool_calls else None,
+            metadata=metadata,
         )
 
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
@@ -819,14 +850,17 @@ class AnthropicProvider(AsyncLLMProvider):
                     message = await stream.get_final_message()
                     parsed = self.adapter.adapt_response(message)
 
-                    yielded = True
-                    yield LLMStreamResponse(
+                    final_chunk = LLMStreamResponse(
                         delta='',
                         is_final=True,
                         finish_reason=parsed.finish_reason,
+                        truncated=parsed.truncated,
                         tool_calls=parsed.tool_calls,
                         model=runtime_config.model,
                     )
+                    self._warn_if_truncated(final_chunk)
+                    yielded = True
+                    yield final_chunk
                 return
             except Exception as exc:
                 if not yielded and not retried:

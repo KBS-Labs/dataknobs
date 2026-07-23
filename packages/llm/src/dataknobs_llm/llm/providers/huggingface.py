@@ -141,6 +141,10 @@ class HuggingFaceProvider(AsyncLLMProvider):
         else:
             text = str(data)
 
+        # The HF text-generation inference path returns no stop-reason signal
+        # (finish_reason is hardcoded 'stop'), so truncation cannot be
+        # detected here — LLMResponse.truncated stays False. If a caller needs
+        # it, request `details=True` and parse `details.finish_reason`.
         return self._analyze_response(LLMResponse(
             content=text,
             model=runtime_config.model,
