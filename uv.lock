@@ -1764,6 +1764,7 @@ dependencies = [
 dev = [
     { name = "black" },
     { name = "dataknobs-data", extra = ["vector"] },
+    { name = "dataknobs-llm", extra = ["anthropic"] },
     { name = "editables" },
     { name = "hatchling" },
     { name = "ipywidgets" },
@@ -1810,6 +1811,7 @@ requires-dist = [
 dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "dataknobs-data", extras = ["vector"], editable = "packages/data" },
+    { name = "dataknobs-llm", extras = ["anthropic"], editable = "packages/llm" },
     { name = "editables", specifier = ">=0.3" },
     { name = "hatchling", specifier = ">=1.21.0" },
     { name = "ipywidgets", specifier = ">=8.1.5" },

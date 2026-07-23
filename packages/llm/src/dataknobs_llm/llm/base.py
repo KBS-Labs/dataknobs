@@ -168,6 +168,85 @@ CAPABILITY_NAMES: dict[str, ModelCapability] = {
 }
 
 
+@dataclass(frozen=True)
+class ModelConstraints:
+    """Request-shape rules a model family enforces at its API boundary.
+
+    Orthogonal to :class:`ModelCapability`. A *capability* is a feature a
+    model supports (vision, function calling); a *constraint* is a rule the
+    model family imposes on the **shape of a request** — which parameters it
+    rejects, whether it accepts a system message inline, an upper bound on
+    ``max_tokens``. The two are separate axes: there is no ``TEMPERATURE``
+    capability, and rejection is per-parameter (finer than any capability
+    member), so constraints are their own small structure rather than +/- on
+    the capability set.
+
+    Like the resolved ``List[ModelCapability]`` (and unlike the stored config
+    fields), a ``ModelConstraints`` is a **runtime value**: a provider
+    auto-detects it (:meth:`LLMProvider._detect_constraints`) and the base
+    overlays any ``LLMConfig.constraints`` override
+    (:meth:`LLMProvider._resolve_constraints`). It is never a stored typed
+    config field — keeping it a runtime object means a consumer can declare or
+    withdraw a constraint in config without a dataknobs release (the answer to
+    "the family table goes stale"), and there is no serialization surface to
+    round-trip.
+
+    Attributes:
+        rejected_params: Generation/sampling parameter names the family
+            rejects at the request boundary (e.g. the Claude 5 family rejects
+            ``temperature`` with a 400). A provider drops these before the
+            call — always drop-and-warn, never silently.
+        accepts_inline_system: Whether the family accepts a ``role="system"``
+            message at a non-leading position in the message array. Anthropic
+            hoists every system message into a top-level ``system`` param, so
+            a mid-conversation system message cannot sit inline
+            (``False``); providers that pass ``system`` through the message
+            array leave this ``True``. Read by the mid-conversation
+            system-message policy.
+        max_tokens_ceiling: Hard upper bound on ``max_tokens`` for the family,
+            or ``None`` when unconstrained. Reserved for future clamping; no
+            provider currently populates it.
+    """
+
+    rejected_params: frozenset[str] = frozenset()
+    accepts_inline_system: bool = True
+    max_tokens_ceiling: int | None = None
+
+    def with_overrides(self, overrides: Dict[str, Any]) -> "ModelConstraints":
+        """Return a copy with the given loose-dict overrides overlaid.
+
+        Overlays per field (an absent key leaves the detected value intact),
+        so a config can adjust one constraint without redeclaring the rest.
+        ``rejected_params`` is *replaced* (the override declares the full set
+        the consumer wants rejected — pass ``[]`` to withdraw a stale rule);
+        ``accepts_inline_system`` / ``max_tokens_ceiling`` are coerced/passed
+        through. Mirrors the loose ``LLMConfig.capabilities`` override shape.
+
+        Args:
+            overrides: Loose mapping with any of ``"rejected_params"``
+                (iterable of str, or ``None`` → empty), ``"accepts_inline_system"``
+                (bool), ``"max_tokens_ceiling"`` (int or ``None``).
+
+        Returns:
+            A new ``ModelConstraints`` (the receiver is never mutated).
+        """
+        from dataclasses import replace
+
+        changes: Dict[str, Any] = {}
+        if "rejected_params" in overrides:
+            raw = overrides["rejected_params"]
+            changes["rejected_params"] = (
+                frozenset(raw) if raw is not None else frozenset()
+            )
+        if "accepts_inline_system" in overrides:
+            changes["accepts_inline_system"] = bool(
+                overrides["accepts_inline_system"]
+            )
+        if "max_tokens_ceiling" in overrides:
+            changes["max_tokens_ceiling"] = overrides["max_tokens_ceiling"]
+        return replace(self, **changes)
+
+
 @dataclass
 class ToolCall:
     """Represents a tool call from the LLM.
@@ -600,6 +679,16 @@ class LLMConfig(StructuredConfig):
     # ModelCapability enum names (e.g. "json_mode", "function_calling").
     capabilities: List[str] | None = None
 
+    # Model-constraint overrides — when set, overlaid onto the provider's
+    # auto-detected ModelConstraints (request-shape rules the model family
+    # enforces).  Loose dict shape mirroring ``capabilities``: resolved to a
+    # typed ModelConstraints at runtime, never stored typed.  Keys:
+    # "rejected_params" (list[str]), "accepts_inline_system" (bool),
+    # "max_tokens_ceiling" (int | None).  Lets a consumer declare/withdraw a
+    # constraint without a dataknobs release (e.g. a future model family
+    # gaining or dropping a rejected param).
+    constraints: Dict[str, Any] | None = None
+
     # ``from_dict`` / ``to_dict`` are inherited from ``StructuredConfig``:
     #  - ``from_dict`` ignores unknown keys (so a dataknobs ``Config``'s
     #    ``type`` / ``name`` / ``factory`` are dropped automatically) and
@@ -824,6 +913,76 @@ class LLMProvider(ABC):
                     logger.warning("Unknown capability name in config: %s", name)
             return resolved
         return detected
+
+    def get_constraints(
+        self, config: LLMConfig | None = None
+    ) -> ModelConstraints:
+        """Get resolved request-shape constraints for this provider/model.
+
+        Template method mirroring :meth:`get_capabilities`: calls
+        :meth:`_detect_constraints` (provider hook), then applies any
+        ``LLMConfig.constraints`` override via :meth:`_resolve_constraints`.
+        Orthogonal to :meth:`get_capabilities` — capabilities are the feature
+        set, constraints are the request-shape rules the model family enforces
+        (see :class:`ModelConstraints`).
+
+        Args:
+            config: The config whose ``model`` + ``constraints`` drive
+                detection and resolution. Defaults to ``self.config``. Pass a
+                per-call runtime config (with ``config_overrides`` applied) so
+                a call that overrides the model to a **different family** gets
+                that family's constraints — the request-param drop is then
+                computed for the model actually sent, not the configured
+                default. (Unlike :meth:`get_capabilities`, which is a
+                provider-level query keyed off ``self.config``; constraints are
+                consumed per-request, so they honor the per-call model.)
+        """
+        cfg = config if config is not None else self.config
+        return self._resolve_constraints(self._detect_constraints(cfg), cfg)
+
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect request-shape constraints for *config*'s model.
+
+        Default: no constraints (permissive — the base assumes a family that
+        accepts every sampling param and an inline system message).  Providers
+        whose model families reject request params or forbid inline system
+        messages override this with family string-matching on ``config.model``,
+        mirroring :meth:`_detect_capabilities`.
+
+        Args:
+            config: The config whose ``model`` is matched. This is the per-call
+                runtime config when called through :meth:`get_constraints`
+                with a per-call override, so detection reflects the model
+                actually being sent.
+        """
+        return ModelConstraints()
+
+    def _resolve_constraints(
+        self, detected: ModelConstraints, config: LLMConfig
+    ) -> ModelConstraints:
+        """Overlay ``config.constraints`` onto *detected*, if set.
+
+        The config-override *mechanism* mirrors :meth:`_resolve_capabilities`
+        (a loose ``LLMConfig`` field resolved at runtime, so a family rule can
+        be declared or withdrawn without a dataknobs release). The *merge
+        semantics differ deliberately*: capabilities **replace** the detected
+        list wholesale, whereas constraints **overlay per field** — an absent
+        override key keeps the detected value (see
+        :meth:`ModelConstraints.with_overrides`). So
+        ``{"accepts_inline_system": true}`` leaves the auto-detected
+        ``rejected_params`` in force rather than resetting the whole
+        structure. Per-field overlay is the better semantic for constraints: a
+        consumer typically wants to adjust one rule, not restate every rule the
+        family enforces.
+
+        Args:
+            detected: The auto-detected constraints for the model.
+            config: The config whose ``constraints`` override is overlaid.
+        """
+        override = config.constraints
+        if not override:
+            return detected
+        return detected.with_overrides(override)
 
     def _check_ready(self) -> None:
         """Raise if provider is not ready for requests.

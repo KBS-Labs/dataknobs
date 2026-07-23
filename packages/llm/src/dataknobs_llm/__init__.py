@@ -8,6 +8,7 @@ from dataknobs_llm.llm import (
     LLMStreamResponse,
     CompletionMode,
     ModelCapability,
+    ModelConstraints,
     normalize_llm_config,
     OpenAIProvider,
     AnthropicProvider,
@@ -98,6 +99,7 @@ __all__ = [
     "LLMStreamResponse",
     "CompletionMode",
     "ModelCapability",
+    "ModelConstraints",
     "normalize_llm_config",
     # Providers
     "OpenAIProvider",

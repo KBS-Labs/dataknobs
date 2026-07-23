@@ -63,14 +63,56 @@ import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
+from dataknobs_common.exceptions import (
+    OperationError, RateLimitError, ValidationError,
+)
+
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ToolCall,
+    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
     normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
+
+#: Claude model families that reject the ``temperature`` sampling parameter
+#: at the request boundary (a hard 400). Matched as lowercase substrings of
+#: the model id, distinguishing the Claude 5 generation
+#: (``claude-sonnet-5``, ``claude-opus-5``, ...) from the Claude 4.x
+#: generation (``claude-opus-4-8``, ``claude-haiku-4-5-...``), which still
+#: accepts ``temperature``. This is the auto-detected default only — a
+#: consumer can declare or withdraw the rule at runtime via
+#: ``LLMConfig.constraints`` without a dataknobs release (see
+#: :class:`~dataknobs_llm.llm.base.ModelConstraints`).
+_CLAUDE_5_TEMPERATURE_REJECTORS: tuple[str, ...] = (
+    "claude-5",
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-haiku-5",
+    "claude-fable-5",
+)
+
+#: Sampling parameters that ``adapt_config`` may forward and that a model
+#: family might reject. Used by the 400-retry safety net to identify which
+#: forwarded param an "unsupported parameter" 400 refers to.
+_SAMPLING_PARAMS: tuple[str, ...] = (
+    "temperature",
+    "top_p",
+    "stop_sequences",
+    "frequency_penalty",
+    "presence_penalty",
+)
+
+#: Process-level cache of sampling params discovered — via a 400 at request
+#: time — to be rejected by a given model, keyed by lowercased model id. The
+#: safety net for families the static table doesn't know yet: the first request
+#: pays one 400, the offending param is dropped and retried, and the discovery
+#: is folded into :meth:`AnthropicProvider._detect_constraints` so subsequent
+#: requests to the same model drop it up front (≤1 wasted round-trip per model
+#: per process). A consumer can still pre-empt this entirely by declaring the
+#: param in ``LLMConfig.constraints``.
+_DISCOVERED_REJECTED_PARAMS: Dict[str, set[str]] = {}
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
@@ -467,6 +509,204 @@ class AnthropicProvider(AsyncLLMProvider):
 
         return capabilities
 
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect Anthropic request-shape constraints for *config*'s model.
+
+        Two Anthropic-specific rules, both string-matched by family
+        (mirroring :meth:`_detect_capabilities`):
+
+        - ``accepts_inline_system=False`` for **every** Anthropic model —
+          Anthropic's Messages API has no inline ``system`` role; a system
+          message is always a top-level ``system`` param. Read by the
+          mid-conversation system-message policy.
+        - ``rejected_params={"temperature"}`` for the Claude 5 family, which
+          returns a 400 when ``temperature`` is supplied. The Claude 4.x
+          family (``claude-opus-4-8``, ``claude-haiku-4-5-...``) still accepts
+          it, so the match distinguishes the generations.
+
+        Matches on ``config.model`` (not ``self.config.model``) so a per-call
+        model override resolves the overriding family's constraints — see
+        :meth:`~dataknobs_llm.llm.base.LLMProvider.get_constraints`.
+
+        Any params discovered at runtime via the 400-retry safety net (see
+        :meth:`_recover_rejected_param`) are folded in for the current process,
+        so a family the static table doesn't know yet self-corrects after one
+        request.
+
+        Both are the auto-detected defaults; a consumer overrides either via
+        ``LLMConfig.constraints`` (see :meth:`_resolve_constraints`).
+        """
+        model = config.model.lower()
+        rejected: set[str] = set()
+        if any(m in model for m in _CLAUDE_5_TEMPERATURE_REJECTORS):
+            rejected.add("temperature")
+        rejected |= _DISCOVERED_REJECTED_PARAMS.get(model, set())
+        return ModelConstraints(
+            rejected_params=frozenset(rejected),
+            accepts_inline_system=False,
+        )
+
+    def _build_api_kwargs(self, config: LLMConfig) -> Dict[str, Any]:
+        """Build Anthropic API params, dropping ones the family rejects.
+
+        Single choke point over :meth:`AnthropicAdapter.adapt_config` shared
+        by ``complete``/``stream_complete``/``function_call``: builds the
+        request params, then drops any parameter named in the resolved
+        :class:`~dataknobs_llm.llm.base.ModelConstraints.rejected_params`
+        (e.g. ``temperature`` for the Claude 5 family) with a
+        ``logger.warning`` naming the param and model — **drop-and-warn,
+        never a silent drop**. Constraints resolve from the passed *runtime*
+        ``config`` (not ``self.config``), so a per-call model or ``constraints``
+        override is honored — the drop reflects the model actually being sent.
+
+        Args:
+            config: Runtime config (with any ``config_overrides`` applied).
+
+        Returns:
+            Anthropic API parameter dict with rejected params removed.
+        """
+        params = self.adapter.adapt_config(config)
+        constraints = self.get_constraints(config)
+        for param_name in constraints.rejected_params:
+            if param_name in params:
+                del params[param_name]
+                logger.warning(
+                    "Dropping request parameter %r rejected by Anthropic "
+                    "model family (model=%r); override via "
+                    "LLMConfig.constraints if this is incorrect.",
+                    param_name,
+                    config.model,
+                )
+        return params
+
+    def _retry_after(self, exc: Exception) -> float | None:
+        """Best-effort ``retry-after`` (seconds) from an Anthropic 429.
+
+        Reads the ``retry-after`` response header if present; returns ``None``
+        when absent or unparseable.
+        """
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        raw = headers.get("retry-after")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw Anthropic SDK error into a dataknobs exception.
+
+        Lets consumers catch by a dataknobs exception type instead of coupling
+        to the ``anthropic`` SDK's classes:
+
+        - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
+          (with ``retry_after`` when the header is present),
+        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 401/403 → :class:`~dataknobs_common.exceptions.OperationError`
+          (auth/permission),
+        - any other Anthropic API error (other status, connection, timeout) →
+          :class:`~dataknobs_common.exceptions.OperationError`.
+
+        Returns ``None`` for a non-Anthropic exception so the caller re-raises
+        it unchanged (a bug in our own code is never masked as an API error).
+        The original SDK error is preserved on ``__cause__`` — callers raise
+        ``... from exc``.
+        """
+        try:
+            import anthropic
+        except ImportError:  # pragma: no cover - anthropic is installed post-init
+            return None
+        if not isinstance(exc, anthropic.APIError):
+            return None
+        status = getattr(exc, "status_code", None)
+        if status == 429:
+            return RateLimitError(
+                f"Anthropic rate limit exceeded: {exc}",
+                retry_after=self._retry_after(exc),
+            )
+        if status == 400:
+            return ValidationError(f"Anthropic rejected the request: {exc}")
+        if status in (401, 403):
+            return OperationError(
+                f"Anthropic authentication/authorization error: {exc}"
+            )
+        return OperationError(f"Anthropic API error: {exc}")
+
+    def _recover_rejected_param(
+        self, exc: Exception, api_kwargs: Dict[str, Any]
+    ) -> str | None:
+        """Drop a sampling param an unexpected 400 identifies, for one retry.
+
+        The safety net for a model family the static constraint table doesn't
+        know yet. On a 400 whose message unambiguously names exactly one
+        sampling param that is present in ``api_kwargs``, this **mutates**
+        ``api_kwargs`` to drop that param, memoizes the discovery in
+        :data:`_DISCOVERED_REJECTED_PARAMS` (so subsequent requests to the same
+        model drop it up front — ≤1 wasted round-trip per model per process),
+        and returns the dropped param name so the caller can retry once.
+
+        Conservative by design — returns ``None`` (no retry) unless it can
+        pin down exactly one offending param, so an ambiguous or unrelated 400
+        is translated (S4) rather than blindly retried. Only genuine Anthropic
+        400s (``status_code == 400``) are considered.
+
+        Args:
+            exc: The exception raised by ``messages.create``/``.stream``.
+            api_kwargs: The request kwargs (mutated in place on a hit).
+
+        Returns:
+            The dropped param name, or ``None`` when no safe recovery applies.
+        """
+        if getattr(exc, "status_code", None) != 400:
+            return None
+        text = str(exc).lower()
+        present = [p for p in _SAMPLING_PARAMS if p in api_kwargs]
+        named = [p for p in present if p in text]
+        if len(named) != 1:
+            return None
+        param = named[0]
+        del api_kwargs[param]
+        model = str(api_kwargs.get("model", "")).lower()
+        _DISCOVERED_REJECTED_PARAMS.setdefault(model, set()).add(param)
+        return param
+
+    async def _create_message(self, api_kwargs: Dict[str, Any]) -> Any:
+        """Call ``messages.create`` with 400-retry recovery and S4 wrapping.
+
+        On an unexpected sampling-param 400, drops the offending param and
+        retries once (:meth:`_recover_rejected_param`); any other Anthropic
+        error is translated to a dataknobs exception
+        (:meth:`_translate_api_error`); non-Anthropic errors propagate
+        unchanged.
+        """
+        try:
+            return await self._client.messages.create(**api_kwargs)
+        except Exception as exc:
+            dropped = self._recover_rejected_param(exc, api_kwargs)
+            if dropped is not None:
+                logger.warning(
+                    "Anthropic rejected request parameter %r (model=%r); "
+                    "dropped it and retrying once. Future requests to this "
+                    "model will drop it up front.",
+                    dropped,
+                    api_kwargs.get("model"),
+                )
+                try:
+                    return await self._client.messages.create(**api_kwargs)
+                except Exception as retry_exc:
+                    translated = self._translate_api_error(retry_exc)
+                    if translated is None:
+                        raise
+                    raise translated from retry_exc
+            translated = self._translate_api_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
+
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -499,8 +739,8 @@ class AnthropicProvider(AsyncLLMProvider):
             msg_list, system_prompt=self.config.system_prompt,
         )
 
-        # Build API call kwargs
-        api_kwargs = self.adapter.adapt_config(runtime_config)
+        # Build API call kwargs (drops params the model family rejects)
+        api_kwargs = self._build_api_kwargs(runtime_config)
         api_kwargs["messages"] = anthropic_messages
         if system_content:
             api_kwargs["system"] = system_content
@@ -509,8 +749,8 @@ class AnthropicProvider(AsyncLLMProvider):
         if tools:
             api_kwargs["tools"] = self.adapter.adapt_tools(tools)
 
-        # Make API call
-        response = await self._client.messages.create(**api_kwargs)
+        # Make API call (400-retry recovery + vendor-error translation)
+        response = await self._create_message(api_kwargs)
 
         return self._analyze_response(self.adapter.adapt_response(response))
 
@@ -546,8 +786,8 @@ class AnthropicProvider(AsyncLLMProvider):
             msg_list, system_prompt=self.config.system_prompt,
         )
 
-        # Build stream kwargs
-        stream_kwargs = self.adapter.adapt_config(runtime_config)
+        # Build stream kwargs (drops params the model family rejects)
+        stream_kwargs = self._build_api_kwargs(runtime_config)
         stream_kwargs["messages"] = anthropic_messages
         if system_content:
             stream_kwargs["system"] = system_content
@@ -556,27 +796,54 @@ class AnthropicProvider(AsyncLLMProvider):
         if tools:
             stream_kwargs["tools"] = self.adapter.adapt_tools(tools)
 
-        # Stream API call
-        async with self._client.messages.stream(**stream_kwargs) as stream:
-            async for chunk in stream:
-                if chunk.type == 'content_block_delta':
-                    if hasattr(chunk.delta, 'text'):
-                        yield LLMStreamResponse(
-                            delta=chunk.delta.text,
-                            is_final=False
+        # Stream API call. A rejected-param 400 fails on stream entry, before
+        # any chunk is yielded, so the 400-retry safety net can recover it once
+        # without risk of double-yielding; any other Anthropic error (on entry
+        # or mid-stream) is translated to a dataknobs exception. The retry is
+        # gated on ``not yielded`` so a mid-stream failure is never retried.
+        yielded = False
+        retried = False
+        while True:
+            try:
+                async with self._client.messages.stream(**stream_kwargs) as stream:
+                    async for chunk in stream:
+                        if chunk.type == 'content_block_delta':
+                            if hasattr(chunk.delta, 'text'):
+                                yielded = True
+                                yield LLMStreamResponse(
+                                    delta=chunk.delta.text,
+                                    is_final=False
+                                )
+
+                    # Final message — use adapter to parse content blocks
+                    message = await stream.get_final_message()
+                    parsed = self.adapter.adapt_response(message)
+
+                    yielded = True
+                    yield LLMStreamResponse(
+                        delta='',
+                        is_final=True,
+                        finish_reason=parsed.finish_reason,
+                        tool_calls=parsed.tool_calls,
+                        model=runtime_config.model,
+                    )
+                return
+            except Exception as exc:
+                if not yielded and not retried:
+                    dropped = self._recover_rejected_param(exc, stream_kwargs)
+                    if dropped is not None:
+                        retried = True
+                        logger.warning(
+                            "Anthropic rejected request parameter %r (model="
+                            "%r); dropped it and retrying the stream once.",
+                            dropped,
+                            stream_kwargs.get("model"),
                         )
-
-            # Final message — use adapter to parse content blocks
-            message = await stream.get_final_message()
-            parsed = self.adapter.adapt_response(message)
-
-            yield LLMStreamResponse(
-                delta='',
-                is_final=True,
-                finish_reason=parsed.finish_reason,
-                tool_calls=parsed.tool_calls,
-                model=runtime_config.model,
-            )
+                        continue
+                translated = self._translate_api_error(exc)
+                if translated is None:
+                    raise
+                raise translated from exc
 
     async def embed(
         self,
@@ -610,12 +877,15 @@ class AnthropicProvider(AsyncLLMProvider):
         tools = self.adapter.adapt_raw_functions(functions)
 
         try:
-            fc_kwargs = self.adapter.adapt_config(self.config)
+            fc_kwargs = self._build_api_kwargs(self.config)
             fc_kwargs["messages"] = anthropic_messages
             fc_kwargs["tools"] = tools
             if system_content:
                 fc_kwargs["system"] = system_content
-            response = await self._client.messages.create(**fc_kwargs)
+            # Route through the shared choke point so this path gets the same
+            # 400-retry recovery and vendor-error translation as
+            # complete()/stream_complete() — not a bare messages.create().
+            response = await self._create_message(fc_kwargs)
 
             parsed = self.adapter.adapt_response(response)
 
@@ -634,10 +904,18 @@ class AnthropicProvider(AsyncLLMProvider):
                 function_call=tool_use,
             )
 
-        except Exception as e:
-            # Fallback to prompt-based approach for older models
+        except ValidationError as e:
+            # A 400 (translated to ValidationError by _create_message) means the
+            # request was rejected — for older models that lack the native tools
+            # API, that is the "tools unsupported" signal, so fall back to
+            # prompt-based function calling. Rate-limit (429 → RateLimitError),
+            # auth (401/403 → OperationError), and any other translated error
+            # are NOT caught here: they propagate unchanged, so a rate-limited
+            # or unauthenticated call is never masked as a "tools failed"
+            # fallback that would issue a second call against the same endpoint.
             logger.warning(
-                "Anthropic native tools failed, falling back to prompt-based: %s", e,
+                "Anthropic native tools unsupported (request rejected), falling "
+                "back to prompt-based function calling: %s", e,
             )
 
             function_descriptions = "\n".join([
