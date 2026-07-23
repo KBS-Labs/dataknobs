@@ -287,6 +287,14 @@ finalize_turn         → return stored response or final synthesis call
 stream_finalize_turn  → yield stored response as chunk or stream synthesis
 ```
 
+When the loop ends abnormally (duplicate detection, max iterations, or a
+DynaBot-level `tool_loop_timeout`) with an unexecuted tool call, the
+assistant `tool_use` would otherwise be left in history with no following
+`tool_result` — which some providers (notably Anthropic) reject. Before the
+synthesis call, `finalize_turn`/`stream_finalize_turn` pair any such orphan
+`tool_use` with a synthetic `tool_result` (`_pair_orphan_tool_calls`), so the
+re-sent history is structurally valid on every backend.
+
 **Wizard Phased Flow**:
 ```
 begin_turn    → restore state, handle navigation/amendments

@@ -1,0 +1,564 @@
+"""Reproduce-first tests for the ReAct finalize tool_use/tool_result pairing.
+
+Background
+----------
+When a ReAct turn ends *abnormally* — a duplicate-tool-call break, or a
+DynaBot-level tool-loop timeout — the loop can leave an assistant
+``tool_use`` in conversation history with no following ``tool_result``.
+The synthesis LLM call then re-sends that history to the provider.  On
+Anthropic's Messages API a dangling ``tool_use`` is a hard 400; other
+providers tolerate it.  Historically the strategy appended a
+``role="system"`` "loop ended, use existing results" notice intending it to
+sit inline after the ``tool_use`` — but adapters that lift system messages
+to a top-level ``system`` param (Anthropic) hoist that notice *out of the
+message array*, so the ``tool_use`` is left dangling.
+
+The fix pairs every orphan ``tool_use`` with a synthetic ``role="tool"``
+result at the synthesis chokepoint, and removes the now-redundant
+``role="system"`` notices.  The pairing logic is a pure
+``list[LLMMessage]`` core
+(:func:`dataknobs_bots.reasoning.react.pair_orphan_tool_calls`) behind a thin
+``ConversationManager`` adapter (``_pair_orphan_tool_calls``).  Synthetic
+guidance is route-aware: an orphan
+that repeats an already-answered call carries the "already called with
+identical parameters" nuance the former duplicate notice conveyed; any other
+orphan carries the generic "loop ended before execution" text.
+
+Assertion strategy
+------------------
+The defect is a conversation-state invariant, so the assertion is
+structural and ties the property to the *real* provider contract without a
+live API call: capture the messages the finalize synthesis received
+(``EchoProvider.get_last_call()``) and run them through
+``AnthropicAdapter.adapt_messages(...)`` — the exact conversion the API 400
+checks — asserting every ``tool_use`` block is paired with a
+``tool_result``.
+
+Route coverage
+--------------
+The orphan-producing routes (these tests FAIL against unfixed code):
+- phased duplicate-break (``process_input`` → ``finalize_turn``),
+- DynaBot ``tool_loop_timeout`` guard,
+- monolithic ``generate()`` duplicate-break,
+- streaming duplicate-break (``_stream_finalize``).
+
+The ``max_iterations`` routes do NOT produce an orphan today — the last
+iteration's tool calls are executed and paired *before* the cap fires — so
+those, plus the happy path, are covered as no-false-positive guards (the
+pairing helper is a correct no-op there and must not append spurious
+messages).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from dataknobs_bots.reasoning.react import (
+    _UNEXECUTED_TOOL_RESULT,
+    ReActReasoning,
+    _duplicate_tool_result,
+    pair_orphan_tool_calls,
+)
+from dataknobs_llm.llm.base import ToolCall
+from dataknobs_bots.testing import BotTestHarness
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm import LLMConfig, LLMMessage
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.conversations.storage import DataknobsConversationStorage
+from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
+from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.prompts import ConfigPromptLibrary
+from dataknobs_llm.prompts.builders import AsyncPromptBuilder
+from dataknobs_llm.testing import text_response, tool_call_response
+from dataknobs_llm.tools.base import Tool
+
+
+# ---------------------------------------------------------------------------
+# Test tool
+# ---------------------------------------------------------------------------
+
+
+class EchoTool(Tool):
+    """Simple tool that returns its input for testing."""
+
+    def __init__(self) -> None:
+        super().__init__(name="echo_tool", description="Echoes input back")
+        self.call_count = 0
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+        }
+
+    async def execute(self, **kwargs: Any) -> dict[str, Any]:
+        self.call_count += 1
+        return {"echoed": kwargs.get("message", ""), "call": self.call_count}
+
+
+# ---------------------------------------------------------------------------
+# Structural assertion helpers
+# ---------------------------------------------------------------------------
+
+
+def _adapt(messages: list[LLMMessage]) -> list[dict[str, Any]]:
+    """Adapt an LLMMessage history to Anthropic message blocks."""
+    _system, anthropic_messages = AnthropicAdapter().adapt_messages(messages)
+    return anthropic_messages
+
+
+def _assert_no_dangling_tool_use(messages: list[LLMMessage]) -> None:
+    """Assert every ``tool_use`` block pairs with a ``tool_result``.
+
+    Runs ``messages`` through the Anthropic adapter (the exact conversion
+    the API 400 validates) and asserts no ``tool_use`` id is left without a
+    matching ``tool_result`` — the precise dangling-``tool_use`` condition.
+    """
+    anthropic_messages = _adapt(messages)
+    tool_use_ids: list[str] = []
+    tool_result_ids: set[str] = set()
+    for m in anthropic_messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use":
+                tool_use_ids.append(block["id"])
+            elif block.get("type") == "tool_result":
+                tool_result_ids.add(block["tool_use_id"])
+
+    unpaired = [tid for tid in tool_use_ids if tid not in tool_result_ids]
+    assert not unpaired, (
+        "Dangling tool_use blocks after adaptation (the exact Anthropic 400 "
+        f"condition): {unpaired}. Adapted messages: {anthropic_messages}"
+    )
+
+
+def _synthesis_messages(provider: EchoProvider) -> list[LLMMessage]:
+    """Return the message list the most recent completion received."""
+    last = provider.get_last_call()
+    assert last is not None, "expected at least one provider call"
+    return list(last["messages"])
+
+
+#: Both synthetic guidance strings share this marker prefix, so the tests can
+#: recognise a pairing tool_result structurally without hardcoding either
+#: full string (route-aware guidance means the exact text varies).
+_SYNTHETIC_PREFIX = "[Tool result unavailable:"
+
+
+def _synthetic_pairing_contents(messages: list[LLMMessage]) -> list[str]:
+    """Contents of the synthetic pairing ``tool_result`` messages, if any."""
+    return [
+        m.content
+        for m in messages
+        if m.role == "tool"
+        and isinstance(m.content, str)
+        and m.content.startswith(_SYNTHETIC_PREFIX)
+    ]
+
+
+def _has_synthetic_pairing(messages: list[LLMMessage]) -> bool:
+    """Whether any synthetic pairing ``tool_result`` was appended."""
+    return bool(_synthetic_pairing_contents(messages))
+
+
+def _system_notice_present(messages: list[LLMMessage]) -> bool:
+    """Whether a removed mid-conversation ``role="system"`` notice leaked.
+
+    The system prompt itself is legitimate; this looks specifically for the
+    old duplicate/timeout notices ("System notice: ...").
+    """
+    return any(
+        m.role == "system" and m.content and "System notice" in m.content
+        for m in messages
+    )
+
+
+# ---------------------------------------------------------------------------
+# Direct-manager helpers (for the monolithic generate() route)
+# ---------------------------------------------------------------------------
+
+
+def _make_provider(responses: list[Any]) -> EchoProvider:
+    provider = EchoProvider(
+        LLMConfig(provider="echo", model="echo-test", options={"echo_prefix": ""})
+    )
+    provider.set_responses(responses)
+    return provider
+
+
+async def _make_manager(provider: EchoProvider) -> ConversationManager:
+    library = ConfigPromptLibrary(
+        {"system": {"assistant": {"template": "You are a test bot."}}}
+    )
+    builder = AsyncPromptBuilder(library=library)
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+    mgr = await ConversationManager.create(
+        llm=provider,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="assistant",
+    )
+    await mgr.add_message(role="user", content="test input")
+    return mgr
+
+
+# =========================================================================
+# T1 — phased duplicate-break (finalize_turn synthesis)
+# =========================================================================
+
+
+class TestPhasedDuplicateBreak:
+    """Duplicate tool calls end the phased loop with an unexecuted call."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_pairs_orphan_tool_use(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "same"}),
+                tool_call_response("echo_tool", {"message": "same"}),
+                text_response("Synthesized answer"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Use the echo tool")
+
+        # The turn completes without error and returns the synthesis text.
+        assert result.response == "Synthesized answer"
+
+        messages = _synthesis_messages(harness.provider)
+        # Structural: the synthesis history adapts to a paired Anthropic
+        # sequence (no dangling tool_use → no 400).
+        _assert_no_dangling_tool_use(messages)
+        # The abandoned (duplicate) tool_use is paired via a synthetic
+        # tool_result carrying the guidance, not a hoisted-away system notice.
+        assert _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+        # Route-aware guidance: this is a *duplicate* break, so the pairing
+        # carries the richer "already called with identical parameters"
+        # nuance the former system notice conveyed — not the generic
+        # "loop ended before execution" text.
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
+
+
+# =========================================================================
+# T2 — DynaBot tool_loop_timeout guard (cross-package route)
+# =========================================================================
+
+
+class TestToolLoopTimeout:
+    """A wall-clock timeout breaks the loop with a pending tool call."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_pairs_orphan_after_timeout(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+                # 0.0 budget → the loop times out immediately after the
+                # first process_input returns a pending tool call, before
+                # it is executed.
+                "tool_loop_timeout": 0.0,
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "hi"}),
+                text_response("Synthesized after timeout"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Use the echo tool")
+
+        assert result.response == "Synthesized after timeout"
+        # The tool never executed (timeout fired first).
+        assert tool.call_count == 0
+
+        messages = _synthesis_messages(harness.provider)
+        _assert_no_dangling_tool_use(messages)
+        assert _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+        # Route-aware guidance: the call was never *reached* (no earlier
+        # answered call with the same signature), so it carries the generic
+        # "loop ended before execution" text — not the duplicate nuance.
+        contents = _synthetic_pairing_contents(messages)
+        assert _UNEXECUTED_TOOL_RESULT in contents
+        assert _duplicate_tool_result("echo_tool") not in contents
+
+
+# =========================================================================
+# T4 — monolithic generate() duplicate-break (HybridReasoning route)
+# =========================================================================
+
+
+class TestMonolithicGenerateDuplicateBreak:
+    """The monolithic generate() path (used by HybridReasoning) also
+    leaves an orphan on a duplicate break."""
+
+    @pytest.mark.asyncio
+    async def test_generate_pairs_orphan_tool_use(self) -> None:
+        provider = _make_provider(
+            [
+                tool_call_response("echo_tool", {"message": "same"}),
+                tool_call_response("echo_tool", {"message": "same"}),
+                text_response("Synthesized answer"),
+            ]
+        )
+        manager = await _make_manager(provider)
+        tool = EchoTool()
+        strategy = ReActReasoning()
+
+        response = await strategy.generate(manager, provider, tools=[tool])
+
+        assert response.content == "Synthesized answer"
+        # First call executed, duplicate (second) did not.
+        assert tool.call_count == 1
+
+        messages = _synthesis_messages(provider)
+        _assert_no_dangling_tool_use(messages)
+        assert _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+        # Duplicate break → richer duplicate guidance (see T1).
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
+
+
+# =========================================================================
+# T5 — streaming finalize duplicate-break (_stream_finalize synthesis)
+# =========================================================================
+
+
+class TestStreamingDuplicateBreak:
+    """The streaming finalize path pairs orphans too."""
+
+    @pytest.mark.asyncio
+    async def test_stream_finalize_pairs_orphan_tool_use(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "same"}),
+                tool_call_response("echo_tool", {"message": "same"}),
+                text_response("Streamed synthesis"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.stream_chat("Use the echo tool")
+
+        assert result.response == "Streamed synthesis"
+
+        messages = _synthesis_messages(harness.provider)
+        _assert_no_dangling_tool_use(messages)
+        assert _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+        # Duplicate break → richer duplicate guidance (see T1).
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
+
+
+# =========================================================================
+# T3 — max_iterations (no-false-positive guard)
+# =========================================================================
+
+
+class TestMaxIterationsNoFalsePositive:
+    """max_iterations ends the loop with the last call already paired, so
+    the helper must be a no-op (no spurious synthetic tool_result)."""
+
+    @pytest.mark.asyncio
+    async def test_max_iterations_no_spurious_pairing(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                # Distinct params each turn so the cap (not duplicate
+                # detection) ends the loop.
+                "reasoning": {"strategy": "react", "max_iterations": 2},
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "a"}),
+                tool_call_response("echo_tool", {"message": "b"}),
+                text_response("Synthesized after cap"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Do two distinct things")
+
+        assert result.response == "Synthesized after cap"
+        assert tool.call_count == 2
+
+        messages = _synthesis_messages(harness.provider)
+        # Already paired — no dangling tool_use, and no synthetic append.
+        _assert_no_dangling_tool_use(messages)
+        assert not _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+
+
+# =========================================================================
+# T6 — happy path (no abnormal termination)
+# =========================================================================
+
+
+class TestHappyPathUnchanged:
+    """A normal turn ending in a real final answer is unchanged: the
+    finalize helper never runs (stored final_response short-circuits)."""
+
+    @pytest.mark.asyncio
+    async def test_final_answer_no_synthetic_pairing(self) -> None:
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "go"}),
+                text_response("The tool answered"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.chat("Use the echo tool")
+
+        assert result.response == "The tool answered"
+        assert tool.call_count == 1
+
+        messages = _synthesis_messages(harness.provider)
+        _assert_no_dangling_tool_use(messages)
+        assert not _has_synthetic_pairing(messages)
+        assert not _system_notice_present(messages)
+
+
+# =========================================================================
+# T7 — pure core (pair_orphan_tool_calls) unit tests
+# =========================================================================
+
+
+def _assistant(*tool_calls: ToolCall) -> LLMMessage:
+    return LLMMessage(role="assistant", content="", tool_calls=list(tool_calls))
+
+
+def _tool_result(tc: ToolCall) -> LLMMessage:
+    """A real (executed) tool_result for ``tc``, keyed as the adapters key it."""
+    return LLMMessage(
+        role="tool", content="ok", name=tc.name, tool_call_id=tc.id
+    )
+
+
+class TestPairOrphanToolCallsCore:
+    """Direct unit tests for the pure ``list[LLMMessage]`` pairing core.
+
+    These exercise the core without a bot, pinning behaviours the
+    integration tests (T1–T6) reach only indirectly: route-aware guidance
+    selection, the id-less duplicate-name collapse, purity, and idempotency.
+    """
+
+    def test_wellformed_history_is_noop(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(tc),
+            _tool_result(tc),
+        ]
+        assert pair_orphan_tool_calls(messages) == []
+
+    def test_unreached_orphan_gets_generic_guidance(self) -> None:
+        # A single tool_use with no result: the loop never reached it (no
+        # earlier answered call with the same signature).
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+
+        results = pair_orphan_tool_calls(messages)
+
+        assert len(results) == 1
+        assert results[0].role == "tool"
+        assert results[0].content == _UNEXECUTED_TOOL_RESULT
+        assert results[0].tool_call_id == "X1"
+        assert results[0].name == "echo_tool"
+
+    def test_duplicate_orphan_gets_duplicate_guidance(self) -> None:
+        # First call answered; the second, identical call is the abandoned
+        # half of a duplicate break → richer duplicate guidance.
+        answered = ToolCall(name="echo_tool", parameters={"m": "same"}, id="X1")
+        orphan = ToolCall(name="echo_tool", parameters={"m": "same"}, id="X2")
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(answered),
+            _tool_result(answered),
+            _assistant(orphan),
+        ]
+
+        results = pair_orphan_tool_calls(messages)
+
+        assert len(results) == 1
+        assert results[0].content == _duplicate_tool_result("echo_tool")
+        assert results[0].tool_call_id == "X2"
+
+    def test_idless_duplicate_name_collapses_and_is_skipped(self) -> None:
+        """Edge case: id-less calls sharing a ``name``.
+
+        With ``tc.id is None`` the pairing key falls back to ``name``, so an
+        already-answered same-name call marks that key answered and a later
+        same-name orphan (even with *different* params) is skipped rather than
+        paired.  This is intentional: the adapters key every same-name
+        ``tool_use`` block to that ``name``, so the one existing
+        ``tool_result`` already pairs them all and nothing dangles.
+        """
+        answered = ToolCall(name="echo_tool", parameters={"m": "a"}, id=None)
+        # Different params, still same name and still id-less → collapses.
+        later = ToolCall(name="echo_tool", parameters={"m": "b"}, id=None)
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(answered),
+            _tool_result(answered),
+            _assistant(later),
+        ]
+
+        # No synthetic result is produced — the name key is already answered.
+        assert pair_orphan_tool_calls(messages) == []
+        # And the history is structurally safe under the real adapter: both
+        # tool_use blocks key to "echo_tool", paired by the one tool_result.
+        _assert_no_dangling_tool_use(messages)
+
+    def test_input_list_is_not_mutated(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+        before = list(messages)
+
+        pair_orphan_tool_calls(messages)
+
+        assert messages == before
+        assert len(messages) == 2
+
+    def test_is_idempotent_after_appending_results(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+
+        first = pair_orphan_tool_calls(messages)
+        messages.extend(first)
+        # Second pass over the now-paired history appends nothing.
+        assert pair_orphan_tool_calls(messages) == []
