@@ -5,7 +5,9 @@ real ``aioboto3`` SQS client against a real LocalStack queue — never a
 moto-mock or hand-rolled fake (a fake appending to a list has the same
 blindness as a ``MagicMock``). LocalStack is the SQS analog of "real
 Postgres via ``bin/dk up``". The whole module skips when LocalStack is
-unavailable (``@requires_localstack``).
+unavailable **or its SQS service is disabled**
+(``requires_localstack_service("sqs")``) — so a container started with a
+restricted ``SERVICES`` list skips this suite rather than failing every case.
 
 Start the service with ``bin/dk up`` (LocalStack runs ``SERVICES=s3,sqs``).
 """
@@ -23,10 +25,14 @@ from dataknobs_common.events import Event, EventType, create_event_bus
 from dataknobs_common.events.sqs import SqsEventBus
 from dataknobs_common.testing import (
     get_localstack_endpoint,
-    requires_localstack,
+    requires_localstack_service,
 )
 
-pytestmark = requires_localstack
+# Skip when LocalStack is unreachable OR its SQS service is disabled (a
+# restricted ``SERVICES`` list), so a partially-configured container skips
+# this suite rather than failing every case with "Service 'sqs' is not
+# enabled".
+pytestmark = requires_localstack_service("sqs")
 
 
 ENDPOINT = get_localstack_endpoint()

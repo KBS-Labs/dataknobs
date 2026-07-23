@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-23T02:53:57Z",
+  "timestamp": "2026-07-23T03:10:20Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.31 (Homebrew 2026-07-22 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/anthropic-param-family-constraints",
-  "git_commit": "5f2840fe7c90a537210f9bfe2d3c04f7e5c66320",
+  "git_branch": "sbk/localstack-service-aware-skip-guard",
+  "git_commit": "cfd4fac2acbfeaf1287fa9e1746da0b8f1c29c4f",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
