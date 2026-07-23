@@ -353,10 +353,53 @@ def get_localstack_endpoint(
     return f"{scheme}://{host}:{port}"
 
 
+def _localstack_service_enabled(endpoint: str, service: str) -> bool:
+    """Return True if *service* reports running/available on LocalStack.
+
+    Queries ``GET {endpoint}/_localstack/health`` and inspects the
+    ``services`` map. A service enabled in the container's ``SERVICES``
+    list reports ``"running"`` or ``"available"``; one omitted reports
+    ``"disabled"`` (and a starting/erroring one reports something else).
+
+    Any error — unreachable endpoint, unparseable body, unexpected shape,
+    or a service not in the ``running``/``available`` state — returns
+    ``False``, the same fail-soft "skip, never fail" contract as the TCP
+    probe. So a service-specific suite *skips* rather than *errors* on a
+    partially-configured LocalStack (e.g. one whose ``SERVICES`` omits the
+    service under test).
+
+    Args:
+        endpoint: Fully-qualified LocalStack endpoint URL.
+        service: LocalStack service key (e.g. ``"sqs"``, ``"s3"``).
+
+    Returns:
+        True only when the health endpoint reports the service ready.
+    """
+    import json
+    from urllib.error import URLError
+    from urllib.request import urlopen
+
+    url = f"{endpoint.rstrip('/')}/_localstack/health"
+    try:
+        with urlopen(url, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (URLError, OSError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        return False
+    return services.get(service) in ("running", "available")
+
+
 def is_localstack_available(
-    host: str | None = None, port: int | None = None
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    service: str | None = None,
 ) -> bool:
-    """Check if a LocalStack edge endpoint is reachable.
+    """Check if a LocalStack edge endpoint (and optionally a service) is ready.
 
     Uses :func:`get_localstack_endpoint` to resolve the
     ``(host, port)`` pair so the probe and the URL form share a
@@ -365,19 +408,31 @@ def is_localstack_available(
     ``localstack:4566`` inside a container and ``localhost:4566``
     elsewhere.
 
+    By default this only probes **edge-port TCP reachability**. Pass
+    ``service`` to additionally require that a specific service is
+    **enabled** in the running container (via ``/_localstack/health``):
+    a LocalStack started with a restricted ``SERVICES`` list (e.g. ``s3``
+    without ``sqs``) is reachable on the edge port but rejects calls to the
+    disabled service, so an sqs-specific suite must *skip*, not *fail*.
+
     Any connection error returns ``False`` (skip, never fail) — the
     same fail-soft contract as the other service probes.
 
     Args:
         host: LocalStack host (overrides env resolution when given)
         port: LocalStack edge port (overrides env resolution when given)
+        service: Optional LocalStack service key (e.g. ``"sqs"``). When
+            given, the edge port must be reachable AND the service must
+            report ``running``/``available`` at ``/_localstack/health``.
 
     Returns:
-        True if the LocalStack edge port accepts a TCP connection.
+        True if the LocalStack edge port accepts a TCP connection and,
+        when ``service`` is given, that service is enabled.
     """
     from urllib.parse import urlparse
 
-    parsed = urlparse(get_localstack_endpoint(host, port))
+    endpoint = get_localstack_endpoint(host, port)
+    parsed = urlparse(endpoint)
     probe_host = parsed.hostname or "localhost"
     probe_port = parsed.port or 4566
     try:
@@ -387,9 +442,13 @@ def is_localstack_available(
         sock.settimeout(1)
         result = sock.connect_ex((probe_host, probe_port))
         sock.close()
-        return result == 0
     except OSError:
         return False
+    if result != 0:
+        return False
+    if service is None:
+        return True
+    return _localstack_service_enabled(endpoint, service)
 
 
 async def ensure_localstack_s3_bucket(
@@ -554,6 +613,26 @@ try:
         reason="LocalStack not available",
     )
 
+    def requires_localstack_service(service: str) -> Any:
+        """Create a skip marker requiring a specific LocalStack service.
+
+        Unlike :data:`requires_localstack` (edge-port reachability only),
+        this skips when the named service is not enabled in the running
+        LocalStack (e.g. its ``SERVICES`` list omits it), so a
+        service-specific suite *skips* rather than *fails* on a
+        partially-configured container.
+
+        Args:
+            service: LocalStack service key (e.g. ``"sqs"``).
+
+        Returns:
+            pytest.mark.skipif marker.
+        """
+        return pytest.mark.skipif(
+            not is_localstack_available(service=service),
+            reason=f"LocalStack service {service!r} not available",
+        )
+
     requires_bedrock = pytest.mark.skipif(
         not is_bedrock_available(),
         reason="Amazon Bedrock live tests require DK_TEST_BEDROCK=true and "
@@ -607,6 +686,9 @@ except ImportError:
     requires_real_postgres = None  # type: ignore
     requires_localstack = None  # type: ignore
     requires_bedrock = None  # type: ignore
+
+    def requires_localstack_service(service: str) -> Any:  # type: ignore
+        return None
 
     def requires_package(package_name: str) -> Any:  # type: ignore
         return None

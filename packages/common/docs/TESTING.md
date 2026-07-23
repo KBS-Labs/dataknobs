@@ -104,6 +104,30 @@ Resolution order — highest priority first:
    when running inside a Docker container (detected via
    `/.dockerenv` or `DOCKER_CONTAINER`).
 
+#### Service-aware skipping
+
+`requires_localstack` (and bare `is_localstack_available()`) only probe
+**edge-port reachability**. A LocalStack started with a restricted
+`SERVICES` list (e.g. `s3` without `sqs`) is reachable on the edge port but
+rejects calls to the disabled service — so a service-specific suite gated
+only by `requires_localstack` would **fail every case** instead of skipping.
+
+Use `requires_localstack_service("<service>")` (or
+`is_localstack_available(service="<service>")`) to additionally require that
+a specific service is enabled. It queries `/_localstack/health` and skips
+unless the service reports `running`/`available`, so a partially-configured
+container skips the suite rather than failing it:
+
+```python
+from dataknobs_common.testing import requires_localstack_service
+
+# Skips when LocalStack is unreachable OR its SQS service is disabled
+pytestmark = requires_localstack_service("sqs")
+```
+
+The dev container enables both (`SERVICES=s3,sqs`); recreate a stale
+container with `bin/dk down && bin/dk up` if a service reports `disabled`.
+
 #### S3 Bucket Provisioning Fixture
 
 For LocalStack S3 tests, the `make_localstack_s3_bucket` pytest11
