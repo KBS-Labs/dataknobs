@@ -289,6 +289,47 @@ the process so subsequent requests to that model drop it up front (≤1 wasted
 round-trip per model). Declaring the param in `constraints` pre-empts even that
 first round-trip.
 
+## Response truncation signal
+
+When a provider cuts generation off at the token budget, the response is
+**incomplete** — and the most dangerous case is a truncated *tool-call* turn,
+whose partial arguments look well-formed but are invalid (e.g. a required field
+missing), so the model's request fails a downstream validator with no hint that
+truncation was the cause. Every provider surfaces this with a single boolean
+that does not depend on knowing each provider's stop-reason vocabulary:
+
+```python
+response = await llm.complete("...", tools=my_tools)
+if response.truncated:
+    # Do NOT feed response.tool_calls to the tool — the arguments are partial.
+    # Raise max_tokens (or shorten the request) and retry.
+    ...
+```
+
+`LLMResponse.truncated` (and `LLMStreamResponse.truncated` on the final chunk)
+is populated consistently:
+
+| Provider | Truncation condition |
+|----------|----------------------|
+| Anthropic | `stop_reason == "max_tokens"` |
+| OpenAI | `finish_reason == "length"` |
+| Ollama | `done_reason == "length"` |
+| Bedrock | `stopReason == "max_tokens"` |
+
+A truncated tool-call turn is logged at `warning`; a truncated plain-text turn
+at `info`. The HuggingFace inference path returns no stop-reason signal, so
+`truncated` is always `False` there.
+
+The Claude-family providers (`AnthropicProvider` and `BedrockProvider`) also
+normalize `finish_reason` onto the canonical vocabulary the `LLMResponse`
+docstring advertises (`max_tokens` → `length`, `tool_use` → `tool_calls`,
+`end_turn`/`stop_sequence` → `stop`); the raw provider value is preserved on
+`metadata["raw_finish_reason"]`. They share Claude's stop-reason vocabulary
+verbatim (Bedrock runs Claude), so both route through a single shared helper
+(`normalize_claude_stop_reason`) rather than each maintaining its own table.
+OpenAI and Ollama already report the canonical vocabulary directly, so
+`finish_reason` reads identically across every provider.
+
 ## Amazon Bedrock
 
 Amazon Bedrock is registered as the `"bedrock"` provider. A single

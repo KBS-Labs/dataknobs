@@ -81,6 +81,7 @@ from ..base import (
     LLMStreamResponse,
     ModelCapability,
     ToolCall,
+    normalize_claude_stop_reason,
     normalize_llm_config,
 )
 
@@ -367,12 +368,24 @@ class BedrockConverseAdapter(LLMAdapter):
                 "total_tokens": usage_raw.get("totalTokens", 0),
             }
 
+        # Bedrock Converse shares Claude's stopReason vocabulary verbatim
+        # (Bedrock runs Claude), so finish_reason is normalized onto the
+        # canonical tokens through the same shared helper as the native
+        # Anthropic provider — the raw Converse stopReason is preserved on
+        # metadata['raw_finish_reason']. stopReason == "max_tokens" is the
+        # token-budget cut-off (same silent-truncation hazard as Anthropic).
+        finish_reason, truncated, metadata = normalize_claude_stop_reason(
+            response.get("stopReason")
+        )
+
         return LLMResponse(
             content=content,
             model=model or "",
-            finish_reason=response.get("stopReason"),
+            finish_reason=finish_reason,
+            truncated=truncated,
             usage=usage,
             tool_calls=tool_calls or None,
+            metadata=metadata,
             cost_usd=_estimate_cost(model or "", usage),
         )
 
@@ -883,14 +896,22 @@ class BedrockProvider(AsyncLLMProvider):
                 (usage or {}).get("total_tokens"),
                 int((time.perf_counter() - stream_start) * 1000),
             )
-            yield LLMStreamResponse(
+            # Normalize onto the canonical finish_reason vocabulary through the
+            # shared Claude helper, so the streaming final chunk matches the
+            # buffered path (and the native Anthropic stream, which is already
+            # canonical because it is built from adapt_response).
+            finish_reason, truncated, _ = normalize_claude_stop_reason(stop_reason)
+            final_chunk = LLMStreamResponse(
                 delta="",
                 is_final=True,
-                finish_reason=stop_reason,
+                finish_reason=finish_reason,
+                truncated=truncated,
                 tool_calls=tool_calls,
                 usage=usage,
                 model=runtime_config.model,
             )
+            self._warn_if_truncated(final_chunk)
+            yield final_chunk
 
     async def embed(
         self,
@@ -1000,9 +1021,10 @@ class BedrockProvider(AsyncLLMProvider):
             response, model=runtime_config.model
         )
 
-        # Legacy function_call format: surface the first tool call as a
-        # function_call dict for backward compatibility.
-        if parsed.tool_calls:
-            tc = parsed.tool_calls[0]
-            parsed.function_call = {"name": tc.name, "arguments": tc.parameters}
-        return parsed
+        # Surface the first tool call as the legacy function_call dict and route
+        # through the shared _analyze_response choke point, so a truncated
+        # tool-call turn on this path fires the truncation warning — exactly
+        # like complete().
+        return self._analyze_response(
+            self._attach_legacy_function_call(parsed)
+        )

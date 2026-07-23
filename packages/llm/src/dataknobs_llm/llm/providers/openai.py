@@ -148,6 +148,10 @@ class OpenAIAdapter(LLMAdapter):
             content=message.content or '',
             model=response.model,
             finish_reason=choice.finish_reason,
+            # OpenAI signals a token-budget cut-off with finish_reason
+            # 'length' — the same silent-truncation hazard as Anthropic's
+            # 'max_tokens' (see LLMResponse.truncated).
+            truncated=choice.finish_reason == 'length',
             usage={
                 'prompt_tokens': response.usage.prompt_tokens,
                 'completion_tokens': response.usage.completion_tokens,
@@ -517,13 +521,17 @@ class OpenAIProvider(AsyncLLMProvider):
                         for _, acc in sorted(tool_call_accumulators.items())
                     ]
 
-                yield LLMStreamResponse(
+                chunk_resp = LLMStreamResponse(
                     delta=content,
                     is_final=finish_reason is not None,
                     finish_reason=finish_reason,
+                    truncated=finish_reason == 'length',
                     tool_calls=accumulated_tool_calls,
                     model=runtime_config.model if finish_reason is not None else None,
                 )
+                if chunk_resp.is_final:
+                    self._warn_if_truncated(chunk_resp)
+                yield chunk_resp
 
     async def embed(
         self,

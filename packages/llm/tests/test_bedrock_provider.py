@@ -233,7 +233,10 @@ class TestAdaptResponse:
             response, model="anthropic.claude-3-haiku-20240307-v1:0"
         )
         assert parsed.content == "the answer"
-        assert parsed.finish_reason == "end_turn"
+        # Bedrock runs Claude → finish_reason normalized onto the canonical
+        # vocabulary, raw stopReason preserved on metadata.
+        assert parsed.finish_reason == "stop"
+        assert parsed.metadata["raw_finish_reason"] == "end_turn"
         assert parsed.usage == {
             "prompt_tokens": 10,
             "completion_tokens": 5,
@@ -267,6 +270,9 @@ class TestAdaptResponse:
         }
         parsed = adapter.adapt_response(response, model="unknown.model")
         assert parsed.content == "let me search"
+        # tool_use normalized onto the canonical vocabulary.
+        assert parsed.finish_reason == "tool_calls"
+        assert parsed.metadata["raw_finish_reason"] == "tool_use"
         assert parsed.tool_calls is not None
         assert parsed.tool_calls[0].name == "search"
         assert parsed.tool_calls[0].parameters == {"query": "x"}
@@ -500,7 +506,9 @@ class TestCompleteBoundary:
         )
         response = await provider.complete("hello")
         assert response.content == "hi!"
-        assert response.finish_reason == "end_turn"
+        # finish_reason normalized onto the canonical vocabulary (Claude family).
+        assert response.finish_reason == "stop"
+        assert response.metadata["raw_finish_reason"] == "end_turn"
         assert response.usage["total_tokens"] == 5
         # request was built through the real path
         sent = client.converse_calls[0]
@@ -608,7 +616,8 @@ class TestStreamBoundary:
         assert text == "Hello"
         final = chunks[-1]
         assert final.is_final is True
-        assert final.finish_reason == "end_turn"
+        # Streaming final chunk normalized to match the buffered path.
+        assert final.finish_reason == "stop"
         assert final.usage["total_tokens"] == 5
         assert final.model == "anthropic.claude-3-haiku-20240307-v1:0"
 
@@ -930,6 +939,55 @@ class TestFunctionCallDeprecated:
                 [{"name": "lookup", "description": "d", "parameters": {}}],
             )
         assert response.function_call == {"name": "lookup", "arguments": {"q": "x"}}
+
+    @pytest.mark.asyncio
+    async def test_truncated_tool_call_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A truncated tool-call turn on this path must fire the warning.
+
+        Reproduce-first: FAILS when function_call() returns ``parsed`` directly
+        (flag survives but the shared warn hook never runs); passes once it
+        routes through ``_analyze_response`` like ``complete()``.
+        """
+        client = _StubBedrockClient(
+            converse_response={
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "u1",
+                                    "name": "submit",
+                                    "input": {"q": "x"},
+                                }
+                            }
+                        ]
+                    }
+                },
+                "stopReason": "max_tokens",
+            }
+        )
+        provider = _stub_provider(
+            LLMConfig(
+                provider="bedrock",
+                model="anthropic.claude-3-haiku-20240307-v1:0",
+            ),
+            client,
+        )
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
+            with pytest.warns(DeprecationWarning):
+                response = await provider.function_call(
+                    [LLMMessage(role="user", content="hi")],
+                    [{"name": "submit", "description": "d", "parameters": {}}],
+                )
+        assert response.truncated is True
+        assert response.finish_reason == "length"
+        assert response.function_call == {"name": "submit", "arguments": {"q": "x"}}
+        assert any(
+            "mid tool-call" in r.getMessage() and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
 
 
 class TestObservability:

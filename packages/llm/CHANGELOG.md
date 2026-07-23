@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Token-budget truncation signal.** New `LLMResponse.truncated` /
+  `LLMStreamResponse.truncated` boolean (default `False`) that every provider
+  populates when generation is cut off at the token budget — Anthropic
+  (`stop_reason == "max_tokens"`), OpenAI (`finish_reason == "length"`), Ollama
+  (`done_reason == "length"`), and Bedrock (`stopReason == "max_tokens"`). A
+  truncated response is incomplete; most dangerously a truncated tool-call turn
+  carries partial arguments that look well-formed. A shared base
+  `_warn_if_truncated()` hook (wired into `_analyze_response` and every
+  streaming final-chunk assembly) logs a `warning` on a truncated tool-call
+  turn and `info` on plain text, so the signal surfaces once and consistently
+  across the `complete`, `stream_complete`, and deprecated `function_call`
+  paths of every provider. HuggingFace's inference path exposes no stop-reason
+  signal, so `truncated` stays `False` there.
+- `normalize_claude_stop_reason()` in `dataknobs_llm.llm.base` — the shared
+  Claude-family stop-reason normalizer used by both the Anthropic and Bedrock
+  adapters (Bedrock runs Claude, so the two share the vocabulary verbatim).
+
+### Changed
+
+- **`finish_reason` is now the canonical vocabulary (`stop` / `length` /
+  `tool_calls`) for every provider.** The Claude-family providers (Anthropic,
+  Bedrock) normalize their raw stop reason onto it (`max_tokens` → `length`,
+  `tool_use` → `tool_calls`, `end_turn`/`stop_sequence` → `stop`); OpenAI and
+  Ollama already emitted it. The raw provider value is preserved on
+  `metadata["raw_finish_reason"]` for any caller that needs the exact token.
+- `LLMResponse.truncated` was inserted between the `finish_reason` and `usage`
+  fields. All in-tree construction uses keyword arguments; any external code
+  constructing `LLMResponse` **positionally** past `finish_reason` must add the
+  `truncated` argument or switch to keywords.
+
 ## v0.6.7 - 2026-07-20
 
 ## v0.6.6 - 2026-07-15

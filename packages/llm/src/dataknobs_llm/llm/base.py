@@ -412,7 +412,20 @@ class LLMResponse:
     Attributes:
         content: Generated text content
         model: Model identifier that generated the response
-        finish_reason: Why generation stopped - 'stop', 'length', 'function_call'
+        finish_reason: Why generation stopped, on the canonical vocabulary
+            'stop' / 'length' / 'tool_calls' / 'function_call'. Every provider
+            reports these tokens: OpenAI and Ollama emit them natively, and the
+            Claude-family providers (Anthropic, Bedrock) normalize their raw
+            stop reason onto them via ``normalize_claude_stop_reason`` — with
+            the raw value preserved on ``metadata['raw_finish_reason']``.
+        truncated: ``True`` when the provider cut generation off at the token
+            budget (Anthropic ``stop_reason == "max_tokens"``, OpenAI/Ollama
+            ``finish_reason``/``done_reason == "length"``, Bedrock
+            ``stopReason == "max_tokens"``). A truncated response is
+            **incomplete** — most dangerously, a truncated ``tool_calls`` turn
+            carries partial/invalid arguments that look well-formed. Providers
+            set this consistently so a consumer can honor it without knowing
+            each provider's stop-reason vocabulary.
         usage: Token usage stats (prompt_tokens, completion_tokens, total_tokens)
         function_call: Function call data if model requested tool use
         metadata: Provider-specific metadata
@@ -452,6 +465,7 @@ class LLMResponse:
     content: str
     model: str
     finish_reason: str | None = None  # 'stop', 'length', 'function_call', 'tool_calls'
+    truncated: bool = False  # provider cut generation off at the token budget
     usage: Dict[str, int] | None = None  # tokens used
     function_call: Dict[str, Any] | None = None  # Legacy single function call
     tool_calls: list["ToolCall"] | None = None  # List of tool calls (preferred)
@@ -475,6 +489,9 @@ class LLMStreamResponse:
         delta: Incremental content for this chunk (not cumulative)
         is_final: True if this is the last chunk in the stream
         finish_reason: Why generation stopped (only set on final chunk)
+        truncated: ``True`` on the final chunk when the provider cut generation
+            off at the token budget (see :class:`LLMResponse.truncated`). Only
+            set on the final chunk.
         usage: Token usage stats (only set on final chunk)
         tool_calls: Tool calls requested by the model (only set on final chunk)
         model: Model identifier (only set on final chunk)
@@ -517,6 +534,7 @@ class LLMStreamResponse:
     delta: str  # Incremental content
     is_final: bool = False
     finish_reason: str | None = None
+    truncated: bool = False  # provider cut generation off at the token budget
     usage: Dict[str, int] | None = None
     tool_calls: list["ToolCall"] | None = None  # Only set on final chunk
     model: str | None = None  # Only set on final chunk
@@ -747,6 +765,59 @@ class LLMConfig(StructuredConfig):
         if self.seed is not None:
             params["seed"] = self.seed
         return params
+
+
+#: Maps the Claude-family provider-native stop-reason vocabulary onto the
+#: canonical :attr:`LLMResponse.finish_reason` tokens (``'stop'`` / ``'length'``
+#: / ``'tool_calls'``) the docstring advertises. The native Anthropic Messages
+#: API and Bedrock Converse share this vocabulary **verbatim** (Bedrock runs
+#: Claude), so both providers normalize through this one table and
+#: ``finish_reason`` reads identically regardless of which endpoint served the
+#: model. The raw value is preserved on ``metadata['raw_finish_reason']``. An
+#: unmapped value passes through unchanged.
+CLAUDE_STOP_REASON_NORMALIZATION: Dict[str, str] = {
+    "max_tokens": "length",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "tool_use": "tool_calls",
+}
+
+#: Claude-family stop-reason tokens that mean generation was cut off at the
+#: token budget (the response is incomplete — see :attr:`LLMResponse.truncated`).
+CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
+
+
+def normalize_claude_stop_reason(
+    raw_stop_reason: str | None,
+) -> tuple[str | None, bool, Dict[str, Any]]:
+    """Normalize a Claude-family stop reason (Anthropic / Bedrock Converse).
+
+    Anthropic and Bedrock (Claude-on-Bedrock) emit the identical stop-reason
+    vocabulary, so both route through this single helper to normalize
+    ``finish_reason`` onto the canonical tokens and detect token-budget
+    truncation — keeping the two providers from drifting.
+
+    Args:
+        raw_stop_reason: The provider-native stop reason (Anthropic
+            ``stop_reason`` / Bedrock ``stopReason``), or ``None``.
+
+    Returns:
+        ``(finish_reason, truncated, metadata)`` where ``finish_reason`` is the
+        normalized canonical token (raw value passes through when unmapped),
+        ``truncated`` is ``True`` for a token-budget cut-off, and ``metadata``
+        carries ``raw_finish_reason`` **only** when normalization changed the
+        value (so a caller needing the exact provider token can still read it).
+    """
+    if raw_stop_reason is None:
+        return None, False, {}
+    finish_reason = CLAUDE_STOP_REASON_NORMALIZATION.get(
+        raw_stop_reason, raw_stop_reason
+    )
+    metadata: Dict[str, Any] = {}
+    if raw_stop_reason != finish_reason:
+        metadata["raw_finish_reason"] = raw_stop_reason
+    truncated = raw_stop_reason in CLAUDE_TRUNCATION_STOP_REASONS
+    return finish_reason, truncated, metadata
 
 
 def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> "LLMConfig":
@@ -1026,6 +1097,58 @@ class LLMProvider(ABC):
                 response.usage.get("completion_tokens", 0),
                 response.model,
             )
+        self._warn_if_truncated(response)
+        return response
+
+    def _warn_if_truncated(
+        self, response: "LLMResponse | LLMStreamResponse"
+    ) -> None:
+        """Log when a response was cut off at the token budget.
+
+        Shared by the complete path (via :meth:`_analyze_response`) and the
+        streaming final-chunk assembly of every provider that populates
+        :attr:`LLMResponse.truncated`, so the warning is emitted once and
+        consistently regardless of provider. Detection of *whether* a response
+        is truncated is per-provider (each knows its own stop-reason
+        vocabulary); this only decides how loudly to surface the flag.
+
+        A truncated **tool-call** turn is the dangerous case — the partial
+        arguments look well-formed but are incomplete — so it warns; a plain
+        truncated text turn logs at ``info``. Accepts either response type
+        (both carry ``truncated``/``tool_calls``/``model``).
+        """
+        if not getattr(response, "truncated", False):
+            return
+        if response.tool_calls:
+            logger.warning(
+                "Response truncated at the token budget mid tool-call "
+                "(model=%s): the tool call arguments are incomplete and will "
+                "likely fail validation — raise max_tokens or shorten the "
+                "request.",
+                response.model,
+            )
+        else:
+            logger.info(
+                "Response truncated at the token budget (model=%s): the "
+                "output is incomplete.",
+                response.model,
+            )
+
+    @staticmethod
+    def _attach_legacy_function_call(response: "LLMResponse") -> "LLMResponse":
+        """Surface the first tool call as the legacy ``function_call`` dict.
+
+        Backward-compat shim for the deprecated :meth:`function_call` entry
+        point: the modern path returns ``tool_calls``, but legacy callers read
+        the single ``function_call`` dict. Providers whose ``function_call``
+        override needs this shape call it, then route the result through
+        :meth:`_analyze_response` — the shared post-processing choke point that
+        preserves ``truncated`` / ``metadata`` and fires
+        :meth:`_warn_if_truncated`. Mutates and returns ``response``.
+        """
+        if response.tool_calls:
+            tc = response.tool_calls[0]
+            response.function_call = {"name": tc.name, "arguments": tc.parameters}
         return response
 
     @property

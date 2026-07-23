@@ -70,7 +70,7 @@ from dataknobs_common.exceptions import (
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
     AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
-    normalize_llm_config
+    normalize_claude_stop_reason, normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -103,6 +103,10 @@ _SAMPLING_PARAMS: tuple[str, ...] = (
     "frequency_penalty",
     "presence_penalty",
 )
+
+#: The Claude stop-reason normalization table + truncation detection live in
+#: ``dataknobs_llm.llm.base`` (:func:`normalize_claude_stop_reason`), shared
+#: verbatim with the Bedrock Converse adapter since Bedrock runs Claude.
 
 #: Process-level cache of sampling params discovered — via a 400 at request
 #: time — to be rejected by a given model, keyed by lowercased model id. The
@@ -246,12 +250,18 @@ class AnthropicAdapter(LLMAdapter):
                 ),
             }
 
+        finish_reason, truncated, metadata = normalize_claude_stop_reason(
+            response.stop_reason
+        )
+
         return LLMResponse(
             content=content,
             model=response.model,
-            finish_reason=response.stop_reason,
+            finish_reason=finish_reason,
+            truncated=truncated,
             usage=usage,
             tool_calls=tool_calls if tool_calls else None,
+            metadata=metadata,
         )
 
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
@@ -819,14 +829,17 @@ class AnthropicProvider(AsyncLLMProvider):
                     message = await stream.get_final_message()
                     parsed = self.adapter.adapt_response(message)
 
-                    yielded = True
-                    yield LLMStreamResponse(
+                    final_chunk = LLMStreamResponse(
                         delta='',
                         is_final=True,
                         finish_reason=parsed.finish_reason,
+                        truncated=parsed.truncated,
                         tool_calls=parsed.tool_calls,
                         model=runtime_config.model,
                     )
+                    self._warn_if_truncated(final_chunk)
+                    yielded = True
+                    yield final_chunk
                 return
             except Exception as exc:
                 if not yielded and not retried:
@@ -889,19 +902,13 @@ class AnthropicProvider(AsyncLLMProvider):
 
             parsed = self.adapter.adapt_response(response)
 
-            # Legacy function_call format: extract first tool call as
-            # function_call dict for backward compatibility.
-            tool_use = None
-            if parsed.tool_calls:
-                tc = parsed.tool_calls[0]
-                tool_use = {"name": tc.name, "arguments": tc.parameters}
-
-            return LLMResponse(
-                content=parsed.content,
-                model=parsed.model,
-                finish_reason=parsed.finish_reason,
-                usage=parsed.usage,
-                function_call=tool_use,
+            # Surface the first tool call as the legacy function_call dict and
+            # route through the shared _analyze_response choke point, so this
+            # path preserves truncated / raw_finish_reason and fires the
+            # truncation warning — exactly like complete()/stream_complete().
+            # Rebuilding a fresh LLMResponse here would silently drop them.
+            return self._analyze_response(
+                self._attach_legacy_function_call(parsed)
             )
 
         except ValidationError as e:

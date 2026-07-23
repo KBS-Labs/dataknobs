@@ -92,6 +92,7 @@ import logging
 import os
 import re
 import warnings
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -232,13 +233,26 @@ class OllamaAdapter(LLMAdapter):
                 ),
             }
 
+        # Ollama reports a token-budget cut-off with done_reason == "length"
+        # (the equivalent of Anthropic's max_tokens); done_reason == "stop"
+        # is a clean finish. Older/streaming payloads may omit done_reason,
+        # so fall back to the done flag.
+        done_reason = data.get("done_reason")
+        truncated = done_reason == "length"
+        if tool_calls:
+            finish_reason = "tool_calls"
+        elif truncated:
+            finish_reason = "length"
+        elif data.get("done"):
+            finish_reason = "stop"
+        else:
+            finish_reason = "length"
+
         return LLMResponse(
             content=content,
             model=data.get("model", ""),
-            finish_reason=(
-                "tool_calls" if tool_calls
-                else ("stop" if data.get("done") else "length")
-            ),
+            finish_reason=finish_reason,
+            truncated=truncated,
             usage=usage,
             tool_calls=tool_calls,
             metadata={
@@ -529,18 +543,11 @@ class OllamaProvider(AsyncLLMProvider):
                 visible_text = match.group(2).strip()
                 if thinking_text:
                     response.metadata["thinking"] = thinking_text
-                response = LLMResponse(
-                    content=visible_text,
-                    model=response.model,
-                    finish_reason=response.finish_reason,
-                    usage=response.usage,
-                    function_call=response.function_call,
-                    tool_calls=response.tool_calls,
-                    metadata=response.metadata,
-                    created_at=response.created_at,
-                    cost_usd=response.cost_usd,
-                    cumulative_cost_usd=response.cumulative_cost_usd,
-                )
+                # replace() copies every field (including ``truncated`` and any
+                # field added to LLMResponse later), so extracting the visible
+                # answer can never silently drop one — only ``content`` changes,
+                # and ``metadata`` was already mutated in place above.
+                response = replace(response, content=visible_text)
         return super()._analyze_response(response)
 
     def _messages_to_ollama(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
@@ -808,14 +815,17 @@ class OllamaProvider(AsyncLLMProvider):
                     if done:
                         # Use adapter for final chunk parsing
                         parsed = self.adapter.adapt_response(data)
-                        yield LLMStreamResponse(
+                        final_chunk = LLMStreamResponse(
                             delta=msg.get('content', ''),
                             is_final=True,
                             finish_reason=parsed.finish_reason,
+                            truncated=parsed.truncated,
                             usage=parsed.usage,
                             tool_calls=parsed.tool_calls,
                             model=runtime_config.model,
                         )
+                        self._warn_if_truncated(final_chunk)
+                        yield final_chunk
                     else:
                         yield LLMStreamResponse(
                             delta=msg.get('content', ''),
