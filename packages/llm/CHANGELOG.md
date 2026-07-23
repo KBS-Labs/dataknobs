@@ -25,8 +25,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `normalize_claude_stop_reason()` in `dataknobs_llm.llm.base` — the shared
   Claude-family stop-reason normalizer used by both the Anthropic and Bedrock
   adapters (Bedrock runs Claude, so the two share the vocabulary verbatim).
+- **Shared message-sequence utility** `dataknobs_llm.llm.message_sequence` — a
+  provider-agnostic home for structural conversation-history invariants,
+  expressed as pure functions over `list[LLMMessage]` (never mutating the
+  input). Ships `pair_orphan_tool_calls()` (pair a dangling assistant
+  `tool_use` with a synthetic `tool_result` so the request is valid on every
+  backend — Anthropic 400s on a dangling `tool_use`) and `tool_call_signature()`
+  (the canonical `(name, sorted-params-json)` duplicate-detection key, shared by
+  the pairing repair and reasoning-loop duplicate-break guards so they agree by
+  construction).
+- **Configurable mid-conversation system-message policy for Anthropic** via
+  `LLMConfig.options["system_message_policy"]`: `inline` (**default** — convert
+  a mid-conversation `role="system"` message to a `user` message at its
+  position, consolidating content blocks so the request stays valid: no
+  consecutive same-role turns, and `tool_result` blocks kept first per
+  Anthropic's ordering rule), `hoist` (legacy — merge into the top-level
+  `system` param), `warn` (log then hoist), `reject` (raise `ValidationError`).
+  An unknown policy fails closed at provider construction. Whether a family
+  accepts an inline system message reads from the `ModelConstraints.accepts_inline_system`
+  datum (`False` for Anthropic).
 
 ### Changed
+
+- **Anthropic mid-conversation `role="system"` messages default to `inline`
+  (was silently hoisted).** A **leading** system prompt still always hoists into
+  the top-level `system` param (unchanged). A **mid-conversation** system
+  message now inlines at its position by default, preserving its in-context
+  meaning instead of becoming a standing global instruction. Set
+  `options["system_message_policy"] = "hoist"` to restore the exact legacy
+  request shape byte-for-byte. In-tree histories carry only leading system
+  messages (which hoist under every policy), so the change affects external
+  consumers that emit mid-conversation system messages.
 
 - **`finish_reason` is now the canonical vocabulary (`stop` / `length` /
   `tool_calls`) for every provider.** The Claude-family providers (Anthropic,
