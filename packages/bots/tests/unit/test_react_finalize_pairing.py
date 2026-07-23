@@ -14,9 +14,15 @@ to a top-level ``system`` param (Anthropic) hoist that notice *out of the
 message array*, so the ``tool_use`` is left dangling.
 
 The fix pairs every orphan ``tool_use`` with a synthetic ``role="tool"``
-result at the synthesis chokepoint
-(:func:`dataknobs_bots.reasoning.react._pair_orphan_tool_calls`), and removes
-the now-redundant ``role="system"`` notices.
+result at the synthesis chokepoint, and removes the now-redundant
+``role="system"`` notices.  The pairing logic is a pure
+``list[LLMMessage]`` core
+(:func:`dataknobs_bots.reasoning.react.pair_orphan_tool_calls`) behind a thin
+``ConversationManager`` adapter (``_pair_orphan_tool_calls``).  Synthetic
+guidance is route-aware: an orphan
+that repeats an already-answered call carries the "already called with
+identical parameters" nuance the former duplicate notice conveyed; any other
+orphan carries the generic "loop ended before execution" text.
 
 Assertion strategy
 ------------------
@@ -52,7 +58,10 @@ import pytest
 from dataknobs_bots.reasoning.react import (
     _UNEXECUTED_TOOL_RESULT,
     ReActReasoning,
+    _duplicate_tool_result,
+    pair_orphan_tool_calls,
 )
+from dataknobs_llm.llm.base import ToolCall
 from dataknobs_bots.testing import BotTestHarness
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm import LLMConfig, LLMMessage
@@ -135,12 +144,26 @@ def _synthesis_messages(provider: EchoProvider) -> list[LLMMessage]:
     return list(last["messages"])
 
 
-def _has_synthetic_pairing(messages: list[LLMMessage]) -> bool:
-    """Whether a synthetic unexecuted-tool ``tool_result`` was appended."""
-    return any(
-        m.role == "tool" and m.content == _UNEXECUTED_TOOL_RESULT
+#: Both synthetic guidance strings share this marker prefix, so the tests can
+#: recognise a pairing tool_result structurally without hardcoding either
+#: full string (route-aware guidance means the exact text varies).
+_SYNTHETIC_PREFIX = "[Tool result unavailable:"
+
+
+def _synthetic_pairing_contents(messages: list[LLMMessage]) -> list[str]:
+    """Contents of the synthetic pairing ``tool_result`` messages, if any."""
+    return [
+        m.content
         for m in messages
-    )
+        if m.role == "tool"
+        and isinstance(m.content, str)
+        and m.content.startswith(_SYNTHETIC_PREFIX)
+    ]
+
+
+def _has_synthetic_pairing(messages: list[LLMMessage]) -> bool:
+    """Whether any synthetic pairing ``tool_result`` was appended."""
+    return bool(_synthetic_pairing_contents(messages))
 
 
 def _system_notice_present(messages: list[LLMMessage]) -> bool:
@@ -222,6 +245,13 @@ class TestPhasedDuplicateBreak:
         # tool_result carrying the guidance, not a hoisted-away system notice.
         assert _has_synthetic_pairing(messages)
         assert not _system_notice_present(messages)
+        # Route-aware guidance: this is a *duplicate* break, so the pairing
+        # carries the richer "already called with identical parameters"
+        # nuance the former system notice conveyed — not the generic
+        # "loop ended before execution" text.
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
 
 
 # =========================================================================
@@ -262,6 +292,12 @@ class TestToolLoopTimeout:
         _assert_no_dangling_tool_use(messages)
         assert _has_synthetic_pairing(messages)
         assert not _system_notice_present(messages)
+        # Route-aware guidance: the call was never *reached* (no earlier
+        # answered call with the same signature), so it carries the generic
+        # "loop ended before execution" text — not the duplicate nuance.
+        contents = _synthetic_pairing_contents(messages)
+        assert _UNEXECUTED_TOOL_RESULT in contents
+        assert _duplicate_tool_result("echo_tool") not in contents
 
 
 # =========================================================================
@@ -296,6 +332,10 @@ class TestMonolithicGenerateDuplicateBreak:
         _assert_no_dangling_tool_use(messages)
         assert _has_synthetic_pairing(messages)
         assert not _system_notice_present(messages)
+        # Duplicate break → richer duplicate guidance (see T1).
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
 
 
 # =========================================================================
@@ -331,6 +371,10 @@ class TestStreamingDuplicateBreak:
         _assert_no_dangling_tool_use(messages)
         assert _has_synthetic_pairing(messages)
         assert not _system_notice_present(messages)
+        # Duplicate break → richer duplicate guidance (see T1).
+        contents = _synthetic_pairing_contents(messages)
+        assert _duplicate_tool_result("echo_tool") in contents
+        assert _UNEXECUTED_TOOL_RESULT not in contents
 
 
 # =========================================================================
@@ -407,3 +451,114 @@ class TestHappyPathUnchanged:
         _assert_no_dangling_tool_use(messages)
         assert not _has_synthetic_pairing(messages)
         assert not _system_notice_present(messages)
+
+
+# =========================================================================
+# T7 — pure core (pair_orphan_tool_calls) unit tests
+# =========================================================================
+
+
+def _assistant(*tool_calls: ToolCall) -> LLMMessage:
+    return LLMMessage(role="assistant", content="", tool_calls=list(tool_calls))
+
+
+def _tool_result(tc: ToolCall) -> LLMMessage:
+    """A real (executed) tool_result for ``tc``, keyed as the adapters key it."""
+    return LLMMessage(
+        role="tool", content="ok", name=tc.name, tool_call_id=tc.id
+    )
+
+
+class TestPairOrphanToolCallsCore:
+    """Direct unit tests for the pure ``list[LLMMessage]`` pairing core.
+
+    These exercise the core without a bot, pinning behaviours the
+    integration tests (T1–T6) reach only indirectly: route-aware guidance
+    selection, the id-less duplicate-name collapse, purity, and idempotency.
+    """
+
+    def test_wellformed_history_is_noop(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(tc),
+            _tool_result(tc),
+        ]
+        assert pair_orphan_tool_calls(messages) == []
+
+    def test_unreached_orphan_gets_generic_guidance(self) -> None:
+        # A single tool_use with no result: the loop never reached it (no
+        # earlier answered call with the same signature).
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+
+        results = pair_orphan_tool_calls(messages)
+
+        assert len(results) == 1
+        assert results[0].role == "tool"
+        assert results[0].content == _UNEXECUTED_TOOL_RESULT
+        assert results[0].tool_call_id == "X1"
+        assert results[0].name == "echo_tool"
+
+    def test_duplicate_orphan_gets_duplicate_guidance(self) -> None:
+        # First call answered; the second, identical call is the abandoned
+        # half of a duplicate break → richer duplicate guidance.
+        answered = ToolCall(name="echo_tool", parameters={"m": "same"}, id="X1")
+        orphan = ToolCall(name="echo_tool", parameters={"m": "same"}, id="X2")
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(answered),
+            _tool_result(answered),
+            _assistant(orphan),
+        ]
+
+        results = pair_orphan_tool_calls(messages)
+
+        assert len(results) == 1
+        assert results[0].content == _duplicate_tool_result("echo_tool")
+        assert results[0].tool_call_id == "X2"
+
+    def test_idless_duplicate_name_collapses_and_is_skipped(self) -> None:
+        """Edge case: id-less calls sharing a ``name``.
+
+        With ``tc.id is None`` the pairing key falls back to ``name``, so an
+        already-answered same-name call marks that key answered and a later
+        same-name orphan (even with *different* params) is skipped rather than
+        paired.  This is intentional: the adapters key every same-name
+        ``tool_use`` block to that ``name``, so the one existing
+        ``tool_result`` already pairs them all and nothing dangles.
+        """
+        answered = ToolCall(name="echo_tool", parameters={"m": "a"}, id=None)
+        # Different params, still same name and still id-less → collapses.
+        later = ToolCall(name="echo_tool", parameters={"m": "b"}, id=None)
+        messages = [
+            LLMMessage(role="user", content="hi"),
+            _assistant(answered),
+            _tool_result(answered),
+            _assistant(later),
+        ]
+
+        # No synthetic result is produced — the name key is already answered.
+        assert pair_orphan_tool_calls(messages) == []
+        # And the history is structurally safe under the real adapter: both
+        # tool_use blocks key to "echo_tool", paired by the one tool_result.
+        _assert_no_dangling_tool_use(messages)
+
+    def test_input_list_is_not_mutated(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+        before = list(messages)
+
+        pair_orphan_tool_calls(messages)
+
+        assert messages == before
+        assert len(messages) == 2
+
+    def test_is_idempotent_after_appending_results(self) -> None:
+        tc = ToolCall(name="echo_tool", parameters={"m": "a"}, id="X1")
+        messages = [LLMMessage(role="user", content="hi"), _assistant(tc)]
+
+        first = pair_orphan_tool_calls(messages)
+        messages.extend(first)
+        # Second pass over the now-paired history appends nothing.
+        assert pair_orphan_tool_calls(messages) == []
