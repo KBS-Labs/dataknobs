@@ -17,8 +17,8 @@ The fix pairs every orphan ``tool_use`` with a synthetic ``role="tool"``
 result at the synthesis chokepoint, and removes the now-redundant
 ``role="system"`` notices.  The pairing logic is a pure
 ``list[LLMMessage]`` core
-(:func:`dataknobs_bots.reasoning.react.pair_orphan_tool_calls`) behind a thin
-``ConversationManager`` adapter (``_pair_orphan_tool_calls``).  Synthetic
+(:func:`dataknobs_llm.llm.message_sequence.pair_orphan_tool_calls`) behind a
+thin ``ConversationManager`` adapter (``_pair_orphan_tool_calls``).  Synthetic
 guidance is route-aware: an orphan
 that repeats an already-answered call carries the "already called with
 identical parameters" nuance the former duplicate notice conveyed; any other
@@ -55,9 +55,9 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.reasoning.react import (
+from dataknobs_bots.reasoning.react import ReActReasoning
+from dataknobs_llm.llm.message_sequence import (
     _UNEXECUTED_TOOL_RESULT,
-    ReActReasoning,
     _duplicate_tool_result,
     pair_orphan_tool_calls,
 )

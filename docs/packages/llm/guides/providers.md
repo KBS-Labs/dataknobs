@@ -333,6 +333,52 @@ verbatim (Bedrock runs Claude), so both route through a single shared helper
 OpenAI and Ollama already report the canonical vocabulary directly, so
 `finish_reason` reads identically across every provider.
 
+## Mid-conversation system-message policy (Anthropic)
+
+Anthropic's Messages API has no inline `system` role — a system prompt is a
+top-level `system` parameter, not a message in the array. A **leading** system
+message is therefore always hoisted into that parameter (correct and required).
+A **mid-conversation** system message — a positional, in-context notice
+appended *after* the dialog has started ("the loop timed out; use the results
+already available") — has no natural home, and historically was silently
+hoisted into the global system prompt too, turning an event-at-a-point into a
+standing instruction with no warning.
+
+`AnthropicProvider` makes this a configurable policy via
+`options["system_message_policy"]`:
+
+```python
+config = LLMConfig(
+    provider="anthropic",
+    model="claude-3-5-sonnet-20241022",
+    options={"system_message_policy": "inline"},  # the default
+)
+```
+
+| Policy | Mid-conversation `role="system"` behavior |
+|--------|-------------------------------------------|
+| `inline` (**default**) | Convert to a `user` message **at its position**, preserving the in-context meaning. Content blocks are consolidated so the request stays valid (no consecutive same-role messages; every `tool_result` stays adjacent/paired to its `tool_use`). |
+| `hoist` | Merge into the top-level `system` param (legacy behavior; positionally lossy but byte-for-byte back-compatible). |
+| `warn` | Log a warning naming the message, then hoist — makes the lossy case visible without changing structure. |
+| `reject` | Raise `ValidationError` — treat a mid-conversation system message as a configuration error. |
+
+An unrecognized policy raises `ValidationError` at provider construction
+(fail-closed). Whether a model family accepts an inline system message at all is
+the S1 `ModelConstraints.accepts_inline_system` datum (`False` for Anthropic);
+a consumer that declares `constraints={"accepts_inline_system": True}` opts the
+family out of the policy entirely — a mid-conversation system message is then
+left in place.
+
+> The default changed from `hoist` to `inline`: `inline` preserves the notice's
+> positional meaning and the consolidation keeps the adapted request
+> structurally valid, so the more-correct behavior carries no alternation risk.
+> Set `system_message_policy: "hoist"` to restore the exact legacy shape.
+
+The `tool_use` ↔ `tool_result` pairing invariant this consolidation relies on
+is a shared, provider-agnostic function
+(`dataknobs_llm.llm.message_sequence.pair_orphan_tool_calls`) so the same rule
+is enforced in one place across the reasoning strategies and the adapters.
+
 ## Amazon Bedrock
 
 Amazon Bedrock is registered as the `"bedrock"` provider. A single

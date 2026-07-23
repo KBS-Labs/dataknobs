@@ -118,6 +118,37 @@ _SAMPLING_PARAMS: tuple[str, ...] = (
 #: param in ``LLMConfig.constraints``.
 _DISCOVERED_REJECTED_PARAMS: Dict[str, set[str]] = {}
 
+#: Valid ``system_message_policy`` values governing how a **mid-conversation**
+#: ``role="system"`` message is handled (a *leading* system prompt is always
+#: hoisted into the top-level ``system`` param — Anthropic's Messages API has
+#: no inline ``system`` role). See :meth:`AnthropicAdapter.adapt_messages`.
+#:
+#: - ``"inline"`` — convert the message to a ``user`` message at its position,
+#:   consolidating content blocks so role-alternation and
+#:   ``tool_use`` ↔ ``tool_result`` adjacency stay valid. **Default** —
+#:   preserves the notice's positional, in-context meaning.
+#: - ``"hoist"`` — merge into the top-level ``system`` param (legacy behavior;
+#:   positionally lossy but a byte-for-byte back-compat escape hatch).
+#: - ``"warn"`` — log a warning naming the message, then hoist (makes the
+#:   lossy case visible without changing structure).
+#: - ``"reject"`` — raise :class:`~dataknobs_common.exceptions.ValidationError`
+#:   (treat a mid-conversation system message as a configuration error).
+_SYSTEM_MESSAGE_POLICIES: frozenset[str] = frozenset(
+    {"inline", "hoist", "warn", "reject"}
+)
+
+#: Default mid-conversation system-message policy. ``"inline"`` is the safe
+#: default because the adapter's content-block consolidation keeps the adapted
+#: request structurally valid (no consecutive same-role messages, tool pairing
+#: preserved), so the more-correct positional semantics carry no alternation
+#: risk.
+_DEFAULT_SYSTEM_MESSAGE_POLICY: str = "inline"
+
+#: Cap on how much of a mid-conversation system message body is echoed into a
+#: ``warn``-policy log line — enough to identify the offending message without
+#: dumping an arbitrarily large payload.
+_WARN_CONTENT_PREVIEW_CHARS: int = 120
+
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
 
@@ -139,12 +170,61 @@ class AnthropicAdapter(LLMAdapter):
     # Anthropic requires max_tokens on every request.
     DEFAULT_MAX_TOKENS: int = 1024
 
+    def __init__(
+        self,
+        *,
+        system_message_policy: str = _DEFAULT_SYSTEM_MESSAGE_POLICY,
+        accepts_inline_system: bool = False,
+    ) -> None:
+        """Build the adapter.
+
+        Args:
+            system_message_policy: How a **mid-conversation** ``role="system"``
+                message is handled — one of :data:`_SYSTEM_MESSAGE_POLICIES`
+                (``"inline"``/``"hoist"``/``"warn"``/``"reject"``). A *leading*
+                system prompt always hoists regardless. Read from
+                ``LLMConfig.options["system_message_policy"]`` by
+                :class:`AnthropicProvider`.
+            accepts_inline_system: Whether the model family accepts an inline
+                ``role="system"`` message in the ``messages`` array (the S1
+                :class:`~dataknobs_llm.llm.base.ModelConstraints.accepts_inline_system`
+                datum — ``False`` for Anthropic). When ``True``, a
+                mid-conversation system message is left in place and the policy
+                is not consulted (the family handles it natively).
+
+        Raises:
+            ValidationError: If ``system_message_policy`` is not a recognized
+                policy — a configuration error, surfaced fail-closed at
+                construction rather than silently defaulted.
+        """
+        super().__init__()
+        if system_message_policy not in _SYSTEM_MESSAGE_POLICIES:
+            raise ValidationError(
+                f"Unknown system_message_policy {system_message_policy!r}. "
+                f"Valid policies: {sorted(_SYSTEM_MESSAGE_POLICIES)}."
+            )
+        self.system_message_policy = system_message_policy
+        self.accepts_inline_system = accepts_inline_system
+
     def adapt_messages(
         self,
         messages: List[LLMMessage],
         system_prompt: str | None = None,
     ) -> tuple[str, List[Dict[str, Any]]]:
         """Convert LLMMessages to Anthropic Messages API format.
+
+        A **leading** ``role="system"`` message (before any non-system
+        message) is always hoisted into the top-level ``system`` param —
+        Anthropic's Messages API has no inline ``system`` role. A
+        **mid-conversation** ``role="system"`` message is handled per the
+        configured :attr:`system_message_policy` (unless
+        :attr:`accepts_inline_system` is ``True``, in which case it is left in
+        place). Under ``"inline"`` the message becomes a ``user`` message at
+        its position; content-block consolidation
+        (:meth:`_append_user_block`) keeps the adapted sequence structurally
+        valid — no consecutive same-role messages, and every ``tool_result``
+        stays adjacent/paired to its ``tool_use`` (the exact conditions the
+        Anthropic API enforces).
 
         Args:
             messages: Standard LLMMessage list.
@@ -155,18 +235,41 @@ class AnthropicAdapter(LLMAdapter):
             Tuple of ``(system_content, anthropic_messages)`` where
             ``system_content`` should be passed as the ``system`` API
             parameter and ``anthropic_messages`` as ``messages``.
+
+        Raises:
+            ValidationError: Under ``system_message_policy="reject"`` when a
+                mid-conversation system message is encountered.
         """
         anthropic_messages: List[Dict[str, Any]] = []
         system_content = system_prompt or ""
+        seen_non_system = False
 
         for msg in messages:
             if msg.role == "system":
-                system_content = (
-                    f"{system_content}\n\n{msg.content}"
-                    if system_content
-                    else msg.content
-                )
-            elif msg.role == "assistant" and msg.tool_calls:
+                if not seen_non_system:
+                    # Leading system prompt — always hoist (correct + required).
+                    system_content = self._merge_system(
+                        system_content, msg.content
+                    )
+                elif self.accepts_inline_system:
+                    # The family accepts an inline system message — leave it in
+                    # place rather than hoisting or converting.
+                    anthropic_messages.append(
+                        {"role": "system", "content": msg.content}
+                    )
+                elif self._mid_system_inlines(msg):
+                    self._append_user_block(
+                        anthropic_messages,
+                        {"type": "text", "text": msg.content},
+                    )
+                else:
+                    system_content = self._merge_system(
+                        system_content, msg.content
+                    )
+                continue
+
+            seen_non_system = True
+            if msg.role == "assistant" and msg.tool_calls:
                 content_blocks: List[Dict[str, Any]] = []
                 if msg.content:
                     content_blocks.append({"type": "text", "text": msg.content})
@@ -184,29 +287,31 @@ class AnthropicAdapter(LLMAdapter):
             elif msg.role == "tool":
                 # Anthropic expects tool results as user messages with
                 # tool_result content blocks paired by tool_use_id.
-                # Consecutive tool results must be consolidated into a
-                # single user message — the API rejects consecutive
-                # messages with the same role.
+                # Consecutive tool results (and an inlined system notice) must
+                # be consolidated into a single user message — the API rejects
+                # consecutive messages with the same role.
                 tool_use_id = msg.tool_call_id or msg.name or "unknown"
-                result_block = {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": msg.content,
-                }
-                if (
-                    anthropic_messages
-                    and anthropic_messages[-1]["role"] == "user"
-                    and isinstance(anthropic_messages[-1]["content"], list)
-                    and anthropic_messages[-1]["content"]
-                    and anthropic_messages[-1]["content"][0].get("type") == "tool_result"
-                ):
-                    # Append to existing tool_result user message
-                    anthropic_messages[-1]["content"].append(result_block)
-                else:
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": [result_block],
-                    })
+                self._append_user_block(
+                    anthropic_messages,
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": msg.content,
+                    },
+                )
+            elif (
+                msg.role == "user"
+                and anthropic_messages
+                and anthropic_messages[-1]["role"] == "user"
+            ):
+                # A plain user turn directly following another user turn (e.g.
+                # after an inlined system notice) must consolidate — the API
+                # rejects consecutive same-role messages. A lone user turn
+                # still passes through as a plain string (below).
+                self._append_user_block(
+                    anthropic_messages,
+                    {"type": "text", "text": msg.content},
+                )
             else:
                 anthropic_messages.append({
                     "role": msg.role,
@@ -214,6 +319,71 @@ class AnthropicAdapter(LLMAdapter):
                 })
 
         return system_content, anthropic_messages
+
+    @staticmethod
+    def _merge_system(existing: str, addition: str) -> str:
+        """Concatenate a system message into the accumulated system content."""
+        return f"{existing}\n\n{addition}" if existing else addition
+
+    def _mid_system_inlines(self, msg: LLMMessage) -> bool:
+        """Apply the policy to a mid-conversation system message.
+
+        Returns ``True`` when the message should be inlined as a ``user``
+        message at its position, ``False`` when it should be hoisted into the
+        top-level ``system`` param. ``"warn"`` logs then hoists; ``"reject"``
+        raises. A *leading* system message never reaches this method.
+
+        Raises:
+            ValidationError: Under ``system_message_policy="reject"``.
+        """
+        policy = self.system_message_policy
+        if policy == "inline":
+            return True
+        if policy == "hoist":
+            return False
+        if policy == "warn":
+            preview = (msg.content or "")[:_WARN_CONTENT_PREVIEW_CHARS]
+            logger.warning(
+                'Mid-conversation role="system" message hoisted into the '
+                "top-level system prompt (content: %r) — its positional, "
+                "in-context meaning is lost. Set "
+                "options.system_message_policy='inline' to preserve it at "
+                "position, or 'reject' to treat it as a configuration error.",
+                preview,
+            )
+            return False
+        # policy == "reject"
+        raise ValidationError(
+            'Mid-conversation role="system" message rejected by '
+            "system_message_policy='reject'. Anthropic's Messages API has no "
+            "inline system role; move the system content to the leading "
+            "position, or select policy 'inline'/'hoist'/'warn'."
+        )
+
+    @staticmethod
+    def _append_user_block(
+        anthropic_messages: List[Dict[str, Any]],
+        block: Dict[str, Any],
+    ) -> None:
+        """Append a content block to the current ``user`` turn.
+
+        Consolidates into the preceding message when it is a ``user`` turn so
+        the adapted sequence never has two consecutive ``user`` messages and a
+        ``tool_result`` stays adjacent to the ``tool_use`` it answers. A
+        plain-string ``user`` turn is promoted to a content-block list so the
+        new block can join it; otherwise a fresh ``user`` message is started.
+        """
+        if anthropic_messages and anthropic_messages[-1]["role"] == "user":
+            last = anthropic_messages[-1]
+            content = last["content"]
+            if isinstance(content, str):
+                content = (
+                    [{"type": "text", "text": content}] if content else []
+                )
+                last["content"] = content
+            content.append(block)
+        else:
+            anthropic_messages.append({"role": "user", "content": [block]})
 
     def adapt_response(self, response: Any) -> LLMResponse:
         """Parse Anthropic response into LLMResponse.
@@ -462,7 +632,21 @@ class AnthropicProvider(AsyncLLMProvider):
         # Normalize config first
         llm_config = normalize_llm_config(config)
         super().__init__(llm_config, prompt_builder=prompt_builder)
-        self.adapter = AnthropicAdapter()
+        # Mid-conversation system-message policy is a request-shape decision:
+        # the policy comes from provider options, while whether the family even
+        # accepts an inline system message is the S1 ModelConstraints datum
+        # (False for Anthropic — resolved from self.config so a constraints
+        # override is honored). Both are passed to the adapter, keeping the
+        # LLMAdapter.adapt_messages ABC signature stable for other adapters.
+        policy = str(
+            llm_config.options.get(
+                "system_message_policy", _DEFAULT_SYSTEM_MESSAGE_POLICY
+            )
+        )
+        self.adapter = AnthropicAdapter(
+            system_message_policy=policy,
+            accepts_inline_system=self.get_constraints().accepts_inline_system,
+        )
 
     async def initialize(self) -> None:
         """Initialize Anthropic client."""
