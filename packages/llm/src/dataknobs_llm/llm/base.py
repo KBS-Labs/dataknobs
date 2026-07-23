@@ -59,22 +59,29 @@ import asyncio
 import logging
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, ClassVar, Coroutine, Dict, List, Union, AsyncIterator, Iterator,
-    Callable, Protocol
+    Any, ClassVar, Coroutine, Dict, List, NoReturn, TypeVar, Union,
+    AsyncIterator, Iterator, Callable, Protocol
 )
 
-from dataknobs_common.exceptions import ResourceError
+from dataknobs_common.exceptions import (
+    OperationError, RateLimitError, ResourceError, ValidationError,
+)
 from dataknobs_common.structured_config import StructuredConfig
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
 from dataknobs_llm.prompts import AsyncPromptBuilder, PromptBuilder
 from dataknobs_config.config import Config
 
 logger = logging.getLogger(__name__)
+
+# Item value yielded by a vendor stream, threaded through _iter_translated.
+_StreamItem = TypeVar("_StreamItem")
 
 
 class CompletionMode(Enum):
@@ -926,6 +933,142 @@ class LLMProvider(ABC):
                 f"Invalid prompt_type: {prompt_type}. "
                 f"Must be 'system', 'user', or 'both'"
             )
+
+    def _dataknobs_error_for_status(
+        self,
+        status: int | None,
+        message: str,
+        *,
+        retry_after: float | None = None,
+    ) -> Exception:
+        """Map an HTTP-ish status to a dataknobs exception (pure dispatch).
+
+        The single place the vendor-error status policy lives, shared by every
+        provider's ``_translate_api_error``. Each provider does the SDK-specific
+        gate + extraction (which is where the vendor coupling belongs) and then
+        defers the status→type decision here, so the policy stays consistent
+        across providers and this method stays import-free of any vendor SDK.
+
+        - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
+          (carrying ``retry_after`` when a provider could extract it),
+        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 401/403 and anything else (other status, connection, timeout, or an
+          unknown ``None`` status) →
+          :class:`~dataknobs_common.exceptions.OperationError`.
+
+        Args:
+            status: HTTP status code, or ``None`` when the transport gave none
+                (connection error, timeout).
+            message: Human-readable error message for the raised exception.
+            retry_after: Seconds to wait, when known (429 only).
+
+        Returns:
+            A dataknobs exception instance (not raised — the caller raises it
+            ``from`` the original SDK error to preserve ``__cause__``).
+        """
+        if status == 429:
+            return RateLimitError(message, retry_after=retry_after)
+        if status == 400:
+            return ValidationError(message)
+        return OperationError(message)  # 401/403 and everything else
+
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw vendor SDK error into a dataknobs exception.
+
+        Overridden per provider to do the SDK-specific gate (is this *my*
+        SDK's error?) and status extraction, then defer the status→type
+        policy to :meth:`_dataknobs_error_for_status`. The base default does
+        no translation (returns ``None``), so a provider with no vendor error
+        taxonomy inherits "never translate" without having to opt out.
+
+        Returning ``None`` is the passthrough contract: a non-vendor exception
+        (a bug in our own code, or a domain error like
+        :class:`~dataknobs_llm.exceptions.ToolsNotSupportedError`) is left for
+        the caller to re-raise unchanged, never masked as an API error.
+        """
+        return None
+
+    def _raise_translated(self, exc: Exception) -> NoReturn:
+        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
+
+        The shared choke point behind every provider's vendor call sites: a
+        vendor SDK error is raised as its dataknobs type ``from`` the original
+        (preserving ``__cause__``); anything :meth:`_translate_api_error`
+        does not recognize is re-raised as-is (the passthrough contract).
+        Always call from inside an ``except`` block.
+        """
+        translated = self._translate_api_error(exc)
+        if translated is None:
+            raise exc
+        raise translated from exc
+
+    async def _call_api(self, factory: Callable[[], Awaitable[Any]]) -> Any:
+        """Await a vendor SDK call, translating vendor errors (choke point).
+
+        A single try/except around a ``create`` / HTTP await so the
+        vendor→dataknobs translation lives in one place for the non-streaming
+        call sites. Non-vendor errors propagate unchanged.
+        """
+        try:
+            return await factory()
+        except Exception as exc:
+            self._raise_translated(exc)
+
+    async def _iter_translated(
+        self, stream: AsyncIterator[_StreamItem]
+    ) -> AsyncIterator[_StreamItem]:
+        """Yield from a vendor stream, translating errors raised mid-iteration.
+
+        The streaming half of the choke point: a rate-limit, throttle, or
+        connection drop surfacing *during* iteration — not just at stream
+        creation — is translated to a dataknobs exception, so a consumer never
+        sees a raw vendor SDK error from the streaming path. Non-vendor errors
+        propagate unchanged.
+
+        A transform error in the *consumer's* loop body is outside this
+        ``try`` — it reaches the generator as ``GeneratorExit`` via ``aclose``,
+        which is not an :class:`Exception` — so it is never mistranslated.
+        """
+        try:
+            async for item in stream:
+                yield item
+        except Exception as exc:
+            self._raise_translated(exc)
+
+    @staticmethod
+    def _retry_after_from_headers(headers: Any) -> float | None:
+        """Best-effort ``retry-after`` seconds from a header mapping.
+
+        Accepts anything with a ``.get(key)`` accessor (an SDK response's
+        ``headers`` mapping — anthropic, openai, and aiohttp all expose one).
+        Per RFC 7231 the value may be either a non-negative number of seconds
+        or an HTTP-date; both forms are parsed (an HTTP-date is converted to
+        seconds-from-now, floored at ``0.0``). Returns ``None`` when the
+        mapping is absent, the header is missing, or the value parses as
+        neither form.
+        """
+        if not headers:
+            return None
+        get = getattr(headers, "get", None)
+        if get is None:
+            return None
+        raw = get("retry-after")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+        # RFC 7231 HTTP-date form, e.g. "Wed, 21 Oct 2025 07:28:00 GMT".
+        try:
+            when = parsedate_to_datetime(str(raw))
+        except (TypeError, ValueError):
+            return None
+        if when is None:  # older Pythons return None instead of raising
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
     @abstractmethod
     def initialize(self) -> None:

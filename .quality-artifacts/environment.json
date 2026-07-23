@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-23T15:54:24Z",
+  "timestamp": "2026-07-23T18:41:12Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.31 (Homebrew 2026-07-22 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/react-honors-truncated",
-  "git_commit": "8a125ec2f22cc04ad199e8221cfc597b76dc3877",
+  "git_branch": "sbk/cross-provider-vendor-error-translation",
+  "git_commit": "caee0eca5c15b163acaa2c8ce9315b5e989ec744",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

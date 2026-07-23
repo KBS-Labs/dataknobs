@@ -63,9 +63,7 @@ import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
-from dataknobs_common.exceptions import (
-    OperationError, RateLimitError, ValidationError,
-)
+from dataknobs_common.exceptions import ValidationError
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -805,37 +803,20 @@ class AnthropicProvider(AsyncLLMProvider):
                 )
         return params
 
-    def _retry_after(self, exc: Exception) -> float | None:
-        """Best-effort ``retry-after`` (seconds) from an Anthropic 429.
-
-        Reads the ``retry-after`` response header if present; returns ``None``
-        when absent or unparseable.
-        """
-        response = getattr(exc, "response", None)
-        headers = getattr(response, "headers", None)
-        if not headers:
-            return None
-        raw = headers.get("retry-after")
-        if not raw:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
-
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw Anthropic SDK error into a dataknobs exception.
 
         Lets consumers catch by a dataknobs exception type instead of coupling
-        to the ``anthropic`` SDK's classes:
+        to the ``anthropic`` SDK's classes. Does the SDK-specific gate (is this
+        an ``anthropic.APIError``?) and extraction (status, ``retry-after``),
+        then defers the status→type policy to
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
           (with ``retry_after`` when the header is present),
         - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
-        - 401/403 → :class:`~dataknobs_common.exceptions.OperationError`
-          (auth/permission),
-        - any other Anthropic API error (other status, connection, timeout) →
-          :class:`~dataknobs_common.exceptions.OperationError`.
+        - 401/403 and any other Anthropic API error (other status, connection,
+          timeout) → :class:`~dataknobs_common.exceptions.OperationError`.
 
         Returns ``None`` for a non-Anthropic exception so the caller re-raises
         it unchanged (a bug in our own code is never masked as an API error).
@@ -849,18 +830,13 @@ class AnthropicProvider(AsyncLLMProvider):
         if not isinstance(exc, anthropic.APIError):
             return None
         status = getattr(exc, "status_code", None)
-        if status == 429:
-            return RateLimitError(
-                f"Anthropic rate limit exceeded: {exc}",
-                retry_after=self._retry_after(exc),
-            )
-        if status == 400:
-            return ValidationError(f"Anthropic rejected the request: {exc}")
-        if status in (401, 403):
-            return OperationError(
-                f"Anthropic authentication/authorization error: {exc}"
-            )
-        return OperationError(f"Anthropic API error: {exc}")
+        response = getattr(exc, "response", None)
+        retry_after = self._retry_after_from_headers(
+            getattr(response, "headers", None)
+        )
+        return self._dataknobs_error_for_status(
+            status, f"Anthropic API error: {exc}", retry_after=retry_after
+        )
 
     def _recover_rejected_param(
         self, exc: Exception, api_kwargs: Dict[str, Any]
@@ -924,14 +900,8 @@ class AnthropicProvider(AsyncLLMProvider):
                 try:
                     return await self._client.messages.create(**api_kwargs)
                 except Exception as retry_exc:
-                    translated = self._translate_api_error(retry_exc)
-                    if translated is None:
-                        raise
-                    raise translated from retry_exc
-            translated = self._translate_api_error(exc)
-            if translated is None:
-                raise
-            raise translated from exc
+                    self._raise_translated(retry_exc)
+            self._raise_translated(exc)
 
     async def complete(
         self,
@@ -1069,10 +1039,7 @@ class AnthropicProvider(AsyncLLMProvider):
                             stream_kwargs.get("model"),
                         )
                         continue
-                translated = self._translate_api_error(exc)
-                if translated is None:
-                    raise
-                raise translated from exc
+                self._raise_translated(exc)
 
     async def embed(
         self,

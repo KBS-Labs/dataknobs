@@ -1653,6 +1653,8 @@ sqlite-cache = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aiosqlite" },
+    { name = "blockbuster" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1683,6 +1685,8 @@ provides-extras = ["openai", "anthropic", "ollama", "huggingface", "embeddings",
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aiosqlite", specifier = ">=0.19.0" },
+    { name = "blockbuster", specifier = ">=1.5.26,<2.0.0" },
     { name = "mypy", specifier = ">=1.0.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
@@ -1764,7 +1768,7 @@ dependencies = [
 dev = [
     { name = "black" },
     { name = "dataknobs-data", extra = ["vector"] },
-    { name = "dataknobs-llm", extra = ["anthropic"] },
+    { name = "dataknobs-llm", extra = ["anthropic", "bedrock", "huggingface", "ollama", "openai"] },
     { name = "editables" },
     { name = "hatchling" },
     { name = "ipywidgets" },
@@ -1811,7 +1815,7 @@ requires-dist = [
 dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "dataknobs-data", extras = ["vector"], editable = "packages/data" },
-    { name = "dataknobs-llm", extras = ["anthropic"], editable = "packages/llm" },
+    { name = "dataknobs-llm", extras = ["anthropic", "openai", "ollama", "huggingface", "bedrock"], editable = "packages/llm" },
     { name = "editables", specifier = ">=0.3" },
     { name = "hatchling", specifier = ">=1.21.0" },
     { name = "ipywidgets", specifier = ">=8.1.5" },

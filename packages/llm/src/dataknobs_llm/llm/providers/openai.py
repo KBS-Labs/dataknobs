@@ -380,6 +380,42 @@ class OpenAIProvider(AsyncLLMProvider):
 
         return capabilities
 
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        """Translate a raw OpenAI SDK error into a dataknobs exception.
+
+        Lets consumers catch by a dataknobs exception type instead of coupling
+        to the ``openai`` SDK's classes. Does the SDK-specific gate (is this an
+        ``openai.APIError``?) and extraction (status, ``retry-after``), then
+        defers the status→type policy to
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
+
+        - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
+          (with ``retry_after`` when the header is present),
+        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 401/403 and any other OpenAI API error (other status, connection,
+          timeout — which carry no ``status_code``) →
+          :class:`~dataknobs_common.exceptions.OperationError`.
+
+        Returns ``None`` for a non-OpenAI exception so the caller re-raises it
+        unchanged (a bug in our own code is never masked as an API error). The
+        original SDK error is preserved on ``__cause__`` — callers raise
+        ``... from exc``.
+        """
+        try:
+            import openai
+        except ImportError:  # pragma: no cover - openai is installed post-init
+            return None
+        if not isinstance(exc, openai.APIError):
+            return None
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        retry_after = self._retry_after_from_headers(
+            getattr(response, "headers", None)
+        )
+        return self._dataknobs_error_for_status(
+            status, f"OpenAI API error: {exc}", retry_after=retry_after
+        )
+
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -420,9 +456,11 @@ class OpenAIProvider(AsyncLLMProvider):
             params["tools"] = self.adapter.adapt_tools(tools)
 
         # Make API call
-        response = await self._client.chat.completions.create(
-            messages=adapted_messages,
-            **params
+        response = await self._call_api(
+            lambda: self._client.chat.completions.create(
+                messages=adapted_messages,
+                **params
+            )
         )
 
         return self._analyze_response(self.adapter.adapt_response(response))
@@ -468,16 +506,21 @@ class OpenAIProvider(AsyncLLMProvider):
             params["tools"] = self.adapter.adapt_tools(tools)
 
         # Stream API call
-        stream = await self._client.chat.completions.create(
-            messages=adapted_messages,
-            **params
+        stream = await self._call_api(
+            lambda: self._client.chat.completions.create(
+                messages=adapted_messages,
+                **params
+            )
         )
 
         # Accumulate tool call deltas across chunks. OpenAI sends them
         # incrementally via delta.tool_calls[i].index.
         tool_call_accumulators: dict[int, dict[str, Any]] = {}
 
-        async for chunk in stream:
+        # Iterate through the translating wrapper so a vendor error surfacing
+        # mid-stream (rate limit, connection drop) is translated too — not
+        # just the create() above.
+        async for chunk in self._iter_translated(stream):
             choice = chunk.choices[0] if chunk.choices else None
             if not choice:
                 continue
@@ -548,9 +591,11 @@ class OpenAIProvider(AsyncLLMProvider):
         else:
             single = False
 
-        response = await self._client.embeddings.create(
-            input=texts,
-            model=self.config.model or 'text-embedding-ada-002'
+        response = await self._call_api(
+            lambda: self._client.embeddings.create(
+                input=texts,
+                model=self.config.model or 'text-embedding-ada-002'
+            )
         )
 
         embeddings = [e.embedding for e in response.data]
@@ -579,9 +624,11 @@ class OpenAIProvider(AsyncLLMProvider):
         params.update(kwargs)
 
         # Make API call
-        response = await self._client.chat.completions.create(
-            messages=adapted_messages,
-            **params
+        response = await self._call_api(
+            lambda: self._client.chat.completions.create(
+                messages=adapted_messages,
+                **params
+            )
         )
 
         return self._analyze_response(self.adapter.adapt_response(response))

@@ -53,12 +53,14 @@ dev = [
     # Referenced via the extra (not re-listed) to keep version specifiers
     # single-sourced in packages/data/pyproject.toml.
     "dataknobs-data[vector]",
-    # The anthropic SDK must be present in the synced dev/test env so the
+    # The provider SDKs must be present in the synced dev/test env so each
     # provider's vendor-error-translation behavioral tests RUN against the real
-    # anthropic exception classes rather than fakes (no fakes for the real
-    # dependency's error types). Referenced via the extra to single-source the
-    # version specifier in packages/llm/pyproject.toml.
-    "dataknobs-llm[anthropic]",
+    # SDK exception classes rather than fakes (no fakes for the real
+    # dependency's error types): anthropic + openai expose ``APIError``
+    # subtrees; ollama/huggingface speak aiohttp; bedrock speaks botocore (via
+    # aioboto3). Referenced via the extras to single-source the version
+    # specifiers in packages/llm/pyproject.toml.
+    "dataknobs-llm[anthropic,openai,ollama,huggingface,bedrock]",
 ]
 
 [tool.uv.workspace]

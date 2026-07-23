@@ -264,33 +264,56 @@ overrides the model to a different family (`complete(..., config_overrides={"mod
 gets that family's rules — the drop reflects the model actually being sent, not
 just the configured default.
 
-### Vendor-error translation and the 400-retry safety net (Anthropic)
+### Vendor-error translation (all providers)
 
-The `AnthropicProvider` translates raw `anthropic` SDK errors into
+Every provider translates raw vendor transport errors into
 `dataknobs_common.exceptions` types, so a consumer catches by a dataknobs type
-without coupling to the SDK (the original error is preserved on `__cause__`):
+without importing a vendor SDK (the original error is preserved on `__cause__`):
 
-| Anthropic error | dataknobs exception |
-|-----------------|---------------------|
+| Vendor error | dataknobs exception |
+|--------------|---------------------|
 | 400 (bad request) | `ValidationError` |
-| 429 (rate limit) | `RateLimitError` (with `retry_after` when the header is present) |
+| 429 (rate limit) | `RateLimitError` (with `retry_after` when the vendor exposes it) |
 | 401 / 403 (auth) | `OperationError` |
 | other status / connection / timeout | `OperationError` |
 
-Non-Anthropic exceptions propagate unchanged (a bug in caller code is never
-masked as an API error). All three request entry points — `complete`,
-`stream_complete`, and the deprecated `function_call` — share this translation.
-(`function_call` still falls back to prompt-based function calling on a `400`,
-the "older model lacks the native tools API" signal, but a `429`/auth error now
-propagates as its translated dataknobs exception instead of triggering a second
-API call.)
+This is uniform across Anthropic, OpenAI, Ollama, HuggingFace, and Bedrock: the
+status→type policy lives once on `LLMProvider._dataknobs_error_for_status`, and
+each provider adds only a small SDK-specific extractor — the Anthropic / OpenAI
+`APIError` subtree, aiohttp's `ClientResponseError` for Ollama / HuggingFace, and
+botocore's nested `ClientError` status for Bedrock (whose throttling *codes*
+`ThrottlingException` / `TooManyRequestsException` also map to `429`). It covers
+every request entry point — `complete`, `stream_complete`, `embed`, and the
+deprecated `function_call`. For the streaming path a vendor error is translated
+whether it surfaces at stream *creation* or partway through *iteration* (both
+run through the shared `_call_api` / `_iter_translated` choke points), so a
+mid-stream rate limit or dropped connection is a dataknobs exception too. A
+non-vendor exception (a bug in caller code) propagates unchanged rather than
+being masked as an API error. When a `429` carries a `Retry-After` header,
+`retry_after` is parsed from either form the RFC permits — a number of seconds
+or an HTTP-date (converted to seconds-from-now).
 
-As a safety net for a **model family the constraint table doesn't know yet**, an
-"unsupported sampling parameter" 400 is recovered once: the offending param is
-dropped, the request retried, a warning logged, and the discovery memoized for
-the process so subsequent requests to that model drop it up front (≤1 wasted
-round-trip per model). Declaring the param in `constraints` pre-empts even that
-first round-trip.
+Domain-specific errors are raised *ahead of* the translator and never flattened:
+Ollama's / HuggingFace's `ToolsNotSupportedError` (a model that cannot do tool
+calling) stays a `ToolsNotSupportedError`, not a generic `ValidationError`.
+
+**Migrating from raw vendor `except` blocks.** If you previously caught a raw
+vendor type around a provider call (`except openai.RateLimitError`, `except
+aiohttp.ClientResponseError`, `except botocore.exceptions.ClientError`), switch
+to the dataknobs type (`except RateLimitError` / `except OperationError` from
+`dataknobs_common.exceptions`); the raw error is still reachable on `__cause__`.
+
+#### Anthropic 400-retry safety net
+
+As a safety net for a **model family the constraint table doesn't know yet**, the
+`AnthropicProvider` recovers an "unsupported sampling parameter" 400 once: the
+offending param is dropped, the request retried, a warning logged, and the
+discovery memoized for the process so subsequent requests to that model drop it
+up front (≤1 wasted round-trip per model). Declaring the param in `constraints`
+pre-empts even that first round-trip. (`function_call` still falls back to
+prompt-based function calling on a `400`, the "older model lacks the native
+tools API" signal, but a `429` / auth error propagates as its translated
+dataknobs exception instead of triggering a second API call.)
 
 ## Response truncation signal
 
