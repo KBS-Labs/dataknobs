@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-23T00:03:18Z",
+  "timestamp": "2026-07-23T02:18:13Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.30 (Homebrew 2026-07-20 aarch64-apple-darwin)",
+  "uv_version": "uv 0.11.31 (Homebrew 2026-07-22 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/react-finalize-dangling-tool-use",
-  "git_commit": "d93a1b896e9f28cfce0d3180553801f180dea00a",
+  "git_branch": "sbk/anthropic-param-family-constraints",
+  "git_commit": "9410961f054acaf26f0553849d261e715e557511",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
