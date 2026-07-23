@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import List
 
+import pytest
+
 from dataknobs_common.exceptions import (
     OperationError,
     RateLimitError,
@@ -122,3 +124,146 @@ class TestRetryAfterFromHeaders:
     def test_mapping_without_get(self) -> None:
         """A header object with no ``.get`` yields ``None`` (not a crash)."""
         assert LLMProvider._retry_after_from_headers(object()) is None
+
+
+class TestRetryAfterHttpDate:
+    """``_retry_after_from_headers`` also parses the RFC 7231 HTTP-date form.
+
+    Previously only the numeric-seconds form was parsed; an HTTP-date value
+    (equally valid per RFC 7231) silently yielded ``None``. These fail against
+    the numeric-only parser and pass once the date form is handled.
+    """
+
+    def test_future_http_date_returns_positive_seconds(self) -> None:
+        headers = {"retry-after": "Wed, 21 Oct 2099 07:28:00 GMT"}
+        result = LLMProvider._retry_after_from_headers(headers)
+        assert result is not None
+        assert result > 0
+
+    def test_past_http_date_floored_to_zero(self) -> None:
+        headers = {"retry-after": "Wed, 21 Oct 1999 07:28:00 GMT"}
+        assert LLMProvider._retry_after_from_headers(headers) == 0.0
+
+    def test_garbage_that_is_neither_seconds_nor_date_is_none(self) -> None:
+        headers = {"retry-after": "not-a-number-or-date"}
+        assert LLMProvider._retry_after_from_headers(headers) is None
+
+
+# ---------------------------------------------------------------------------
+# Shared choke-point helpers — pinned once at the base, independent of any SDK
+# ---------------------------------------------------------------------------
+
+
+class _TranslatingProvider(_BaseProvider):
+    """A base provider whose extractor translates a sentinel vendor error.
+
+    Stands in for a real provider so the *shared* ``_raise_translated`` /
+    ``_iter_translated`` helpers can be exercised without any SDK: a
+    ``_VendorError`` translates to a 429 ``RateLimitError`` exactly as a
+    provider's ``_translate_api_error`` would; anything else returns ``None``
+    (the passthrough contract).
+    """
+
+    class _VendorError(Exception):
+        pass
+
+    def _translate_api_error(self, exc: Exception) -> Exception | None:
+        if isinstance(exc, self._VendorError):
+            return self._dataknobs_error_for_status(
+                429, f"translated: {exc}", retry_after=1.0
+            )
+        return None
+
+
+def _translating_provider() -> _TranslatingProvider:
+    return _TranslatingProvider(LLMConfig(provider="test", model="test-model"))
+
+
+async def _yield_then_raise(items: list, exc: Exception):
+    for item in items:
+        yield item
+    raise exc
+
+
+async def _yield_all(items: list):
+    for item in items:
+        yield item
+
+
+class TestTranslateApiErrorDefault:
+    """The base extractor default performs no translation (passthrough)."""
+
+    def test_base_default_returns_none(self) -> None:
+        assert _provider()._translate_api_error(ValueError("x")) is None
+
+
+class TestRaiseTranslated:
+    """``_raise_translated`` translates a vendor error, else re-raises as-is."""
+
+    def test_translates_vendor_error_preserving_cause(self) -> None:
+        provider = _translating_provider()
+        original = provider._VendorError("throttled")
+        with pytest.raises(RateLimitError) as excinfo:
+            try:
+                raise original
+            except Exception as exc:
+                provider._raise_translated(exc)
+        assert excinfo.value.retry_after == 1.0
+        assert excinfo.value.__cause__ is original
+
+    def test_passes_through_non_vendor_error_unchanged(self) -> None:
+        provider = _translating_provider()
+        original = ValueError("our own bug")
+        with pytest.raises(ValueError) as excinfo:
+            try:
+                raise original
+            except Exception as exc:
+                provider._raise_translated(exc)
+        assert excinfo.value is original
+
+
+class TestIterTranslated:
+    """``_iter_translated`` closes the streaming half of the choke point.
+
+    A vendor error raised *during* iteration — not just at stream creation —
+    is translated, so a consumer never sees a raw vendor error from the
+    streaming path.
+    """
+
+    async def test_yields_all_when_no_error(self) -> None:
+        provider = _translating_provider()
+        got = [x async for x in provider._iter_translated(_yield_all([1, 2, 3]))]
+        assert got == [1, 2, 3]
+
+    async def test_translates_mid_iteration_vendor_error(self) -> None:
+        provider = _translating_provider()
+        original = provider._VendorError("mid-stream throttle")
+        got: list[int] = []
+        with pytest.raises(RateLimitError) as excinfo:
+            async for x in provider._iter_translated(
+                _yield_then_raise([1, 2], original)
+            ):
+                got.append(x)
+        # Chunks before the error still reached the consumer.
+        assert got == [1, 2]
+        assert excinfo.value.retry_after == 1.0
+        assert excinfo.value.__cause__ is original
+
+    async def test_passes_through_non_vendor_mid_iteration_error(self) -> None:
+        provider = _translating_provider()
+        original = ValueError("our own bug")
+        with pytest.raises(ValueError) as excinfo:
+            async for _ in provider._iter_translated(
+                _yield_then_raise([], original)
+            ):
+                pass
+        assert excinfo.value is original
+
+    async def test_consumer_body_error_is_not_mistranslated(self) -> None:
+        """An error from the *consumer's* loop body is never translated — even a
+        vendor-shaped one — because it does not arise inside the wrapper.
+        """
+        provider = _translating_provider()
+        with pytest.raises(provider._VendorError):
+            async for _ in provider._iter_translated(_yield_all([1, 2, 3])):
+                raise provider._VendorError("raised by consumer, not the stream")

@@ -75,8 +75,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other status → `OperationError`. The original SDK / transport error is
   preserved on `__cause__`, and a non-vendor exception (a bug in caller code)
   propagates unchanged rather than being masked as an API error. The
-  status→type policy lives once on `LLMProvider._dataknobs_error_for_status`;
-  each provider contributes only a small SDK-specific extractor. **Backward
+  status→type policy lives once on `LLMProvider._dataknobs_error_for_status`,
+  and the raise / stream-iteration choke points (`_raise_translated`,
+  `_call_api`, `_iter_translated`) are shared on the base too; each provider
+  contributes only a small SDK-specific extractor. Translation covers every
+  entry point — `complete`, `stream_complete`, `embed`, and the deprecated
+  `function_call` — and on the streaming path a vendor error is translated
+  whether it surfaces at stream creation or mid-iteration. `retry_after` is
+  parsed from either form the `Retry-After` header permits (a number of
+  seconds or an HTTP-date). Ollama's deprecated `function_call` falls back to
+  prompt-based calling only for the genuine "model lacks the native tools API"
+  `400` signal — a rate-limit / auth / transport error surfaces as its
+  dataknobs exception instead of triggering a second request. **Backward
   compatibility:** any consumer that previously caught a *raw vendor type*
   around a provider call (`except openai.RateLimitError`, `except
   aiohttp.ClientResponseError`, `except botocore.exceptions.ClientError`, etc.)

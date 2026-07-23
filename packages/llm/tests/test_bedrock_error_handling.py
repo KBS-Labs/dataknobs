@@ -68,19 +68,61 @@ class _RaisingBedrockClient:
         raise self._error
 
 
+class _RaisingEventStream:
+    """An async iterator that raises *exc* mid-stream (after create succeeds)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __aiter__(self) -> _RaisingEventStream:
+        return self
+
+    async def __anext__(self) -> object:
+        raise self._exc
+
+
+class _StreamingBedrockClient:
+    """``converse_stream`` *returns* a response whose event stream raises.
+
+    Models the streaming gap: the ``converse_stream`` create succeeds, then a
+    throttle / connection drop surfaces while iterating ``response["stream"]``.
+    """
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def converse_stream(self, **kwargs: Any) -> dict[str, Any]:
+        return {"stream": _RaisingEventStream(self._exc)}
+
+
 class _StubSession:
     """aioboto3.Session stub returning a fixed bedrock-runtime client."""
 
-    def __init__(self, client: _RaisingBedrockClient) -> None:
+    def __init__(self, client: Any) -> None:
         self._client = client
 
-    def client(self, service: str, **kwargs: Any) -> _RaisingBedrockClient:
+    def client(self, service: str, **kwargs: Any) -> Any:
         return self._client
 
 
 def _provider(error: Exception, *, model: str = "anthropic.claude-3-haiku") -> BedrockProvider:
     provider = BedrockProvider(LLMConfig(provider="bedrock", model=model))
     provider._session = _StubSession(_RaisingBedrockClient(error))
+    provider._is_initialized = True
+    return provider
+
+
+def _streaming_provider(
+    error: Exception, *, model: str = "anthropic.claude-3-haiku"
+) -> BedrockProvider:
+    provider = BedrockProvider(LLMConfig(provider="bedrock", model=model))
+    provider._session = _StubSession(_StreamingBedrockClient(error))
     provider._is_initialized = True
     return provider
 
@@ -132,6 +174,18 @@ class TestVendorErrorTranslation:
         with pytest.raises(RateLimitError):
             async for _ in provider.stream_complete("hi"):
                 pass
+
+    async def test_mid_stream_error_is_translated(self) -> None:
+        """A throttle raised *during* stream iteration (not at create) is
+        translated. Before the streaming wrapper this raw botocore
+        ``ClientError`` leaked straight to the consumer.
+        """
+        err = _client_error("ThrottlingException", 429)
+        provider = _streaming_provider(err)
+        with pytest.raises(RateLimitError) as excinfo:
+            async for _ in provider.stream_complete("hi"):
+                pass
+        assert excinfo.value.__cause__ is err
 
     async def test_embed_error_is_translated(self) -> None:
         err = _client_error("ThrottlingException", 429)

@@ -27,7 +27,7 @@ from dataknobs_common.exceptions import (
     ValidationError,
 )
 from dataknobs_llm.exceptions import ToolsNotSupportedError
-from dataknobs_llm.llm.base import LLMConfig
+from dataknobs_llm.llm.base import LLMConfig, LLMMessage
 from dataknobs_llm.llm.providers.ollama import OllamaProvider
 
 from _aiohttp_error_stub import (
@@ -117,6 +117,62 @@ class TestVendorErrorTranslation:
         with pytest.raises(ValidationError):
             async for _ in provider.stream_complete("hi"):
                 pass
+
+
+class TestFunctionCallErrorSurfacing:
+    """Deprecated ``function_call()`` surfaces transport errors directly.
+
+    Previously the native-tools call was wrapped in a broad ``except`` that
+    logged "native tools failed" and re-issued the whole request prompt-based —
+    so a 429 / timeout triggered a *second*, wasteful full request instead of
+    surfacing ``RateLimitError``. The fallback now fires only for the genuine
+    "does not support tools" signal.
+    """
+
+    _FUNCTIONS = [{"name": "f", "description": "d", "parameters": {}}]
+
+    async def test_rate_limit_surfaces_without_second_request(self) -> None:
+        err = make_client_response_error(
+            429, "slow down", headers={"retry-after": "4"}
+        )
+        session = FakeSession(
+            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
+        )
+        provider = _provider(session)
+        with pytest.warns(DeprecationWarning):
+            with pytest.raises(RateLimitError) as excinfo:
+                await provider.function_call(
+                    [LLMMessage(role="user", content="hi")], self._FUNCTIONS
+                )
+        assert excinfo.value.retry_after == 4.0
+        assert excinfo.value.__cause__ is err
+        # A throttle must NOT trigger a second, prompt-based request.
+        assert len(session.calls) == 1
+
+    async def test_tools_not_supported_still_falls_back_to_prompt(self) -> None:
+        """The genuine "does not support tools" 400 still falls back."""
+        native = FakeSession.responding(
+            FakeResponse(400, text="this model does not support tools")
+        )
+        fallback = FakeSession.responding(
+            FakeResponse(
+                200,
+                json_data={
+                    "message": {"content": '{"function": "f", "arguments": {}}'},
+                    "done": True,
+                },
+            )
+        )
+        session = FakeSession([native, fallback])
+        provider = _provider(session)
+        with pytest.warns(DeprecationWarning):
+            result = await provider.function_call(
+                [LLMMessage(role="user", content="hi")], self._FUNCTIONS
+            )
+        # Native attempt + prompt-based fallback = two requests.
+        assert len(session.calls) == 2
+        assert result.function_call is not None
+        assert result.function_call["name"] == "f"
 
 
 class TestDomainErrorPreserved:

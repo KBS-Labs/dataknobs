@@ -281,8 +281,14 @@ each provider adds only a small SDK-specific extractor — the Anthropic / OpenA
 botocore's nested `ClientError` status for Bedrock (whose throttling *codes*
 `ThrottlingException` / `TooManyRequestsException` also map to `429`). It covers
 every request entry point — `complete`, `stream_complete`, `embed`, and the
-deprecated `function_call`. A non-vendor exception (a bug in caller code)
-propagates unchanged rather than being masked as an API error.
+deprecated `function_call`. For the streaming path a vendor error is translated
+whether it surfaces at stream *creation* or partway through *iteration* (both
+run through the shared `_call_api` / `_iter_translated` choke points), so a
+mid-stream rate limit or dropped connection is a dataknobs exception too. A
+non-vendor exception (a bug in caller code) propagates unchanged rather than
+being masked as an API error. When a `429` carries a `Retry-After` header,
+`retry_after` is parsed from either form the RFC permits — a number of seconds
+or an HTTP-date (converted to seconds-from-now).
 
 Domain-specific errors are raised *ahead of* the translator and never flattened:
 Ollama's / HuggingFace's `ToolsNotSupportedError` (a model that cannot do tool

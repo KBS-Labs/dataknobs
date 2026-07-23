@@ -48,7 +48,6 @@ import json
 import logging
 import os
 import warnings
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -417,21 +416,6 @@ class OpenAIProvider(AsyncLLMProvider):
             status, f"OpenAI API error: {exc}", retry_after=retry_after
         )
 
-    async def _call_api(self, factory: Callable[[], Awaitable[Any]]) -> Any:
-        """Await an OpenAI SDK call, translating vendor errors (S4 choke point).
-
-        Single try/except around every ``chat.completions.create`` /
-        ``embeddings.create`` await, so the vendor→dataknobs translation lives
-        in one place. Non-OpenAI errors propagate unchanged.
-        """
-        try:
-            return await factory()
-        except Exception as exc:
-            translated = self._translate_api_error(exc)
-            if translated is None:
-                raise
-            raise translated from exc
-
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -533,7 +517,10 @@ class OpenAIProvider(AsyncLLMProvider):
         # incrementally via delta.tool_calls[i].index.
         tool_call_accumulators: dict[int, dict[str, Any]] = {}
 
-        async for chunk in stream:
+        # Iterate through the translating wrapper so a vendor error surfacing
+        # mid-stream (rate limit, connection drop) is translated too — not
+        # just the create() above.
+        async for chunk in self._iter_translated(stream):
             choice = chunk.choices[0] if chunk.choices else None
             if not choice:
                 continue

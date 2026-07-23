@@ -3,7 +3,7 @@
 import asyncio
 import os
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Union, AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -111,18 +111,6 @@ class HuggingFaceProvider(AsyncLLMProvider):
                 None, f"HuggingFace API error: {exc}"
             )
         return None
-
-    def _raise_translated(self, exc: Exception) -> NoReturn:
-        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
-
-        The S4 choke point for the ``aiohttp`` call sites (completion /
-        embeddings). A non-transport error is re-raised as-is; a transport
-        error is raised as its dataknobs type ``from`` the original.
-        """
-        translated = self._translate_api_error(exc)
-        if translated is None:
-            raise exc
-        raise translated from exc
 
     async def complete(
         self,

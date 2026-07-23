@@ -98,6 +98,44 @@ def _provider(client: Any, **config_kwargs: Any) -> OpenAIProvider:
     return provider
 
 
+class _RaisingStream:
+    """An async iterator that raises *exc* mid-stream (after create succeeds).
+
+    Models the streaming gap: ``chat.completions.create`` returns fine, then a
+    rate-limit / connection drop surfaces during token iteration.
+    """
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __aiter__(self) -> _RaisingStream:
+        return self
+
+    async def __anext__(self) -> object:
+        raise self._exc
+
+
+class _StreamReturningCall:
+    """A ``.create`` endpoint that *returns* a scripted stream (does not raise)."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> Any:
+        self.calls.append(dict(kwargs))
+        return self._stream
+
+
+class _StreamingClient:
+    """Minimal client whose ``chat.completions.create`` returns *stream*."""
+
+    def __init__(self, stream: Any) -> None:
+        self.chat = types.SimpleNamespace(
+            completions=_StreamReturningCall(stream)
+        )
+
+
 class TestVendorErrorTranslation:
     """Raw OpenAI errors become catchable dataknobs exceptions."""
 
@@ -183,6 +221,26 @@ class TestVendorErrorTranslation:
         with pytest.raises(ValidationError):
             async for _ in provider.stream_complete("hi"):
                 pass
+
+    async def test_mid_stream_error_is_translated(self) -> None:
+        """A vendor error raised *during* iteration (not at create) is translated.
+
+        ``create()`` succeeds and returns a stream; the rate limit surfaces on
+        the first ``__anext__``. Before the streaming wrapper this raw
+        ``openai.RateLimitError`` leaked straight to the consumer.
+        """
+        err = _status_error(
+            openai.RateLimitError,
+            429,
+            "throttled mid-stream",
+            headers={"retry-after": "2"},
+        )
+        provider = _provider(_StreamingClient(_RaisingStream(err)))
+        with pytest.raises(RateLimitError) as excinfo:
+            async for _ in provider.stream_complete("hi"):
+                pass
+        assert excinfo.value.retry_after == 2.0
+        assert isinstance(excinfo.value.__cause__, openai.RateLimitError)
 
     async def test_non_openai_error_propagates_unchanged(self) -> None:
         """A bug in our own code is never masked as an API error."""

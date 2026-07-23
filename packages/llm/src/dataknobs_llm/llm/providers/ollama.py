@@ -93,7 +93,7 @@ import os
 import re
 import warnings
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Union, AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -700,20 +700,6 @@ class OllamaProvider(AsyncLLMProvider):
             )
         return None
 
-    def _raise_translated(self, exc: Exception) -> NoReturn:
-        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
-
-        The S4 choke point for the ``aiohttp`` call sites (chat / stream /
-        embeddings). A non-transport error (including
-        :class:`~dataknobs_llm.exceptions.ToolsNotSupportedError`) is re-raised
-        as-is; a transport error is raised as its dataknobs type ``from`` the
-        original.
-        """
-        translated = self._translate_api_error(exc)
-        if translated is None:
-            raise exc
-        raise translated from exc
-
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -957,9 +943,28 @@ class OllamaProvider(AsyncLLMProvider):
             'options': self._build_options()
         }
 
+        from ...exceptions import ToolsNotSupportedError
+
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-                response.raise_for_status()
+                if response.status != 200:
+                    error_text = await response.text()
+                    # An older Ollama / non-tool model rejects the native tools
+                    # API with a 400 "does not support tools" — the one case a
+                    # prompt-based fallback is appropriate. Mirrors complete().
+                    if response.status == 400 and "does not support tools" in error_text:
+                        raise ToolsNotSupportedError(
+                            model=self.config.model,
+                            suggestion=(
+                                "For tool support, use: llama3.1:8b, qwen3:8b, "
+                                "mistral:7b, or command-r:latest"
+                            ),
+                        )
+                    logger.error(
+                        "Ollama API error (status %s): %s",
+                        response.status, error_text,
+                    )
+                    response.raise_for_status()
                 data = await response.json()
 
             # Extract response and tool calls
@@ -990,10 +995,15 @@ class OllamaProvider(AsyncLLMProvider):
 
             return llm_response
 
-        except Exception as e:
-            # Fallback to prompt-based approach if native tools not supported
-            import logging
-            logging.warning(f"Ollama native tools failed, falling back to prompt-based: {e}")
+        except ToolsNotSupportedError:
+            # Native tools genuinely unsupported — fall back to prompt-based
+            # function calling. A transport/throttle error (429, timeout,
+            # connection drop) does NOT reach here: it is re-raised as a
+            # dataknobs exception below rather than triggering a second,
+            # wasteful full request.
+            logger.warning(
+                "Ollama native tools unsupported; falling back to prompt-based"
+            )
 
             function_descriptions = json.dumps(functions, indent=2)
 
@@ -1021,6 +1031,12 @@ To call a function, respond with JSON:
                 pass
 
             return llm_response
+
+        except Exception as exc:
+            # Transport / throttle / auth errors surface as dataknobs
+            # exceptions (RateLimitError, OperationError, ...) — never masked
+            # as a prompt-based fallback.
+            self._raise_translated(exc)
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""

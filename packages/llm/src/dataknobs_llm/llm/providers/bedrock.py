@@ -67,7 +67,7 @@ import logging
 import time
 import warnings
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.exceptions import ConfigurationError
@@ -792,18 +792,6 @@ class BedrockProvider(AsyncLLMProvider):
             )
         return None
 
-    def _raise_translated(self, exc: Exception) -> NoReturn:
-        """Raise the dataknobs translation of *exc*, else re-raise it unchanged.
-
-        The S4 choke point for the ``converse`` / ``converse_stream`` /
-        ``invoke_model`` call sites. A non-botocore error is re-raised as-is; a
-        botocore error is raised as its dataknobs type ``from`` the original.
-        """
-        translated = self._translate_api_error(exc)
-        if translated is None:
-            raise exc
-        raise translated from exc
-
     async def complete(
         self,
         messages: str | list[LLMMessage],
@@ -896,7 +884,10 @@ class BedrockProvider(AsyncLLMProvider):
             stop_reason: str | None = None
             usage: dict[str, int] | None = None
 
-            async for event in response["stream"]:
+            # Iterate through the translating wrapper so a vendor error
+            # surfacing mid-stream (throttle, connection drop) is translated
+            # too — not just the converse_stream() create above.
+            async for event in self._iter_translated(response["stream"]):
                 if "contentBlockStart" in event:
                     start = event["contentBlockStart"]
                     idx = start.get("contentBlockIndex", 0)

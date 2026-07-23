@@ -900,14 +900,8 @@ class AnthropicProvider(AsyncLLMProvider):
                 try:
                     return await self._client.messages.create(**api_kwargs)
                 except Exception as retry_exc:
-                    translated = self._translate_api_error(retry_exc)
-                    if translated is None:
-                        raise
-                    raise translated from retry_exc
-            translated = self._translate_api_error(exc)
-            if translated is None:
-                raise
-            raise translated from exc
+                    self._raise_translated(retry_exc)
+            self._raise_translated(exc)
 
     async def complete(
         self,
@@ -1045,10 +1039,7 @@ class AnthropicProvider(AsyncLLMProvider):
                             stream_kwargs.get("model"),
                         )
                         continue
-                translated = self._translate_api_error(exc)
-                if translated is None:
-                    raise
-                raise translated from exc
+                self._raise_translated(exc)
 
     async def embed(
         self,
