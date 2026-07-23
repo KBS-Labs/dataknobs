@@ -228,6 +228,39 @@ class TestModelConstraintsResolution:
         assert client.captured_kwargs["temperature"] == 0.3
 
 
+class TestPerCallModelOverride:
+    """Constraints resolve from the per-call runtime config, not self.config.
+
+    The base config pins a Claude 4.x model (which accepts ``temperature``),
+    but a call overrides the model to a Claude 5 model (which rejects it). The
+    drop must reflect the model **actually being sent** — otherwise the request
+    carries ``temperature`` and pays a wasted 400 round-trip. Reproduce-first:
+    FAILS before the fix (constraints read ``self.config`` → Claude 4.x → keeps
+    ``temperature``), passes after.
+    """
+
+    async def test_override_to_claude_5_drops_temperature_up_front(self) -> None:
+        provider, client = _provider_with_capture(
+            "claude-haiku-4-5-20251001", temperature=0.3
+        )
+        await provider.complete(
+            "hi", config_overrides={"model": "claude-sonnet-5"}
+        )
+        assert client.captured_kwargs.get("model") == "claude-sonnet-5"
+        assert "temperature" not in client.captured_kwargs
+
+    def test_get_constraints_honors_passed_config(self) -> None:
+        """``get_constraints(config)`` resolves the passed config's family."""
+        provider = AnthropicProvider(
+            LLMConfig(provider="anthropic", model="claude-haiku-4-5-20251001")
+        )
+        # Default (self.config) → Claude 4.5 rejects nothing.
+        assert provider.get_constraints().rejected_params == frozenset()
+        # Per-call config for a Claude 5 model → rejects temperature.
+        claude5 = LLMConfig(provider="anthropic", model="claude-opus-5")
+        assert "temperature" in provider.get_constraints(claude5).rejected_params
+
+
 class TestModelConstraintsDataclass:
     """Unit tests for the ``ModelConstraints`` value type."""
 

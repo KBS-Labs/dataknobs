@@ -914,7 +914,9 @@ class LLMProvider(ABC):
             return resolved
         return detected
 
-    def get_constraints(self) -> ModelConstraints:
+    def get_constraints(
+        self, config: LLMConfig | None = None
+    ) -> ModelConstraints:
         """Get resolved request-shape constraints for this provider/model.
 
         Template method mirroring :meth:`get_capabilities`: calls
@@ -923,32 +925,61 @@ class LLMProvider(ABC):
         Orthogonal to :meth:`get_capabilities` — capabilities are the feature
         set, constraints are the request-shape rules the model family enforces
         (see :class:`ModelConstraints`).
-        """
-        return self._resolve_constraints(self._detect_constraints())
 
-    def _detect_constraints(self) -> ModelConstraints:
-        """Auto-detect request-shape constraints for this provider/model.
+        Args:
+            config: The config whose ``model`` + ``constraints`` drive
+                detection and resolution. Defaults to ``self.config``. Pass a
+                per-call runtime config (with ``config_overrides`` applied) so
+                a call that overrides the model to a **different family** gets
+                that family's constraints — the request-param drop is then
+                computed for the model actually sent, not the configured
+                default. (Unlike :meth:`get_capabilities`, which is a
+                provider-level query keyed off ``self.config``; constraints are
+                consumed per-request, so they honor the per-call model.)
+        """
+        cfg = config if config is not None else self.config
+        return self._resolve_constraints(self._detect_constraints(cfg), cfg)
+
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect request-shape constraints for *config*'s model.
 
         Default: no constraints (permissive — the base assumes a family that
         accepts every sampling param and an inline system message).  Providers
         whose model families reject request params or forbid inline system
-        messages override this with family string-matching, mirroring
-        :meth:`_detect_capabilities`.
+        messages override this with family string-matching on ``config.model``,
+        mirroring :meth:`_detect_capabilities`.
+
+        Args:
+            config: The config whose ``model`` is matched. This is the per-call
+                runtime config when called through :meth:`get_constraints`
+                with a per-call override, so detection reflects the model
+                actually being sent.
         """
         return ModelConstraints()
 
     def _resolve_constraints(
-        self, detected: ModelConstraints
+        self, detected: ModelConstraints, config: LLMConfig
     ) -> ModelConstraints:
         """Overlay ``config.constraints`` onto *detected*, if set.
 
-        Mirrors :meth:`_resolve_capabilities`: an environment config can
-        declare or withdraw a constraint at runtime (e.g. a future model
-        family gaining or dropping a rejected param) without a dataknobs
-        release.  Overlay is per field — see
-        :meth:`ModelConstraints.with_overrides`.
+        The config-override *mechanism* mirrors :meth:`_resolve_capabilities`
+        (a loose ``LLMConfig`` field resolved at runtime, so a family rule can
+        be declared or withdrawn without a dataknobs release). The *merge
+        semantics differ deliberately*: capabilities **replace** the detected
+        list wholesale, whereas constraints **overlay per field** — an absent
+        override key keeps the detected value (see
+        :meth:`ModelConstraints.with_overrides`). So
+        ``{"accepts_inline_system": true}`` leaves the auto-detected
+        ``rejected_params`` in force rather than resetting the whole
+        structure. Per-field overlay is the better semantic for constraints: a
+        consumer typically wants to adjust one rule, not restate every rule the
+        family enforces.
+
+        Args:
+            detected: The auto-detected constraints for the model.
+            config: The config whose ``constraints`` override is overlaid.
         """
-        override = self.config.constraints
+        override = config.constraints
         if not override:
             return detected
         return detected.with_overrides(override)

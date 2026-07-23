@@ -36,7 +36,7 @@ from dataknobs_common.exceptions import (
     RateLimitError,
     ValidationError,
 )
-from dataknobs_llm.llm.base import LLMConfig
+from dataknobs_llm.llm.base import LLMConfig, LLMMessage
 from dataknobs_llm.llm.providers import anthropic as anthropic_module
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
 
@@ -287,6 +287,93 @@ class TestRejectedParamRetry:
         with pytest.raises(ValidationError):
             await provider.complete("hi")
         assert len(client.calls) == 2
+
+
+_FUNCTIONS = [
+    {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+]
+
+
+class TestFunctionCallErrorHandling:
+    """The deprecated ``function_call()`` shares S4 + the 400-retry net.
+
+    It previously called ``messages.create`` directly and swallowed *every*
+    exception into a prompt-based fallback that issued a **second** API call —
+    so a 429 doubled the load against a rate-limited endpoint and a 401 was
+    masked as "native tools failed". These tests reproduce that: they FAIL
+    before the fix (the error is swallowed, two calls) and pass after (the
+    translated error propagates from the single call; only a 400 still falls
+    back, which is the genuine "older model lacks native tools" signal).
+    """
+
+    async def test_rate_limit_propagates_without_second_call(self) -> None:
+        client = _RaisingClient(
+            [
+                _status_error(
+                    anthropic.RateLimitError,
+                    429,
+                    "slow down",
+                    headers={"retry-after": "5"},
+                )
+            ]
+        )
+        provider = _provider("claude-3-haiku", client)
+        messages = [LLMMessage(role="user", content="weather in Paris?")]
+        with pytest.raises(RateLimitError) as excinfo:
+            await provider.function_call(messages, _FUNCTIONS)
+        assert excinfo.value.retry_after == 5.0
+        assert isinstance(excinfo.value.__cause__, anthropic.RateLimitError)
+        # Critical: no fallback → exactly one call against the rate-limited API.
+        assert len(client.calls) == 1
+
+    async def test_auth_error_propagates_without_fallback(self) -> None:
+        client = _RaisingClient(
+            [_status_error(anthropic.AuthenticationError, 401, "bad key")]
+        )
+        provider = _provider("claude-3-haiku", client)
+        messages = [LLMMessage(role="user", content="weather?")]
+        with pytest.raises(OperationError):
+            await provider.function_call(messages, _FUNCTIONS)
+        assert len(client.calls) == 1
+
+    async def test_non_anthropic_error_propagates(self) -> None:
+        """A bug in our own code is not swallowed into the fallback."""
+        client = _RaisingClient([ValueError("internal bug")])
+        provider = _provider("claude-3-haiku", client)
+        messages = [LLMMessage(role="user", content="weather?")]
+        with pytest.raises(ValueError):
+            await provider.function_call(messages, _FUNCTIONS)
+        assert len(client.calls) == 1
+
+    async def test_400_still_falls_back_to_prompt_based(self) -> None:
+        """An older model's "native tools unsupported" 400 still falls back."""
+        # First create → 400 (translated to ValidationError → fallback); the
+        # fallback's self.complete() issues the second create → success.
+        client = _RaisingClient(
+            [
+                _status_error(
+                    anthropic.BadRequestError, 400, "tools: not supported"
+                ),
+                None,
+            ]
+        )
+        provider = _provider("claude-2.1", client)
+        messages = [LLMMessage(role="user", content="weather?")]
+        result = await provider.function_call(messages, _FUNCTIONS)
+        assert result.content == "ok"
+        # Two calls: the native-tools attempt (carried ``tools``), then the
+        # prompt-based fallback (no ``tools``).
+        assert len(client.calls) == 2
+        assert "tools" in client.calls[0]
+        assert "tools" not in client.calls[1]
 
 
 class TestStreamErrorHandling:

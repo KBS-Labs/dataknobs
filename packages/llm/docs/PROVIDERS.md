@@ -229,7 +229,7 @@ provider = create_llm_provider({
 Because the family table can go stale, the rule is **config-overridable** — a
 consumer can declare a new rejected param or withdraw a stale one at runtime,
 without waiting for a dataknobs release, via `LLMConfig.constraints` (a loose
-dict overlaid onto the auto-detected defaults, mirroring `capabilities`):
+dict resolved at runtime, the same mechanism as `capabilities`):
 
 ```python
 # Add a rejected param the built-in table doesn't know about yet:
@@ -248,6 +248,19 @@ create_llm_provider({
 })
 ```
 
+The *merge* semantics differ from `capabilities`, deliberately: a `capabilities`
+override **replaces** the detected list wholesale, whereas a `constraints`
+override is **overlaid per field** — an absent override key keeps the
+auto-detected value. So `{"accepts_inline_system": false}` leaves the detected
+`rejected_params` in force rather than resetting the whole structure. (Within
+the override, `rejected_params` itself is replaced by the list you supply — pass
+`[]` to withdraw a stale rule, as above.)
+
+Constraints resolve from the **per-call runtime config**, so a call that
+overrides the model to a different family (`complete(..., config_overrides={"model": ...})`)
+gets that family's rules — the drop reflects the model actually being sent, not
+just the configured default.
+
 ### Vendor-error translation and the 400-retry safety net (Anthropic)
 
 The `AnthropicProvider` translates raw `anthropic` SDK errors into
@@ -262,7 +275,12 @@ without coupling to the SDK (the original error is preserved on `__cause__`):
 | other status / connection / timeout | `OperationError` |
 
 Non-Anthropic exceptions propagate unchanged (a bug in caller code is never
-masked as an API error).
+masked as an API error). All three request entry points — `complete`,
+`stream_complete`, and the deprecated `function_call` — share this translation.
+(`function_call` still falls back to prompt-based function calling on a `400`,
+the "older model lacks the native tools API" signal, but a `429`/auth error now
+propagates as its translated dataknobs exception instead of triggering a second
+API call.)
 
 As a safety net for a **model family the constraint table doesn't know yet**, an
 "unsupported sampling parameter" 400 is recovered once: the offending param is

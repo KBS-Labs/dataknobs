@@ -509,8 +509,8 @@ class AnthropicProvider(AsyncLLMProvider):
 
         return capabilities
 
-    def _detect_constraints(self) -> ModelConstraints:
-        """Auto-detect Anthropic request-shape constraints.
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect Anthropic request-shape constraints for *config*'s model.
 
         Two Anthropic-specific rules, both string-matched by family
         (mirroring :meth:`_detect_capabilities`):
@@ -524,6 +524,10 @@ class AnthropicProvider(AsyncLLMProvider):
           family (``claude-opus-4-8``, ``claude-haiku-4-5-...``) still accepts
           it, so the match distinguishes the generations.
 
+        Matches on ``config.model`` (not ``self.config.model``) so a per-call
+        model override resolves the overriding family's constraints — see
+        :meth:`~dataknobs_llm.llm.base.LLMProvider.get_constraints`.
+
         Any params discovered at runtime via the 400-retry safety net (see
         :meth:`_recover_rejected_param`) are folded in for the current process,
         so a family the static table doesn't know yet self-corrects after one
@@ -532,7 +536,7 @@ class AnthropicProvider(AsyncLLMProvider):
         Both are the auto-detected defaults; a consumer overrides either via
         ``LLMConfig.constraints`` (see :meth:`_resolve_constraints`).
         """
-        model = self.config.model.lower()
+        model = config.model.lower()
         rejected: set[str] = set()
         if any(m in model for m in _CLAUDE_5_TEMPERATURE_REJECTORS):
             rejected.add("temperature")
@@ -551,10 +555,9 @@ class AnthropicProvider(AsyncLLMProvider):
         :class:`~dataknobs_llm.llm.base.ModelConstraints.rejected_params`
         (e.g. ``temperature`` for the Claude 5 family) with a
         ``logger.warning`` naming the param and model — **drop-and-warn,
-        never a silent drop**. Constraints resolve from ``self.config`` (the
-        capability precedent), so a rare per-call model override to a
-        different family is not reflected; the common configured-model case
-        is covered.
+        never a silent drop**. Constraints resolve from the passed *runtime*
+        ``config`` (not ``self.config``), so a per-call model or ``constraints``
+        override is honored — the drop reflects the model actually being sent.
 
         Args:
             config: Runtime config (with any ``config_overrides`` applied).
@@ -563,7 +566,7 @@ class AnthropicProvider(AsyncLLMProvider):
             Anthropic API parameter dict with rejected params removed.
         """
         params = self.adapter.adapt_config(config)
-        constraints = self.get_constraints()
+        constraints = self.get_constraints(config)
         for param_name in constraints.rejected_params:
             if param_name in params:
                 del params[param_name]
@@ -879,7 +882,10 @@ class AnthropicProvider(AsyncLLMProvider):
             fc_kwargs["tools"] = tools
             if system_content:
                 fc_kwargs["system"] = system_content
-            response = await self._client.messages.create(**fc_kwargs)
+            # Route through the shared choke point so this path gets the same
+            # 400-retry recovery and vendor-error translation as
+            # complete()/stream_complete() — not a bare messages.create().
+            response = await self._create_message(fc_kwargs)
 
             parsed = self.adapter.adapt_response(response)
 
@@ -898,10 +904,18 @@ class AnthropicProvider(AsyncLLMProvider):
                 function_call=tool_use,
             )
 
-        except Exception as e:
-            # Fallback to prompt-based approach for older models
+        except ValidationError as e:
+            # A 400 (translated to ValidationError by _create_message) means the
+            # request was rejected — for older models that lack the native tools
+            # API, that is the "tools unsupported" signal, so fall back to
+            # prompt-based function calling. Rate-limit (429 → RateLimitError),
+            # auth (401/403 → OperationError), and any other translated error
+            # are NOT caught here: they propagate unchanged, so a rate-limited
+            # or unauthenticated call is never masked as a "tools failed"
+            # fallback that would issue a second call against the same endpoint.
             logger.warning(
-                "Anthropic native tools failed, falling back to prompt-based: %s", e,
+                "Anthropic native tools unsupported (request rejected), falling "
+                "back to prompt-based function calling: %s", e,
             )
 
             function_descriptions = "\n".join([
