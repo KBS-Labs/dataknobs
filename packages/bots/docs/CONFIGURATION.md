@@ -1736,7 +1736,7 @@ Every ReAct turn ends for one of six reasons. That reason is surfaced two ways
    | `truncated_tool_call` | The response was truncated mid-tool-call and the incomplete call was abandoned. |
    | `duplicate_tool_calls_detected` | The duplicate-tool-call break guard fired. |
    | `tools_not_supported` | The model cannot call tools; a graceful message was returned. |
-   | `truncation_retry_exhausted` | The adaptive-budget retry (`truncation_retry_max_tokens`) was still truncated and abandoned. |
+   | `truncation_retry_exhausted` | The adaptive-budget retry (`truncation_retry_max_tokens`) did not recover a complete call — still truncated, or the retry errored — so the truncated turn was abandoned. |
 
 2. **Opt-in callback topic (`react:turn:end`).** For dashboards / alerting /
    adaptive policy, register a callback on the strategy's lazy

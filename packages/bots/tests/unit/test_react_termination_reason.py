@@ -67,6 +67,11 @@ def _bot_config(reasoning_extra: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# A trace left by a hypothetical earlier tool-using turn; the no-loop terminal
+# branches must overwrite (not retain) this when store_trace is on.
+_STALE_TRACE = [{"iteration": 1, "status": "prior_tool_turn"}]
+
+
 async def _phased_termination(
     reasoning_extra: dict[str, Any],
     main_responses: list[Any],
@@ -101,6 +106,23 @@ async def _make_manager(
     await manager.add_message(role="system", content="You are a tool user.")
     await manager.add_message(role="user", content="Do the multi-step task.")
     return manager, llm
+
+
+class _CountingStorage(DataknobsConversationStorage):
+    """Real storage that counts metadata persist round-trips.
+
+    A spy over the real backend (not a mock): ``update_metadata`` is the sole
+    persist point ReAct uses (via ``_persist_metadata``), so its call count is
+    exactly the number of storage round-trips a terminal branch performs.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.persist_calls = 0
+
+    async def update_metadata(self, *args: Any, **kwargs: Any) -> Any:
+        self.persist_calls += 1
+        return await super().update_metadata(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +303,64 @@ class TestMonolithicGenerate:
             == ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED.value
         )
 
+    async def test_duplicate_tool_calls(self) -> None:
+        """DUPLICATE_TOOL_CALLS terminal branch fires in the monolithic path.
+
+        Closes the both-paths pin: the duplicate-break was only asserted via
+        the phased ``process_input`` path before.
+        """
+        manager, llm = await _make_manager(
+            [
+                tool_call_response("echo", {"text": "same"}),
+                tool_call_response("echo", {"text": "same"}),
+                text_response("synth"),
+            ]
+        )
+        strategy = ReActReasoning.from_config({"max_iterations": 5})
+        await strategy.generate(manager, llm, tools=[_EchoTool()])
+        term = manager.metadata.get("reasoning_termination")
+        assert term is not None
+        assert (
+            term["reason"] == ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
+        )
+        assert term["iterations_used"] == 2
+
+    async def test_truncated_tool_call(self) -> None:
+        """Plain TRUNCATED_TOOL_CALL (retry disabled) via ``generate``.
+
+        The retry-disabled reason-choice branch was only covered on the phased
+        path; this drives it through the monolithic loop.
+        """
+        manager, llm = await _make_manager(
+            [
+                tool_call_response("echo", {"text": "x"}, truncated=True),
+                text_response("synth"),
+            ]
+        )
+        strategy = ReActReasoning.from_config({"max_iterations": 5})
+        await strategy.generate(manager, llm, tools=[_EchoTool()])
+        term = manager.metadata.get("reasoning_termination")
+        assert term is not None
+        assert term["reason"] == ReActTerminationReason.TRUNCATED_TOOL_CALL.value
+        assert term["iterations_used"] == 1
+
+    async def test_tools_not_supported(self) -> None:
+        """TOOLS_NOT_SUPPORTED terminal branch fires in the monolithic path."""
+        manager, llm = await _make_manager(None)
+
+        def _raise(_messages: Any) -> Any:
+            raise ToolsNotSupportedError(model="test-model")
+
+        llm.set_response_function(_raise)
+        strategy = ReActReasoning.from_config({"max_iterations": 5})
+        await strategy.generate(manager, llm, tools=[_EchoTool()])
+        term = manager.metadata.get("reasoning_termination")
+        assert term is not None
+        assert (
+            term["reason"] == ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
+        )
+        assert term["iterations_used"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Always-on (D2): the reason is recorded even with store_trace=False (default).
@@ -429,3 +509,179 @@ class TestCapability:
             Capability.CALLBACK_REGISTRY
             in ReActReasoning.supported_capabilities()
         )
+
+
+# ---------------------------------------------------------------------------
+# No-tools fast path: a ReAct turn with no tools still records COMPLETED.
+# ---------------------------------------------------------------------------
+
+
+class TestNoToolsFastPath:
+    """The always-on contract holds even when no tool loop runs.
+
+    Reproduce-first: before recording was added to the two no-tools fast paths,
+    a ReAct turn dispatched with no tools wrote NO ``reasoning_termination`` —
+    a consumer reading the key unconditionally (the pattern the docs encourage)
+    hit a missing key. Both fast paths now record COMPLETED with
+    ``iterations_used=0`` (the loop body never executed).
+    """
+
+    async def test_phased_no_tools_records_completed(self) -> None:
+        async with await BotTestHarness.create(
+            bot_config=_bot_config({"max_iterations": 5}),
+            main_responses=[text_response("Direct answer, no tools needed")],
+            tools=[],
+        ) as harness:
+            await harness.chat("just answer directly")
+            conv = await harness.bot.get_conversation(
+                harness.context.conversation_id
+            )
+        assert conv is not None
+        term = conv.metadata.get("reasoning_termination")
+        assert term is not None, (
+            "no-tools turn wrote no termination reason (the gap)"
+        )
+        assert term["reason"] == ReActTerminationReason.COMPLETED.value
+        assert term["iterations_used"] == 0
+
+    async def test_monolithic_no_tools_records_completed(self) -> None:
+        manager, llm = await _make_manager([text_response("Direct answer")])
+        strategy = ReActReasoning.from_config({"max_iterations": 5})
+        result = await strategy.generate(manager, llm, tools=None)
+        assert result is not None
+        term = manager.metadata.get("reasoning_termination")
+        assert term is not None, (
+            "no-tools generate() wrote no termination reason (the gap)"
+        )
+        assert term["reason"] == ReActTerminationReason.COMPLETED.value
+        assert term["iterations_used"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Single persist: a terminal branch round-trips storage once, both keys.
+# ---------------------------------------------------------------------------
+
+
+class TestSinglePersist:
+    """The recorder writes reason + trace in one storage round-trip.
+
+    Reproduce-first: before folding the trace store into ``_record_termination``,
+    a ``store_trace=True`` terminal branch persisted twice (reason, then trace)
+    — this asserts exactly one flush, so the count is 2 on the pre-fix code.
+    ``storage.update_metadata`` is the sole persist point ReAct uses.
+    """
+
+    async def _run_generate(
+        self, *, store_trace: bool
+    ) -> tuple[_CountingStorage, Any]:
+        db = AsyncMemoryDatabase()
+        storage = _CountingStorage(db)
+        llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
+        llm.set_responses([text_response("Done immediately")])
+        manager = await ConversationManager.create(
+            llm=llm,
+            prompt_builder=AsyncPromptBuilder(library=None),
+            storage=storage,
+        )
+        await manager.add_message(role="system", content="You are a tool user.")
+        await manager.add_message(role="user", content="Do the task.")
+        storage.persist_calls = 0  # ignore any setup writes
+        strategy = ReActReasoning.from_config(
+            {"max_iterations": 5, "store_trace": store_trace}
+        )
+        await strategy.generate(manager, llm, tools=[_EchoTool()])
+        return storage, manager
+
+    async def test_store_trace_true_persists_once(self) -> None:
+        storage, manager = await self._run_generate(store_trace=True)
+        assert storage.persist_calls == 1, (
+            "store_trace=True must write both metadata keys in one round-trip"
+        )
+        # Both keys landed from the single flush.
+        assert manager.metadata.get("reasoning_termination") is not None
+        assert manager.metadata.get("reasoning_trace") is not None
+
+    async def test_store_trace_false_persists_once(self) -> None:
+        storage, manager = await self._run_generate(store_trace=False)
+        assert storage.persist_calls == 1  # the always-on metadata write only
+        assert manager.metadata.get("reasoning_termination") is not None
+        assert manager.metadata.get("reasoning_trace") is None
+
+
+# ---------------------------------------------------------------------------
+# No-loop terminal branches (no-tools, tools-not-supported) write a FRESH trace.
+# ---------------------------------------------------------------------------
+
+
+class TestNoLoopTraceStore:
+    """store_trace=True: a branch that runs no tool loop still refreshes the trace.
+
+    Reproduce-first: before the fix, the no-tools and tools-not-supported
+    terminal branches recorded ``reasoning_termination`` but never touched
+    ``reasoning_trace`` — so an earlier tool-using turn's trace survived. A
+    consumer reading both keys together saw ``reasoning_termination`` reporting
+    "completed this turn" while ``reasoning_trace`` still showed the *previous*
+    turn's tool steps. We pre-seed a stale trace to stand in for that earlier
+    turn and assert each of the four branches overwrites it with a fresh,
+    status-only trace (mirroring the MAX_ITERATIONS status-only append). On the
+    pre-fix code the stale trace survives and every assertion FAILS.
+    """
+
+    async def test_phased_no_tools_overwrites_stale_trace(self) -> None:
+        manager, llm = await _make_manager([text_response("Direct answer")])
+        manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
+        strategy = ReActReasoning.from_config(
+            {"max_iterations": 5, "store_trace": True}
+        )
+        handle = await strategy.begin_turn(manager, llm, tools=[])
+        assert handle.early_response is not None
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace == [
+            {"status": ReActTerminationReason.COMPLETED.value}
+        ], "no-tools turn left a stale reasoning_trace (the gap)"
+
+    async def test_monolithic_no_tools_overwrites_stale_trace(self) -> None:
+        manager, llm = await _make_manager([text_response("Direct answer")])
+        manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
+        strategy = ReActReasoning.from_config(
+            {"max_iterations": 5, "store_trace": True}
+        )
+        await strategy.generate(manager, llm, tools=None)
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace == [{"status": ReActTerminationReason.COMPLETED.value}]
+
+    async def test_phased_tools_not_supported_overwrites_stale_trace(
+        self,
+    ) -> None:
+        manager, llm = await _make_manager(None)
+
+        def _raise(_messages: Any) -> Any:
+            raise ToolsNotSupportedError(model="test-model")
+
+        llm.set_response_function(_raise)
+        manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
+        strategy = ReActReasoning.from_config({"store_trace": True})
+        handle = await strategy.begin_turn(manager, llm, tools=[_EchoTool()])
+        result = await strategy.process_input(handle)
+        assert result.action == "tools_not_supported"
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace == [
+            {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
+        ]
+
+    async def test_monolithic_tools_not_supported_overwrites_stale_trace(
+        self,
+    ) -> None:
+        manager, llm = await _make_manager(None)
+
+        def _raise(_messages: Any) -> Any:
+            raise ToolsNotSupportedError(model="test-model")
+
+        llm.set_response_function(_raise)
+        manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
+        strategy = ReActReasoning.from_config({"store_trace": True})
+        await strategy.generate(manager, llm, tools=[_EchoTool()])
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace == [
+            {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
+        ]
