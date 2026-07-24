@@ -448,7 +448,19 @@ class TokenCounter:
             # Add name tokens if present
             if msg.name:
                 total += cls.estimate_tokens(msg.name, model)
-                
+            # Add tool-call payload tokens.  An assistant ``tool_use`` turn
+            # carries its arguments here while ``content`` is ``None``; in a
+            # long tool loop these call payloads (and the paired observations)
+            # dominate the history, so counting only ``content`` systematically
+            # under-reports the very turns a history budget exists to bound.
+            if msg.tool_calls:
+                serialized = json.dumps(
+                    [tc.to_dict() for tc in msg.tool_calls],
+                    default=str,
+                    sort_keys=True,
+                )
+                total += cls.estimate_tokens(serialized, model)
+
         return total
         
     @classmethod

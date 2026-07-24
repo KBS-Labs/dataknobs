@@ -1150,6 +1150,13 @@ class ConversationManager:
         are either dropped (``summarizer=None`` — windowing, the cheap default)
         or folded into a single summary node (``summarizer`` provided).
 
+        **Scope — the current tool loop only.** The head (the system prompt(s)
+        and every prior turn, tool loops included) is retained verbatim; only
+        the in-flight turn's loop body is bounded. Cross-turn accumulation over
+        a long multi-turn conversation is deliberately out of scope — call this
+        once per tool-using turn to bound that turn, not to compact history
+        across turns.
+
         **Pairing safety (the load-bearing invariant):** an iteration *unit* is a
         message that is not a tool result (an assistant ``tool_use`` turn, or a
         stray text turn) together with the ``role="tool"`` observation messages

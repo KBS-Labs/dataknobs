@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -196,6 +197,10 @@ class ReActReasoning(
         )
         self._summary_provider: Any = None
         self._owns_summary_provider = False
+        #: Serializes the lazy strategy build so concurrent first-compactions
+        #: (see ``generate``'s concurrent-call contract) cannot both construct
+        #: and leak a dedicated summary provider. Loop-free once built.
+        self._compaction_lock: asyncio.Lock = asyncio.Lock()
         self._artifact_registry = self.components.get("artifact_registry")
         self._review_executor = self.components.get("review_executor")
         self._context_builder = self.components.get("context_builder")
@@ -419,10 +424,21 @@ class ReActReasoning(
         Prefers the provider's resolved input ceiling
         (``ModelConstraints.max_input_tokens``) times ``budget_fraction`` — the
         common path for a provider that publishes a context window (the Claude
-        family). Falls back to the configured absolute ``history_token_budget``
-        when no ceiling resolves (non-Anthropic providers / unknown model), and
-        ``None`` when neither is available (proactive disabled; the reactive
-        backstop still applies).
+        family). A configured absolute ``history_token_budget`` then **caps**
+        that resolved budget (the published ceiling is the model's *maximum
+        attainable* context, which can exceed a consumer's *effective*
+        per-request window — e.g. a beta-gated larger window they have not
+        enabled; the cap keeps proactive compaction firing at their real limit
+        rather than never). When no ceiling resolves (non-Anthropic providers /
+        unknown model) ``history_token_budget`` is the sole threshold, and
+        ``None`` is returned when neither is available (proactive disabled; the
+        reactive backstop still applies).
+
+        The ceiling is resolved from the provider's default-config constraints;
+        a per-call model override to a different family is not reflected here.
+        That imprecision is dominated by the coarse char-ratio history estimate
+        and covered by the reactive backstop, so it is intentionally not
+        plumbed through.
         """
         cfg = self._history_compaction
         if cfg is None:
@@ -431,10 +447,13 @@ class ReActReasoning(
         try:
             constraints = llm.get_constraints()
             ceiling = getattr(constraints, "max_input_tokens", None)
-        except Exception:  # pragma: no cover - defensive; provider may lack it
+        except AttributeError:  # provider predates get_constraints() entirely
             ceiling = None
         if ceiling is not None:
-            return int(ceiling * cfg.budget_fraction)
+            budget = int(ceiling * cfg.budget_fraction)
+            if cfg.history_token_budget is not None:
+                budget = min(budget, cfg.history_token_budget)
+            return budget
         return cfg.history_token_budget
 
     async def _get_compaction_strategy(self, llm: Any) -> CompactionStrategy:
@@ -447,20 +466,27 @@ class ReActReasoning(
         """
         if self._compaction_strategy is not None:
             return self._compaction_strategy
-        cfg = self._history_compaction
-        assert cfg is not None  # guarded by _compaction_enabled at call sites
-        provider = llm
-        if cfg.strategy == "summarize" and cfg.summary_llm:
-            self._summary_provider = create_llm_provider(cfg.summary_llm)
-            initialize = getattr(self._summary_provider, "initialize", None)
-            if initialize is not None:
-                await initialize()
-            self._owns_summary_provider = True
-            provider = self._summary_provider
-        self._compaction_strategy = build_compaction_strategy(
-            cfg.strategy, summary_provider=provider
-        )
-        return self._compaction_strategy
+        # Serialize the build: the summarize path creates *and initializes*
+        # (opens a network client for) a dedicated provider, so two concurrent
+        # first-compactions must not both build one and leak the loser. Double-
+        # checked under the lock — the fast path above stays lock-free once set.
+        async with self._compaction_lock:
+            if self._compaction_strategy is not None:
+                return self._compaction_strategy
+            cfg = self._history_compaction
+            assert cfg is not None  # guarded by _compaction_enabled at callers
+            provider = llm
+            if cfg.strategy == "summarize" and cfg.summary_llm:
+                self._summary_provider = create_llm_provider(cfg.summary_llm)
+                initialize = getattr(self._summary_provider, "initialize", None)
+                if initialize is not None:
+                    await initialize()
+                self._owns_summary_provider = True
+                provider = self._summary_provider
+            self._compaction_strategy = build_compaction_strategy(
+                cfg.strategy, summary_provider=provider
+            )
+            return self._compaction_strategy
 
     async def _compact_now(self, manager: Any, llm: Any) -> int:
         """Compact unconditionally (used by the reactive backstop)."""
@@ -516,14 +542,24 @@ class ReActReasoning(
             if not self._compaction_enabled():
                 raise
             compacted = await self._compact_now(manager, llm)
-            logger.info(
-                "ReAct: context overflow — compacted %d tool iterations and "
-                "retrying once",
-                compacted,
-                extra={"conversation_id": getattr(
-                    manager, "conversation_id", None
-                )},
-            )
+            conv_id = getattr(manager, "conversation_id", None)
+            if compacted:
+                logger.info(
+                    "ReAct: context overflow — compacted %d tool iterations "
+                    "and retrying once",
+                    compacted,
+                    extra={"conversation_id": conv_id},
+                )
+            else:
+                # Nothing left to compact — the overflow is in the retained
+                # head (system + current user + kept tail), not the loop body.
+                # Retry anyway: the head may have changed, and one retry is
+                # cheaper than reasoning about the exact cause here.
+                logger.info(
+                    "ReAct: context overflow — nothing compactable "
+                    "(head over budget); retrying once",
+                    extra={"conversation_id": conv_id},
+                )
             return await complete()
 
     async def close(self) -> None:

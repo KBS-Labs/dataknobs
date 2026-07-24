@@ -16,6 +16,9 @@ tool loop). Real constructs only — a real ``ConversationManager`` over an
 
 from __future__ import annotations
 
+import itertools
+import json
+
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -26,6 +29,7 @@ from dataknobs_llm.conversations import (
 )
 from dataknobs_llm.llm import EchoProvider, LLMConfig
 from dataknobs_llm.llm.base import ToolCall
+from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 pytestmark = pytest.mark.asyncio
@@ -176,3 +180,59 @@ class TestCompactHistorySummarizing:
         assert "observation 3" in contents
         assert "observation 4" in contents
         _assert_no_dangling_tool_use(after)
+
+
+def _assert_valid_anthropic_sequence(adapted: list[dict]) -> None:
+    """Assert the adapted messages satisfy the Messages-API well-formedness.
+
+    No two consecutive messages share a role, and every ``tool_result`` block
+    is preceded by the ``tool_use`` it answers — the exact conditions a real
+    Anthropic 400 enforces on a re-sent history.
+    """
+    for prev, cur in itertools.pairwise(adapted):
+        assert prev["role"] != cur["role"], (
+            f"consecutive {cur['role']} messages: {adapted}"
+        )
+    open_ids: set[str] = set()
+    for msg in adapted:
+        content = msg["content"]
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use":
+                open_ids.add(block["id"])
+            elif block.get("type") == "tool_result":
+                assert block["tool_use_id"] in open_ids, (
+                    f"tool_result before its tool_use: {block}"
+                )
+
+
+class TestCompactHistoryAdapterValidity:
+    async def test_summarized_history_adapts_to_valid_anthropic_sequence(
+        self,
+    ) -> None:
+        """A compacted+summarized path stays a valid Anthropic Messages request.
+
+        ``compact_history``'s summary node is ``role="system"`` mid-conversation;
+        its docstring relies on "the adapter's mid-conversation system-message
+        handling keeps the sequence valid." The primitive's own unit tests use
+        ``EchoProvider``, which does not validate alternation/pairing — so this
+        drives the produced history through the **real** ``AnthropicAdapter``
+        (default ``system_message_policy="inline"``) and asserts the API
+        well-formedness that claim depends on, closing the coverage gap.
+        """
+        manager = await _make_manager()
+        await _build_loop(manager, 5)
+        summarizer = LLMSummarizer(
+            EchoProvider(LLMConfig(provider="echo", model="echo-model"))
+        )
+        await manager.compact_history(2, summarizer=summarizer)
+        history = await manager.get_history()
+
+        adapter = AnthropicAdapter()  # default policy: "inline"
+        _system_content, adapted = adapter.adapt_messages(history)
+
+        _assert_valid_anthropic_sequence(adapted)
+        # The folded summary survived into the request (inlined by the default
+        # policy as a user block), not silently dropped.
+        assert "observation 0" in json.dumps(adapted)

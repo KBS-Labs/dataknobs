@@ -16,6 +16,7 @@ overflow is a real ``ContextLengthExceededError``, not a mock).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -243,3 +244,129 @@ class TestReactiveBackstop:
             await strategy._complete_with_reactive_compaction(
                 manager, llm, complete
             )
+
+
+# ---------------------------------------------------------------------------
+# Proactive budget resolution (input-ceiling * fraction, capped by the budget)
+# ---------------------------------------------------------------------------
+
+
+def _echo_with_input_ceiling(ceiling: int) -> EchoProvider:
+    """A real EchoProvider whose resolved constraints report an input ceiling.
+
+    The ``constraints`` override rides the real ``get_constraints`` template
+    method (``_resolve_constraints`` overlays it per field), so this exercises
+    the actual ceiling-resolution path — not a stubbed value.
+    """
+    return EchoProvider(
+        LLMConfig(
+            provider="echo",
+            model="echo-model",
+            constraints={"max_input_tokens": ceiling},
+        )
+    )
+
+
+class TestBudgetResolution:
+    @staticmethod
+    def _strategy(compaction: dict[str, Any]) -> ReActReasoning:
+        return ReActReasoning.from_config({"history_compaction": compaction})
+
+    async def test_absolute_budget_caps_resolved_ceiling(self) -> None:
+        """``history_token_budget`` caps ceiling*fraction, not only backstops it.
+
+        Reproduce-first: on HEAD a resolved ceiling won the budget outright
+        (``int(1_000_000 * 0.75) == 750_000``), ignoring an explicit
+        ``history_token_budget``. A consumer whose *effective* window is smaller
+        than the model's *advertised maximum* could therefore never make
+        proactive compaction fire before the reactive backstop. The configured
+        budget must now cap the resolved one.
+        """
+        llm = _echo_with_input_ceiling(1_000_000)
+        strategy = self._strategy(
+            {
+                "enabled": True,
+                "budget_fraction": 0.75,
+                "history_token_budget": 50_000,
+            }
+        )
+        assert strategy._resolve_history_budget(llm) == 50_000
+
+    async def test_resolved_ceiling_used_when_no_cap(self) -> None:
+        """Without an absolute budget the resolved ceiling*fraction is used."""
+        llm = _echo_with_input_ceiling(1_000_000)
+        strategy = self._strategy({"enabled": True, "budget_fraction": 0.75})
+        assert strategy._resolve_history_budget(llm) == 750_000
+
+    async def test_absolute_budget_sole_threshold_without_ceiling(self) -> None:
+        """No resolved ceiling (plain EchoProvider) → budget used as-is."""
+        llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
+        strategy = self._strategy(
+            {"enabled": True, "history_token_budget": 50_000}
+        )
+        assert strategy._resolve_history_budget(llm) == 50_000
+
+
+# ---------------------------------------------------------------------------
+# Concurrent lazy strategy build (double-checked lock, no leaked provider)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentStrategyBuild:
+    async def test_concurrent_first_compaction_builds_one_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two concurrent first-compactions build exactly one summary provider.
+
+        Reproduce-first: before the double-checked lock, two turns hitting their
+        first ``summarize`` compaction concurrently both passed the
+        ``_compaction_strategy is None`` check (the interleave opens at
+        ``await initialize()``), so both built + opened a dedicated provider and
+        one was silently overwritten and leaked. The lock makes the build happen
+        exactly once.
+
+        Real constructs: the summary provider is a real ``EchoProvider``
+        subclass whose ``initialize`` adds a genuine suspension point (the base
+        ``EchoProvider.initialize`` never yields, so the race can't otherwise be
+        driven deterministically). The factory seam is the real module-level
+        ``create_llm_provider`` the strategy calls.
+        """
+        built: list[EchoProvider] = []
+
+        class _SlowInitEcho(EchoProvider):
+            async def initialize(self) -> None:
+                await asyncio.sleep(0)  # real suspension → force the interleave
+                await super().initialize()
+
+        def _counting_factory(_cfg: Any) -> EchoProvider:
+            provider = _SlowInitEcho(
+                LLMConfig(provider="echo", model="summary")
+            )
+            built.append(provider)
+            return provider
+
+        monkeypatch.setattr(
+            "dataknobs_bots.reasoning.react.create_llm_provider",
+            _counting_factory,
+        )
+
+        _manager, llm = await _make_manager([])
+        strategy = ReActReasoning.from_config(
+            {
+                "history_compaction": {
+                    "enabled": True,
+                    "strategy": "summarize",
+                    "summary_llm": {"provider": "echo", "model": "summary"},
+                    "keep_recent_iterations": 1,
+                }
+            }
+        )
+        first, second = await asyncio.gather(
+            strategy._get_compaction_strategy(llm),
+            strategy._get_compaction_strategy(llm),
+        )
+        assert len(built) == 1, (
+            f"expected one summary provider, built {len(built)}"
+        )
+        assert first is second  # both got the one cached strategy
+        await strategy.close()

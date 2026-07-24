@@ -12,7 +12,7 @@ from dataknobs_llm.llm.utils import (
     chain_prompts,
     create_few_shot_prompt,
 )
-from dataknobs_llm.llm.base import LLMMessage, LLMResponse
+from dataknobs_llm.llm.base import LLMMessage, LLMResponse, ToolCall
 
 
 def test_template_strategy_enum():
@@ -881,6 +881,38 @@ def test_token_counter_estimate_none_content():
     ]
     tokens = TokenCounter.estimate_messages_tokens(messages)
     assert tokens >= 8  # role tokens (4 each) still counted; no crash
+
+
+def test_token_counter_counts_tool_call_payload():
+    """A ``tool_use`` turn's arguments are counted, not just ``content``.
+
+    Reproduce-first: before the fix, an assistant tool-call turn (``content``
+    is ``None`` while the call args live in ``tool_calls``) counted only its 4
+    role tokens, systematically under-reporting the very turns a history budget
+    exists to bound. The estimate must now grow with the serialized call args.
+    """
+    bare = LLMMessage(role="assistant", content=None)
+    with_call = LLMMessage(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            ToolCall(
+                name="search_documents",
+                parameters={
+                    "query": "a fairly long search phrase that costs tokens",
+                    "top_k": 25,
+                    "filters": {"category": "engineering", "year": 2026},
+                },
+                id="call_abc123",
+            )
+        ],
+    )
+    bare_tokens = TokenCounter.estimate_messages_tokens([bare])
+    call_tokens = TokenCounter.estimate_messages_tokens([with_call])
+    # The tool-call payload contributes real tokens beyond the bare role count.
+    assert call_tokens > bare_tokens
+    # And it is proportional to the serialized argument size, not a flat bump.
+    assert call_tokens - bare_tokens >= 10
 
 
 def test_token_counter_fits_in_context():

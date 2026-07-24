@@ -20,6 +20,11 @@ class HistoryCompactionConfig(StructuredConfig):
     ``enabled=False`` block is byte-identical to no compaction (no token
     estimation, no compaction call).
 
+    Scope: bounds the **current** tool loop (from the last user message
+    forward). The head — system prompt and all prior turns — is retained
+    verbatim, so this does not bound cross-turn accumulation over a long
+    multi-turn conversation.
+
     Attributes:
         enabled: Master switch. ``False`` (default) → no estimation, no
             compaction.
@@ -29,11 +34,17 @@ class HistoryCompactionConfig(StructuredConfig):
             the loop compacts before the next completion. The common path — used
             whenever the provider resolves an input ceiling (the Claude family
             via the live Models API / bundled fallback). Must be in ``(0, 1]``.
-        history_token_budget: Absolute-token fallback used when no input ceiling
-            resolves (non-Anthropic providers, or an unknown model). When both a
-            resolved ceiling and this are unavailable, proactive compaction is
-            disabled and only the reactive backstop (a caught context-overflow
-            error) applies. Must be a positive integer when set.
+        history_token_budget: Absolute-token budget. When no input ceiling
+            resolves (non-Anthropic providers, or an unknown model) it is the
+            sole proactive threshold; when a ceiling *does* resolve it also
+            **caps** ``max_input_tokens * budget_fraction`` — set it to your
+            effective per-request window when that is smaller than the model's
+            advertised maximum context (the published ceiling is the maximum
+            attainable window, which a consumer may not actually have enabled).
+            When both a resolved ceiling and this are unavailable, proactive
+            compaction is disabled and only the reactive backstop (a caught
+            context-overflow error) applies. Must be a positive integer when
+            set.
         keep_recent_iterations: The number of most-recent tool iterations to
             retain verbatim on compaction. Must be ``>= 0``.
         strategy: ``"window"`` (default — drop the oldest iterations, LLM-free)
