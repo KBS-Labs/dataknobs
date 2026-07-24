@@ -203,6 +203,27 @@ class TestAnthropicCapabilityDetection:
         caps = self._caps("claude-3-haiku")
         assert ModelCapability.VISION in caps
 
+    def test_claude5_opus_has_modern_capabilities(self):
+        caps = self._caps("claude-opus-5")
+        assert ModelCapability.JSON_MODE in caps
+        assert ModelCapability.FUNCTION_CALLING in caps
+        assert ModelCapability.VISION in caps
+
+    def test_claude5_fable_has_modern_capabilities(self):
+        """Fable 5 carries no opus/sonnet/haiku marker → was mis-detected as
+        lacking vision/tools/JSON until the family name was listed."""
+        caps = self._caps("claude-fable-5")
+        assert ModelCapability.JSON_MODE in caps
+        assert ModelCapability.FUNCTION_CALLING in caps
+        assert ModelCapability.VISION in caps
+
+    def test_claude5_mythos_has_modern_capabilities(self):
+        """Mythos 5 shares Fable 5's capabilities and the same marker gap."""
+        caps = self._caps("claude-mythos-5")
+        assert ModelCapability.JSON_MODE in caps
+        assert ModelCapability.FUNCTION_CALLING in caps
+        assert ModelCapability.VISION in caps
+
     def test_legacy_model_no_json_mode(self):
         """Claude 2.x should not have JSON_MODE."""
         caps = self._caps("claude-2.1")

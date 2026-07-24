@@ -40,8 +40,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   column through `--update`. Non-Anthropic providers leave it `None`. Consumers
   read it (e.g. to size a proactive history-compaction budget) or override it via
   `LLMConfig.constraints`.
+- **Claude 5 family model support (Opus 5 and siblings).** Capability
+  auto-detection now recognizes the Claude 5 generation family names
+  (`claude-fable`, `claude-mythos`, and the `claude-5` marker) across both
+  `AnthropicProvider` and `BedrockProvider`. These names carry no
+  `opus`/`sonnet`/`haiku` token, so they were previously mis-detected as lacking
+  vision / function calling / JSON mode. The bundled Anthropic model-limits
+  resource adds `claude-opus-5` (128k output, 1M input) and corrects the
+  input-context ceiling of the current 1M-context models to `1000000`.
 
 ### Fixed
+
+- **`AnthropicProvider.validate_model` no longer rejects every current model.**
+  It matched against a hardcoded version whitelist that predated Claude 4, so it
+  returned `False` for every model shipped since. It now queries the provider's
+  live Models API (mirroring `OpenAIProvider`), bounded by the model-limits
+  refresh timeout and fail-soft to `False` on any error, matching an exact id or
+  a configured family alias. An invitation-only model absent from the account's
+  listing correctly resolves to `False`.
+- **Claude 5 temperature-rejection list was missing a family member.** The
+  Claude 5 generation rejects an explicit `temperature`, but the internal
+  rejector list omitted `claude-mythos-5` — a request to it forwarded
+  `temperature` and was rejected by the API instead of having the parameter
+  dropped. It is now listed alongside the other Claude 5 family members.
 
 - **`TokenCounter.estimate_tokens` / `estimate_messages_tokens` tolerate `None`
   content.** Estimating a real tool-loop history previously crashed with a

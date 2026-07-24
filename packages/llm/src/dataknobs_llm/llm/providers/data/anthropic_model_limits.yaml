@@ -13,19 +13,24 @@
 # Maintained by:
 #   uv run python -m dataknobs_llm.tooling.model_limits --update
 models:
+  # Current flagship (dateless pinned snapshot + alias). 1M context is both
+  # the default and the maximum -- no smaller variant; 128k sync-API output.
+  claude-opus-5:
+    max_tokens: 128000
+    max_input_tokens: 1000000
   claude-opus-4-8:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   claude-sonnet-5:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   claude-fable-5:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   # Glasswing (invitation-only); shares Fable 5's ceilings.
   claude-mythos-5:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   # Short family alias (like the current-gen keys above). Resolves the bare
   # alias AND every dated snapshot (`claude-haiku-4-5-YYYYMMDD`) via the
   # match_ceiling family-alias rule; a dated key would miss future snapshots.
@@ -35,13 +40,13 @@ models:
   # legacy (still available)
   claude-opus-4-7:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   claude-opus-4-6:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   claude-sonnet-4-6:
     max_tokens: 128000
-    max_input_tokens: 200000
+    max_input_tokens: 1000000
   claude-sonnet-4-5-20250929:
     max_tokens: 64000
     max_input_tokens: 200000

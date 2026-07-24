@@ -55,6 +55,7 @@ CLAUDE_5_TEMPERATURE_REJECTORS: tuple[str, ...] = (
     "claude-opus-5",
     "claude-haiku-5",
     "claude-fable-5",
+    "claude-mythos-5",
 )
 
 
