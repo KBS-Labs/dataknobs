@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured ReAct termination reason.** Every ReAct turn now surfaces *why*
+  it ended as always-on `reasoning_termination` conversation metadata
+  (`{"strategy": "react", "reason": <value>, "iterations_used": <int>}`),
+  written independent of `store_trace` (which stays `false` by default). The
+  reason is one of six `ReActTerminationReason` enum values (`completed`,
+  `max_iterations_reached`, `truncated_tool_call`,
+  `duplicate_tool_calls_detected`, `tools_not_supported`,
+  `truncation_retry_exhausted`), whose `.value` is byte-identical to the
+  reasoning-trace `status` string so the two never drift. An opt-in
+  `react:turn:end` callback topic (register on
+  `ReActReasoning.termination_callbacks`, EventBus-composable via
+  `also_publish_to`) fires the same payload once per terminated turn for
+  dashboards / alerting / adaptive policy — zero overhead until a callback or
+  fan-out target is registered. `ReActReasoning` advertises
+  `Capability.CALLBACK_REGISTRY`. All terminal branches across both the phased
+  and monolithic loop paths route through one shared recorder, and the two
+  previously log-only reasons (`tools_not_supported`,
+  `truncation_retry_exhausted`) are now surfaced uniformly. Additive — existing
+  `reasoning_trace` consumers are unaffected.
 - **Opt-in in-loop history compaction for the ReAct strategy.** A long
   tool-using turn can grow the conversation history until it trips a model's
   input-context window; `ReActReasoningConfig.history_compaction` (a nested

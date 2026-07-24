@@ -58,7 +58,12 @@ from .compaction import (
     WindowCompaction,
     build_compaction_strategy,
 )
-from .react import ReActReasoning, ReActTurnHandle
+from .react import (
+    REACT_TERMINATION_TOPIC,
+    ReActReasoning,
+    ReActTerminationReason,
+    ReActTurnHandle,
+)
 from .react_config import HistoryCompactionConfig, ReActReasoningConfig
 from .registry import (
     StrategyFactory,
@@ -121,6 +126,8 @@ __all__ = [
     "SimpleReasoningConfig",
     "ReActReasoning",
     "ReActReasoningConfig",
+    "ReActTerminationReason",
+    "REACT_TERMINATION_TOPIC",
     "HistoryCompactionConfig",
     "CompactionStrategy",
     "WindowCompaction",

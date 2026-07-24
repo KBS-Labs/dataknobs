@@ -88,6 +88,16 @@ prompt, the user's question, and the most recent iterations (a `tool_use` is
 never split from its `tool_result`). See the bots Configuration guide for the
 full field reference.
 
+**Termination reason (always-on):** every ReAct turn records *why* it ended
+under the `reasoning_termination` conversation-metadata key — one of
+`completed`, `max_iterations_reached`, `truncated_tool_call`,
+`duplicate_tool_calls_detected`, `tools_not_supported`, or
+`truncation_retry_exhausted` — independent of `store_trace`. For dashboards or
+adaptive policy, register on the strategy's `termination_callbacks` registry
+(topic `react:turn:end`, EventBus-composable). See the bots Configuration guide
+(ReAct Reasoning → *Termination reason*) for the full vocabulary and callback
+example.
+
 ## Creating a Custom Tool
 
 Tools implement the `Tool` interface:

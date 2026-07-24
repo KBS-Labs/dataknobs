@@ -8,9 +8,11 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, ClassVar
 
-from dataknobs_common import close_if_owned
+from dataknobs_common import Capability, CapabilityMixin, close_if_owned
+from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse, TokenCounter, create_llm_provider
 from dataknobs_llm.exceptions import (
@@ -31,6 +33,45 @@ from .compaction import CompactionStrategy, build_compaction_strategy
 from .react_config import HistoryCompactionConfig, ReActReasoningConfig
 
 logger = logging.getLogger(__name__)
+
+
+class ReActTerminationReason(str, Enum):
+    """Why a ReAct tool loop ended.
+
+    ``.value`` is byte-identical to the reasoning-trace ``status`` strings, so
+    the always-on ``reasoning_termination`` conversation metadata (written
+    regardless of ``store_trace``) and the opt-in ``reasoning_trace`` last
+    entry share a single source and can never drift.
+
+    Members:
+        COMPLETED: The LLM returned a final answer (no tool calls).
+        MAX_ITERATIONS: The iteration cap was hit; ``finalize`` synthesizes.
+        TRUNCATED_TOOL_CALL: The response was truncated mid-tool-call and the
+            incomplete call was abandoned.
+        DUPLICATE_TOOL_CALLS: The duplicate-tool-call break guard fired.
+        TOOLS_NOT_SUPPORTED: The model cannot call tools; a graceful message
+            was returned.
+        TRUNCATION_RETRY_EXHAUSTED: The adaptive-budget retry of a truncated
+            tool call did not recover a complete call — the retry was still
+            truncated, or the retry ``complete()`` itself errored — so the
+            truncated turn was abandoned. Distinguished from
+            ``TRUNCATED_TOOL_CALL`` only by the retry having been enabled; the
+            log line at the retry site records which sub-case occurred.
+    """
+
+    COMPLETED = "completed"
+    MAX_ITERATIONS = "max_iterations_reached"
+    TRUNCATED_TOOL_CALL = "truncated_tool_call"
+    DUPLICATE_TOOL_CALLS = "duplicate_tool_calls_detected"
+    TOOLS_NOT_SUPPORTED = "tools_not_supported"
+    TRUNCATION_RETRY_EXHAUSTED = "truncation_retry_exhausted"
+
+
+#: Callback topic fired once per terminated ReAct turn (``<subsystem>:<operation>:<phase>``
+#: convention). Consumers register on ``ReActReasoning.termination_callbacks``
+#: and optionally compose ``also_publish_to(bus, topic_prefix="react:")`` for
+#: cross-replica EventBus fan-out.
+REACT_TERMINATION_TOPIC = "react:turn:end"
 
 
 async def _pair_orphan_tool_calls(manager: Any) -> None:
@@ -121,7 +162,9 @@ class ReActTurnHandle(TurnHandle):
 
 
 class ReActReasoning(
-    StructuredConfigConsumer[ReActReasoningConfig], ReasoningStrategy
+    StructuredConfigConsumer[ReActReasoningConfig],
+    CapabilityMixin,
+    ReasoningStrategy,
 ):
     """ReAct (Reasoning + Acting) strategy.
 
@@ -165,6 +208,15 @@ class ReActReasoning(
     #: (``cls.from_config({...}, prompt_refresher=fn)``) and are bound in
     #: :meth:`_setup`.
     CONFIG_CLS: ClassVar[type[ReActReasoningConfig]] = ReActReasoningConfig
+
+    #: Cross-cutting capability advertisement (``dataknobs_common.Capability``).
+    #: ReAct exposes a lazy ``termination_callbacks`` registry, so it advertises
+    #: ``CALLBACK_REGISTRY`` — machine-queryable via ``strategy.supports(...)``.
+    #: This is orthogonal to the strategy-level :meth:`capabilities` classmethod
+    #: (which returns a :class:`StrategyCapabilities`, a distinct surface).
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CALLBACK_REGISTRY}
+    )
 
     @classmethod
     def capabilities(cls) -> StrategyCapabilities:
@@ -275,6 +327,24 @@ class ReActReasoning(
                 extra={"conversation_id": getattr(manager, "conversation_id", None)},
             )
             handle.early_response = await manager.complete(**kwargs)
+            # No tool loop ran, but the model still returned a final answer —
+            # record the always-on termination reason so the "every ReAct turn
+            # records why it ended" contract holds on the no-tools fast path
+            # too (symmetric with generate()'s no-tools branch below).
+            # iterations_used=0: the loop body never executed.  When store_trace
+            # is on, write a fresh status-only trace so ``reasoning_trace`` can't
+            # retain a stale trace from an earlier tool-using turn (mirrors the
+            # MAX_ITERATIONS status-only append).
+            if handle.trace is not None:
+                handle.trace.append(
+                    {"status": ReActTerminationReason.COMPLETED.value}
+                )
+            await self._record_termination(
+                manager,
+                ReActTerminationReason.COMPLETED,
+                iterations_used=0,
+                trace=handle.trace,
+            )
             return handle
 
         # Build static extra_context for tool execution.  These don't
@@ -406,9 +476,28 @@ class ReActReasoning(
                 budget,
                 extra={"conversation_id": conv_id, "iteration": iteration},
             )
-            # Seam: a structured ``truncation_retry_exhausted`` reason could be
-            # emitted here via the lifecycle/callback surface (not built here).
+            # The still-truncated retry flows back to the caller's truncated
+            # terminal branch, which records TRUNCATION_RETRY_EXHAUSTED (it
+            # sees retry was enabled) — a single terminal recorder per branch,
+            # no double-write. This helper stays purely about retrying.
         return retry
+
+    def _truncation_reason(self) -> ReActTerminationReason:
+        """The terminal reason for abandoning a truncated tool call.
+
+        Retry enabled (``_truncation_retry_max_tokens is not None``) means the
+        adaptive-budget retry already ran and the response reaching the
+        truncated terminal branch is *still* truncated (or the retry errored)
+        → the more specific
+        :attr:`ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED`; otherwise a
+        plain :attr:`ReActTerminationReason.TRUNCATED_TOOL_CALL`. Shared by the
+        phased and monolithic truncated branches so the two cannot drift.
+        """
+        return (
+            ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED
+            if self._truncation_retry_max_tokens is not None
+            else ReActTerminationReason.TRUNCATED_TOOL_CALL
+        )
 
     # ------------------------------------------------------------------
     # In-loop history compaction (opt-in; shared by both loop sites, D5)
@@ -608,8 +697,15 @@ class ReActReasoning(
                 },
             )
             if handle.trace is not None:
-                handle.trace.append({"status": "max_iterations_reached"})
-                await self._store_trace(handle.manager, handle.trace)
+                handle.trace.append(
+                    {"status": ReActTerminationReason.MAX_ITERATIONS.value}
+                )
+            await self._record_termination(
+                handle.manager,
+                ReActTerminationReason.MAX_ITERATIONS,
+                iterations_used=handle.max_iterations,
+                trace=handle.trace,
+            )
             return ProcessResult(action="max_iterations")
 
         # Prompt refresh for iterations > 0
@@ -672,6 +768,16 @@ class ReActReasoning(
                     ),
                 },
             )
+            if handle.trace is not None:
+                handle.trace.append(
+                    {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
+                )
+            await self._record_termination(
+                handle.manager,
+                ReActTerminationReason.TOOLS_NOT_SUPPORTED,
+                iterations_used=handle.iteration + 1,
+                trace=handle.trace,
+            )
             return ProcessResult(
                 early_response=LLMResponse(
                     content=(
@@ -713,9 +819,14 @@ class ReActReasoning(
             )
             handle.final_response = response
             if handle.trace is not None:
-                iteration_trace["status"] = "completed"
+                iteration_trace["status"] = ReActTerminationReason.COMPLETED.value
                 handle.trace.append(iteration_trace)
-                await self._store_trace(handle.manager, handle.trace)
+            await self._record_termination(
+                handle.manager,
+                ReActTerminationReason.COMPLETED,
+                iterations_used=handle.iteration + 1,
+                trace=handle.trace,
+            )
             return ProcessResult(action="final_answer")
 
         # Truncated mid-tool-call → terminal, not executed.  The tool_use is
@@ -736,11 +847,24 @@ class ReActReasoning(
                     "tools": [tc.name for tc in response.tool_calls],
                 },
             )
+            # Reaching this branch with the adaptive-budget retry enabled means
+            # the retry ran and did not recover → the more specific
+            # TRUNCATION_RETRY_EXHAUSTED reason (closes the FU5-B1 seam);
+            # otherwise a plain truncation (shared _truncation_reason so the
+            # two loop paths cannot drift). A single terminal recorder here —
+            # the retry helper does not record — so metadata + trace never
+            # double-write and always agree.
+            reason = self._truncation_reason()
             handle.final_response = None  # finalize_turn does the synthesis
             if handle.trace is not None:
-                iteration_trace["status"] = "truncated_tool_call"
+                iteration_trace["status"] = reason.value
                 handle.trace.append(iteration_trace)
-                await self._store_trace(handle.manager, handle.trace)
+            await self._record_termination(
+                handle.manager,
+                reason,
+                iterations_used=handle.iteration + 1,
+                trace=handle.trace,
+            )
             return ProcessResult(action="truncated")
 
         num_tool_calls = len(response.tool_calls)
@@ -786,9 +910,16 @@ class ReActReasoning(
             # (e.g. Anthropic), leaving the tool_use dangling.
             handle.final_response = None  # finalize_turn does synthesis
             if handle.trace is not None:
-                iteration_trace["status"] = "duplicate_tool_calls_detected"
+                iteration_trace["status"] = (
+                    ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
+                )
                 handle.trace.append(iteration_trace)
-                await self._store_trace(handle.manager, handle.trace)
+            await self._record_termination(
+                handle.manager,
+                ReActTerminationReason.DUPLICATE_TOOL_CALLS,
+                iterations_used=handle.iteration + 1,
+                trace=handle.trace,
+            )
             return ProcessResult(action="duplicate_break")
 
         handle.prev_tool_calls = current_calls
@@ -932,16 +1063,34 @@ class ReActReasoning(
         # accumulate records from earlier calls.
         self._tool_executions.clear()
 
+        # Initialize trace if enabled (before the no-tools fast path so it, too,
+        # can write a fresh trace).
+        trace = [] if self.store_trace else None
+
         if not tools:
             # No tools available, fall back to simple generation
             logger.info(
                 "ReAct: No tools available, falling back to simple generation",
                 extra={"conversation_id": manager.conversation_id},
             )
-            return await manager.complete(**kwargs)
-
-        # Initialize trace if enabled
-        trace = [] if self.store_trace else None
+            final = await manager.complete(**kwargs)
+            # Symmetric with begin_turn's no-tools fast path: record the
+            # always-on termination reason even though no tool loop ran, so a
+            # consumer reading reasoning_termination unconditionally never hits
+            # a missing key on a no-tools turn. iterations_used=0.  When
+            # store_trace is on, write a fresh status-only trace so
+            # ``reasoning_trace`` can't retain a stale earlier-turn trace.
+            if trace is not None:
+                trace.append(
+                    {"status": ReActTerminationReason.COMPLETED.value}
+                )
+            await self._record_termination(
+                manager,
+                ReActTerminationReason.COMPLETED,
+                iterations_used=0,
+                trace=trace,
+            )
+            return final
 
         # Get log level based on verbose setting
         log_level = logging.DEBUG if self.verbose else logging.INFO
@@ -995,6 +1144,20 @@ class ReActReasoning(
                     e.model,
                     extra={"conversation_id": manager.conversation_id},
                 )
+                if trace is not None:
+                    trace.append(
+                        {
+                            "status": (
+                                ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
+                            )
+                        }
+                    )
+                await self._record_termination(
+                    manager,
+                    ReActTerminationReason.TOOLS_NOT_SUPPORTED,
+                    iterations_used=iteration + 1,
+                    trace=trace,
+                )
                 return LLMResponse(
                     content=(
                         "I'm configured to use tools for this task, but my "
@@ -1028,9 +1191,16 @@ class ReActReasoning(
                 )
 
                 if trace is not None:
-                    iteration_trace["status"] = "completed"
+                    iteration_trace["status"] = (
+                        ReActTerminationReason.COMPLETED.value
+                    )
                     trace.append(iteration_trace)
-                    await self._store_trace(manager, trace)
+                await self._record_termination(
+                    manager,
+                    ReActTerminationReason.COMPLETED,
+                    iterations_used=iteration + 1,
+                    trace=trace,
+                )
 
                 return response
 
@@ -1049,10 +1219,22 @@ class ReActReasoning(
                         "tools": [tc.name for tc in response.tool_calls],
                     },
                 )
+                # Reaching this branch with the adaptive-budget retry enabled
+                # means the retry ran and did not recover → the more specific
+                # TRUNCATION_RETRY_EXHAUSTED reason (closes the FU5-B1 seam);
+                # otherwise a plain truncation (shared _truncation_reason so the
+                # two loop paths cannot drift). Single terminal recorder — the
+                # retry helper does not record — so metadata + trace agree.
+                reason = self._truncation_reason()
                 if trace is not None:
-                    iteration_trace["status"] = "truncated_tool_call"
+                    iteration_trace["status"] = reason.value
                     trace.append(iteration_trace)
-                    await self._store_trace(manager, trace)
+                await self._record_termination(
+                    manager,
+                    reason,
+                    iterations_used=iteration + 1,
+                    trace=trace,
+                )
                 break
 
             num_tool_calls = len(response.tool_calls)
@@ -1091,9 +1273,16 @@ class ReActReasoning(
                 # lift system messages to a top-level param (e.g. Anthropic),
                 # leaving the tool_use dangling.
                 if trace is not None:
-                    iteration_trace["status"] = "duplicate_tool_calls_detected"
+                    iteration_trace["status"] = (
+                        ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
+                    )
                     trace.append(iteration_trace)
-                    await self._store_trace(manager, trace)
+                await self._record_termination(
+                    manager,
+                    ReActTerminationReason.DUPLICATE_TOOL_CALLS,
+                    iterations_used=iteration + 1,
+                    trace=trace,
+                )
 
                 break
 
@@ -1243,8 +1432,15 @@ class ReActReasoning(
             )
 
             if trace is not None:
-                trace.append({"status": "max_iterations_reached"})
-                await self._store_trace(manager, trace)
+                trace.append(
+                    {"status": ReActTerminationReason.MAX_ITERATIONS.value}
+                )
+            await self._record_termination(
+                manager,
+                ReActTerminationReason.MAX_ITERATIONS,
+                iterations_used=self.max_iterations,
+                trace=trace,
+            )
 
         # Guarantee no dangling tool_use is left in history (e.g. a
         # duplicate-break abandoned the current call) before the final
@@ -1257,38 +1453,105 @@ class ReActReasoning(
 
         return await manager.complete(**kwargs)
 
-    async def _store_trace(self, manager: Any, trace: list[dict[str, Any]]) -> None:
-        """Store reasoning trace in conversation metadata.
+    async def _persist_metadata(self, manager: Any) -> None:
+        """Persist ``manager.metadata`` to storage.
+
+        The in-memory metadata is assumed already mutated (via
+        ``manager.update_metadata``); this flushes it to the backing store.
+        The single flush point for :meth:`_record_termination`, so a terminal
+        branch round-trips storage exactly once no matter how many metadata
+        keys (``reasoning_termination`` and, when ``store_trace`` is on,
+        ``reasoning_trace``) it updated.
 
         Args:
-            manager: ConversationManager instance
-            trace: Reasoning trace data
+            manager: ConversationManager instance.
         """
+        await manager.storage.update_metadata(
+            conversation_id=manager.conversation_id,
+            metadata=manager.metadata,
+        )
+
+    @property
+    def termination_callbacks(self) -> CallbackRegistry:
+        """Lazily-created registry fired once per terminated ReAct turn.
+
+        Mirrors :attr:`ToolRegistry.ExecutionTracker.execution_callbacks`:
+        zero cost until a consumer registers a callback on
+        :data:`REACT_TERMINATION_TOPIC` or composes
+        ``also_publish_to(bus, topic_prefix="react:")`` for cross-replica
+        EventBus fan-out. Advertised via ``Capability.CALLBACK_REGISTRY``.
+        """
+        reg = getattr(self, "_termination_callbacks", None)
+        if reg is None:
+            reg = CallbackRegistry()
+            self._termination_callbacks = reg
+        return reg
+
+    async def _record_termination(
+        self,
+        manager: Any,
+        reason: ReActTerminationReason,
+        *,
+        iterations_used: int,
+        trace: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Surface why the loop ended: always-on metadata + opt-in fan-out.
+
+        Invoked at EVERY terminal branch across BOTH the phased
+        ``process_input`` path and the monolithic ``generate`` path, so the
+        reason logic lives once (not copy-pasted per branch). Writes the
+        always-on ``reasoning_termination`` conversation metadata (independent
+        of ``store_trace``) and — when ``trace`` is supplied (``store_trace``
+        on) — the ``reasoning_trace`` metadata in the **same** in-memory update,
+        so a terminal branch persists to storage **once** rather than
+        round-tripping twice. When a consumer has registered a callback, fires
+        :data:`REACT_TERMINATION_TOPIC`.
+
+        Recording is non-load-bearing observability: a storage failure is
+        logged and swallowed so it can never abort the turn.
+
+        Args:
+            manager: ConversationManager instance.
+            reason: The terminal reason.
+            iterations_used: Human-facing count of iterations used.
+            trace: The reasoning trace to persist alongside the reason when
+                ``store_trace`` is enabled (the caller appends the terminal
+                ``status`` entry first), or ``None`` (default) to write only
+                the always-on termination metadata.
+        """
+        payload = {
+            "strategy": "react",
+            "reason": reason.value,
+            "iterations_used": iterations_used,
+        }
         try:
-            # Update in-memory metadata on the manager
-            manager.update_metadata({"reasoning_trace": trace})
-
-            # Persist to storage
-            await manager.storage.update_metadata(
-                conversation_id=manager.conversation_id,
-                metadata=manager.metadata,
-            )
-
-            logger.debug(
-                "ReAct: Stored reasoning trace in conversation metadata",
-                extra={
-                    "conversation_id": manager.conversation_id,
-                    "trace_items": len(trace),
-                },
-            )
+            manager.update_metadata({"reasoning_termination": payload})
+            if trace is not None:
+                manager.update_metadata({"reasoning_trace": trace})
+            # A single persist covers both keys — the update-then-persist
+            # round-trip happens once per terminal branch, not once per key.
+            await self._persist_metadata(manager)
         except Exception as e:
             logger.warning(
-                "ReAct: Failed to store reasoning trace",
+                "ReAct: Failed to record termination reason",
                 extra={
-                    "conversation_id": manager.conversation_id,
+                    "conversation_id": getattr(
+                        manager, "conversation_id", None
+                    ),
                     "error": str(e),
                 },
             )
+        # Fire the observability topic only when there is something to observe
+        # it — a local callback OR a composed EventBus fan-out target. A
+        # registry that was never touched isn't even instantiated, and one with
+        # neither costs nothing. fire_async so async callbacks and
+        # also_publish_to bus delivery are awaited correctly.
+        reg = getattr(self, "_termination_callbacks", None)
+        if reg is not None and (
+            reg.callback_count(REACT_TERMINATION_TOPIC)
+            or reg.supports_event_bus_emission()
+        ):
+            await reg.fire_async(REACT_TERMINATION_TOPIC, payload)
 
     def _find_tool(self, tool_name: str, tools: list[Any]) -> Any | None:
         """Find a tool by name.
