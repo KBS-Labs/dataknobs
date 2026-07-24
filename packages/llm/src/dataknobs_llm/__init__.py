@@ -37,6 +37,15 @@ from dataknobs_llm.tools import (
     ToolRegistry,
 )
 
+# Conversation summarization seam (shared by compact_history + SummaryMemory)
+from dataknobs_llm.summarization import (
+    DEFAULT_SUMMARIZATION_PROMPT,
+    LLMSummarizer,
+    Summarizer,
+    format_messages_for_summary,
+    summarize_messages,
+)
+
 # Intent classification
 from dataknobs_llm.intent import (
     CompositeIntentClassifier,
@@ -130,6 +139,12 @@ __all__ = [
     # Tools
     "Tool",
     "ToolRegistry",
+    # Summarization seam
+    "Summarizer",
+    "LLMSummarizer",
+    "summarize_messages",
+    "format_messages_for_summary",
+    "DEFAULT_SUMMARIZATION_PROMPT",
     # Intent classification
     "IntentClassifier",
     "IntentClassifierFactory",

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Opt-in in-loop history compaction for the ReAct strategy.** A long
+  tool-using turn can grow the conversation history until it trips a model's
+  input-context window; `ReActReasoningConfig.history_compaction` (a nested
+  `HistoryCompactionConfig`, disabled by default) opts a bot into bounding it.
+  When enabled, both ReAct loop sites — the phased `process_input` path DynaBot
+  drives and the monolithic `generate` — proactively estimate the path's tokens
+  and compact the oldest complete tool iterations when over budget (via
+  `ConversationManager.compact_history`), and reactively compact-and-retry once
+  on a caught `ContextLengthExceededError`. The budget is a fraction
+  (`budget_fraction`, default `0.75`) of the provider's resolved input ceiling,
+  with an absolute `history_token_budget` fallback for providers that publish no
+  ceiling. Strategy is pluggable via the `CompactionStrategy` extension point:
+  `"window"` (default — drop the oldest iterations, LLM-free) or `"summarize"`
+  (fold them into one summary node, reusing the bot's provider or a dedicated
+  `summary_llm`). A `tool_use` is never separated from its `tool_result`.
+  Disabled config is byte-identical to prior behaviour (no estimation, no
+  compaction). `SummaryMemory` now composes the shared `dataknobs_llm`
+  summarization seam (behaviour unchanged).
+
 ### Fixed
 
 - **`DynaBot` now bounds the terminal synthesis of a phased reasoning turn**

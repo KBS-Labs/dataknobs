@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **In-loop conversation history compaction.** New
+  `ConversationManager.compact_history(keep_recent_iterations, *, summarizer=None)`
+  re-roots the active conversation path to bound a long tool loop's history
+  before it overflows a model's input-context window. It retains the system
+  prompt, the current-turn user message, and the most recent
+  `keep_recent_iterations` **complete tool iterations**, and either drops the
+  older ones (windowing, `summarizer=None`) or folds them into a single summary
+  node (a `Summarizer` provided). Compaction happens only at whole-iteration
+  boundaries, so a `tool_use` is never separated from its `tool_result` — the
+  re-sent history always stays a valid message sequence. Dropped nodes are left
+  in the tree (untraversed), consistent with `branch_from` semantics — no
+  destructive prune. Additive; no change to existing `ConversationManager`
+  methods.
+- **Shared summarization seam.** New `dataknobs_llm.summarization` module
+  (`summarize_messages`, `format_messages_for_summary`, the `Summarizer`
+  Protocol, and the default `LLMSummarizer`, all re-exported from the package
+  root) folds a run of messages into one summary string via a single
+  `llm.complete`. It is the one place the prompt-fill + completion pattern lives,
+  shared by `ConversationManager.compact_history` and (in `dataknobs-bots`)
+  `SummaryMemory` — no re-implementation, one place to fix a prompt-safety or
+  formatting concern.
+- **Model input-context ceiling resolution.** `ModelConstraints` gains
+  `max_input_tokens` (the model's input/context-window size, informational — not
+  clamped). `AnthropicProvider` resolves it from the live Models API
+  `max_input_tokens` column (cached, TTL-refreshed, same machinery as the output
+  `max_tokens` ceiling) with a bundled fallback resource; the bundled resource is
+  now nested (`{max_tokens, max_input_tokens}` per model) with the loader tolerant
+  of the legacy flat form, and the reconciliation tooling carries the input
+  column through `--update`. Non-Anthropic providers leave it `None`. Consumers
+  read it (e.g. to size a proactive history-compaction budget) or override it via
+  `LLMConfig.constraints`.
+
+### Fixed
+
+- **`TokenCounter.estimate_tokens` / `estimate_messages_tokens` tolerate `None`
+  content.** Estimating a real tool-loop history previously crashed with a
+  `TypeError` because an assistant message that carried only tool calls has
+  `content=None`; `None`/empty text now counts as `0` tokens.
+
 - **Distinct context-window-overflow exception.**
   `ContextLengthExceededError` (`dataknobs_llm.exceptions`), a `ValidationError`
   subclass, is now raised when a request's input exceeds the model's maximum

@@ -867,6 +867,22 @@ def test_token_counter_estimate_messages():
     assert tokens >= 12  # At least 3 * 4
 
 
+def test_token_counter_estimate_none_content():
+    """None content (an assistant tool_call turn) counts as 0, never crashes.
+
+    Reproduce-first: before the guard, ``estimate_tokens(None)`` raised
+    ``TypeError: object of type 'NoneType' has no len()`` — so estimating a real
+    ReAct history (assistant tool_call messages have ``content=None``) crashed.
+    """
+    assert TokenCounter.estimate_tokens(None) == 0
+    messages = [
+        LLMMessage(role="assistant", content=None),  # tool-call turn
+        LLMMessage(role="user", content="Hello"),
+    ]
+    tokens = TokenCounter.estimate_messages_tokens(messages)
+    assert tokens >= 8  # role tokens (4 each) still counted; no crash
+
+
 def test_token_counter_fits_in_context():
     """Test TokenCounter fits_in_context."""
     short_text = "Hello"

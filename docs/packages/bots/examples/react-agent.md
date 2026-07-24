@@ -60,7 +60,14 @@ config = {
     "reasoning": {
         "strategy": "react",
         "max_iterations": 5,  # Maximum reasoning steps
-        "verbose": True        # Show reasoning trace
+        "verbose": True,       # Show reasoning trace
+        # Optional: bound a long tool loop so it never overflows the model's
+        # input-context window (disabled by default).
+        "history_compaction": {
+            "enabled": True,
+            "keep_recent_iterations": 3,
+            "strategy": "window",  # or "summarize"
+        },
     },
     "tools": [
         {
@@ -72,6 +79,14 @@ config = {
 ```
 
 **Important:** The ReAct strategy with tools requires a model that supports function calling. Models like `qwen3:8b`, `llama3.1:8b`, and `mistral:7b` support this. Models like `gemma3` do **not** support tool calling and will raise a `ToolsNotSupportedError`.
+
+**History compaction (optional):** for agents that take many tool steps, set
+`history_compaction` to keep the in-loop conversation bounded — the oldest
+complete tool iterations are dropped (`"window"`) or summarized (`"summarize"`)
+once the estimated history exceeds the budget, always preserving the system
+prompt, the user's question, and the most recent iterations (a `tool_use` is
+never split from its `tool_result`). See the bots Configuration guide for the
+full field reference.
 
 ## Creating a Custom Tool
 

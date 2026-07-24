@@ -46,11 +46,23 @@ from test_anthropic_param_handling import make_anthropic_response
 
 
 class _ScriptedModel:
-    """A minimal ``anthropic`` ``ModelInfo`` stand-in (id + max_tokens)."""
+    """A minimal ``anthropic`` ``ModelInfo`` stand-in.
 
-    def __init__(self, model_id: str, max_tokens: int | None) -> None:
+    Carries ``id`` + ``max_tokens`` (the output ceiling) + ``max_input_tokens``
+    (the input/context ceiling). ``max_input_tokens`` defaults to ``None`` so the
+    many existing two-arg constructions keep working; the input-ceiling tests
+    pass it explicitly.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        max_tokens: int | None,
+        max_input_tokens: int | None = None,
+    ) -> None:
         self.id = model_id
         self.max_tokens = max_tokens
+        self.max_input_tokens = max_input_tokens
 
 
 class _AsyncModelPage:
@@ -636,6 +648,77 @@ class TestDynamicMaxTokensResolution:
         assert "claude-opus-4-8" in limits
 
 
+class TestDynamicMaxInputTokensResolution:
+    """The ``max_input_tokens`` (context) ceiling resolves from the live API.
+
+    Mirrors :class:`TestDynamicMaxTokensResolution` for the *input* ceiling that
+    the proactive history-compaction budget is a fraction of. Precedence per
+    model: dynamic (live Models API, cached) → bundled fallback resource →
+    ``None``. Reproduce-first: each FAILS against pre-W0 HEAD, where
+    ``ModelConstraints`` has no ``max_input_tokens`` field and nothing reads the
+    Models-API ``max_input_tokens`` column.
+    """
+
+    async def test_dynamic_input_value_overrides_resource(self) -> None:
+        """A live ``max_input_tokens`` wins over the bundled resource value."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [
+            _ScriptedModel("claude-sonnet-5", 128000, max_input_tokens=1_000_000)
+        ]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_input_tokens == 1_000_000
+
+    async def test_input_resource_used_when_dynamic_fails(self) -> None:
+        """A failed refresh falls back to the bundled input resource value."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.raise_on_list = True
+        await provider.refresh_model_limits()  # swallows the error
+        assert provider.get_constraints().max_input_tokens == 200000
+
+    async def test_absent_model_input_is_permissive(self) -> None:
+        """A model in neither cache nor resource resolves input to ``None``."""
+        provider, client = _provider_with_capture("mystery-model-x")
+        client.models.raise_on_list = True
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_input_tokens is None
+
+    async def test_input_and_output_share_one_fetch(self) -> None:
+        """One Models-API poll populates both ceilings from the same model."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [
+            _ScriptedModel("claude-sonnet-5", 128000, max_input_tokens=200000)
+        ]
+        await provider.refresh_model_limits()
+        assert client.models.list_calls == 1
+        constraints = provider.get_constraints()
+        assert constraints.max_tokens_ceiling == 128000
+        assert constraints.max_input_tokens == 200000
+
+    async def test_input_only_model_is_cached(self) -> None:
+        """A model returning input-only (no output) still resolves its input."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [
+            _ScriptedModel("claude-sonnet-5", None, max_input_tokens=200000)
+        ]
+        await provider.refresh_model_limits()
+        constraints = provider.get_constraints()
+        # Output falls back to the resource; input comes from the live value.
+        assert constraints.max_input_tokens == 200000
+
+    def test_input_override_via_constraints(self) -> None:
+        """A consumer can declare ``max_input_tokens`` via config constraints."""
+        base = ModelConstraints()
+        assert base.max_input_tokens is None
+        overridden = base.with_overrides({"max_input_tokens": 500000})
+        assert overridden.max_input_tokens == 500000
+
+    def test_input_resource_ships_and_loads(self) -> None:
+        """The bundled input-ceiling fallback map is importable and non-empty."""
+        limits = anthropic_mod._load_model_input_limits_resource()
+        assert limits
+        assert "claude-opus-4-8" in limits
+
+
 class TestModelLimitsTooling:
     """The ``--check``/``--update`` reconciliation tool (no network).
 
@@ -649,15 +732,23 @@ class TestModelLimitsTooling:
         assert model_limits.main(["--check"]) == 0
         assert "skipped" in capsys.readouterr().out
 
-    async def test_fetch_live_limits_skips_models_without_max_tokens(self) -> None:
-        """Live fetch collects ``max_tokens`` and skips models lacking it."""
+    async def test_fetch_live_limits_captures_both_and_skips_empty(self) -> None:
+        """Live fetch collects both ceilings; a model with neither is skipped.
+
+        A model reporting only its input window is still captured (input-only
+        entry) — the tooling must not drop the input column on ``--update``.
+        """
         client = _CaptureAnthropicClient()
         client.models.models = [
-            _ScriptedModel("claude-a", 100),
-            _ScriptedModel("claude-b", None),
+            _ScriptedModel("claude-a", 100, max_input_tokens=200000),
+            _ScriptedModel("claude-b", None),  # neither ceiling → skipped
+            _ScriptedModel("claude-c", None, max_input_tokens=200000),  # input-only
         ]
         limits = await model_limits.fetch_live_limits(client)
-        assert limits == {"claude-a": 100}
+        assert limits == {
+            "claude-a": {"max_tokens": 100, "max_input_tokens": 200000},
+            "claude-c": {"max_tokens": None, "max_input_tokens": 200000},
+        }
 
     def test_diff_detects_drift(self) -> None:
         assert model_limits.diff_limits({"a": 100}, {"a": 200}) == [("a", 100, 200)]
@@ -681,8 +772,8 @@ class TestModelLimitsTooling:
         path = tmp_path / "limits.yaml"
         client = _CaptureAnthropicClient()
         client.models.models = [
-            _ScriptedModel("claude-a", 100),
-            _ScriptedModel("claude-z", 200),
+            _ScriptedModel("claude-a", 100, max_input_tokens=200000),
+            _ScriptedModel("claude-z", 200, max_input_tokens=200000),
         ]
         rc = model_limits.main(
             ["--update"],
@@ -692,10 +783,26 @@ class TestModelLimitsTooling:
         )
         assert rc == 0
         assert model_limits.load_resource_limits(path) == {
-            "claude-a": 100,
-            "claude-z": 200,
+            "claude-a": {"max_tokens": 100, "max_input_tokens": 200000},
+            "claude-z": {"max_tokens": 200, "max_input_tokens": 200000},
         }
         assert "2026-07-23" in path.read_text(encoding="utf-8")
+
+    def test_update_round_trips_input_only_model(self, tmp_path) -> None:
+        """A ``--update`` preserves an input-only model (no output ceiling)."""
+        path = tmp_path / "limits.yaml"
+        client = _CaptureAnthropicClient()
+        client.models.models = [
+            _ScriptedModel("claude-in", None, max_input_tokens=200000),
+        ]
+        rc = model_limits.main(
+            ["--update"], client=client, resource_path=path,
+            verified_date="2026-07-24",
+        )
+        assert rc == 0
+        assert model_limits.load_resource_limits(path) == {
+            "claude-in": {"max_tokens": None, "max_input_tokens": 200000},
+        }
 
     @pytest.mark.skipif(
         not os.getenv("ANTHROPIC_API_KEY"),

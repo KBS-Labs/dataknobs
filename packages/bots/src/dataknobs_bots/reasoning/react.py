@@ -9,9 +9,13 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from dataknobs_common import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
-from dataknobs_llm import LLMStreamResponse
-from dataknobs_llm.exceptions import ToolsNotSupportedError
+from dataknobs_llm import LLMStreamResponse, TokenCounter, create_llm_provider
+from dataknobs_llm.exceptions import (
+    ContextLengthExceededError,
+    ToolsNotSupportedError,
+)
 from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.llm.message_sequence import (
     pair_orphan_tool_calls,
@@ -22,7 +26,8 @@ from dataknobs_llm.tools import ToolExecutionContext
 from dataknobs_bots.bot.turn import ToolExecution
 
 from .base import ProcessResult, ReasoningStrategy, StrategyCapabilities, TurnHandle
-from .react_config import ReActReasoningConfig
+from .compaction import CompactionStrategy, build_compaction_strategy
+from .react_config import HistoryCompactionConfig, ReActReasoningConfig
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +184,18 @@ class ReActReasoning(
         self.verbose = config.verbose
         self.store_trace = config.store_trace
         self._truncation_retry_max_tokens = config.truncation_retry_max_tokens
+        #: Opt-in in-loop history compaction (default disabled → no-op). The
+        #: strategy + optional dedicated summary provider are built lazily on
+        #: first compaction (they need the runtime provider); a consumer may
+        #: inject a bespoke ``CompactionStrategy`` via the components channel.
+        self._history_compaction: HistoryCompactionConfig | None = (
+            config.history_compaction
+        )
+        self._compaction_strategy: CompactionStrategy | None = (
+            self.components.get("compaction_strategy")
+        )
+        self._summary_provider: Any = None
+        self._owns_summary_provider = False
         self._artifact_registry = self.components.get("artifact_registry")
         self._review_executor = self.components.get("review_executor")
         self._context_builder = self.components.get("context_builder")
@@ -388,6 +405,134 @@ class ReActReasoning(
             # emitted here via the lifecycle/callback surface (not built here).
         return retry
 
+    # ------------------------------------------------------------------
+    # In-loop history compaction (opt-in; shared by both loop sites, D5)
+    # ------------------------------------------------------------------
+
+    def _compaction_enabled(self) -> bool:
+        cfg = self._history_compaction
+        return cfg is not None and cfg.enabled
+
+    def _resolve_history_budget(self, llm: Any) -> int | None:
+        """Resolve the proactive token budget, or ``None`` (proactive off).
+
+        Prefers the provider's resolved input ceiling
+        (``ModelConstraints.max_input_tokens``) times ``budget_fraction`` — the
+        common path for a provider that publishes a context window (the Claude
+        family). Falls back to the configured absolute ``history_token_budget``
+        when no ceiling resolves (non-Anthropic providers / unknown model), and
+        ``None`` when neither is available (proactive disabled; the reactive
+        backstop still applies).
+        """
+        cfg = self._history_compaction
+        if cfg is None:
+            return None
+        ceiling: int | None = None
+        try:
+            constraints = llm.get_constraints()
+            ceiling = getattr(constraints, "max_input_tokens", None)
+        except Exception:  # pragma: no cover - defensive; provider may lack it
+            ceiling = None
+        if ceiling is not None:
+            return int(ceiling * cfg.budget_fraction)
+        return cfg.history_token_budget
+
+    async def _get_compaction_strategy(self, llm: Any) -> CompactionStrategy:
+        """Lazily build (and cache) the compaction strategy.
+
+        A consumer-injected ``compaction_strategy`` component is used as-is.
+        Otherwise the strategy is built from config: ``"window"`` (LLM-free) or
+        ``"summarize"`` — the latter reusing the runtime provider by default, or
+        a dedicated one built (and owned) from ``summary_llm``.
+        """
+        if self._compaction_strategy is not None:
+            return self._compaction_strategy
+        cfg = self._history_compaction
+        assert cfg is not None  # guarded by _compaction_enabled at call sites
+        provider = llm
+        if cfg.strategy == "summarize" and cfg.summary_llm:
+            self._summary_provider = create_llm_provider(cfg.summary_llm)
+            initialize = getattr(self._summary_provider, "initialize", None)
+            if initialize is not None:
+                await initialize()
+            self._owns_summary_provider = True
+            provider = self._summary_provider
+        self._compaction_strategy = build_compaction_strategy(
+            cfg.strategy, summary_provider=provider
+        )
+        return self._compaction_strategy
+
+    async def _compact_now(self, manager: Any, llm: Any) -> int:
+        """Compact unconditionally (used by the reactive backstop)."""
+        cfg = self._history_compaction
+        assert cfg is not None
+        strategy = await self._get_compaction_strategy(llm)
+        return await strategy.compact(
+            manager, keep_recent_iterations=cfg.keep_recent_iterations
+        )
+
+    async def _maybe_compact_history(self, manager: Any, llm: Any) -> None:
+        """Proactively compact the history when it exceeds the token budget.
+
+        No-op when compaction is disabled (default) or no budget resolves. Uses
+        the char-ratio ``TokenCounter`` estimate — imprecise by design; the
+        reactive ``ContextLengthExceededError`` backstop covers under-estimates.
+        """
+        if not self._compaction_enabled():
+            return
+        budget = self._resolve_history_budget(llm)
+        if budget is None:
+            return
+        try:
+            history = await manager.get_history()
+        except Exception:  # pragma: no cover - defensive; never fail the turn
+            return
+        if TokenCounter.estimate_messages_tokens(history) > budget:
+            compacted = await self._compact_now(manager, llm)
+            if compacted:
+                logger.debug(
+                    "ReAct: proactively compacted %d tool iterations "
+                    "(history over budget)",
+                    compacted,
+                    extra={"conversation_id": getattr(
+                        manager, "conversation_id", None
+                    )},
+                )
+
+    async def _complete_with_reactive_compaction(
+        self, manager: Any, llm: Any, complete: Callable[[], Any]
+    ) -> Any:
+        """Await ``complete()``; on context overflow, compact once and retry.
+
+        The reactive backstop (D2): a ``ContextLengthExceededError`` from the
+        in-loop completion triggers one compaction + one retry instead of
+        failing the turn. When compaction is disabled the error propagates
+        unchanged (byte-identical to today). ``complete`` is a zero-arg callable
+        returning the completion coroutine so the retry re-issues it cleanly.
+        """
+        try:
+            return await complete()
+        except ContextLengthExceededError:
+            if not self._compaction_enabled():
+                raise
+            compacted = await self._compact_now(manager, llm)
+            logger.info(
+                "ReAct: context overflow — compacted %d tool iterations and "
+                "retrying once",
+                compacted,
+                extra={"conversation_id": getattr(
+                    manager, "conversation_id", None
+                )},
+            )
+            return await complete()
+
+    async def close(self) -> None:
+        """Release a dedicated summary provider this strategy built + owns."""
+        await close_if_owned(
+            self._summary_provider, self._owns_summary_provider
+        )
+        await super().close()
+
     async def process_input(
         self,
         handle: TurnHandle,
@@ -465,10 +610,20 @@ class ReActReasoning(
             },
         )
 
-        # LLM call with tools
+        # Proactively bound the in-loop history before the completion (no-op
+        # unless compaction is enabled and over budget). Symmetric with the
+        # monolithic ``generate`` site (top-of-iteration).
+        await self._maybe_compact_history(handle.manager, handle.llm)
+
+        # LLM call with tools (reactive compaction backstop wraps the
+        # completion: a context overflow compacts once and retries).
         try:
-            response = await handle.manager.complete(
-                tools=handle.tools, **handle.kwargs
+            response = await self._complete_with_reactive_compaction(
+                handle.manager,
+                handle.llm,
+                lambda: handle.manager.complete(
+                    tools=handle.tools, **handle.kwargs
+                ),
             )
         except ToolsNotSupportedError as e:
             logger.error(
@@ -785,9 +940,18 @@ class ReActReasoning(
                 },
             )
 
-            # Generate response with tools
+            # Proactively bound the in-loop history before the completion
+            # (no-op unless compaction is enabled and over budget).
+            await self._maybe_compact_history(manager, llm)
+
+            # Generate response with tools (reactive compaction backstop wraps
+            # the completion: a context overflow compacts once and retries).
             try:
-                response = await manager.complete(tools=tools, **kwargs)
+                response = await self._complete_with_reactive_compaction(
+                    manager,
+                    llm,
+                    lambda: manager.complete(tools=tools, **kwargs),
+                )
             except ToolsNotSupportedError as e:
                 logger.error(
                     "ReAct: Model '%s' does not support tools — "
