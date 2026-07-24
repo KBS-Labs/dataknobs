@@ -747,14 +747,20 @@ class BedrockProvider(AsyncLLMProvider):
             ModelCapability.STREAMING,
             ModelCapability.FUNCTION_CALLING,
         ]
-        # Multimodal Claude 3+ / Nova models accept image content.
+        # Multimodal Claude 3+ / Nova models accept image content. The Claude 5
+        # generation adds family names (fable/mythos) that carry no
+        # opus/sonnet/haiku marker, so they are listed explicitly or they would
+        # be mis-detected as lacking vision.
         if any(
             token in model
             for token in (
                 "claude-3",
+                "claude-5",
                 "claude-sonnet",
                 "claude-opus",
                 "claude-haiku",
+                "claude-fable",
+                "claude-mythos",
                 "nova",
             )
         ):

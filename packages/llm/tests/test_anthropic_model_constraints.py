@@ -201,6 +201,19 @@ class TestModelFamilyParamRejection:
         await provider.complete("hi")
         assert "temperature" not in client.captured_kwargs
 
+    async def test_temperature_dropped_for_mythos_5(self) -> None:
+        """Mythos 5 is Claude-5 family → ``temperature`` must not reach the API.
+
+        Its id (``claude-mythos-5``) is not a substring of any of the other
+        family markers, so it was silently forwarding ``temperature`` and
+        paying a 400 round-trip until the marker was added.
+        """
+        provider, client = _provider_with_capture(
+            "claude-mythos-5", temperature=0.3
+        )
+        await provider.complete("hi")
+        assert "temperature" not in client.captured_kwargs
+
     async def test_temperature_kept_for_claude_4_5(self) -> None:
         """Claude 4.5 still accepts ``temperature`` → forwarded unchanged."""
         provider, client = _provider_with_capture(
@@ -278,6 +291,44 @@ class TestModelFamilyParamRejection:
         assert not caplog.records
 
 
+class TestValidateModel:
+    """``validate_model`` resolves against the live Models API listing.
+
+    Reproduce-first: the previous hardcoded whitelist predated Claude 4, so
+    it returned ``False`` for every current model. These assert the current
+    models validate True (they fail against that stale list) and that a
+    listing outage resolves to ``False`` rather than raising.
+    """
+
+    async def test_current_model_validates_when_listed(self) -> None:
+        provider, client = _provider_with_capture("claude-opus-5")
+        client.models.models = [_ScriptedModel("claude-opus-5", 128000, 1000000)]
+        assert await provider.validate_model() is True
+
+    async def test_opus_4_8_validates_when_listed(self) -> None:
+        provider, client = _provider_with_capture("claude-opus-4-8")
+        client.models.models = [_ScriptedModel("claude-opus-4-8", 128000, 1000000)]
+        assert await provider.validate_model() is True
+
+    async def test_bare_alias_matches_dated_snapshot(self) -> None:
+        """A configured bare alias validates against its dated snapshot id."""
+        provider, client = _provider_with_capture("claude-haiku-4-5")
+        client.models.models = [
+            _ScriptedModel("claude-haiku-4-5-20251001", 64000, 200000)
+        ]
+        assert await provider.validate_model() is True
+
+    async def test_unlisted_model_does_not_validate(self) -> None:
+        provider, client = _provider_with_capture("claude-opus-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 128000, 1000000)]
+        assert await provider.validate_model() is False
+
+    async def test_listing_outage_returns_false(self) -> None:
+        provider, client = _provider_with_capture("claude-opus-5")
+        client.models.raise_on_list = True
+        assert await provider.validate_model() is False
+
+
 # ---------------------------------------------------------------------------
 # S1 surface: ModelConstraints detection + config override
 # ---------------------------------------------------------------------------
@@ -289,6 +340,13 @@ class TestModelConstraintsResolution:
     def test_claude_5_detected_rejects_temperature(self) -> None:
         provider = AnthropicProvider(
             LLMConfig(provider="anthropic", model="claude-sonnet-5")
+        )
+        constraints = provider.get_constraints()
+        assert "temperature" in constraints.rejected_params
+
+    def test_mythos_5_detected_rejects_temperature(self) -> None:
+        provider = AnthropicProvider(
+            LLMConfig(provider="anthropic", model="claude-mythos-5")
         )
         constraints = provider.get_constraints()
         assert "temperature" in constraints.rejected_params
@@ -673,7 +731,8 @@ class TestDynamicMaxInputTokensResolution:
         provider, client = _provider_with_capture("claude-sonnet-5")
         client.models.raise_on_list = True
         await provider.refresh_model_limits()  # swallows the error
-        assert provider.get_constraints().max_input_tokens == 200000
+        # claude-sonnet-5 is a 1M-context model in the bundled resource.
+        assert provider.get_constraints().max_input_tokens == 1000000
 
     async def test_absent_model_input_is_permissive(self) -> None:
         """A model in neither cache nor resource resolves input to ``None``."""

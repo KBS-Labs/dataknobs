@@ -310,6 +310,23 @@ class TestCapabilities:
         assert ModelCapability.VISION in caps
         assert ModelCapability.EMBEDDINGS not in caps
 
+    def test_fable_5_has_vision(self) -> None:
+        """Fable 5 on Bedrock carries no opus/sonnet/haiku marker → its vision
+        support was mis-detected until the family name was listed."""
+        provider = BedrockProvider(
+            LLMConfig(provider="bedrock", model="anthropic.claude-fable-5")
+        )
+        caps = provider.get_capabilities()
+        assert ModelCapability.VISION in caps
+        assert ModelCapability.FUNCTION_CALLING in caps
+
+    def test_mythos_5_has_vision(self) -> None:
+        provider = BedrockProvider(
+            LLMConfig(provider="bedrock", model="anthropic.claude-mythos-5")
+        )
+        caps = provider.get_capabilities()
+        assert ModelCapability.VISION in caps
+
     def test_embedding_model_has_embeddings(self) -> None:
         provider = BedrockProvider(
             LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0")

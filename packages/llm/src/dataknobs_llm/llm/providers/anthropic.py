@@ -1047,12 +1047,37 @@ class AnthropicProvider(AsyncLLMProvider):
             await self._client.close()  # type: ignore[unreachable]
 
     async def validate_model(self) -> bool:
-        """Validate model availability."""
-        valid_models = [
-            'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
-            'claude-2.1', 'claude-2.0', 'claude-instant-1.2'
-        ]
-        return any(m in self.config.model for m in valid_models)
+        """Validate model availability against the live Models API.
+
+        Queries the provider's own model listing (mirroring the OpenAI
+        provider) rather than maintaining a hardcoded version whitelist,
+        which silently goes stale every release — the previous list
+        predated Claude 4 and so rejected *every* current model. Returns
+        ``False`` on any error (uninitialized client, listing outage) so a
+        transient failure never hard-fails a caller. The match accepts an
+        exact id, a configured bare alias that is a substring of a dated
+        snapshot id, or a listed id that is a substring of the configured
+        id — the same family-alias philosophy as the token-ceiling matcher.
+        An invitation-only model absent from the account's listing correctly
+        resolves to ``False``.
+        """
+        try:
+            if not self._is_initialized:
+                await self.initialize()
+            # Bound the poll like ``_refresh_model_limits`` so a hung
+            # control-plane cannot stall the caller for the full client timeout.
+            models = await asyncio.wait_for(
+                self._list_models(),
+                timeout=self._model_limits_refresh_timeout,
+            )
+            listed = [str(getattr(m, "id", "")).lower() for m in models]
+        except Exception:
+            return False
+        model = self.config.model.lower()
+        return any(
+            bool(mid) and (model == mid or model in mid or mid in model)
+            for mid in listed
+        )
 
     def _detect_capabilities(self) -> List[ModelCapability]:
         """Auto-detect Anthropic model capabilities."""
@@ -1064,10 +1089,14 @@ class AnthropicProvider(AsyncLLMProvider):
             ModelCapability.CODE,
         ]
 
-        # Claude 3+ models support vision, tools, and JSON mode
+        # Claude 3+ models support vision, tools, and JSON mode. The family
+        # names are matched by substring; the Claude 5 generation adds names
+        # (fable/mythos) that carry no opus/sonnet/haiku marker, so they are
+        # listed explicitly or they would be mis-detected as lacking these.
         modern_models = [
-            'claude-3', 'claude-3.5', 'claude-4',
+            'claude-3', 'claude-3.5', 'claude-4', 'claude-5',
             'claude-sonnet', 'claude-opus', 'claude-haiku',
+            'claude-fable', 'claude-mythos',
         ]
         if any(m in model for m in modern_models):
             capabilities.extend([
