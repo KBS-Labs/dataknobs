@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the phased terminal synthesis exceeds the remaining `tool_loop_timeout`.
   Defaults to a provider-neutral string; override to localize / brand / soften
   the degraded response without subclassing.
+- **`ReActReasoningConfig.truncation_retry_max_tokens`** — opt-in, bounded,
+  single retry of a tool-call turn the provider truncated at the token budget
+  (`LLMResponse.truncated`). When set (positive int), the truncated turn is
+  retried **once per truncated tool-call iteration** at the larger `max_tokens`
+  before being abandoned, branching off the incomplete `tool_use` so no dangling
+  block re-enters history. Shared across the phased and monolithic ReAct paths.
+  A non-positive value is rejected at config construction; a still-truncated or
+  erroring retry degrades to the existing abandon-and-synthesize path (never a
+  hard turn failure). Default (`None`/unset) is byte-identical to the prior
+  abandon-only behavior.
 
 ## v0.9.1 - 2026-07-18
 

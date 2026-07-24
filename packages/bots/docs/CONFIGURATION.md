@@ -1658,12 +1658,19 @@ reasoning:
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
 - `truncation_retry_max_tokens` (int, optional): When set, a tool-call turn the
   provider truncated at the token budget (`LLMResponse.truncated`) is retried
-  **once** at this `max_tokens` before being abandoned. Useful when the truncated
-  call *was* the work (a large structured tool payload). Default (`None`/unset)
-  keeps the safe terminal behavior: a truncated tool call is abandoned and the
-  turn is synthesized without retry. The requested budget is clamped to the
-  model's output ceiling by the provider, so a generous value is safe; a
-  still-truncated retry falls back to the terminal path (one attempt, no loop).
+  **once per truncated tool-call iteration** at this `max_tokens` before being
+  abandoned. Useful when the truncated call *was* the work (a large structured
+  tool payload). Must be a positive integer — `0` or a negative value is rejected
+  at config load. Default (`None`/unset) keeps the safe terminal behavior: a
+  truncated tool call is abandoned and the turn is synthesized without retry.
+  Set it comfortably above the configured `max_tokens` so the retry has room.
+  When the model advertises an output ceiling (e.g. the Claude family) the
+  provider clamps the request to it, so an oversized value is safe; providers
+  without a known ceiling (the project-default Ollama, HuggingFace, Echo) pass
+  it through unclamped. Loop-safety does not depend on the clamp — the retry is
+  single-shot, so a still-truncated retry falls back to the terminal path (one
+  attempt, no loop). If the retry call itself errors, the turn degrades to the
+  same abandon-and-synthesize path as the default (never a hard failure).
 - `greeting_template` (string, optional): Jinja2 template for bot-initiated
   greetings. See [Bot Greetings](#bot-greetings).
 
