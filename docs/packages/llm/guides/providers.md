@@ -341,10 +341,23 @@ without importing a vendor SDK (the original error is preserved on `__cause__`):
 
 | Vendor error | dataknobs exception |
 |--------------|---------------------|
-| 400 (bad request) | `ValidationError` |
+| 400 — context-window overflow | `ContextLengthExceededError` (a `ValidationError` subclass) |
+| 400 (other bad request) | `ValidationError` |
 | 429 (rate limit) | `RateLimitError` (with `retry_after` when the vendor exposes it) |
 | 401 / 403 (auth) | `OperationError` |
 | other status / connection / timeout | `OperationError` |
+
+A **context-window overflow** — the request's input exceeded the model's
+maximum context length — is a 400, so it is a `ValidationError`; the translator
+raises the narrower `ContextLengthExceededError` (`from dataknobs_llm.exceptions
+import ContextLengthExceededError`) for it. Because that type *is a*
+`ValidationError`, an existing `except ValidationError` keeps matching — catch
+the narrower type only when you want to react to overflow specifically (compact
+history and retry, switch to a larger-context model, or surface a distinct
+message). Detection is a machine `code` (OpenAI) or a conservative message
+marker (all vendors), and stays deliberately narrow — an unrelated 400 (a
+rejected sampling parameter, a malformed request) remains a plain
+`ValidationError`.
 
 This is uniform across Anthropic, OpenAI, Ollama, HuggingFace, and Bedrock: the
 status→type policy lives once on `LLMProvider._dataknobs_error_for_status`, and
