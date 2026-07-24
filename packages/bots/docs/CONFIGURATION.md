@@ -1709,6 +1709,56 @@ reasoning:
 - `greeting_template` (string, optional): Jinja2 template for bot-initiated
   greetings. See [Bot Greetings](#bot-greetings).
 
+**Termination reason (observability):**
+
+Every ReAct turn ends for one of six reasons. That reason is surfaced two ways
+— both additive, requiring no config:
+
+1. **Always-on conversation metadata.** After each turn the strategy writes a
+   machine-readable record under the `reasoning_termination` metadata key,
+   **independent of `store_trace`** (which defaults to `false`):
+
+   ```python
+   conv = await bot.get_conversation(conversation_id)
+   conv.metadata["reasoning_termination"]
+   # {"strategy": "react", "reason": "max_iterations_reached", "iterations_used": 2}
+   ```
+
+   The `reason` value is one of the `ReActTerminationReason` enum values
+   (`from dataknobs_bots.reasoning import ReActTerminationReason`), whose
+   `.value` is byte-identical to the reasoning-trace `status` string (so the
+   two never drift):
+
+   | `reason` | Meaning |
+   |---|---|
+   | `completed` | The LLM returned a final answer (no tool calls). |
+   | `max_iterations_reached` | The iteration cap was hit; a final answer is synthesized. |
+   | `truncated_tool_call` | The response was truncated mid-tool-call and the incomplete call was abandoned. |
+   | `duplicate_tool_calls_detected` | The duplicate-tool-call break guard fired. |
+   | `tools_not_supported` | The model cannot call tools; a graceful message was returned. |
+   | `truncation_retry_exhausted` | The adaptive-budget retry (`truncation_retry_max_tokens`) was still truncated and abandoned. |
+
+2. **Opt-in callback topic (`react:turn:end`).** For dashboards / alerting /
+   adaptive policy, register a callback on the strategy's lazy
+   `termination_callbacks` registry, which fires once per terminated turn with
+   the same payload. Zero overhead until a callback (or an EventBus fan-out
+   target) is registered:
+
+   ```python
+   from dataknobs_bots.reasoning import REACT_TERMINATION_TOPIC
+
+   strategy = bot.reasoning_strategy  # a ReActReasoning
+   strategy.termination_callbacks.register(REACT_TERMINATION_TOPIC, my_callback)
+
+   # Cross-replica fan-out — the topic is already fully namespaced, so no
+   # topic_prefix is needed:
+   strategy.termination_callbacks.also_publish_to(event_bus)
+   ```
+
+   `ReActReasoning` advertises `Capability.CALLBACK_REGISTRY`
+   (`strategy.supports(Capability.CALLBACK_REGISTRY)` is `True`), so the
+   observability channel is machine-queryable.
+
 **Use Cases:**
 - Tool-using agents
 - Multi-step problem solving
