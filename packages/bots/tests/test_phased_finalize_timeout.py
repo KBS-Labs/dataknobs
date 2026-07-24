@@ -17,6 +17,7 @@ drives a real ``DynaBot`` and ``EchoProvider`` simulates a slow provider via
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -29,6 +30,7 @@ from dataknobs_bots.bot.base import (
     _MIN_FINALIZE_BUDGET,
 )
 from dataknobs_bots.bot.config import _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
+from dataknobs_bots.bot.turn import TurnMode, TurnState
 from dataknobs_bots.testing import BotTestHarness
 from dataknobs_llm.llm.base import LLMMessage
 from dataknobs_llm.testing import text_response, tool_call_response
@@ -67,11 +69,14 @@ class _EchoTool(Tool):
 def _synthesis_delay(delay: float) -> Callable[[list[LLMMessage]], float]:
     """Return a delay predicate that sleeps only on the synthesis call.
 
-    The phased ReAct synthesis re-call carries the paired tool_use / tool_result
-    in its message history (verified: an assistant message with ``tool_calls``
-    plus a ``role == "tool"`` message), whereas the tool-loop ``process_input``
-    call at ``tool_loop_timeout == 0`` sees only the user message. Keying on
-    that history makes the injected latency hit the synthesis and nothing else.
+    At ``tool_loop_timeout == 0`` the phased loop breaks at the wall-clock guard
+    *before* executing the tool, leaving an orphan assistant ``tool_use`` in
+    history; ReAct's ``finalize_turn`` pairs it with a synthetic ``tool_result``
+    for the synthesis re-call. So the synthesis call's messages carry an
+    assistant message with ``tool_calls`` (and, once paired, a ``role ==
+    "tool"`` message), whereas the loop's first ``process_input`` call sees only
+    the user message. Keying on that history — an OR over either marker — makes
+    the injected latency hit the synthesis and nothing else.
     """
 
     def _fn(messages: list[LLMMessage]) -> float:
@@ -263,14 +268,17 @@ async def test_finalize_timeout_builders_markers() -> None:
         assert resp.content == _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
         assert resp.model == bot.llm.config.model
         assert resp.finish_reason == "length"
-        assert resp.truncated is True
+        # A wall-clock finalize timeout is NOT a token-budget cutoff, so
+        # ``truncated`` stays False (its documented meaning); the timeout cause
+        # is carried by finish_reason + termination_reason instead.
+        assert resp.truncated is False
         assert resp.metadata["termination_reason"] == _FINALIZE_TIMEOUT_REASON
 
         chunk = bot._finalize_timeout_chunk()
         assert chunk.delta == _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
         assert chunk.is_final is True
         assert chunk.finish_reason == "length"
-        assert chunk.truncated is True
+        assert chunk.truncated is False
         assert chunk.metadata["termination_reason"] == _FINALIZE_TIMEOUT_REASON
 
 
@@ -318,3 +326,67 @@ async def test_custom_tool_loop_timeout_message_surfaces(
         )
         streaming = await harness.stream_chat("please use the tool")
     assert streaming.chunks == [custom]
+
+
+class _HangingCloseStream:
+    """A finalize source whose ``aclose()`` hangs — exercises teardown bounding.
+
+    The source never produces a chunk within the budget (so
+    ``_bounded_finalize_stream`` hits its deadline and truncates), and its
+    ``aclose()`` then blocks far past the turn budget. Against the pre-fix
+    unbounded ``await aclose()`` the whole consumption hangs (the outer
+    ``wait_for`` below trips → the test fails); once the teardown is bounded it
+    returns in ≈ the close ceiling.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __aiter__(self) -> "_HangingCloseStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        await asyncio.sleep(30)  # never resolves within the finalize budget
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed = True
+        await asyncio.sleep(30)  # a teardown that hangs on a slow connection
+
+
+async def test_bounded_finalize_stream_bounds_source_teardown() -> None:
+    """The streaming teardown is itself bounded — a hung ``aclose()`` cannot
+    reintroduce the unbounded wall-clock this path exists to eliminate.
+
+    Reproduce-first: the outer ``wait_for`` trips (test fails) against the
+    pre-fix unbounded ``await aclose()``; with the bounded teardown the
+    consumption returns in ≈ ``_FINALIZE_SOURCE_CLOSE_TIMEOUT`` (1.0s).
+    """
+    async with await BotTestHarness.create(
+        bot_config=_react_config(tool_loop_timeout=0.0),
+        main_responses=[text_response("noop")],
+    ) as harness:
+        bot = harness.bot
+        source = _HangingCloseStream()
+        turn = TurnState(
+            mode=TurnMode.STREAM, message="hi", context=harness.context
+        )
+
+        chunks: list[Any] = []
+
+        async def _consume() -> None:
+            async for chunk in bot._bounded_finalize_stream(source, 0.05, turn):
+                chunks.append(chunk)
+
+        start = time.monotonic()
+        # Bound the whole consumption so a regression (unbounded aclose) fails
+        # loudly here instead of hanging the suite.
+        await asyncio.wait_for(_consume(), timeout=5.0)
+        elapsed = time.monotonic() - start
+
+    assert source.closed is True  # teardown was attempted, not skipped
+    # Returned in ≈ the close ceiling, nowhere near the 30s hang.
+    assert elapsed < _BOUNDED_CEILING, f"teardown not bounded: {elapsed:.2f}s"
+    # Exactly the graceful fallback chunk (the source produced none in time).
+    assert len(chunks) == 1
+    assert chunks[0].metadata["termination_reason"] == _FINALIZE_TIMEOUT_REASON

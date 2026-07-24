@@ -71,6 +71,13 @@ _MIN_FINALIZE_BUDGET = 1.0
 _FINALIZE_TIMEOUT_FINISH_REASON = "length"
 _FINALIZE_TIMEOUT_REASON = "finalize_timeout"
 
+# Ceiling on closing a truncated streaming-finalize source. The source's
+# ``GeneratorExit`` cleanup (a real provider closing its HTTP response there)
+# can itself block on a slow connection, so the teardown is bounded — a change
+# whose whole purpose is bounding the turn's wall-clock must not reintroduce an
+# unbounded await during its own cleanup. See ``_close_finalize_source``.
+_FINALIZE_SOURCE_CLOSE_TIMEOUT = 1.0
+
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     """Normalize wizard metadata to canonical structure.
@@ -1739,9 +1746,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     ),
                 },
             )
-            # #188-FU6 seam: this degradation site is the natural emission
-            # point for a structured termination reason (finalize_timeout)
-            # via LifecycleHooks/CallbackRegistry. Not built here.
+            # This degradation site is the natural emission point for a
+            # structured finalize_timeout termination reason via
+            # LifecycleHooks/CallbackRegistry (not built here).
             response = self._finalize_timeout_response()
 
         # Merge phased tool executions into turn state so _finalize_turn
@@ -1871,22 +1878,37 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         return model or "unknown"
 
     def _finalize_timeout_response(self) -> LLMResponse:
-        """Graceful-degradation response when a buffered finalize times out."""
+        """Graceful-degradation response when a buffered finalize times out.
+
+        ``truncated`` stays ``False``: it is reserved for a provider cutting
+        generation off at the **token budget** (see
+        :attr:`~dataknobs_llm.LLMResponse.truncated`) — a different condition
+        that ``_warn_if_truncated`` and ReAct's ``_is_truncated_tool_call`` key
+        off. This fallback is a *complete* degradation notice ended by a
+        **wall-clock** deadline, not a partial token-budget cutoff; the timeout
+        cause is carried by ``finish_reason='length'`` +
+        ``metadata['termination_reason']`` instead.
+        """
         return LLMResponse(
             content=self._finalize_timeout_message,
             model=self._llm_model_name(),
             finish_reason=_FINALIZE_TIMEOUT_FINISH_REASON,
-            truncated=True,
+            truncated=False,
             metadata={"termination_reason": _FINALIZE_TIMEOUT_REASON},
         )
 
     def _finalize_timeout_chunk(self) -> LLMStreamResponse:
-        """Graceful-degradation final chunk when a streaming finalize times out."""
+        """Graceful-degradation final chunk when a streaming finalize times out.
+
+        ``truncated`` stays ``False`` for the same reason as
+        :meth:`_finalize_timeout_response`: a wall-clock finalize timeout is not
+        a token-budget cutoff.
+        """
         return LLMStreamResponse(
             delta=self._finalize_timeout_message,
             is_final=True,
             finish_reason=_FINALIZE_TIMEOUT_FINISH_REASON,
-            truncated=True,
+            truncated=False,
             model=self._llm_model_name(),
             metadata={"termination_reason": _FINALIZE_TIMEOUT_REASON},
         )
@@ -1904,6 +1926,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         past it), yields a single graceful fallback final chunk and stops.
         The source generator is always closed on exit so no task/generator
         leaks when the stream is truncated.
+
+        Degraded-content shape is intentionally asymmetric with the buffered
+        path: on a real streaming provider this yields whatever partial chunks
+        the source produced *before* the deadline and then appends the single
+        fallback chunk — a degraded streaming turn is ``partial answer +
+        notice``. The buffered path (:meth:`_finalize_timeout_response`) instead
+        replaces the whole response with the notice (``notice only``), because
+        a buffered response is atomic while a stream is inherently incremental.
 
         Args:
             source: The strategy's ``stream_finalize_turn`` async iterator.
@@ -1936,9 +1966,33 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     return
                 yield chunk
         finally:
-            aclose = getattr(agen, "aclose", None)
-            if aclose is not None:
-                await aclose()
+            await self._close_finalize_source(agen)
+
+    async def _close_finalize_source(
+        self, agen: AsyncIterator[LLMStreamResponse]
+    ) -> None:
+        """Close a truncated finalize source, bounding the teardown itself.
+
+        Closing the source runs its ``GeneratorExit`` cleanup (a real provider
+        closes its HTTP response there), which can itself block on a slow
+        connection. That await is bounded by ``_FINALIZE_SOURCE_CLOSE_TIMEOUT``
+        so a hung teardown cannot reintroduce the unbounded wall-clock this path
+        exists to eliminate; on timeout the close is abandoned with a warning
+        rather than hanging the turn.
+        """
+        aclose = getattr(agen, "aclose", None)
+        if aclose is None:
+            return
+        try:
+            await asyncio.wait_for(
+                aclose(), timeout=_FINALIZE_SOURCE_CLOSE_TIMEOUT
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                "Finalize source close exceeded %.1fs — abandoning teardown to "
+                "keep the turn bounded",
+                _FINALIZE_SOURCE_CLOSE_TIMEOUT,
+            )
 
     def _log_and_build_finalize_timeout_chunk(
         self, budget: float, turn: TurnState
@@ -1954,8 +2008,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 ),
             },
         )
-        # #188-FU6 seam: emit a structured finalize_timeout termination reason
-        # here via LifecycleHooks/CallbackRegistry when FU6 lands.
+        # Natural emission point for a structured finalize_timeout termination
+        # reason via LifecycleHooks/CallbackRegistry (not built here).
         return self._finalize_timeout_chunk()
 
     @staticmethod
@@ -2334,9 +2388,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     # Accumulate usage from intermediate LLM calls
                     turn.accumulate_usage(response)
                     # Enforce remaining loop budget on the LLM re-call
-                    remaining = self._tool_loop_timeout - (
-                        time.monotonic() - loop_start
-                    )
+                    remaining = self._remaining_loop_budget(loop_start)
                     if remaining <= 0:
                         logger.warning(
                             "Tool loop budget exhausted before LLM re-call "
@@ -2792,9 +2844,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 pending_tool_calls = None
 
                 # Check remaining budget before starting LLM re-stream
-                remaining = self._tool_loop_timeout - (
-                    time.monotonic() - loop_start
-                )
+                remaining = self._remaining_loop_budget(loop_start)
                 if remaining <= 0:
                     logger.warning(
                         "Streaming tool loop budget exhausted before "
