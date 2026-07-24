@@ -1647,6 +1647,7 @@ reasoning:
   verbose: true           # Log reasoning steps
   store_trace: true       # Store reasoning trace
   early_stopping: true    # Stop when answer found
+  truncation_retry_max_tokens: 8192  # Optional: retry a truncated tool call once
   greeting_template: "Hi! I can help with research using tools."  # Optional
 ```
 
@@ -1655,6 +1656,14 @@ reasoning:
 - `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
 - `store_trace` (bool): Store reasoning trace in conversation metadata for debugging (default: false)
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
+- `truncation_retry_max_tokens` (int, optional): When set, a tool-call turn the
+  provider truncated at the token budget (`LLMResponse.truncated`) is retried
+  **once** at this `max_tokens` before being abandoned. Useful when the truncated
+  call *was* the work (a large structured tool payload). Default (`None`/unset)
+  keeps the safe terminal behavior: a truncated tool call is abandoned and the
+  turn is synthesized without retry. The requested budget is clamped to the
+  model's output ceiling by the provider, so a generous value is safe; a
+  still-truncated retry falls back to the terminal path (one attempt, no loop).
 - `greeting_template` (string, optional): Jinja2 template for bot-initiated
   greetings. See [Bot Greetings](#bot-greetings).
 

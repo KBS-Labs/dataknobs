@@ -178,6 +178,7 @@ class ReActReasoning(
         self.max_iterations = config.max_iterations
         self.verbose = config.verbose
         self.store_trace = config.store_trace
+        self._truncation_retry_max_tokens = config.truncation_retry_max_tokens
         self._artifact_registry = self.components.get("artifact_registry")
         self._review_executor = self.components.get("review_executor")
         self._context_builder = self.components.get("context_builder")
@@ -279,6 +280,82 @@ class ReActReasoning(
         )
 
         return handle
+
+    async def _maybe_retry_truncated_tool_call(
+        self,
+        response: Any,
+        manager: Any,
+        tools: list[Any] | None,
+        kwargs: dict[str, Any],
+        *,
+        iteration: int,
+    ) -> Any:
+        """Opt-in single retry of a truncated tool-call turn at a larger budget.
+
+        Called immediately after a ``complete()`` whose result is a truncated
+        tool call (:func:`_is_truncated_tool_call`).  Returns:
+
+        - the original ``response`` unchanged when the retry is disabled
+          (``truncation_retry_max_tokens is None`` — the default), so the
+          caller's terminal branch abandons it exactly as before; or
+        - the retry response (non-truncated → the caller runs its normal
+          branching: final answer / execute; still-truncated → the caller's
+          terminal branch abandons *it* instead, which is off the same active
+          path).
+
+        The truncated node is dropped off the active conversation path via
+        :meth:`ConversationManager.branch_from` before the retry, so the retry
+        becomes its sibling and no orphan ``tool_use`` lingers in the history
+        that the retry (or any later iteration) re-sends.  The requested
+        ``max_tokens`` is clamped to the model's output ceiling by the
+        provider, so an oversized budget cannot escape the model's limit — a
+        retry that is still truncated simply falls back to terminal synthesis.
+
+        Args:
+            response: The just-returned truncated tool-call response.
+            manager: Conversation manager for this turn.
+            tools: Tools forwarded to the retry ``complete()``.
+            kwargs: Additional generation params forwarded to the retry.
+            iteration: 1-based iteration index, for log parity only.
+
+        Returns:
+            The response the caller should proceed with (see above).
+        """
+        budget = self._truncation_retry_max_tokens
+        if budget is None:
+            return response  # opt-out default → terminal, unchanged
+
+        conv_id = getattr(manager, "conversation_id", None)
+        logger.warning(
+            "ReAct: tool call truncated at the token budget — retrying once "
+            "at max_tokens=%d (provider clamps to the model ceiling)",
+            budget,
+            extra={"conversation_id": conv_id, "iteration": iteration},
+        )
+        # Drop the truncated node off the active path; the retry becomes its
+        # sibling so history (root→current) excludes the incomplete tool_use.
+        await manager.branch_from(manager.current_node_id)
+        # Merge the larger budget into any caller-supplied overrides rather
+        # than passing a second ``llm_config_overrides`` (kwargs may already
+        # carry one); the retry's max_tokens wins.
+        retry_overrides = {
+            **(kwargs.get("llm_config_overrides") or {}),
+            "max_tokens": budget,
+        }
+        retry_kwargs = {**kwargs, "llm_config_overrides": retry_overrides}
+        retry = await manager.complete(tools=tools, **retry_kwargs)
+        if _is_truncated_tool_call(retry):
+            logger.warning(
+                "ReAct: retry still truncated at max_tokens=%d — abandoning "
+                "(terminal synthesis)",
+                budget,
+                extra={"conversation_id": conv_id, "iteration": iteration},
+            )
+            # Termination-reason observability seam: a structured
+            # `truncation_retry_exhausted` reason could be emitted here via the
+            # lifecycle/callback surface.  Intentionally not built in this
+            # change — seam marker only.
+        return retry
 
     async def process_input(
         self,
@@ -385,6 +462,19 @@ class ReActReasoning(
                     finish_reason="error",
                 ),
                 action="tools_not_supported",
+            )
+
+        # Opt-in single adaptive-budget retry before abandoning a truncated
+        # tool call.  Returns the original response unchanged when disabled
+        # (default) or when the retry is still truncated, so every downstream
+        # branch below is unaffected on the terminal path.
+        if _is_truncated_tool_call(response):
+            response = await self._maybe_retry_truncated_tool_call(
+                response,
+                handle.manager,
+                handle.tools,
+                handle.kwargs,
+                iteration=handle.iteration + 1,
             )
 
         # No tool_calls → final answer
@@ -683,6 +773,15 @@ class ReActReasoning(
                     ),
                     model=e.model,
                     finish_reason="error",
+                )
+
+            # Opt-in single adaptive-budget retry before abandoning a
+            # truncated tool call (shared with the phased ``process_input``
+            # path).  Returns the original response unchanged when disabled
+            # (default) or when the retry is still truncated.
+            if _is_truncated_tool_call(response):
+                response = await self._maybe_retry_truncated_tool_call(
+                    response, manager, tools, kwargs, iteration=iteration + 1,
                 )
 
             # Check if we have tool calls
