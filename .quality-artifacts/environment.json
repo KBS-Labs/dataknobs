@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-24T19:43:20Z",
+  "timestamp": "2026-07-24T21:13:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.32 (Homebrew 2026-07-23 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/structured-termination-reason",
-  "git_commit": "e1485ec3ea13823819436f5297b5962bdf9025e8",
+  "git_commit": "d4a563f42ce29d881c5c87a9e36d77e79fecb2d3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
