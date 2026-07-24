@@ -106,7 +106,7 @@ class TestBedrockMaxTokensClamp:
         provider = _stub_provider(
             LLMConfig(
                 provider="bedrock",
-                model="meta.llama3-1-70b-instruct-v1:0",
+                model="mistral.mistral-large-2402-v1:0",
                 max_tokens=500_000,
             ),
             client,

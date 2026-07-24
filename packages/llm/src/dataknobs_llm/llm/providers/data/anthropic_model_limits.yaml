@@ -11,7 +11,12 @@ models:
   claude-opus-4-8: 128000
   claude-sonnet-5: 128000
   claude-fable-5: 128000
-  claude-haiku-4-5-20251001: 64000
+  # Glasswing (invitation-only); shares Fable 5's output ceiling.
+  claude-mythos-5: 128000
+  # Short family alias (like the current-gen keys above). Resolves the bare
+  # alias AND every dated snapshot (`claude-haiku-4-5-YYYYMMDD`) via the
+  # match_ceiling family-alias rule; a dated key would miss future snapshots.
+  claude-haiku-4-5: 64000
   # legacy (still available)
   claude-opus-4-7: 128000
   claude-opus-4-6: 128000
