@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import warnings
@@ -21,6 +22,12 @@ if TYPE_CHECKING:
 
 # Type alias for response functions
 ResponseFunction = Callable[[List[LLMMessage]], Union[str, LLMResponse]]
+
+# Type alias for a per-call response latency. Either a fixed number of seconds
+# or a callable that inspects the (normalized) message list and returns the
+# seconds to sleep before that call resolves — letting a test slow only
+# specific calls (e.g. a synthesis re-call) while leaving others instant.
+ResponseDelay = Union[float, Callable[[List[LLMMessage]], float]]
 
 
 class ErrorResponse:
@@ -149,6 +156,10 @@ class EchoProvider(AsyncLLMProvider):
             responses or []
         )
         self._response_fn: ResponseFunction | None = response_fn
+        # Per-call latency (seconds). 0.0 = no delay. Simulates provider
+        # response latency so tests can exercise timeout/deadline paths
+        # deterministically. See ``set_response_delay``.
+        self._response_delay: ResponseDelay = 0.0
         self._pattern_responses: List[
             tuple[re.Pattern[str], Union[str, LLMResponse, ErrorResponse]]
         ] = []
@@ -217,6 +228,33 @@ class EchoProvider(AsyncLLMProvider):
             Self for chaining
         """
         self._response_fn = fn
+        return self
+
+    def set_response_delay(
+        self,
+        delay: ResponseDelay,
+    ) -> EchoProvider:
+        """Simulate provider response latency before each ``complete`` call.
+
+        The delay is applied inside :meth:`complete` (and therefore also
+        :meth:`stream_complete`, which delegates to it) *before* the response
+        is resolved, simulating a slow provider. Use this to exercise
+        timeout / deadline paths deterministically without a real network
+        provider or a mock.
+
+        Args:
+            delay: Either a fixed number of seconds, or a callable
+                ``(messages) -> seconds`` that inspects the normalized
+                message list and returns the seconds to sleep for that
+                specific call. The callable form lets a test slow only
+                targeted calls (e.g. a synthesis re-call carrying tool
+                observations) while leaving others instant. Non-positive
+                values are a no-op.
+
+        Returns:
+            Self for chaining.
+        """
+        self._response_delay = delay
         return self
 
     def add_pattern_response(
@@ -390,6 +428,20 @@ class EchoProvider(AsyncLLMProvider):
     # =========================================================================
     # Response Resolution
     # =========================================================================
+
+    def _resolve_delay_seconds(self, messages: List[LLMMessage]) -> float:
+        """Resolve the configured per-call latency to a concrete seconds value.
+
+        Args:
+            messages: Normalized message list for this call.
+
+        Returns:
+            Seconds to sleep before resolving the response (0.0 for no delay).
+        """
+        delay = self._response_delay
+        if callable(delay):
+            return float(delay(messages))
+        return float(delay)
 
     def _resolve_response(
         self,
@@ -607,6 +659,11 @@ class EchoProvider(AsyncLLMProvider):
         # Convert to message list
         if isinstance(messages, str):
             messages = [LLMMessage(role='user', content=messages)]
+
+        # Simulate provider response latency (0.0 = no delay).
+        delay = self._resolve_delay_seconds(messages)
+        if delay > 0:
+            await asyncio.sleep(delay)
 
         # Try scripted response first
         try:

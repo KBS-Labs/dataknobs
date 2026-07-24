@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`DynaBot` now bounds the terminal synthesis of a phased reasoning turn**
+  (ReAct) by the wall-clock budget left unspent by `tool_loop_timeout`.
+  Previously `tool_loop_timeout` bounded only the tool *loop*; the synthesis
+  that runs after an abnormal loop termination (max iterations, duplicate-tool
+  break, loop-timeout break) was unbounded, so a slow or hung provider pushed a
+  turn's wall-clock to `tool_loop_timeout` + an unbounded finalize. The finalize
+  is now bounded at the DynaBot dispatch layer — buffered via `asyncio.wait_for`,
+  streaming via a per-chunk deadline whose source generator (and the source's
+  own teardown) are themselves bounded so nothing leaks or hangs. On timeout the
+  turn degrades gracefully to a config-overridable
+  `DynaBotConfig.tool_loop_timeout_message` (default provider-neutral) carrying
+  `finish_reason="length"` + `metadata['termination_reason']="finalize_timeout"`
+  (`truncated` stays `False` — a wall-clock timeout is not a token-budget
+  cutoff). No `ReasoningStrategy` / `PhasedReasoningProtocol` /
+  `StreamingPhasedProtocol` signatures change; `Simple` / `Wizard` / `ReAct`
+  strategy code is untouched.
+
+### Added
+
+- **`DynaBotConfig.tool_loop_timeout_message`** — the user-facing text surfaced
+  when the phased terminal synthesis exceeds the remaining `tool_loop_timeout`.
+  Defaults to a provider-neutral string; override to localize / brand / soften
+  the degraded response without subclassing.
+
 ## v0.9.1 - 2026-07-18
 
 ## v0.9.0 - 2026-07-15

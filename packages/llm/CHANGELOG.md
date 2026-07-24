@@ -81,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-breaking: an unknown model resolves to `None` (permissive, unchanged), and
   the default `max_tokens` (`1024`) is below any real ceiling, so the
   overwhelming majority of requests are byte-identical.
+- **`EchoProvider.set_response_delay(float | Callable[[messages], float])`** —
+  a testing construct that simulates provider response latency. The delay is
+  awaited once inside `complete()` (so it also covers `stream_complete`, which
+  delegates) *before* the response is resolved. The callable form receives the
+  normalized message list and returns the seconds to sleep, so a test can slow
+  only a targeted call (e.g. a synthesis re-call carrying tool observations)
+  while leaving others instant — driving timeout / deadline paths
+  deterministically with real constructs instead of mocks.
 
 ### Changed
 
