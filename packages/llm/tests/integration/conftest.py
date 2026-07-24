@@ -14,6 +14,8 @@ from typing import Any, Generator
 import pytest
 import requests
 
+from dataknobs_common.testing import is_ollama_model_usable
+
 
 def is_ollama_available(
     host: str = "localhost", port: int = 11434, timeout: float = 2.0
@@ -91,7 +93,7 @@ def verify_ollama_model(
     """Verify that a specific Ollama model is available.
 
     Args:
-        model: Model name (e.g., "qwen3-coder")
+        model: Model name (e.g., "llama3.1:8b")
         host: Ollama host
         port: Ollama port
 
@@ -126,34 +128,83 @@ def ensure_ollama_ready(ollama_connection_params: dict[str, Any]) -> None:
 
 @pytest.fixture(scope="session")
 def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
-    """Get the Ollama model to use for tests.
+    """Resolve an Ollama model that actually produces usable output.
 
-    Uses OLLAMA_MODEL environment variable, defaulting to qwen3-coder.
-    Falls back to any available model if specified model is not found.
+    Uses OLLAMA_MODEL (default ``llama3.1:8b``) as the preferred model, but goes
+    beyond checking a model is merely *installed*: each candidate is canaried via
+    :func:`~dataknobs_common.testing.is_ollama_model_usable` (a trivial
+    generation) and the first that returns non-empty output is used. This makes
+    the suite resilient to environmental changes — a model that is loaded but
+    mis-serving (a reasoning model exhausting its token budget, or a
+    runtime/template mismatch after an Ollama upgrade) is stepped over instead of
+    silently yielding empty extractions that fail every assertion.
+
+    - If a usable model is found, it is used (a loud note is printed when it is
+      not the preferred one, so a degraded environment stays visible).
+    - If models are installed but NONE produce usable output, the fixture
+      **hard-fails** with a diagnosis — a broken runtime is a real failure, not a
+      silent skip (per the project's CI policy).
+    - If no models are installed at all, it skips (nothing to test).
     """
-    preferred_model = os.environ.get("OLLAMA_MODEL", "qwen3-coder")
+    preferred = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
     host = ollama_connection_params["host"]
     port = ollama_connection_params["port"]
 
-    if verify_ollama_model(preferred_model, host, port):
-        return preferred_model
-
-    # Fall back to any available model
     available = get_available_models(host, port)
-    # Prefer models good for extraction
-    extraction_models = ["qwen3-coder", "qwen3", "llama3", "mistral", "gemma3"]
-    for model in extraction_models:
-        for available_model in available:
-            if available_model.startswith(model):
-                print(f"\nUsing fallback model: {available_model}")
-                return available_model
+    if not available:
+        pytest.skip(f"No Ollama models installed. Run: ollama pull {preferred}")
 
-    if available:
-        print(f"\nWARNING: Using first available model: {available[0]}")
-        return available[0]
+    # Ordered candidates: the preferred model first (respecting OLLAMA_MODEL),
+    # then reliable instruct families that are fast + well-behaved for
+    # deterministic extraction. Reasoning/"coder" families (qwen*) come last:
+    # they emit hidden thinking tokens, are slow to canary, and can return empty
+    # under some runtimes — poor extraction defaults, useful only as a fallback.
+    candidates: list[str] = []
 
-    pytest.skip(f"No Ollama models available. Run: ollama pull {preferred_model}")
-    return preferred_model  # Won't reach here, but satisfies type checker
+    def _add(name: str) -> None:
+        if name and name not in candidates:
+            candidates.append(name)
+
+    if verify_ollama_model(preferred, host, port):
+        base = preferred.split(":", maxsplit=1)[0]
+        for model in available:
+            if model in (preferred, base) or model.startswith(base + ":"):
+                _add(model)
+        _add(preferred)
+    for family in ("llama3", "mistral", "gemma3", "qwen3-coder", "qwen3"):
+        for model in available:
+            if model.startswith(family):
+                _add(model)
+    # Cap the candidate set so a wholesale-broken runtime hard-fails promptly
+    # rather than canarying every installed model. The preferred + reliable
+    # instruct families above cover the realistic working cases.
+    candidates = candidates[:6]
+
+    tried: list[str] = []
+    for model in candidates:
+        # Bounded canary: a slow reasoning model that returns empty (e.g.
+        # qwen3-coder) is cut off at the timeout instead of stalling the run.
+        if is_ollama_model_usable(
+            model, host=host, port=port, num_predict=16, timeout=12.0
+        ):
+            if tried:
+                print(
+                    f"\nOllama: preferred model unusable; recovered with "
+                    f"'{model}' (tried: {', '.join(tried)})."
+                )
+            return model
+        tried.append(model)
+
+    pytest.fail(
+        f"Ollama is reachable and {len(available)} model(s) are installed, but "
+        f"NONE produced usable (non-empty) output. Tried: {', '.join(tried)}. "
+        "This indicates a broken Ollama runtime (e.g. a version/template "
+        "mismatch after an upgrade, or reasoning models exhausting their token "
+        "budget) — not a dataknobs code defect. Fix the Ollama environment "
+        "(restart/roll back Ollama, re-pull a model, or set OLLAMA_MODEL to a "
+        "working instruct model) and re-run."
+    )
+    return preferred  # Won't reach here, but satisfies the type checker
 
 
 @pytest.fixture

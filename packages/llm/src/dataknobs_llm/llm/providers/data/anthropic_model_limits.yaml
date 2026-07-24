@@ -1,0 +1,21 @@
+# Anthropic model output-token ceilings (max_tokens), synchronous Messages API.
+# FALLBACK ONLY -- the primary source is the live Models API `max_tokens` field.
+# Source: https://platform.claude.com/docs/en/docs/about-claude/models/overview
+# Last verified: 2026-07-23
+# NOTE: the Batches API supports higher output (up to 300k) via the
+#   output-300k-2026-03-24 beta header; not represented here (sync-API values).
+# Values are the documented (rounded) maxima; exactness comes from the dynamic
+# Models-API path. Maintained by:
+#   uv run python -m dataknobs_llm.tooling.model_limits --update
+models:
+  claude-opus-4-8: 128000
+  claude-sonnet-5: 128000
+  claude-fable-5: 128000
+  claude-haiku-4-5-20251001: 64000
+  # legacy (still available)
+  claude-opus-4-7: 128000
+  claude-opus-4-6: 128000
+  claude-sonnet-4-6: 128000
+  claude-sonnet-4-5-20250929: 64000
+  claude-opus-4-5-20251101: 64000
+  claude-opus-4-1-20250805: 32000

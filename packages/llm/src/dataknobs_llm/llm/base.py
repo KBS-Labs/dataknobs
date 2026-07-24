@@ -210,9 +210,14 @@ class ModelConstraints:
             (``False``); providers that pass ``system`` through the message
             array leave this ``True``. Read by the mid-conversation
             system-message policy.
-        max_tokens_ceiling: Hard upper bound on ``max_tokens`` for the family,
-            or ``None`` when unconstrained. Reserved for future clamping; no
-            provider currently populates it.
+        max_tokens_ceiling: Hard upper bound on ``max_tokens`` for the model,
+            or ``None`` when unconstrained. A provider clamps an over-ceiling
+            ``max_tokens`` down to this value before the call (clamp-and-warn),
+            pre-empting the output-truncation / 400 class at source. Populated
+            by :class:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider`
+            from the live Models API (cached, TTL-refreshed) with a bundled
+            fallback resource, and always config-overridable; ``None`` (the
+            default and any unknown model) leaves ``max_tokens`` untouched.
     """
 
     rejected_params: frozenset[str] = frozenset()

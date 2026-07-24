@@ -209,7 +209,7 @@ capabilities are the feature set; constraints are request-shape rules).
 |-------|---------|
 | `rejected_params` | Generation/sampling params the family rejects — the provider **drops them before the call and logs a warning** (drop-and-warn, never silent). |
 | `accepts_inline_system` | Whether the family accepts a `role="system"` message at a non-leading position (Anthropic hoists all system messages, so `False`). |
-| `max_tokens_ceiling` | Reserved upper bound on `max_tokens` (unpopulated today). |
+| `max_tokens_ceiling` | Upper bound on `max_tokens` for the model. When a request asks for more, the provider **clamps it down to the ceiling and logs a warning** (clamp-and-warn, never silent). Resolved from the live Models API (cached, TTL-refreshed) with a bundled fallback resource; `None` (unknown model, or none overridden) leaves `max_tokens` untouched. |
 
 The `AnthropicProvider` auto-detects the Claude 5 → `temperature`-rejection rule,
 so a Claude-5-family config no longer 400s when it carries `temperature:` — the
@@ -260,6 +260,56 @@ Constraints resolve from the **per-call runtime config**, so a call that
 overrides the model to a different family (`complete(..., config_overrides={"model": ...})`)
 gets that family's rules — the drop reflects the model actually being sent, not
 just the configured default.
+
+The same surface carries `max_tokens_ceiling`. When a request's `max_tokens`
+exceeds the model's ceiling, the provider **clamps it down to the ceiling and
+logs a warning** — clamping *down* is always a valid request (asking for fewer
+output tokens never 400s), so this pre-empts the output-truncation / 400 class
+at source rather than recovering from it.
+
+The ceiling is **resolved dynamically**, in this precedence per model:
+
+1. **Config override** — `LLMConfig.constraints={"max_tokens_ceiling": N}` always
+   wins over any dynamically-resolved value.
+2. **Live Models API** — the Anthropic Models API reports each model's
+   `max_tokens`. The provider caches it per process and refreshes it on a TTL (at
+   most one `models.list()` per TTL per event loop, never per request), so a
+   ceiling that changes between releases is picked up without a dataknobs release.
+3. **Bundled fallback resource** — a maintained data file shipped with the
+   package (`llm/providers/data/anthropic_model_limits.yaml`), used only when the
+   dynamic path has produced no value (no API key, offline, an API blip). A
+   known-good dynamic value is never degraded back to the resource on a transient
+   failure.
+4. **`None`** → permissive, `max_tokens` passes through untouched — identical to
+   the pre-clamp default (which sends `1024`, well under any real ceiling, so the
+   overwhelming majority of requests are byte-identical).
+
+```python
+# Pin the ceiling explicitly — an over-ceiling max_tokens is clamped down (with
+# a logged warning) instead of truncating or 400-ing. The override always wins
+# over any dynamically-resolved value:
+create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "max_tokens": 100_000,
+    "constraints": {"max_tokens_ceiling": 8192},  # request clamped to 8192
+})
+```
+
+Two provider `options` tune the dynamic path (both optional):
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `model_limits_ttl` | `3600` | Seconds between Models-API refreshes — the freshness-vs-traffic knob. Near-zero re-fetches each call; large minimizes API traffic. |
+| `model_limits_dynamic` | `true` | Set `false` to disable Models-API calls entirely (resource-only). |
+
+A consumer that prefers to drive freshness on its own schedule can call
+`await provider.refresh_model_limits()` to force an immediate refresh.
+
+The bundled fallback resource is kept current with a maintainer tool that
+reconciles it against the live API — `bin/update-model-limits.sh --check` reports
+drift (a key-gated CI signal) and `--update` rewrites the file from live values.
+Both are a clean no-op when `ANTHROPIC_API_KEY` is unset.
 
 ### Vendor-error translation (all providers)
 
