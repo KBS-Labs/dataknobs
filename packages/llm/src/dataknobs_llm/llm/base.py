@@ -71,6 +71,7 @@ from dataknobs_common.exceptions import (
     OperationError, RateLimitError, ResourceError, ValidationError,
 )
 from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_llm.exceptions import ContextLengthExceededError
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -798,6 +799,23 @@ CLAUDE_STOP_REASON_NORMALIZATION: Dict[str, str] = {
 #: token budget (the response is incomplete — see :attr:`LLMResponse.truncated`).
 CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
 
+#: Case-insensitive substrings identifying a context-window-overflow 400 across
+#: vendor phrasings. Conservative — only unambiguous overflow wording, so an
+#: unrelated 400 (rejected param, malformed request) stays a plain
+#: ``ValidationError``. Every provider folds the vendor error *body* into the
+#: dispatched message — the SDK providers via ``str(exc)`` and the aiohttp
+#: providers (Ollama, HuggingFace) via ``raise_for_status_with_body`` (which
+#: preserves the body aiohttp's own ``raise_for_status`` would drop) — so a
+#: marker here fires uniformly without per-provider translator changes.
+_CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset({
+    "context_length_exceeded",   # OpenAI machine code + message fragment
+    "maximum context length",    # OpenAI message
+    "prompt is too long",        # Anthropic message
+    "input is too long",         # Bedrock message
+    "too many input tokens",     # Bedrock variant
+    "context window",            # generic
+})
+
 
 def normalize_claude_stop_reason(
     raw_stop_reason: str | None,
@@ -939,12 +957,35 @@ class LLMProvider(ABC):
                 f"Must be 'system', 'user', or 'both'"
             )
 
+    @staticmethod
+    def _is_context_length_error(
+        status: int | None, message: str, *, code: str | None = None
+    ) -> bool:
+        """True when a 400 is specifically a context-window overflow.
+
+        Status-gated first (only 400s qualify), then a machine ``code``
+        (OpenAI supplies one) or a conservative message marker (every provider
+        folds the vendor error body into the dispatched message — see
+        :data:`_CONTEXT_LENGTH_MARKERS`). Deliberately narrow so an unrelated
+        400 — a rejected sampling parameter, a malformed request — stays a plain
+        :class:`~dataknobs_common.exceptions.ValidationError`.
+        """
+        if status != 400:
+            return False
+        # ``str(code)`` guards the generic ``code`` extension point: a future
+        # provider passing a non-str machine code must not ``AttributeError``.
+        if code and str(code).lower() in _CONTEXT_LENGTH_MARKERS:
+            return True
+        text = message.lower()
+        return any(marker in text for marker in _CONTEXT_LENGTH_MARKERS)
+
     def _dataknobs_error_for_status(
         self,
         status: int | None,
         message: str,
         *,
         retry_after: float | None = None,
+        code: str | None = None,
     ) -> Exception:
         """Map an HTTP-ish status to a dataknobs exception (pure dispatch).
 
@@ -956,7 +997,11 @@ class LLMProvider(ABC):
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
           (carrying ``retry_after`` when a provider could extract it),
-        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - 400 that is a context-window overflow →
+          :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`
+          (a ``ValidationError`` subclass — see
+          :meth:`_is_context_length_error`),
+        - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
         - 401/403 and anything else (other status, connection, timeout, or an
           unknown ``None`` status) →
           :class:`~dataknobs_common.exceptions.OperationError`.
@@ -966,6 +1011,9 @@ class LLMProvider(ABC):
                 (connection error, timeout).
             message: Human-readable error message for the raised exception.
             retry_after: Seconds to wait, when known (429 only).
+            code: Machine error code, when the SDK supplies one (OpenAI). Used
+                to identify a context-length overflow even if the message
+                phrasing does not match a marker.
 
         Returns:
             A dataknobs exception instance (not raised — the caller raises it
@@ -973,6 +1021,8 @@ class LLMProvider(ABC):
         """
         if status == 429:
             return RateLimitError(message, retry_after=retry_after)
+        if self._is_context_length_error(status, message, code=code):
+            return ContextLengthExceededError(message)
         if status == 400:
             return ValidationError(message)
         return OperationError(message)  # 401/403 and everything else

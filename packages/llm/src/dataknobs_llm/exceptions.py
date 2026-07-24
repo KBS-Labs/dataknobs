@@ -9,12 +9,13 @@ from dataknobs_common import (
     OperationError,
     ResourceError,
 )
-from dataknobs_common.exceptions import RateLimitError
+from dataknobs_common.exceptions import RateLimitError, ValidationError
 
 # Create LLMError as alias to DataknobsError for backward compatibility
 LLMError = DataknobsError
 
 __all__ = [
+    "ContextLengthExceededError",
     "LLMError",
     "RateLimitError",
     "ResponseQueueExhaustedError",
@@ -23,6 +24,20 @@ __all__ = [
     "ToolsNotSupportedError",
     "VersioningError",
 ]
+
+
+class ContextLengthExceededError(ValidationError):
+    """The request exceeded the model's input context window.
+
+    A specialization of :class:`~dataknobs_common.exceptions.ValidationError`
+    (context overflow is a 400 / invalid request), so existing
+    ``except ValidationError`` handlers keep matching. Catch this narrower type
+    to react to context overflow specifically — compact history and retry,
+    switch to a larger-context model, or surface a distinct message. The
+    original vendor SDK error is preserved on ``__cause__``.
+    """
+
+    pass
 
 
 class VersioningError(OperationError):

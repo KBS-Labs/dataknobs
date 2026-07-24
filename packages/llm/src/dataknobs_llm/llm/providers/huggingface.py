@@ -10,6 +10,7 @@ from ..base import (
     AsyncLLMProvider, ModelCapability,
     normalize_llm_config
 )
+from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
@@ -166,7 +167,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         try:
             async with self._session.post(url, json=payload) as response:
-                response.raise_for_status()
+                await raise_for_status_with_body(response)
                 data = await response.json()
         except Exception as exc:
             self._raise_translated(exc)
@@ -236,7 +237,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         try:
             async with self._session.post(url, json=payload) as response:
-                response.raise_for_status()
+                await raise_for_status_with_body(response)
                 embeddings = await response.json()
         except Exception as exc:
             self._raise_translated(exc)

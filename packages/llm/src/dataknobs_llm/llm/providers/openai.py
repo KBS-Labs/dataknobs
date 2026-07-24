@@ -391,7 +391,9 @@ class OpenAIProvider(AsyncLLMProvider):
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
           (with ``retry_after`` when the header is present),
-        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - a context-window-overflow 400 (identified by the ``code`` or message)
+          → :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`,
+        - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
         - 401/403 and any other OpenAI API error (other status, connection,
           timeout — which carry no ``status_code``) →
           :class:`~dataknobs_common.exceptions.OperationError`.
@@ -413,7 +415,10 @@ class OpenAIProvider(AsyncLLMProvider):
             getattr(response, "headers", None)
         )
         return self._dataknobs_error_for_status(
-            status, f"OpenAI API error: {exc}", retry_after=retry_after
+            status,
+            f"OpenAI API error: {exc}",
+            retry_after=retry_after,
+            code=getattr(exc, "code", None),
         )
 
     async def complete(

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Distinct context-window-overflow exception.**
+  `ContextLengthExceededError` (`dataknobs_llm.exceptions`), a `ValidationError`
+  subclass, is now raised when a request's input exceeds the model's maximum
+  context length (a 400 that previously surfaced as the generic
+  `ValidationError`). The shared status dispatch identifies overflow by a
+  machine `code` (OpenAI) or a conservative message marker (all providers),
+  staying narrow so an unrelated 400 remains a plain `ValidationError`. Purely
+  additive — because the new type *is a* `ValidationError`, every existing
+  `except ValidationError` keeps matching; catch the narrower type to react to
+  overflow specifically. The original vendor SDK error is preserved on
+  `__cause__`.
 - **Token-budget truncation signal.** New `LLMResponse.truncated` /
   `LLMStreamResponse.truncated` boolean (default `False`) that every provider
   populates when generation is cut off at the token budget — Anthropic

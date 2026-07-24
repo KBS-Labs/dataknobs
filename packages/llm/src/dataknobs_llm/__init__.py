@@ -67,7 +67,11 @@ from dataknobs_llm.execution.parallel import (
 )
 
 # Exceptions
-from dataknobs_llm.exceptions import ResponseQueueExhaustedError, ToolsNotSupportedError
+from dataknobs_llm.exceptions import (
+    ContextLengthExceededError,
+    ResponseQueueExhaustedError,
+    ToolsNotSupportedError,
+)
 
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
@@ -150,6 +154,7 @@ __all__ = [
     "DeterministicTask",
     "TaskResult",
     # Exceptions
+    "ContextLengthExceededError",
     "ResponseQueueExhaustedError",
     "ToolsNotSupportedError",
     # Testing utilities
