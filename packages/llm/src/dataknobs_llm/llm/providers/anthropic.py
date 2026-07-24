@@ -57,10 +57,14 @@ See Also:
     - anthropic Python package: https://github.com/anthropics/anthropic-sdk-python
 """
 
+import asyncio
 import json
 import logging
 import os
+import time
 import warnings
+import weakref
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from dataknobs_common.exceptions import ValidationError
@@ -70,26 +74,27 @@ from ..base import (
     AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
     normalize_claude_stop_reason, normalize_llm_config
 )
+from ._claude_shared import (
+    CLAUDE_5_TEMPERATURE_REJECTORS,
+    RESOURCE_MODEL_LIMITS,
+    claude_rejects_temperature,
+    load_model_limits_resource,
+    match_ceiling,
+    resource_ceiling,
+)
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
 
-#: Claude model families that reject the ``temperature`` sampling parameter
-#: at the request boundary (a hard 400). Matched as lowercase substrings of
-#: the model id, distinguishing the Claude 5 generation
-#: (``claude-sonnet-5``, ``claude-opus-5``, ...) from the Claude 4.x
-#: generation (``claude-opus-4-8``, ``claude-haiku-4-5-...``), which still
-#: accepts ``temperature``. This is the auto-detected default only — a
-#: consumer can declare or withdraw the rule at runtime via
-#: ``LLMConfig.constraints`` without a dataknobs release (see
-#: :class:`~dataknobs_llm.llm.base.ModelConstraints`).
-_CLAUDE_5_TEMPERATURE_REJECTORS: tuple[str, ...] = (
-    "claude-5",
-    "claude-sonnet-5",
-    "claude-opus-5",
-    "claude-haiku-5",
-    "claude-fable-5",
-)
+#: Claude model families that reject ``temperature`` + the ``max_tokens``
+#: fallback resource + the family-matching resolvers are Claude-family knowledge
+#: shared with the Bedrock (Claude-on-Bedrock) provider, so they live in
+#: :mod:`._claude_shared` and are imported above. Module aliases preserve the
+#: historical ``_``-prefixed names some call sites / tests reference.
+_CLAUDE_5_TEMPERATURE_REJECTORS = CLAUDE_5_TEMPERATURE_REJECTORS
+_RESOURCE_MODEL_LIMITS = RESOURCE_MODEL_LIMITS
+_load_model_limits_resource = load_model_limits_resource
+_resource_ceiling = resource_ceiling
 
 #: Sampling parameters that ``adapt_config`` may forward and that a model
 #: family might reject. Used by the 400-retry safety net to identify which
@@ -105,6 +110,164 @@ _SAMPLING_PARAMS: tuple[str, ...] = (
 #: The Claude stop-reason normalization table + truncation detection live in
 #: ``dataknobs_llm.llm.base`` (:func:`normalize_claude_stop_reason`), shared
 #: verbatim with the Bedrock Converse adapter since Bedrock runs Claude.
+
+#: Default TTL (seconds) governing how often the live Anthropic Models API is
+#: re-polled for per-model output-token (``max_tokens``) ceilings. A fresh cache
+#: entry is a no-op (no I/O); a refresh happens **at most once per TTL per
+#: process** (per event loop), never per request. Overridable per provider via
+#: ``LLMConfig.options["model_limits_ttl"]`` — the "freshness vs. API traffic"
+#: knob: near-zero → re-fetch each call (maximal freshness), large → minimal
+#: Models-API traffic.
+_DEFAULT_MODEL_LIMITS_TTL: float = 3600.0
+
+#: Default hard timeout (seconds) on a single Models-API refresh poll. The
+#: refresh runs under the per-loop lock, so a *hung* (not erroring) Models API
+#: would otherwise stall every cold-cache caller for the full client
+#: ``config.timeout`` (60s by default). Bounding the poll independently keeps a
+#: hung control-plane from blocking the request path: on timeout the poll is
+#: cancelled, the lock released, and the request proceeds on the cached/resource
+#: value (the refresh is best-effort). Overridable per provider via
+#: ``LLMConfig.options["model_limits_refresh_timeout"]``.
+_DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT: float = 10.0
+
+
+@dataclass
+class _CeilingEntry:
+    """One cached per-model ``max_tokens`` ceiling and its provenance.
+
+    ``source`` distinguishes a value fetched from the live Models API
+    (``"dynamic"``) from the bundled fallback (``"resource"``) so a transient
+    Models-API failure never degrades a known-good dynamic value back to the
+    (possibly rounded-down) resource — see
+    :meth:`AnthropicProvider._refresh_model_limits`. ``fetched_at`` is a
+    ``time.monotonic()`` stamp (provenance/debugging; the refresh cadence is
+    gated per-loop by :data:`_MODEL_LIMITS_LAST_FETCH`, not per entry).
+    """
+
+    ceiling: int | None
+    source: str  # "dynamic" | "resource"
+    fetched_at: float
+
+
+#: Process-level cache keyed by lowercased model id, populated by the async
+#: Models-API refresh and read synchronously by :meth:`AnthropicProvider._detect_constraints`.
+#: Module-global (shared across provider instances) so one refresh serves every
+#: consumer on the loop. Mirrors the :data:`_DISCOVERED_REJECTED_PARAMS`
+#: process-cache precedent.
+_MODEL_LIMITS_CACHE: dict[str, _CeilingEntry] = {}
+
+#: Per-event-loop monotonic timestamp of the last Models-API refresh *attempt*
+#: (success or failure). Gates the refresh cadence: a refresh fires only when
+#: ``now - last >= ttl`` for the running loop, so it is bounded to ≤1
+#: ``models.list()`` per TTL per loop regardless of request volume or outcome.
+#: Keyed on the **loop object** via a :class:`weakref.WeakKeyDictionary`: the
+#: entry is dropped automatically when the loop is garbage-collected (no leak),
+#: and identity keying means a *new* loop is always a distinct key — closing the
+#: ``id(loop)``-reuse hole where a fresh loop could inherit a dead loop's stale
+#: timestamp and wrongly skip a needed refresh.
+_MODEL_LIMITS_LAST_FETCH: "weakref.WeakKeyDictionary[Any, float]" = (
+    weakref.WeakKeyDictionary()
+)
+
+#: Per-event-loop locks serializing the refresh critical section so concurrent
+#: requests on a cold/stale cache coalesce into a single ``models.list()``.
+#: Keyed on the loop object (same :class:`weakref.WeakKeyDictionary` rationale
+#: as :data:`_MODEL_LIMITS_LAST_FETCH`) — a plain module-level
+#: :class:`asyncio.Lock` is loop-bound and breaks under multiple loops.
+_MODEL_LIMITS_LOCKS: "weakref.WeakKeyDictionary[Any, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _model_limits_lock() -> asyncio.Lock:
+    """Return (lazily creating) the refresh lock for the running loop.
+
+    Lazy creation is race-free within a loop: no ``await`` separates the
+    ``get`` from the assignment, so a single loop cannot interleave two
+    creations, and distinct loops key on distinct loop objects.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _MODEL_LIMITS_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _MODEL_LIMITS_LOCKS[loop] = lock
+    return lock
+
+
+def _resolve_ceiling(model: str) -> int | None:
+    """Synchronous ceiling resolution read by ``_detect_constraints``.
+
+    Precedence: a dynamically-fetched value in :data:`_MODEL_LIMITS_CACHE`
+    (the normal-operation source, kept fresh by the TTL-gated async refresh)
+    else the bundled :func:`~._claude_shared.resource_ceiling` fallback else
+    ``None``. Both consult the *same* family-matching rule
+    (:func:`~._claude_shared.match_ceiling` — exact, then longest substring in
+    either direction) so the dynamic cache and the resource never disagree on
+    how a model id resolves: a bare-alias request (``claude-sonnet-5``) matches
+    a dated cache key (``claude-sonnet-5-<snapshot>``) fetched from the API, and
+    a dated request matches a family resource key. Purely a cache/dict read — no
+    I/O — so it is safe on the synchronous detect path.
+    """
+    key = model.lower()
+    dynamic = match_ceiling(
+        key,
+        (
+            (cached_id, entry.ceiling)
+            for cached_id, entry in _MODEL_LIMITS_CACHE.items()
+            if entry.ceiling is not None
+        ),
+    )
+    if dynamic is not None:
+        return dynamic
+    return resource_ceiling(key)
+
+
+def _extract_max_tokens(model_obj: Any) -> int | None:
+    """Read a model object's ``max_tokens`` (output ceiling), or ``None``.
+
+    The typed ``anthropic`` ``ModelInfo`` exposes ``max_tokens`` directly; the
+    ``model_dump()`` fallback is defensive for an SDK whose typed surface lags
+    the REST payload. A missing / non-integer value yields ``None`` (the model
+    then resolves via the resource fallback).
+    """
+    mt = getattr(model_obj, "max_tokens", None)
+    if mt is None and hasattr(model_obj, "model_dump"):
+        try:
+            mt = model_obj.model_dump().get("max_tokens")
+        except Exception:  # pragma: no cover - defensive against SDK shape
+            mt = None
+    if mt is None:
+        return None
+    try:
+        return int(mt)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Coerce a config ``options`` value to ``bool`` (string-tolerant).
+
+    ``LLMConfig.options`` values may arrive as strings from a config file, so
+    ``"false"`` must not read as truthy. Mirrors the defensive coercion the
+    provider applies to other option knobs.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
+def _coerce_ttl(value: Any, *, default: float) -> float:
+    """Coerce a config ``options`` value to a non-negative TTL float."""
+    try:
+        ttl = float(value)
+    except (TypeError, ValueError):
+        return default
+    return ttl if ttl >= 0 else default
+
 
 #: Process-level cache of sampling params discovered — via a 400 at request
 #: time — to be rejected by a given model, keyed by lowercased model id. The
@@ -146,6 +309,7 @@ _DEFAULT_SYSTEM_MESSAGE_POLICY: str = "inline"
 #: ``warn``-policy log line — enough to identify the offending message without
 #: dumping an arbitrarily large payload.
 _WARN_CONTENT_PREVIEW_CHARS: int = 120
+
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
@@ -677,6 +841,20 @@ class AnthropicProvider(AsyncLLMProvider):
             system_message_policy=policy,
             accepts_inline_system=self.get_constraints().accepts_inline_system,
         )
+        # Dynamic max_tokens-ceiling resolution knobs (see the module-level
+        # _resolve_ceiling / _refresh_model_limits docs). Read once from options
+        # with defensive coercion — config-file values may be strings.
+        self._model_limits_dynamic = _coerce_bool(
+            llm_config.options.get("model_limits_dynamic"), default=True
+        )
+        self._model_limits_ttl = _coerce_ttl(
+            llm_config.options.get("model_limits_ttl"),
+            default=_DEFAULT_MODEL_LIMITS_TTL,
+        )
+        self._model_limits_refresh_timeout = _coerce_ttl(
+            llm_config.options.get("model_limits_refresh_timeout"),
+            default=_DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT,
+        )
 
     async def initialize(self) -> None:
         """Initialize Anthropic client."""
@@ -695,6 +873,107 @@ class AnthropicProvider(AsyncLLMProvider):
             self._is_initialized = True
         except ImportError as e:
             raise ImportError("anthropic package not installed. Install with: pip install anthropic") from e
+        # NOTE: initialize() deliberately does NO network I/O beyond building
+        # the client. The per-model max_tokens ceilings are refreshed lazily at
+        # the first request boundary (complete/stream_complete/function_call all
+        # call _refresh_model_limits_if_stale before the clamp), so the first
+        # completion already clamps against fresh data without initialize()
+        # incurring a swallowed Models-API round-trip.
+
+    async def _refresh_model_limits_if_stale(self) -> None:
+        """Refresh the per-model ``max_tokens`` cache if the loop's TTL expired.
+
+        The synchronous detect/clamp path must not do I/O, so the refresh fires
+        here — from the async request boundary — *before* :meth:`_build_api_kwargs`.
+        TTL-gated on the running loop's last-fetch timestamp, so a fresh cache is
+        a no-op (no I/O) and a refresh happens **at most once per TTL per loop**,
+        never per request. A no-op when dynamic resolution is disabled.
+        """
+        if not self._model_limits_dynamic:
+            return
+        if not self._loop_fetch_stale():
+            return
+        await self._refresh_model_limits()
+
+    def _loop_fetch_stale(self) -> bool:
+        """Whether the running loop is due for a Models-API refresh (per TTL)."""
+        last = _MODEL_LIMITS_LAST_FETCH.get(asyncio.get_running_loop())
+        if last is None:
+            return True
+        return (time.monotonic() - last) >= self._model_limits_ttl
+
+    async def _refresh_model_limits(self, *, force: bool = False) -> None:
+        """Poll the live Models API and refresh the per-model ceiling cache.
+
+        Serialized per loop so concurrent callers on a cold/stale cache coalesce
+        into a single ``models.list()`` (the double-check after acquiring the
+        lock returns early for the losers). The last-fetch timer is re-armed
+        **before** the API call — success or failure — so a Models-API outage
+        cannot busy-retry: it is bounded to one attempt per TTL, and on failure
+        the last-known-good ``dynamic`` entries are left intact (never degraded
+        to the resource; see :class:`_CeilingEntry`). A ``resource``-sourced
+        model is promoted to ``dynamic`` once a later poll returns it — how a
+        model published after ``initialize`` resolves without a restart. Never
+        fatal: on error the cached/resource value is served and the request
+        proceeds. ``force`` bypasses the TTL gate (public
+        :meth:`refresh_model_limits` / manual drive) but still honors the
+        dynamic-disabled switch.
+        """
+        if not self._model_limits_dynamic:
+            return
+        async with _model_limits_lock():
+            if not force and not self._loop_fetch_stale():
+                return
+            _MODEL_LIMITS_LAST_FETCH[asyncio.get_running_loop()] = (
+                time.monotonic()
+            )
+            try:
+                # Bound the poll independently of the client's request timeout:
+                # the lock is held across it, so a *hung* control-plane would
+                # otherwise stall every cold-cache caller for the full
+                # config.timeout. On timeout the poll is cancelled and the
+                # request proceeds on the cached/resource value.
+                models = await asyncio.wait_for(
+                    self._list_models(),
+                    timeout=self._model_limits_refresh_timeout,
+                )
+            except Exception as exc:  # never fatal — serve cached/resource value
+                logger.debug(
+                    "Anthropic Models API refresh failed, using fallback: %s",
+                    exc,
+                )
+                return
+            now = time.monotonic()
+            for model_obj in models:
+                mt = _extract_max_tokens(model_obj)
+                model_id = getattr(model_obj, "id", None)
+                if mt is not None and model_id:
+                    _MODEL_LIMITS_CACHE[str(model_id).lower()] = _CeilingEntry(
+                        ceiling=mt, source="dynamic", fetched_at=now
+                    )
+
+    async def _list_models(self) -> list[Any]:
+        """Collect every model from the Models API (auto-paged).
+
+        ``client.models.list()`` returns an ``AsyncPaginator``; iterating it
+        with ``async for`` walks all pages, so no model is missed.
+        """
+        collected: list[Any] = []
+        async for model_obj in self._client.models.list(limit=1000):
+            collected.append(model_obj)
+        return collected
+
+    async def refresh_model_limits(self) -> None:
+        """Force an immediate refresh of the cached per-model output ceilings.
+
+        Public entry point for a consumer that prefers to drive freshness on
+        their own schedule instead of relying on the TTL. Bypasses the TTL gate
+        but honors ``options["model_limits_dynamic"]=false`` (a no-op then).
+        Never raises — the underlying poll is best-effort.
+        """
+        if not self._is_initialized:
+            await self.initialize()
+        await self._refresh_model_limits(force=True)
 
     async def _close_client(self) -> None:
         """Close the Anthropic client."""
@@ -747,6 +1026,13 @@ class AnthropicProvider(AsyncLLMProvider):
           returns a 400 when ``temperature`` is supplied. The Claude 4.x
           family (``claude-opus-4-8``, ``claude-haiku-4-5-...``) still accepts
           it, so the match distinguishes the generations.
+        - ``max_tokens_ceiling`` from :func:`_resolve_ceiling` — the live
+          Models-API value cached per-process (kept fresh by the TTL-gated
+          :meth:`_refresh_model_limits_if_stale` refresh) else the bundled
+          fallback resource else ``None`` (permissive). Read by
+          :meth:`_build_api_kwargs` to clamp an over-ceiling ``max_tokens`` down
+          before the call. The read is a synchronous cache lookup (no I/O); the
+          async refresh at the request boundary keeps the cache current.
 
         Matches on ``config.model`` (not ``self.config.model``) so a per-call
         model override resolves the overriding family's constraints — see
@@ -762,46 +1048,42 @@ class AnthropicProvider(AsyncLLMProvider):
         """
         model = config.model.lower()
         rejected: set[str] = set()
-        if any(m in model for m in _CLAUDE_5_TEMPERATURE_REJECTORS):
+        if claude_rejects_temperature(model):
             rejected.add("temperature")
         rejected |= _DISCOVERED_REJECTED_PARAMS.get(model, set())
         return ModelConstraints(
             rejected_params=frozenset(rejected),
             accepts_inline_system=False,
+            max_tokens_ceiling=_resolve_ceiling(model),
         )
 
     def _build_api_kwargs(self, config: LLMConfig) -> Dict[str, Any]:
-        """Build Anthropic API params, dropping ones the family rejects.
+        """Build Anthropic API params with the family's request-shape rules applied.
 
-        Single choke point over :meth:`AnthropicAdapter.adapt_config` shared
-        by ``complete``/``stream_complete``/``function_call``: builds the
-        request params, then drops any parameter named in the resolved
-        :class:`~dataknobs_llm.llm.base.ModelConstraints.rejected_params`
-        (e.g. ``temperature`` for the Claude 5 family) with a
-        ``logger.warning`` naming the param and model — **drop-and-warn,
-        never a silent drop**. Constraints resolve from the passed *runtime*
-        ``config`` (not ``self.config``), so a per-call model or ``constraints``
-        override is honored — the drop reflects the model actually being sent.
+        Single choke point over :meth:`AnthropicAdapter.adapt_config` shared by
+        ``complete``/``stream_complete``/``function_call``: first shapes the
+        runtime config through the shared
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
+        (drops family-rejected sampling params and clamps ``max_tokens`` down to
+        the family ceiling — both drop/clamp-and-warn, never silent), then adapts
+        the shaped config to Anthropic wire params. Because the shaping happens in
+        canonical config space, the exact same clamp/drop logic serves the Bedrock
+        (Claude-on-Bedrock) provider too — no per-provider duplication.
+
+        The shaping resolves from the passed *runtime* ``config`` (not
+        ``self.config``), so a per-call model or ``constraints`` override is
+        honored — the shaping reflects the model actually being sent.
 
         Args:
             config: Runtime config (with any ``config_overrides`` applied).
 
         Returns:
-            Anthropic API parameter dict with rejected params removed.
+            Anthropic API parameter dict with rejected params removed and
+            ``max_tokens`` clamped to the family ceiling.
         """
-        params = self.adapter.adapt_config(config)
-        constraints = self.get_constraints(config)
-        for param_name in constraints.rejected_params:
-            if param_name in params:
-                del params[param_name]
-                logger.warning(
-                    "Dropping request parameter %r rejected by Anthropic "
-                    "model family (model=%r); override via "
-                    "LLMConfig.constraints if this is incorrect.",
-                    param_name,
-                    config.model,
-                )
-        return params
+        return self.adapter.adapt_config(
+            self._apply_request_constraints(config)
+        )
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw Anthropic SDK error into a dataknobs exception.
@@ -935,6 +1217,10 @@ class AnthropicProvider(AsyncLLMProvider):
             msg_list, system_prompt=self.config.system_prompt,
         )
 
+        # Keep the per-model max_tokens ceiling fresh (TTL-gated, ≤1 poll per
+        # TTL per loop) so the clamp in _build_api_kwargs reads a current value.
+        await self._refresh_model_limits_if_stale()
+
         # Build API call kwargs (drops params the model family rejects)
         api_kwargs = self._build_api_kwargs(runtime_config)
         api_kwargs["messages"] = anthropic_messages
@@ -981,6 +1267,10 @@ class AnthropicProvider(AsyncLLMProvider):
         system_content, anthropic_messages = self.adapter.adapt_messages(
             msg_list, system_prompt=self.config.system_prompt,
         )
+
+        # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
+        # clamp — same choke point as the buffered path.
+        await self._refresh_model_limits_if_stale()
 
         # Build stream kwargs (drops params the model family rejects)
         stream_kwargs = self._build_api_kwargs(runtime_config)
@@ -1071,6 +1361,10 @@ class AnthropicProvider(AsyncLLMProvider):
         # function_call() receives raw dicts, not Tool objects — delegate
         # to the adapter's raw function converter.
         tools = self.adapter.adapt_raw_functions(functions)
+
+        # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
+        # clamp — same choke point as complete()/stream_complete().
+        await self._refresh_model_limits_if_stale()
 
         try:
             fc_kwargs = self._build_api_kwargs(self.config)

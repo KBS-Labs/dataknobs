@@ -15,6 +15,7 @@ from dataknobs_common.testing import (
     is_faiss_available,
     is_ollama_available,
     is_ollama_model_available,
+    is_ollama_model_usable,
     is_package_available,
     is_postgres_available,
     is_redis_available,
@@ -22,6 +23,7 @@ from dataknobs_common.testing import (
     requires_faiss,
     requires_ollama,
     requires_ollama_model,
+    requires_ollama_usable_model,
     requires_package,
     requires_redis,
     safe_sql_ident,
@@ -46,6 +48,33 @@ class TestServiceAvailability:
         # If Ollama is not available, model check should also return False
         if not is_ollama_available():
             assert is_ollama_model_available("any-model") is False
+
+    def test_is_ollama_model_usable_returns_bool(self):
+        """is_ollama_model_usable returns a boolean."""
+        result = is_ollama_model_usable(
+            "nonexistent-model-xyz", timeout=5.0
+        )
+        assert isinstance(result, bool)
+
+    def test_is_ollama_model_usable_false_for_nonexistent_model(self):
+        """A model that cannot generate is not usable (deterministic).
+
+        Reproduce-first for the readiness gap this closes: a model that is not
+        installed (or a runtime that returns empty output) must read as *not
+        usable*, so a live-model suite can gate on generation rather than mere
+        presence. Independent of whether Ollama is running — an unreachable
+        server, an HTTP error, or an empty body all resolve to False.
+        """
+        assert (
+            is_ollama_model_usable("nonexistent-model-xyz", timeout=5.0) is False
+        )
+
+    def test_is_ollama_model_usable_false_when_unreachable(self):
+        """An unreachable Ollama endpoint resolves to False, not an error."""
+        result = is_ollama_model_usable(
+            "any-model", host="localhost", port=65432, timeout=2.0
+        )
+        assert result is False
 
     def test_is_faiss_available_returns_bool(self):
         """Test that is_faiss_available returns a boolean."""
@@ -206,6 +235,12 @@ class TestPytestMarkers:
     def test_requires_ollama_model_returns_marker(self):
         """Test that requires_ollama_model returns a marker."""
         marker = requires_ollama_model("nomic-embed-text")
+        assert marker is not None
+        assert hasattr(marker, "mark")
+
+    def test_requires_ollama_usable_model_returns_marker(self):
+        """Test that requires_ollama_usable_model returns a marker."""
+        marker = requires_ollama_usable_model("nomic-embed-text")
         assert marker is not None
         assert hasattr(marker, "mark")
 

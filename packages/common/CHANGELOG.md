@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `is_ollama_model_usable(model_name, *, host, port, prompt, num_predict,
+  timeout)` and the `requires_ollama_usable_model(model_name, *, host, port)`
+  pytest marker in `dataknobs_common.testing`: a stronger Ollama readiness
+  check than `is_ollama_model_available`, which only verifies a model is
+  *listed*. The canary sends one trivial, deterministic completion via
+  Ollama's `/api/chat` (standard library only — no `requests` dependency) and
+  returns `True` only when the model produces non-empty output. A model can be
+  installed and loaded yet return empty content — e.g. a reasoning model
+  exhausting its token budget on hidden thinking, or a runtime/template
+  mismatch after an Ollama upgrade — which passes the "available" check but
+  then fails every live assertion with a misleading empty result. Live-model
+  test suites should gate on generation, not mere presence, so a broken
+  runtime surfaces as one clear signal (or an automatic fall-back to a working
+  model) instead of a cascade of cryptic per-assertion failures.
+
 ## v1.6.1 - 2026-07-18
 
 ### Added

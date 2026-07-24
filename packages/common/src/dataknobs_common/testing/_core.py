@@ -33,10 +33,13 @@ Example:
 """
 
 import importlib.util
+import json
 import logging
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +111,68 @@ def is_ollama_model_available(model_name: str = "nomic-embed-text") -> bool:
         return model_name in result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+
+
+def is_ollama_model_usable(
+    model_name: str,
+    *,
+    host: str = "localhost",
+    port: int = 11434,
+    prompt: str = "Reply with the single word: ok",
+    num_predict: int = 32,
+    timeout: float = 60.0,
+) -> bool:
+    """Check that an Ollama model actually produces usable (non-empty) output.
+
+    A stronger readiness signal than :func:`is_ollama_model_available`, which
+    only verifies the model is *listed*. A model can be installed and loaded yet
+    return empty output — e.g. a reasoning model exhausting its token budget on
+    hidden thinking, or a runtime/template mismatch after an Ollama upgrade. Such
+    a runtime passes the "available" check but then fails every live assertion
+    with a misleading empty result, so a live-model test suite should gate on
+    this stronger check and fall back (or fail with a clear reason) instead.
+
+    Sends one trivial, deterministic (temperature 0) completion via Ollama's
+    ``/api/chat`` HTTP endpoint and returns ``True`` only when the response
+    carries non-empty message content. Standard-library only (no ``requests``
+    dependency). Any error (unreachable, timeout, HTTP error, malformed body)
+    returns ``False`` — the caller decides whether that is a skip or a failure.
+
+    Args:
+        model_name: Ollama model to probe (e.g. ``"llama3.1:8b"``).
+        host: Ollama host.
+        port: Ollama HTTP port.
+        prompt: Trivial prompt for the canary generation.
+        num_predict: Output-token cap for the canary — kept small; the check is
+            "did it produce anything", not "is the answer correct".
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        ``True`` if the model returned non-empty content, ``False`` otherwise.
+    """
+    payload = json.dumps(
+        {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "options": {"num_predict": num_predict, "temperature": 0.0},
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"http://{host}:{port}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = json.load(response)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        logger.debug(
+            "Ollama usability canary for model %r failed: %s", model_name, exc
+        )
+        return False
+    content = (body.get("message") or {}).get("content") or ""
+    return bool(str(content).strip())
 
 
 def is_faiss_available() -> bool:
@@ -675,6 +740,29 @@ try:
             reason=f"Ollama model {model_name} not available",
         )
 
+    def requires_ollama_usable_model(
+        model_name: str, *, host: str = "localhost", port: int = 11434
+    ) -> Any:
+        """Create a skip marker requiring an Ollama model that produces output.
+
+        Stronger than :func:`requires_ollama_model` — skips unless the model is
+        not only installed but also returns non-empty output (see
+        :func:`is_ollama_model_usable`), so a broken/empty-output runtime does
+        not surface as misleading per-assertion failures.
+
+        Args:
+            model_name: Name of the required model
+            host: Ollama host
+            port: Ollama HTTP port
+
+        Returns:
+            pytest.mark.skipif marker
+        """
+        return pytest.mark.skipif(
+            not is_ollama_model_usable(model_name, host=host, port=port),
+            reason=f"Ollama model {model_name} not producing usable output",
+        )
+
 except ImportError:
     # pytest not installed - provide placeholder markers
     requires_ollama = None  # type: ignore
@@ -694,6 +782,11 @@ except ImportError:
         return None
 
     def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:  # type: ignore
+        return None
+
+    def requires_ollama_usable_model(  # type: ignore
+        model_name: str, *, host: str = "localhost", port: int = 11434
+    ) -> Any:
         return None
 
 

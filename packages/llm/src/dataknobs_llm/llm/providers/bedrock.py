@@ -80,10 +80,12 @@ from ..base import (
     LLMResponse,
     LLMStreamResponse,
     ModelCapability,
+    ModelConstraints,
     ToolCall,
     normalize_claude_stop_reason,
     normalize_llm_config,
 )
+from ._claude_shared import claude_rejects_temperature, resource_ceiling
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
@@ -690,11 +692,17 @@ class BedrockProvider(AsyncLLMProvider):
         else:
             msg_list = list(messages)
 
+        # Shape the runtime config to the model family's ModelConstraints
+        # (drop rejected sampling params, clamp max_tokens to the Claude
+        # ceiling) via the shared choke point — the same clamp/drop the native
+        # Anthropic provider applies, since Bedrock runs the same Claude models.
+        shaped_config = self._apply_request_constraints(runtime_config)
+
         system_blocks, converse_messages = self.adapter.adapt_messages(
             msg_list, system_prompt=runtime_config.system_prompt
         )
 
-        request = self.adapter.adapt_config(runtime_config)
+        request = self.adapter.adapt_config(shaped_config)
         request["messages"] = converse_messages
         if system_blocks:
             request["system"] = system_blocks
@@ -752,6 +760,45 @@ class BedrockProvider(AsyncLLMProvider):
         ):
             capabilities.append(ModelCapability.VISION)
         return capabilities
+
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect request-shape constraints for a Claude-on-Bedrock model.
+
+        Bedrock Converse serves Claude behind AWS, so the **model-family**
+        constraints are identical to the native Anthropic provider's — a Claude
+        model's output ceiling and its ``temperature`` support are properties of
+        the model, not the endpoint. Both are sourced from the shared Claude
+        helper (:mod:`._claude_shared`), so the two providers cannot drift:
+
+        - ``max_tokens_ceiling`` from the bundled Claude fallback resource
+          (:func:`~._claude_shared.resource_ceiling`), read by the shared
+          :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
+          to clamp an over-ceiling ``max_tokens`` down before the call. Bedrock
+          does **not** have the Anthropic Models API, so it uses the resource
+          fallback only (no live dynamic sourcing); the resource is family-keyed,
+          so it resolves through the Bedrock model id's ``anthropic.claude-...``
+          substring.
+        - ``rejected_params={"temperature"}`` for the Claude 5 family
+          (:func:`~._claude_shared.claude_rejects_temperature`) — Claude 5 does
+          not support ``temperature``, so it is dropped (drop-and-warn) rather
+          than sent. Claude 4.x still accepts it.
+
+        A non-Claude Bedrock model (Llama, Mistral, Nova, Titan) matches neither
+        the resource nor the Claude-5 rule, so it resolves to permissive
+        (no ceiling, no rejected params) — dataknobs ships ceiling data for
+        Claude only. Matches on ``config.model`` (the per-call runtime config)
+        with the region / inference-profile prefix stripped, so a cross-region
+        profile id resolves the same family as its base id. Overridable per
+        request via ``LLMConfig.constraints``.
+        """
+        model = _canonical_model_id(config.model.lower())
+        rejected: set[str] = set()
+        if claude_rejects_temperature(model):
+            rejected.add("temperature")
+        return ModelConstraints(
+            rejected_params=frozenset(rejected),
+            max_tokens_ceiling=resource_ceiling(model),
+        )
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw botocore error into a dataknobs exception.

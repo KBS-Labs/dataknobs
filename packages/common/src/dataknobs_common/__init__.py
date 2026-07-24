@@ -225,12 +225,14 @@ from dataknobs_common.testing import (
     is_faiss_available,
     is_ollama_available,
     is_ollama_model_available,
+    is_ollama_model_usable,
     is_package_available,
     is_redis_available,
     requires_chromadb,
     requires_faiss,
     requires_ollama,
     requires_ollama_model,
+    requires_ollama_usable_model,
     requires_package,
     requires_redis,
 )
@@ -406,6 +408,7 @@ __all__ = [
     # Testing - Availability Checks
     "is_ollama_available",
     "is_ollama_model_available",
+    "is_ollama_model_usable",
     "is_faiss_available",
     "is_chromadb_available",
     "is_redis_available",
@@ -417,6 +420,7 @@ __all__ = [
     "requires_redis",
     "requires_package",
     "requires_ollama_model",
+    "requires_ollama_usable_model",
     # Testing - Configuration Factories
     "get_test_bot_config",
     "get_test_rag_config",

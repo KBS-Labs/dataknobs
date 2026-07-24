@@ -23,11 +23,19 @@ after the fix.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+import os
+import time
+from typing import Any, Self
+
+import pytest
 
 from dataknobs_llm.llm.base import LLMConfig, ModelConstraints
+from dataknobs_llm.llm.providers import _claude_shared
+from dataknobs_llm.llm.providers import anthropic as anthropic_mod
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
+from dataknobs_llm.tooling import model_limits
 
 from test_anthropic_param_handling import make_anthropic_response
 
@@ -37,6 +45,72 @@ from test_anthropic_param_handling import make_anthropic_response
 # ---------------------------------------------------------------------------
 
 
+class _ScriptedModel:
+    """A minimal ``anthropic`` ``ModelInfo`` stand-in (id + max_tokens)."""
+
+    def __init__(self, model_id: str, max_tokens: int | None) -> None:
+        self.id = model_id
+        self.max_tokens = max_tokens
+
+
+class _AsyncModelPage:
+    """Async-iterable page mimicking the SDK's ``AsyncPaginator``."""
+
+    def __init__(self, models: list[Any]) -> None:
+        self._it = iter(models)
+
+    def __aiter__(self) -> _AsyncModelPage:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+class _ModelsStub:
+    """Stand-in for ``client.models`` — scripts ``list()`` + tracks calls."""
+
+    def __init__(self) -> None:
+        self.models: list[Any] = []
+        self.list_calls = 0
+        self.raise_on_list = False
+
+    def list(self, **_kwargs: Any) -> _AsyncModelPage:
+        self.list_calls += 1
+        if self.raise_on_list:
+            raise RuntimeError("simulated Models API failure")
+        return _AsyncModelPage(list(self.models))
+
+
+class _SlowModelPage:
+    """Async-iterable page whose first step sleeps — a *hung* Models API."""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+
+    def __aiter__(self) -> _SlowModelPage:
+        return self
+
+    async def __anext__(self) -> Any:
+        # Block as if the control-plane hung, then end (never yields a model).
+        await asyncio.sleep(self._delay)
+        raise StopAsyncIteration
+
+
+class _SlowModelsStub:
+    """``client.models`` stand-in whose ``list()`` hangs for ``delay`` seconds."""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+        self.list_calls = 0
+
+    def list(self, **_kwargs: Any) -> _SlowModelPage:
+        self.list_calls += 1
+        return _SlowModelPage(self._delay)
+
+
 class _CaptureAnthropicClient:
     """Records the kwargs passed to ``messages.create``.
 
@@ -44,17 +118,46 @@ class _CaptureAnthropicClient:
     stand-in (no dataknobs testing construct returns a real Anthropic
     request/response). Exercises the real ``AnthropicProvider.complete``
     wiring (``adapt_messages`` → ``_build_api_kwargs`` → ``messages.create``
-    → ``adapt_response``) without a live API or the ``anthropic`` package.
+    → ``adapt_response``) without a live API or the ``anthropic`` package. The
+    ``models`` sub-stub scripts the Models-API ``list()`` used by the dynamic
+    ``max_tokens``-ceiling resolution.
     """
 
     def __init__(self) -> None:
         self.captured_kwargs: dict[str, Any] = {}
         # ``provider._client.messages.create`` → this object's ``create``.
         self.messages = self
+        # ``provider._client.models.list`` → the scripted models stub.
+        self.models = _ModelsStub()
 
     async def create(self, **kwargs: Any) -> object:
         self.captured_kwargs = kwargs
         return make_anthropic_response([{"type": "text", "text": "ok"}])
+
+
+@pytest.fixture(autouse=True)
+def _reset_model_limits_cache() -> Any:
+    """Isolate the module-level process caches between tests.
+
+    The dynamic ceiling cache, per-loop last-fetch timestamps, refresh locks,
+    and the discovered-rejected-params cache are process-global; clearing them
+    before each test keeps state from leaking across tests.
+    """
+    for cache in (
+        anthropic_mod._MODEL_LIMITS_CACHE,
+        anthropic_mod._MODEL_LIMITS_LAST_FETCH,
+        anthropic_mod._MODEL_LIMITS_LOCKS,
+        anthropic_mod._DISCOVERED_REJECTED_PARAMS,
+    ):
+        cache.clear()
+    yield
+    for cache in (
+        anthropic_mod._MODEL_LIMITS_CACHE,
+        anthropic_mod._MODEL_LIMITS_LAST_FETCH,
+        anthropic_mod._MODEL_LIMITS_LOCKS,
+        anthropic_mod._DISCOVERED_REJECTED_PARAMS,
+    ):
+        cache.clear()
 
 
 def _provider_with_capture(
@@ -109,13 +212,13 @@ class TestModelFamilyParamRejection:
         captured: dict[str, Any] = {}
 
         class _StreamCtx:
-            async def __aenter__(self) -> "_StreamCtx":
+            async def __aenter__(self) -> Self:
                 return self
 
             async def __aexit__(self, *exc: object) -> None:
                 return None
 
-            def __aiter__(self) -> "_StreamCtx":
+            def __aiter__(self) -> Self:
                 return self
 
             async def __anext__(self) -> object:
@@ -261,6 +364,132 @@ class TestPerCallModelOverride:
         assert "temperature" in provider.get_constraints(claude5).rejected_params
 
 
+class TestMaxTokensCeilingClamp:
+    """``max_tokens`` is clamped down to the family ceiling — clamp-and-warn.
+
+    Substrate S1 declared ``max_tokens_ceiling`` but left it inert (no read
+    site). The clamp wires it in at the same ``_build_api_kwargs`` choke point
+    as the rejected-param drop: when a request asks for more output tokens than
+    the family grants, reduce to the ceiling and warn (never silent). Clamping
+    *down* is always a valid request (asking for fewer tokens never 400s), so
+    unlike the rejected-param path this needs no retry net.
+
+    The clamp is proven via a **config override** (``max_tokens_ceiling`` set on
+    ``LLMConfig.constraints``), independent of the dynamically/resource-resolved
+    ceiling that could go stale — the override always wins. Reproduce-first:
+    the discriminating test FAILS against HEAD (no clamp → ``max_tokens`` stays
+    at the requested value).
+    """
+
+    def test_clamp_via_config_override(self, caplog) -> None:
+        """A ceiling below the request clamps ``max_tokens`` and warns.
+
+        Discriminating reproduce-first test — FAILS on HEAD (max_tokens stays
+        500), passes after the clamp lands. Seed-independent: the ceiling comes
+        from the config override, not the seed table.
+        """
+        provider = AnthropicProvider(
+            LLMConfig(
+                provider="anthropic",
+                model="claude-sonnet-5",
+                max_tokens=500,
+                constraints={"max_tokens_ceiling": 100},
+            )
+        )
+        with caplog.at_level(logging.WARNING):
+            params = provider._build_api_kwargs(provider.config)
+        assert params["max_tokens"] == 100
+        assert any(
+            "max_tokens" in rec.message and "claude-sonnet-5" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_no_clamp_when_under_ceiling(self, caplog) -> None:
+        """A request at or below the ceiling passes through, no warning."""
+        provider = AnthropicProvider(
+            LLMConfig(
+                provider="anthropic",
+                model="claude-sonnet-5",
+                max_tokens=100,
+                constraints={"max_tokens_ceiling": 4096},
+            )
+        )
+        with caplog.at_level(logging.WARNING):
+            params = provider._build_api_kwargs(provider.config)
+        assert params["max_tokens"] == 100
+        assert not caplog.records
+
+    def test_no_clamp_when_no_ceiling(self, caplog) -> None:
+        """No ceiling (unresolved family, none overridden) → unchanged, no warning.
+
+        Guards the "overwhelming majority of requests are byte-identical"
+        backward-compat claim: with no resolvable family ceiling (a model absent
+        from both the dynamic cache and the fallback resource), ``max_tokens``
+        flows through untouched.
+        """
+        provider = AnthropicProvider(
+            LLMConfig(
+                provider="anthropic",
+                model="claude-unseeded-model",
+                max_tokens=100_000,
+            )
+        )
+        assert provider.get_constraints().max_tokens_ceiling is None
+        with caplog.at_level(logging.WARNING):
+            params = provider._build_api_kwargs(provider.config)
+        assert params["max_tokens"] == 100_000
+        assert not caplog.records
+
+    async def test_clamp_applied_in_live_request_path(self) -> None:
+        """The clamp fires end-to-end through ``complete`` → ``messages.create``.
+
+        Proves the clamp sits in the real request path (not only reachable by
+        calling ``_build_api_kwargs`` directly), mirroring the rejected-param
+        drop's end-to-end coverage.
+        """
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5",
+            max_tokens=500,
+            constraints={"max_tokens_ceiling": 100},
+        )
+        await provider.complete("hi")
+        assert client.captured_kwargs["max_tokens"] == 100
+
+    def test_per_call_override_clamps_to_runtime_ceiling(self) -> None:
+        """The clamp reads the per-call runtime config, not ``self.config``.
+
+        Base config has no ceiling; a per-call ``constraints`` override supplies
+        one below the requested ``max_tokens``. The clamp must reflect the
+        config actually being sent.
+        """
+        provider = AnthropicProvider(
+            LLMConfig(
+                provider="anthropic",
+                model="claude-sonnet-5",
+                max_tokens=500,
+            )
+        )
+        runtime = provider.config.clone(
+            constraints={"max_tokens_ceiling": 100}
+        )
+        params = provider._build_api_kwargs(runtime)
+        assert params["max_tokens"] == 100
+        # self.config (no ceiling) is unaffected → passes through.
+        assert provider._build_api_kwargs(provider.config)["max_tokens"] == 500
+
+    def test_detect_constraints_permissive_by_default(self) -> None:
+        """Resolution is permissive (``None``) for an unknown model.
+
+        A model absent from both the dynamic cache and the fallback resource
+        resolves to ``None`` → no clamp, identical to pre-clamp behavior. This
+        documents the safe default for an unrecognized model.
+        """
+        provider = AnthropicProvider(
+            LLMConfig(provider="anthropic", model="some-unknown-model")
+        )
+        assert provider.get_constraints().max_tokens_ceiling is None
+
+
 class TestModelConstraintsDataclass:
     """Unit tests for the ``ModelConstraints`` value type."""
 
@@ -292,3 +521,334 @@ class TestModelConstraintsDataclass:
         assert overridden.rejected_params == frozenset({"temperature"})
         assert overridden.accepts_inline_system is False
         assert overridden.max_tokens_ceiling == 8192
+
+
+class TestDynamicMaxTokensResolution:
+    """The ``max_tokens`` ceiling resolves from the live Models API, cached.
+
+    Precedence per model: config override → dynamic (live Models API,
+    cached, TTL-refreshed) → bundled fallback resource → ``None``. These
+    reproduce-first tests drive the real ``AnthropicProvider`` and script the
+    Models-API ``list()`` via the sanctioned SDK stand-in. Each FAILS against
+    the pre-FU7 state (no dynamic path; the fallback table shipped empty):
+    ``refresh_model_limits`` did not exist and the ceiling resolved to ``None``.
+    """
+
+    async def test_dynamic_value_overrides_resource(self) -> None:
+        """A live Models-API value wins over the bundled resource value.
+
+        The resource seeds ``claude-sonnet-5`` at 128000; a live 200000 must
+        take precedence once fetched.
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+    async def test_resource_used_when_dynamic_fails(self) -> None:
+        """A failed refresh falls back to the bundled resource value."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.raise_on_list = True
+        await provider.refresh_model_limits()  # swallows the error
+        assert provider.get_constraints().max_tokens_ceiling == 128000
+
+    async def test_absent_model_is_permissive(self) -> None:
+        """A model in neither the cache nor the resource resolves to ``None``."""
+        provider, client = _provider_with_capture("mystery-model-x")
+        client.models.raise_on_list = True
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling is None
+
+    async def test_dynamic_disabled_uses_resource_without_api_call(self) -> None:
+        """``model_limits_dynamic=False`` → resource-only, no Models-API call."""
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5", options={"model_limits_dynamic": False}
+        )
+        await provider.complete("hi")
+        assert client.models.list_calls == 0
+        assert provider.get_constraints().max_tokens_ceiling == 128000
+
+    async def test_ttl_zero_refreshes_each_call(self) -> None:
+        """TTL≈0 → each request re-polls the Models API."""
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5", options={"model_limits_ttl": 0}
+        )
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.complete("hi")
+        await provider.complete("hi")
+        assert client.models.list_calls == 2
+
+    async def test_long_ttl_refreshes_once(self) -> None:
+        """A long TTL → one poll shared across requests (bounded, not per-call)."""
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5", options={"model_limits_ttl": 3600}
+        )
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.complete("hi")
+        await provider.complete("hi")
+        assert client.models.list_calls == 1
+
+    async def test_dynamic_value_not_degraded_on_failed_refresh(self) -> None:
+        """A known-good dynamic value survives a later failed refresh.
+
+        Source-aware non-degradation: a transient Models-API failure must not
+        drop a cached dynamic value back to the (possibly rounded-down)
+        resource.
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+        # A subsequent forced refresh fails — the dynamic value must persist.
+        client.models.raise_on_list = True
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+    async def test_concurrent_requests_dedup_refresh(self) -> None:
+        """N concurrent requests on a cold cache coalesce into one poll."""
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await asyncio.gather(*[provider.complete("hi") for _ in range(8)])
+        assert client.models.list_calls == 1
+
+    async def test_clamp_uses_dynamic_ceiling_end_to_end(self) -> None:
+        """The clamp fires against a dynamically-sourced ceiling, end to end.
+
+        Discriminating reproduce-first test — over-ceiling ``max_tokens`` clamps
+        to the live value through ``complete`` → ``messages.create``. FAILS on
+        pre-FU7 HEAD (no dynamic ceiling → no clamp → ``max_tokens`` stays 500000).
+        """
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5", max_tokens=500_000
+        )
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 128000)]
+        await provider.complete("hi")
+        assert client.captured_kwargs["max_tokens"] == 128000
+
+    def test_resource_ships_and_loads(self) -> None:
+        """The bundled fallback resource is importable and non-empty.
+
+        Guards package-data inclusion via ``importlib.resources`` — a
+        missing-from-package regression makes this fail.
+        """
+        limits = anthropic_mod._load_model_limits_resource()
+        assert limits
+        assert "claude-opus-4-8" in limits
+
+
+class TestModelLimitsTooling:
+    """The ``--check``/``--update`` reconciliation tool (no network).
+
+    Driven with the sanctioned SDK stand-in and a temp resource path — no live
+    API. The key-gated live drift test lives separately (skips without a key).
+    """
+
+    def test_check_without_key_is_noop(self, monkeypatch, capsys) -> None:
+        """Keyless ``--check`` is a clean no-op (exit 0), never a failure."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert model_limits.main(["--check"]) == 0
+        assert "skipped" in capsys.readouterr().out
+
+    async def test_fetch_live_limits_skips_models_without_max_tokens(self) -> None:
+        """Live fetch collects ``max_tokens`` and skips models lacking it."""
+        client = _CaptureAnthropicClient()
+        client.models.models = [
+            _ScriptedModel("claude-a", 100),
+            _ScriptedModel("claude-b", None),
+        ]
+        limits = await model_limits.fetch_live_limits(client)
+        assert limits == {"claude-a": 100}
+
+    def test_diff_detects_drift(self) -> None:
+        assert model_limits.diff_limits({"a": 100}, {"a": 200}) == [("a", 100, 200)]
+        assert model_limits.diff_limits({"a": 100}, {"a": 100}) == []
+
+    def test_check_exits_nonzero_on_drift(self, tmp_path) -> None:
+        path = tmp_path / "limits.yaml"
+        path.write_text("models:\n  claude-a: 999\n", encoding="utf-8")
+        client = _CaptureAnthropicClient()
+        client.models.models = [_ScriptedModel("claude-a", 100)]
+        assert model_limits.main(["--check"], client=client, resource_path=path) == 1
+
+    def test_check_zero_when_matching(self, tmp_path) -> None:
+        path = tmp_path / "limits.yaml"
+        path.write_text("models:\n  claude-a: 100\n", encoding="utf-8")
+        client = _CaptureAnthropicClient()
+        client.models.models = [_ScriptedModel("claude-a", 100)]
+        assert model_limits.main(["--check"], client=client, resource_path=path) == 0
+
+    def test_update_rewrites_resource_from_live(self, tmp_path) -> None:
+        path = tmp_path / "limits.yaml"
+        client = _CaptureAnthropicClient()
+        client.models.models = [
+            _ScriptedModel("claude-a", 100),
+            _ScriptedModel("claude-z", 200),
+        ]
+        rc = model_limits.main(
+            ["--update"],
+            client=client,
+            resource_path=path,
+            verified_date="2026-07-23",
+        )
+        assert rc == 0
+        assert model_limits.load_resource_limits(path) == {
+            "claude-a": 100,
+            "claude-z": 200,
+        }
+        assert "2026-07-23" in path.read_text(encoding="utf-8")
+
+    @pytest.mark.skipif(
+        not os.getenv("ANTHROPIC_API_KEY"),
+        reason="requires ANTHROPIC_API_KEY for a live Models-API drift check",
+    )
+    def test_bundled_resource_matches_live_api(self) -> None:
+        """Key-gated drift alarm: the bundled resource matches live values.
+
+        Skips without a key (normal / keyless CI). On a keyed nightly/local run
+        it fails if the bundled resource has drifted from the live Models API —
+        run ``bin/update-model-limits.sh --update`` to refresh it.
+        """
+        assert model_limits.main(["--check"]) == 0
+
+
+class TestRefreshTimeout:
+    """A *hung* Models API is bounded by the dedicated refresh timeout.
+
+    The refresh runs under the per-loop lock, so without an independent bound a
+    hung (not erroring) control-plane would stall every cold-cache caller for
+    the full client ``config.timeout`` (60s default). The dedicated
+    ``model_limits_refresh_timeout`` cancels the poll and the request proceeds
+    on the cached/resource value. Reproduce-first: FAILS against the pre-change
+    refresh (no ``asyncio.wait_for`` bound → the call awaits the full hang).
+    """
+
+    async def test_hung_models_api_bounded_by_refresh_timeout(self) -> None:
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5",
+            options={"model_limits_refresh_timeout": 0.05},
+        )
+        # Replace the models sub-stub with one that hangs for 2s per list().
+        client.models = _SlowModelsStub(delay=2.0)  # type: ignore[attr-defined]
+
+        start = time.monotonic()
+        await provider.refresh_model_limits()  # best-effort — never raises
+        elapsed = time.monotonic() - start
+
+        # Bounded well below the 2s "hang" (with generous slack for scheduling).
+        assert elapsed < 1.0
+        # The poll was attempted, then abandoned; the ceiling falls back to the
+        # bundled resource value rather than blocking on the hung API.
+        assert provider.get_constraints().max_tokens_ceiling == 128000
+
+
+class TestMatchCeilingUnification:
+    """The dynamic cache and the resource share one family-matching rule (#3).
+
+    The unit-level rule is symmetric (exact, then longest substring in either
+    direction). The end-to-end tests prove the dynamic cache uses the *same*
+    rule as the resource, so a bare-alias request resolves a dated cache key
+    (and vice versa) — reproduce-first against the pre-change exact-only cache
+    lookup, which silently fell through to the resource on any alias mismatch.
+    """
+
+    def test_exact_match_wins(self) -> None:
+        assert _claude_shared.match_ceiling(
+            "claude-x", [("claude-x", 42), ("claude", 7)]
+        ) == 42
+
+    def test_family_alias_short_key_in_long_request(self) -> None:
+        # Resource-style: short family key matches a longer dated request.
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5-20260514", [("claude-sonnet-5", 128000)]
+        ) == 128000
+
+    def test_bare_alias_request_in_long_dated_key(self) -> None:
+        # Dynamic-style: bare request matches a longer dated cache key.
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5", [("claude-sonnet-5-20260514", 200000)]
+        ) == 200000
+
+    def test_longest_family_wins_over_shorter_prefix(self) -> None:
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5-x",
+            [("claude", 1), ("claude-sonnet-5", 128000)],
+        ) == 128000
+
+    def test_no_match_is_none(self) -> None:
+        assert _claude_shared.match_ceiling("gpt-4", [("claude", 1)]) is None
+
+    async def test_bare_alias_resolves_dynamic_dated_ceiling(self) -> None:
+        """A bare-alias request resolves a *dynamic* dated cache entry.
+
+        The live API returns a dated id; a request for the bare family alias
+        must resolve against that cached dynamic value (200000), not fall
+        through to the resource (128000). Reproduce-first: FAILS against the
+        exact-only cache lookup → resolved to the resource value.
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [
+            _ScriptedModel("claude-sonnet-5-20260930", 200000)
+        ]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+    async def test_dated_request_resolves_dynamic_family_ceiling(self) -> None:
+        """A dated request resolves a *dynamic* family-keyed cache entry.
+
+        Reproduce-first: FAILS against the exact-only cache lookup → resolved to
+        the resource value (128000) instead of the dynamic value (200000).
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5-20261231")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+
+class TestPerLoopStateKeying:
+    """Per-loop refresh state is keyed by the loop *object*, not ``id(loop)`` (#4).
+
+    ``id(loop)`` in a plain dict never evicts a dead loop's entry (a leak) and,
+    worse, lets a *new* loop that happens to reuse a freed id inherit the dead
+    loop's stale last-fetch timestamp and wrongly skip a needed refresh. Keying
+    a ``WeakKeyDictionary`` on the loop object evicts the entry when the loop is
+    collected and makes every new loop a distinct key.
+
+    Note: the id-reuse *mis-skip* is inherently non-deterministic (it depends on
+    the allocator reusing a freed id), so it cannot be reproduced reliably in a
+    unit test. This test pins the deterministic, observable consequence of the
+    fix — automatic eviction when the loop is GC'd — which the pre-change plain
+    ``dict[int, ...]`` fails (the entry persists after the loop is gone).
+    """
+
+    def test_state_is_weak_keyed(self) -> None:
+        import weakref
+
+        assert isinstance(
+            anthropic_mod._MODEL_LIMITS_LAST_FETCH, weakref.WeakKeyDictionary
+        )
+        assert isinstance(
+            anthropic_mod._MODEL_LIMITS_LOCKS, weakref.WeakKeyDictionary
+        )
+
+    def test_dead_loop_entry_is_evicted(self) -> None:
+        import gc
+
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(provider.refresh_model_limits())
+        finally:
+            loop.close()
+
+        # The refresh recorded per-loop state keyed by the loop object.
+        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 1
+
+        del loop
+        gc.collect()
+
+        # WeakKeyDictionary drops the dead loop's entry — no leak, and no stale
+        # timestamp a future (id-reused) loop could inherit. A plain
+        # ``dict[int, float]`` (the pre-change keying) would still hold it.
+        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 0

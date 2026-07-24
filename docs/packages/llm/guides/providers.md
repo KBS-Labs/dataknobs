@@ -212,11 +212,13 @@ capabilities are the feature set; constraints are request-shape rules).
 |-------|---------|
 | `rejected_params` | Generation/sampling params the family rejects — the provider **drops them before the call and logs a warning** (drop-and-warn, never silent). |
 | `accepts_inline_system` | Whether the family accepts a `role="system"` message at a non-leading position (Anthropic hoists all system messages, so `False`). |
-| `max_tokens_ceiling` | Reserved upper bound on `max_tokens` (unpopulated today). |
+| `max_tokens_ceiling` | Upper bound on `max_tokens` for the model. When a request asks for more, the provider **clamps it down to the ceiling and logs a warning** (clamp-and-warn, never silent) — applied at a shared base choke point, so both the Anthropic and Bedrock (Claude) providers get it. Resolved from the live Models API on the native Anthropic endpoint (cached, TTL-refreshed) with a bundled fallback resource (the primary source on Bedrock); `None` (unknown model, or none overridden) leaves `max_tokens` untouched. |
 
-The `AnthropicProvider` auto-detects the Claude 5 → `temperature`-rejection rule,
-so a Claude-5-family config no longer 400s when it carries `temperature:` — the
-param is dropped with a warning naming it and the model:
+Both Claude providers — the native `AnthropicProvider` and the Bedrock provider
+(Claude-on-Bedrock) — auto-detect the Claude 5 → `temperature`-rejection rule
+from shared family knowledge, so a Claude-5-family config no longer 400s when it
+carries `temperature:` — the param is dropped with a warning naming it and the
+model:
 
 ```python
 from dataknobs_llm import create_llm_provider
@@ -263,6 +265,73 @@ Constraints resolve from the **per-call runtime config**, so a call that
 overrides the model to a different family (`complete(..., config_overrides={"model": ...})`)
 gets that family's rules — the drop reflects the model actually being sent, not
 just the configured default.
+
+The same surface carries `max_tokens_ceiling`. When a request's `max_tokens`
+exceeds the model's ceiling, the provider **clamps it down to the ceiling and
+logs a warning** — clamping *down* is always a valid request (asking for fewer
+output tokens never 400s), so this pre-empts the output-truncation / 400 class
+at source rather than recovering from it. The clamp (and the rejected-param
+drop) apply in canonical config space at a shared base choke point
+(`LLMProvider._apply_request_constraints`), so the **same** behavior serves both
+Claude providers — the native **Anthropic** Messages API and **Bedrock**
+Converse (Claude-on-Bedrock) — from one implementation. Non-Claude Bedrock
+models (Llama, Mistral, Nova, Titan) resolve to a permissive `None` ceiling
+(dataknobs ships ceiling data for Claude only).
+
+The ceiling is **resolved dynamically**, in this precedence per model:
+
+1. **Config override** — `LLMConfig.constraints={"max_tokens_ceiling": N}` always
+   wins over any dynamically-resolved value.
+2. **Live Models API** *(native Anthropic endpoint only)* — the Anthropic Models
+   API reports each model's `max_tokens`. The provider caches it per process and
+   refreshes it on a TTL (at most one `models.list()` per TTL per event loop,
+   never per request; each poll independently timeout-bounded so a hung API never
+   stalls the request path), so a ceiling that changes between releases is picked
+   up without a dataknobs release. Bedrock has no Models API, so it resolves
+   directly against the bundled resource below.
+3. **Bundled fallback resource** — a maintained data file shipped with the
+   package (`llm/providers/data/anthropic_model_limits.yaml`), used when the
+   dynamic path has produced no value (no API key, offline, an API blip) and as
+   the primary source on Bedrock. The dynamic cache and the resource share one
+   family-matching rule (exact id, then longest family-substring in either
+   direction), so a bare model alias resolves a dated key and vice versa. A
+   known-good dynamic value is never degraded back to the resource on a transient
+   failure.
+4. **`None`** → permissive, `max_tokens` passes through untouched — identical to
+   the pre-clamp default (which sends `1024`, well under any real ceiling, so the
+   overwhelming majority of requests are byte-identical).
+
+`initialize()` performs no network I/O; the ceiling is refreshed lazily at the
+first request boundary (before the clamp), so the first completion already
+clamps against fresh data.
+
+```python
+# Pin the ceiling explicitly — an over-ceiling max_tokens is clamped down (with
+# a logged warning) instead of truncating or 400-ing. The override always wins
+# over any dynamically-resolved value:
+create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "max_tokens": 100_000,
+    "constraints": {"max_tokens_ceiling": 8192},  # request clamped to 8192
+})
+```
+
+Two provider `options` tune the dynamic path (both optional):
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `model_limits_ttl` | `3600` | Seconds between Models-API refreshes — the freshness-vs-traffic knob. Near-zero re-fetches each call; large minimizes API traffic. |
+| `model_limits_refresh_timeout` | `10` | Seconds a single Models-API refresh poll may run before it is abandoned (falling back to the cached/resource value). Bounds a hung control plane independently of the request `timeout`. |
+| `model_limits_dynamic` | `true` | Set `false` to disable Models-API calls entirely (resource-only). |
+
+A consumer that prefers to drive freshness on its own schedule can call
+`await provider.refresh_model_limits()` to force an immediate refresh.
+
+The bundled fallback resource is kept current with a maintainer tool that
+reconciles it against the live API — `bin/update-model-limits.sh --check` reports
+drift (a key-gated CI signal) and `--update` rewrites the file from live values.
+Both are a clean no-op when `ANTHROPIC_API_KEY` is unset.
 
 ### Vendor-error translation (all providers)
 

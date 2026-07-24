@@ -22,19 +22,38 @@ Functions to check if external services and packages are available.
 ### Ollama
 
 ```python
-from dataknobs_common import is_ollama_available, is_ollama_model_available
+from dataknobs_common import (
+    is_ollama_available,
+    is_ollama_model_available,
+    is_ollama_model_usable,
+)
 
 # Check if Ollama service is running
 if is_ollama_available():
     print("Ollama is available")
 
-# Check if a specific model is available
+# Check if a specific model is available (installed / listed)
 if is_ollama_model_available("nomic-embed-text"):
     print("Embedding model ready")
 
 if is_ollama_model_available("llama3.1:8b"):
     print("LLM model ready")
+
+# Stronger check: verify the model actually PRODUCES output. A model can be
+# installed yet return empty content (a reasoning model exhausting its token
+# budget, or a runtime/template mismatch after an Ollama upgrade), which passes
+# is_ollama_model_available but then fails every live assertion. Gate live-model
+# suites on generation, not mere presence:
+if is_ollama_model_usable("llama3.1:8b"):
+    print("Model produces usable output")
 ```
+
+A common pattern for a live-model fixture is to canary each installed model and
+fall back to the first that generates usable output — or fail with a clear
+diagnosis when none do — so a broken Ollama runtime surfaces as one actionable
+signal instead of a cascade of misleading `assert None == ...` failures. The
+`requires_ollama_usable_model("<model>")` marker skips a test on the same
+stronger condition.
 
 ### Packages
 

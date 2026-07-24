@@ -44,6 +44,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An unknown policy fails closed at provider construction. Whether a family
   accepts an inline system message reads from the `ModelConstraints.accepts_inline_system`
   datum (`False` for Anthropic).
+- **`max_tokens` is clamped to the model's output ceiling** (and rejected
+  sampling params dropped) at a **shared, provider-agnostic choke point.** The
+  S1 `ModelConstraints.max_tokens_ceiling` datum is wired through a new base
+  `LLMProvider._apply_request_constraints()` that shapes the runtime config in
+  canonical space (before any provider `adapt_config`): when a request's
+  `max_tokens` exceeds the model's ceiling it clamps down to the ceiling
+  (clamp-and-warn, never silent), and it drops any family-rejected sampling
+  param (e.g. Claude 5's `temperature`). Because the shaping is provider-
+  agnostic, the **same** clamp/drop serves both Claude providers — the native
+  Anthropic Messages API **and** Amazon Bedrock Converse (Claude-on-Bedrock) —
+  with no per-provider duplication; the shared Claude family knowledge (the
+  bundled ceiling resource + the Claude-5 `temperature` rule) lives in
+  `llm/providers/_claude_shared.py`. Clamping *down* is always a valid request,
+  so this pre-empts the output-truncation / 400 class at source rather than
+  recovering from it. On the native Anthropic endpoint the ceiling is **resolved
+  dynamically** from the live Models API (`max_tokens`), cached per process and
+  refreshed on a configurable TTL (`options["model_limits_ttl"]`, default
+  `3600`s; at most one `models.list()` per TTL per event loop, never per
+  request), with each poll independently bounded by
+  `options["model_limits_refresh_timeout"]` (default `10`s) so a *hung* control
+  plane cannot stall the request path. It falls back to the maintained bundled
+  resource (`llm/providers/data/anthropic_model_limits.yaml`) — the same
+  resource Bedrock uses (it has no Models API) — when the live API is
+  unavailable, and a known-good dynamic value is never degraded back to the
+  resource on a transient failure. The dynamic cache and the resource share one
+  family-matching rule, so a bare-alias request resolves a dated cache/resource
+  key and vice versa. Dynamic resolution can be disabled with
+  `options["model_limits_dynamic"] = false` (resource-only) or forced with
+  `await provider.refresh_model_limits()`; `initialize()` performs no network
+  I/O — the ceiling is refreshed lazily at the first request boundary. Always
+  config-overridable via `LLMConfig.constraints={"max_tokens_ceiling": N}`
+  (per-field overlay, always wins over the dynamically-resolved value). The
+  bundled resource is kept honest by a maintainer tool
+  (`bin/update-model-limits.sh --check` / `--update`, key-gated). Additive and
+  non-breaking: an unknown model resolves to `None` (permissive, unchanged), and
+  the default `max_tokens` (`1024`) is below any real ceiling, so the
+  overwhelming majority of requests are byte-identical.
 
 ### Changed
 

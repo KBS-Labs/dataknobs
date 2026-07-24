@@ -210,9 +210,14 @@ class ModelConstraints:
             (``False``); providers that pass ``system`` through the message
             array leave this ``True``. Read by the mid-conversation
             system-message policy.
-        max_tokens_ceiling: Hard upper bound on ``max_tokens`` for the family,
-            or ``None`` when unconstrained. Reserved for future clamping; no
-            provider currently populates it.
+        max_tokens_ceiling: Hard upper bound on ``max_tokens`` for the model,
+            or ``None`` when unconstrained. A provider clamps an over-ceiling
+            ``max_tokens`` down to this value before the call (clamp-and-warn),
+            pre-empting the output-truncation / 400 class at source. Populated
+            by :class:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider`
+            from the live Models API (cached, TTL-refreshed) with a bundled
+            fallback resource, and always config-overridable; ``None`` (the
+            default and any unknown model) leaves ``max_tokens`` untouched.
     """
 
     rejected_params: frozenset[str] = frozenset()
@@ -1197,6 +1202,81 @@ class LLMProvider(ABC):
         if not override:
             return detected
         return detected.with_overrides(override)
+
+    def _apply_request_constraints(self, config: LLMConfig) -> LLMConfig:
+        """Return a runtime config shaped to satisfy this model's constraints.
+
+        Shared request-shaping choke point for **every** provider. Resolves the
+        model's :class:`ModelConstraints` (:meth:`get_constraints`) and, in
+        canonical :class:`LLMConfig` space (before any provider ``adapt_config``):
+
+        - **Drops** each sampling parameter named in ``rejected_params`` (e.g.
+          ``temperature`` for the Claude 5 family) — drop-and-warn, never
+          silently. Dropping a *rejected* param pre-empts the 400 it would
+          otherwise cause.
+        - **Clamps** ``max_tokens`` down to ``max_tokens_ceiling`` when the
+          request exceeds it — clamp-and-warn, never silently. Clamping *down*
+          is always a valid request (asking for fewer output tokens never 400s),
+          so it pre-empts the output-truncation / 400 class at source and needs
+          no retry net. A ``None`` ceiling (unknown model, none overridden)
+          leaves ``max_tokens`` untouched.
+
+        Working in canonical config space (not on the provider-specific adapted
+        params) is what makes this shareable: it does not depend on how each
+        provider's adapter names its wire params (Anthropic ``max_tokens`` vs.
+        Bedrock ``inferenceConfig.maxTokens``). Providers whose model families
+        carry constraints route their runtime config through this before
+        ``adapt_config``, so the clamp/drop benefits the native Anthropic
+        Messages provider and the Bedrock Converse provider (both Claude)
+        identically.
+
+        Both rules resolve from the passed *runtime* ``config`` (not
+        ``self.config``), so a per-call model or ``constraints`` override is
+        honored — the shaping reflects the model actually being sent. A no-op
+        (returns ``config`` unchanged) when nothing needs shaping.
+
+        Args:
+            config: Runtime config (with any ``config_overrides`` applied).
+
+        Returns:
+            The same config when no shaping applies, else a clone with rejected
+            sampling params cleared and ``max_tokens`` clamped to the ceiling.
+        """
+        constraints = self.get_constraints(config)
+        overrides: Dict[str, Any] = {}
+
+        for param_name in constraints.rejected_params:
+            # Only canonical sampling params (config fields) can be shaped here;
+            # a rejected param that is not a config field was never going to be
+            # emitted by adapt_config anyway, so it is skipped (mirroring the
+            # historical silent no-op rather than crashing config.clone()).
+            if (
+                param_name in config.__dataclass_fields__
+                and getattr(config, param_name) is not None
+            ):
+                overrides[param_name] = None
+                logger.warning(
+                    "Dropping request parameter %r rejected by the model "
+                    "family (model=%r); override via LLMConfig.constraints if "
+                    "this is incorrect.",
+                    param_name,
+                    config.model,
+                )
+
+        ceiling = constraints.max_tokens_ceiling
+        requested = config.max_tokens
+        if ceiling is not None and requested is not None and requested > ceiling:
+            overrides["max_tokens"] = ceiling
+            logger.warning(
+                "Clamping max_tokens %d down to the model family ceiling %d "
+                "(model=%r); override via LLMConfig.constraints if this is "
+                "incorrect.",
+                requested,
+                ceiling,
+                config.model,
+            )
+
+        return config.clone(**overrides) if overrides else config
 
     def _check_ready(self) -> None:
         """Raise if provider is not ready for requests.

@@ -359,9 +359,10 @@ PRINT_RESULTS=()
 # Files that are allowed to have print statements
 # CLI tools and debuggers need to output to users
 PRINT_EXCEPTIONS=(
-    "*/cli/main.py"       # CLI interface uses Rich console.print
-    "*/api/advanced.py"   # Debugger class needs user output
-    "*/prompts/syntax.py" # CLI tool for prompt syntax conversion/detection
+    "*/cli/main.py"                 # CLI interface uses Rich console.print
+    "*/api/advanced.py"            # Debugger class needs user output
+    "*/prompts/syntax.py"          # CLI tool for prompt syntax conversion/detection
+    "*/tooling/model_limits.py"    # CLI maintainer tool: stdout is its product (drift report / status)
 )
 
 # Function to check if a file should be excluded
