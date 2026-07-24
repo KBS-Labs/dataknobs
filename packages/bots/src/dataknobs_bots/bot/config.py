@@ -25,6 +25,15 @@ from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
+#: Default text surfaced to the user when a phased reasoning turn's terminal
+#: synthesis is cut off by the tool-loop wall-clock budget. Provider-neutral
+#: and free of any consumer/product naming so it is a safe out-of-the-box
+#: default; consumers localize / brand / soften it via
+#: ``DynaBotConfig.tool_loop_timeout_message``.
+_DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE = (
+    "The response was cut short due to a time limit."
+)
+
 
 @dataclass(frozen=True)
 class DynaBotConfig(StructuredConfig):
@@ -87,6 +96,18 @@ class DynaBotConfig(StructuredConfig):
         max_tool_iterations: Maximum tool-execution rounds before returning.
         tool_timeout: Per-tool execution timeout in seconds.
         tool_loop_timeout: Wall-clock budget for the tool-execution loop.
+            For phased reasoning strategies this also bounds the terminal
+            synthesis (``finalize_turn`` / ``stream_finalize_turn``) that
+            runs after an abnormal loop termination: the synthesis is
+            granted the remaining budget (floored at a small minimum) and,
+            on timeout, degrades to ``tool_loop_timeout_message`` rather
+            than running unbounded.
+        tool_loop_timeout_message: Text surfaced to the user when the phased
+            terminal synthesis exceeds the remaining ``tool_loop_timeout``
+            budget and is cut off. Overridable so consumers can localize /
+            brand / soften the degraded response without subclassing. An
+            empty string is a legitimate choice (yields empty content /
+            an empty final chunk) and is not rejected.
     """
 
     # Adopt polymorphic-section validation for the subsystem sections whose
@@ -135,6 +156,7 @@ class DynaBotConfig(StructuredConfig):
     max_tool_iterations: int = 5
     tool_timeout: float = 30.0
     tool_loop_timeout: float = 120.0
+    tool_loop_timeout_message: str = _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
 
     def __post_init__(self) -> None:
         """Validate the timeout + prompt_envelope invariants against the snapshot.

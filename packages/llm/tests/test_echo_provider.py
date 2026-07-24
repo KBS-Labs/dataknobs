@@ -519,3 +519,79 @@ async def test_echo_usage_in_integration():
             chunks.append(chunk)
         assert len(chunks) > 0
         assert chunks[-1].is_final
+
+
+# ============================================================================
+# Response latency (set_response_delay)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_set_response_delay_fixed(echo_provider):
+    """A fixed float delay slows complete() by roughly that many seconds."""
+    import time
+
+    echo_provider.set_response_delay(0.1)
+
+    start = time.monotonic()
+    await echo_provider.complete("hello")
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= 0.1
+
+
+@pytest.mark.asyncio
+async def test_set_response_delay_zero_is_noop(echo_provider):
+    """The default (no delay) does not slow complete()."""
+    import time
+
+    start = time.monotonic()
+    await echo_provider.complete("hello")
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.05
+
+
+@pytest.mark.asyncio
+async def test_set_response_delay_callable_targets_specific_calls(echo_provider):
+    """A callable delay slows only the calls it selects by message content."""
+    import time
+
+    def delay_fn(messages):
+        # Slow only calls whose user content contains "slow".
+        content = " ".join(m.content for m in messages)
+        return 0.1 if "slow" in content else 0.0
+
+    echo_provider.set_response_delay(delay_fn)
+
+    start = time.monotonic()
+    await echo_provider.complete("go fast")
+    fast_elapsed = time.monotonic() - start
+
+    start = time.monotonic()
+    await echo_provider.complete("go slow")
+    slow_elapsed = time.monotonic() - start
+
+    assert fast_elapsed < 0.05
+    assert slow_elapsed >= 0.1
+
+
+@pytest.mark.asyncio
+async def test_set_response_delay_applies_to_stream_complete(echo_provider):
+    """stream_complete inherits the delay (it delegates to complete())."""
+    import time
+
+    echo_provider.set_response_delay(0.1)
+
+    start = time.monotonic()
+    async for _ in echo_provider.stream_complete("hello"):
+        pass
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= 0.1
+
+
+@pytest.mark.asyncio
+async def test_set_response_delay_returns_self_for_chaining(echo_provider):
+    """set_response_delay returns the provider for fluent chaining."""
+    assert echo_provider.set_response_delay(0.0) is echo_provider

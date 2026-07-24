@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Self, TypeVar
 from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
-from dataknobs_llm import LLMStreamResponse
+from dataknobs_llm import LLMResponse, LLMStreamResponse
 from dataknobs_llm.conversations import (
     ConversationManager,
     ConversationMiddleware,
@@ -53,6 +53,23 @@ PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
 # Type variable for ``DynaBot.get_steps_of_type`` — preserves the caller's
 # requested class as the element type of the returned list.
 _StepT = TypeVar("_StepT")
+
+# Minimum wall-clock budget (seconds) granted to a phased strategy's terminal
+# synthesis, even when the tool loop already consumed the whole
+# ``tool_loop_timeout``. The synthesis is the response-producing call — unlike
+# the monolithic loop it cannot simply ``break`` when the budget is exhausted
+# without leaving the turn with no response — so it gets a small floored last
+# attempt rather than being killed at exactly zero.
+_MIN_FINALIZE_BUDGET = 1.0
+
+# Marker for the graceful-degradation response produced when the phased
+# terminal synthesis is cut off by the tool-loop budget. ``finish_reason``
+# stays on the canonical vocabulary ('length' = generation stopped at a limit,
+# response incomplete — the closest fit; there is no 'timeout' token) and the
+# precise reason is carried in ``metadata`` so no parallel finish_reason value
+# is minted.
+_FINALIZE_TIMEOUT_FINISH_REASON = "length"
+_FINALIZE_TIMEOUT_REASON = "finalize_timeout"
 
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
@@ -372,6 +389,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._max_tool_iterations = self.config.max_tool_iterations
         self._tool_timeout = self.config.tool_timeout
         self._tool_loop_timeout = self.config.tool_loop_timeout
+        self._finalize_timeout_message = self.config.tool_loop_timeout_message
         # Resolve the dotted-path context_transform now (cheap, sync). The
         # pre-built shape overrides this with a directly-supplied callable.
         self._context_transform = self._resolve_context_transform(
@@ -1693,15 +1711,38 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if handle.early_response:
             return handle.early_response
 
+        loop_start = time.monotonic()
         early_response, tool_results = await self._run_phased_process_loop(
-            strategy, handle, turn
+            strategy, handle, turn, loop_start
         )
         if early_response is not None:
             return early_response
 
-        response = await strategy.finalize_turn(  # type: ignore[union-attr]
-            handle, tool_results
-        )
+        # Bound the terminal synthesis by the budget the loop left unspent,
+        # mirroring the monolithic path's bounded in-loop re-call. Unlike that
+        # path, the finalize is the response-producing call, so on timeout it
+        # degrades gracefully rather than breaking with no response.
+        budget = self._finalize_budget(loop_start)
+        try:
+            response = await asyncio.wait_for(
+                strategy.finalize_turn(handle, tool_results),  # type: ignore[union-attr]
+                timeout=budget,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                "Phased finalize synthesis exceeded remaining tool loop "
+                "budget (%.1fs) — returning graceful fallback",
+                budget,
+                extra={
+                    "conversation_id": getattr(
+                        turn.manager, "conversation_id", None
+                    ),
+                },
+            )
+            # #188-FU6 seam: this degradation site is the natural emission
+            # point for a structured termination reason (finalize_timeout)
+            # via LifecycleHooks/CallbackRegistry. Not built here.
+            response = self._finalize_timeout_response()
 
         # Merge phased tool executions into turn state so _finalize_turn
         # dispatches on_tool_executed middleware for these executions.
@@ -1715,6 +1756,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         strategy: Any,
         handle: Any,
         turn: TurnState,
+        loop_start: float,
     ) -> tuple[Any | None, list[ToolExecution] | None]:
         """Run the iterative process_input loop for phased strategies.
 
@@ -1722,10 +1764,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         phased path in ``stream_chat``.  Handles iteration cap, timeout,
         tool execution dispatch, and the ``iterate`` loop signal.
 
+        The turn timer is caller-owned: the caller records ``loop_start``
+        and passes it in so it can compute the budget remaining for the
+        terminal ``finalize_turn`` synthesis after this loop returns (the
+        wall-clock budget is a ``DynaBot`` concept, exactly as on the
+        monolithic path where ``loop_start`` and the bounded re-call share
+        one scope).
+
         Args:
             strategy: Phased reasoning strategy instance.
             handle: Turn handle from ``begin_turn``.
             turn: Current turn state.
+            loop_start: Caller-owned ``time.monotonic()`` timestamp marking
+                the start of the turn's tool-loop wall-clock budget.
 
         Returns:
             Tuple of ``(early_response, tool_results)``:
@@ -1741,7 +1792,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # return cleanly (e.g. writing trace entries).
         max_iters = (handle.max_iterations or self._max_tool_iterations) + 1
         tool_results: list[ToolExecution] | None = None
-        loop_start = time.monotonic()
         result: ProcessResult | None = None
         for _iteration in range(max_iters):
             result = await strategy.process_input(handle)
@@ -1801,6 +1851,112 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 logger.warning("Phased tool loop reached max iterations")
 
         return None, tool_results
+
+    def _remaining_loop_budget(self, loop_start: float) -> float:
+        """Seconds left in the tool-loop wall-clock budget (may be <= 0)."""
+        return self._tool_loop_timeout - (time.monotonic() - loop_start)
+
+    def _finalize_budget(self, loop_start: float) -> float:
+        """Budget for the terminal synthesis: remaining, floored at a minimum.
+
+        The floor guarantees a stored/instant finalize still returns and a
+        genuinely-needed synthesis gets a bounded last attempt rather than
+        being killed at exactly zero (see ``_MIN_FINALIZE_BUDGET``).
+        """
+        return max(self._remaining_loop_budget(loop_start), _MIN_FINALIZE_BUDGET)
+
+    def _llm_model_name(self) -> str:
+        """Best-effort model identifier for a synthesized fallback response."""
+        model = getattr(getattr(self.llm, "config", None), "model", None)
+        return model or "unknown"
+
+    def _finalize_timeout_response(self) -> LLMResponse:
+        """Graceful-degradation response when a buffered finalize times out."""
+        return LLMResponse(
+            content=self._finalize_timeout_message,
+            model=self._llm_model_name(),
+            finish_reason=_FINALIZE_TIMEOUT_FINISH_REASON,
+            truncated=True,
+            metadata={"termination_reason": _FINALIZE_TIMEOUT_REASON},
+        )
+
+    def _finalize_timeout_chunk(self) -> LLMStreamResponse:
+        """Graceful-degradation final chunk when a streaming finalize times out."""
+        return LLMStreamResponse(
+            delta=self._finalize_timeout_message,
+            is_final=True,
+            finish_reason=_FINALIZE_TIMEOUT_FINISH_REASON,
+            truncated=True,
+            model=self._llm_model_name(),
+            metadata={"termination_reason": _FINALIZE_TIMEOUT_REASON},
+        )
+
+    async def _bounded_finalize_stream(
+        self,
+        source: AsyncIterator[LLMStreamResponse],
+        budget: float,
+        turn: TurnState,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Yield a finalize stream bounded by a wall-clock deadline.
+
+        Wraps each ``__anext__`` in ``asyncio.wait_for`` against the time
+        left before ``budget`` elapses. On deadline (or a per-chunk stall
+        past it), yields a single graceful fallback final chunk and stops.
+        The source generator is always closed on exit so no task/generator
+        leaks when the stream is truncated.
+
+        Args:
+            source: The strategy's ``stream_finalize_turn`` async iterator.
+            budget: Seconds the whole finalize stream may run.
+            turn: Current turn state (for log context).
+
+        Yields:
+            The source's chunks, or a single fallback chunk on timeout.
+        """
+        deadline = time.monotonic() + budget
+        agen = source.__aiter__()
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    yield self._log_and_build_finalize_timeout_chunk(
+                        budget, turn
+                    )
+                    return
+                try:
+                    chunk = await asyncio.wait_for(
+                        agen.__anext__(), timeout=remaining
+                    )
+                except StopAsyncIteration:
+                    return
+                except (TimeoutError, asyncio.TimeoutError):
+                    yield self._log_and_build_finalize_timeout_chunk(
+                        budget, turn
+                    )
+                    return
+                yield chunk
+        finally:
+            aclose = getattr(agen, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+    def _log_and_build_finalize_timeout_chunk(
+        self, budget: float, turn: TurnState
+    ) -> LLMStreamResponse:
+        """Log the streaming-finalize timeout and build the fallback chunk."""
+        logger.warning(
+            "Phased streaming finalize exceeded remaining tool loop budget "
+            "(%.1fs) — truncating with graceful fallback",
+            budget,
+            extra={
+                "conversation_id": getattr(
+                    turn.manager, "conversation_id", None
+                ),
+            },
+        )
+        # #188-FU6 seam: emit a structured finalize_timeout termination reason
+        # here via LifecycleHooks/CallbackRegistry when FU6 lands.
+        return self._finalize_timeout_chunk()
 
     @staticmethod
     def _extract_response_content(response: Any) -> str:
@@ -2479,9 +2635,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         finish_reason="stop",
                     )
                 else:
+                    loop_start = time.monotonic()
                     early_response, tool_results = (
                         await self._run_phased_process_loop(
-                            strategy, handle, turn
+                            strategy, handle, turn, loop_start
                         )
                     )
 
@@ -2499,9 +2656,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                             finish_reason="stop",
                         )
                     else:
-                        # Stream finalize_turn
-                        async for chunk in strategy.stream_finalize_turn(
-                            handle, tool_results
+                        # Stream finalize_turn, bounded by the budget the loop
+                        # left unspent (see _bounded_finalize_stream). This is
+                        # the terminal call, so a hung synthesis stream is the
+                        # actual failure mode — a per-stream deadline, not a
+                        # mere entry-gate, is required.
+                        budget = self._finalize_budget(loop_start)
+                        async for chunk in self._bounded_finalize_stream(
+                            strategy.stream_finalize_turn(
+                                handle, tool_results
+                            ),
+                            budget,
+                            turn,
                         ):
                             turn.stream_chunks.append(chunk.delta)
                             if chunk.is_final or chunk.usage:
