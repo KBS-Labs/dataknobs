@@ -100,6 +100,7 @@ from ..base import (
     AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
+from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
@@ -774,7 +775,7 @@ class OllamaProvider(AsyncLLMProvider):
                     else:
                         logger.error("Ollama API error (status %s): %s", response.status, error_text)
                         logger.error("Request payload: %s", json.dumps(payload, indent=2))
-                        response.raise_for_status()
+                        await raise_for_status_with_body(response, body=error_text)
                 else:
                     data = await response.json()
         except Exception as exc:
@@ -846,7 +847,7 @@ class OllamaProvider(AsyncLLMProvider):
 
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-                response.raise_for_status()
+                await raise_for_status_with_body(response)
 
                 async for line in response.content:
                     if line:
@@ -900,7 +901,7 @@ class OllamaProvider(AsyncLLMProvider):
 
             try:
                 async with self._session.post(f"{self.base_url}/api/embeddings", json=payload) as response:
-                    response.raise_for_status()
+                    await raise_for_status_with_body(response)
                     data = await response.json()
                     embeddings.append(data['embedding'])
             except Exception as exc:
@@ -964,7 +965,7 @@ class OllamaProvider(AsyncLLMProvider):
                         "Ollama API error (status %s): %s",
                         response.status, error_text,
                     )
-                    response.raise_for_status()
+                    await raise_for_status_with_body(response, body=error_text)
                 data = await response.json()
 
             # Extract response and tool calls

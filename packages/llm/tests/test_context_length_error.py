@@ -9,15 +9,30 @@ larger-context model, surface a distinct message) had nothing narrower to catch.
 The fix specializes the shared status dispatch so an overflow 400 raises
 ``ContextLengthExceededError`` — a ``ValidationError`` subclass, so every
 existing ``except ValidationError`` keeps matching (purely additive). Detection
-is a machine ``code`` (OpenAI) or a conservative message marker (all vendors
-fold ``str(exc)`` into the dispatched message).
+is a machine ``code`` (OpenAI) or a conservative message marker. Every provider
+folds the vendor error *body* into the dispatched message: the SDK providers via
+``str(exc)``, and the two aiohttp providers (Ollama, HuggingFace) via
+``raise_for_status_with_body`` — aiohttp's own ``raise_for_status`` carries only
+the reason phrase (``"Bad Request"``) and drops the body where the overflow
+wording lives, so those two route through the shared helper to preserve it.
 
 These build **real** vendor SDK error objects (openai / botocore are dev deps
-for exactly this reason — no fakes for the real dependency's error classes) and
-drive the real providers via the sanctioned raising client/session stubs. Each
-FAILS against HEAD: the raised type is the generic ``ValidationError``, not a
+for exactly this reason — no fakes for the real dependency's error classes), and
+the aiohttp providers are driven through a **real** ``aiohttp.ClientResponseError``
+via the sanctioned raising session stub. Each FAILS against the unfixed base:
+the raised type is the generic ``ValidationError``, not a
 ``ContextLengthExceededError``, so ``pytest.raises(ContextLengthExceededError)``
-fails until the specialization lands.
+fails until the specialization (and, for Ollama/HuggingFace, the body-preserving
+helper) lands.
+
+Discriminating assertions:
+- ``test_openai_context_length_via_code_only`` — an **opaque** message with no
+  marker, overflow identified by the machine ``code`` alone, isolating the
+  ``code`` channel end-to-end (the marker-bearing openai test would pass even if
+  the code were ignored).
+- ``test_ollama_non_overflow_400_stays_validation_error`` /
+  ``test_huggingface`` overflow cases — prove the aiohttp body-folding both
+  fires on overflow wording *and* stays narrow on an unrelated 400.
 """
 
 from __future__ import annotations
@@ -34,7 +49,15 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_llm.exceptions import ContextLengthExceededError
 from dataknobs_llm.llm.base import LLMConfig, LLMProvider, ModelCapability
 from dataknobs_llm.llm.providers.bedrock import BedrockProvider
+from dataknobs_llm.llm.providers.huggingface import HuggingFaceProvider
+from dataknobs_llm.llm.providers.ollama import OllamaProvider
 from dataknobs_llm.llm.providers.openai import OpenAIProvider
+
+from _aiohttp_error_stub import (
+    FakeResponse,
+    FakeSession,
+    make_client_response_error,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +149,45 @@ def _bedrock_provider(exc: Exception) -> BedrockProvider:
 
 
 # ---------------------------------------------------------------------------
+# ollama / huggingface: real aiohttp ClientResponseError + a raising session stub
+#
+# aiohttp's raise_for_status() carries only the reason phrase; the overflow
+# wording lives in the response *body* (FakeResponse.text). The provider routes
+# through raise_for_status_with_body, which folds that body into the error's
+# message so the shared markers fire.
+# ---------------------------------------------------------------------------
+
+
+def _ollama_provider(session: Any) -> OllamaProvider:
+    provider = OllamaProvider(LLMConfig(provider="ollama", model="llama3.2"))
+    provider._session = session
+    provider._is_initialized = True
+    return provider
+
+
+def _hf_provider(session: Any) -> HuggingFaceProvider:
+    provider = HuggingFaceProvider(
+        LLMConfig(provider="huggingface", model="gpt2", api_key="test")
+    )
+    provider._session = session
+    provider._is_initialized = True
+    return provider
+
+
+def _bad_request_response(body: str) -> FakeResponse:
+    """A 400 whose vendor wording lives in the *body*, not the reason phrase.
+
+    ``raise_exc`` is the real ``aiohttp.ClientResponseError`` that
+    ``raise_for_status()`` raises — its bare reason phrase (``"Bad Request"``)
+    carries no marker, so overflow is detected only once the body is folded in
+    (and a non-overflow body stays a plain ``ValidationError``).
+    """
+    return FakeResponse(
+        400, text=body, raise_exc=make_client_response_error(400, "Bad Request")
+    )
+
+
+# ---------------------------------------------------------------------------
 # base predicate: a minimal concrete provider
 # ---------------------------------------------------------------------------
 
@@ -171,6 +233,23 @@ class TestContextLengthTranslation:
         # Original SDK error preserved on __cause__.
         assert isinstance(excinfo.value.__cause__, openai.BadRequestError)
 
+    async def test_openai_context_length_via_code_only(self) -> None:
+        """OpenAI overflow with an **opaque** message — only the ``code`` fires.
+
+        Isolates the machine-``code`` channel end-to-end: the message carries no
+        marker, so this passes only if ``getattr(exc, "code", None)`` actually
+        reaches the predicate. The marker-bearing openai test above would pass
+        even if the code were dropped, so it does not cover this path.
+        """
+        exc = _openai_bad_request(
+            "The request could not be processed.",
+            code="context_length_exceeded",
+        )
+        provider = _openai_provider(exc)
+        with pytest.raises(ContextLengthExceededError) as excinfo:
+            await provider.complete("hi")
+        assert isinstance(excinfo.value.__cause__, openai.BadRequestError)
+
     async def test_anthropic_context_length_400_via_marker(self) -> None:
         """Anthropic carries no code — the message marker fires."""
         provider = _base_provider()
@@ -208,6 +287,62 @@ class TestContextLengthTranslation:
         with pytest.raises(ValidationError) as excinfo:
             await provider.complete("hi")
         assert not isinstance(excinfo.value, ContextLengthExceededError)
+
+
+# ---------------------------------------------------------------------------
+# aiohttp providers: overflow lives in the body, folded by the shared helper
+# ---------------------------------------------------------------------------
+
+
+class TestAiohttpProviderContextLength:
+    """Ollama / HuggingFace overflow is detected from the response **body**.
+
+    aiohttp's ``raise_for_status()`` keeps only the reason phrase, so these FAIL
+    against the unfixed base (the body — and its marker — is discarded, leaving
+    a plain ``ValidationError``) and pass once ``raise_for_status_with_body``
+    preserves it.
+    """
+
+    async def test_ollama_context_length_via_body_marker(self) -> None:
+        response = _bad_request_response(
+            '{"error":"input is too long for this model\'s context window"}'
+        )
+        provider = _ollama_provider(
+            FakeSession([FakeSession.responding(response)])
+        )
+        with pytest.raises(ContextLengthExceededError) as excinfo:
+            await provider.complete("hi")
+        # Backward compatibility + original error preserved on __cause__.
+        assert isinstance(excinfo.value, ValidationError)
+        assert excinfo.value.__cause__ is response._raise_exc
+
+    async def test_ollama_non_overflow_400_stays_validation_error(self) -> None:
+        """A 400 whose body has no overflow marker stays a plain ValidationError.
+
+        Pins that folding the body did not widen the net — an unrelated Ollama
+        400 (a rejected option) must not be misclassified as overflow.
+        """
+        response = _bad_request_response(
+            '{"error":"invalid options: temperature must be <= 2"}'
+        )
+        provider = _ollama_provider(
+            FakeSession([FakeSession.responding(response)])
+        )
+        with pytest.raises(ValidationError) as excinfo:
+            await provider.complete("hi")
+        assert not isinstance(excinfo.value, ContextLengthExceededError)
+
+    async def test_huggingface_context_length_via_body_marker(self) -> None:
+        response = _bad_request_response(
+            '{"error":"Input validation error: prompt is too long"}'
+        )
+        provider = _hf_provider(
+            FakeSession([FakeSession.responding(response)])
+        )
+        with pytest.raises(ContextLengthExceededError) as excinfo:
+            await provider.complete("hi")
+        assert isinstance(excinfo.value, ValidationError)
+        assert excinfo.value.__cause__ is response._raise_exc
 
 
 # ---------------------------------------------------------------------------

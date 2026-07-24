@@ -802,8 +802,11 @@ CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
 #: Case-insensitive substrings identifying a context-window-overflow 400 across
 #: vendor phrasings. Conservative — only unambiguous overflow wording, so an
 #: unrelated 400 (rejected param, malformed request) stays a plain
-#: ``ValidationError``. Every provider folds ``str(exc)`` into the dispatched
-#: message, so a marker here fires without touching the provider translators.
+#: ``ValidationError``. Every provider folds the vendor error *body* into the
+#: dispatched message — the SDK providers via ``str(exc)`` and the aiohttp
+#: providers (Ollama, HuggingFace) via ``raise_for_status_with_body`` (which
+#: preserves the body aiohttp's own ``raise_for_status`` would drop) — so a
+#: marker here fires uniformly without per-provider translator changes.
 _CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset({
     "context_length_exceeded",   # OpenAI machine code + message fragment
     "maximum context length",    # OpenAI message
@@ -961,14 +964,17 @@ class LLMProvider(ABC):
         """True when a 400 is specifically a context-window overflow.
 
         Status-gated first (only 400s qualify), then a machine ``code``
-        (OpenAI supplies one) or a conservative message marker (all vendors
-        fold ``str(exc)`` into the dispatched message). Deliberately narrow so
-        an unrelated 400 — a rejected sampling parameter, a malformed request —
-        stays a plain :class:`~dataknobs_common.exceptions.ValidationError`.
+        (OpenAI supplies one) or a conservative message marker (every provider
+        folds the vendor error body into the dispatched message — see
+        :data:`_CONTEXT_LENGTH_MARKERS`). Deliberately narrow so an unrelated
+        400 — a rejected sampling parameter, a malformed request — stays a plain
+        :class:`~dataknobs_common.exceptions.ValidationError`.
         """
         if status != 400:
             return False
-        if code and code.lower() in _CONTEXT_LENGTH_MARKERS:
+        # ``str(code)`` guards the generic ``code`` extension point: a future
+        # provider passing a non-str machine code must not ``AttributeError``.
+        if code and str(code).lower() in _CONTEXT_LENGTH_MARKERS:
             return True
         text = message.lower()
         return any(marker in text for marker in _CONTEXT_LENGTH_MARKERS)
