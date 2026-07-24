@@ -26,11 +26,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Self
 
 import pytest
 
 from dataknobs_llm.llm.base import LLMConfig, ModelConstraints
+from dataknobs_llm.llm.providers import _claude_shared
 from dataknobs_llm.llm.providers import anthropic as anthropic_mod
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
 from dataknobs_llm.tooling import model_limits
@@ -80,6 +82,33 @@ class _ModelsStub:
         if self.raise_on_list:
             raise RuntimeError("simulated Models API failure")
         return _AsyncModelPage(list(self.models))
+
+
+class _SlowModelPage:
+    """Async-iterable page whose first step sleeps — a *hung* Models API."""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+
+    def __aiter__(self) -> _SlowModelPage:
+        return self
+
+    async def __anext__(self) -> Any:
+        # Block as if the control-plane hung, then end (never yields a model).
+        await asyncio.sleep(self._delay)
+        raise StopAsyncIteration
+
+
+class _SlowModelsStub:
+    """``client.models`` stand-in whose ``list()`` hangs for ``delay`` seconds."""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+        self.list_calls = 0
+
+    def list(self, **_kwargs: Any) -> _SlowModelPage:
+        self.list_calls += 1
+        return _SlowModelPage(self._delay)
 
 
 class _CaptureAnthropicClient:
@@ -680,3 +709,146 @@ class TestModelLimitsTooling:
         run ``bin/update-model-limits.sh --update`` to refresh it.
         """
         assert model_limits.main(["--check"]) == 0
+
+
+class TestRefreshTimeout:
+    """A *hung* Models API is bounded by the dedicated refresh timeout.
+
+    The refresh runs under the per-loop lock, so without an independent bound a
+    hung (not erroring) control-plane would stall every cold-cache caller for
+    the full client ``config.timeout`` (60s default). The dedicated
+    ``model_limits_refresh_timeout`` cancels the poll and the request proceeds
+    on the cached/resource value. Reproduce-first: FAILS against the pre-change
+    refresh (no ``asyncio.wait_for`` bound → the call awaits the full hang).
+    """
+
+    async def test_hung_models_api_bounded_by_refresh_timeout(self) -> None:
+        provider, client = _provider_with_capture(
+            "claude-sonnet-5",
+            options={"model_limits_refresh_timeout": 0.05},
+        )
+        # Replace the models sub-stub with one that hangs for 2s per list().
+        client.models = _SlowModelsStub(delay=2.0)  # type: ignore[attr-defined]
+
+        start = time.monotonic()
+        await provider.refresh_model_limits()  # best-effort — never raises
+        elapsed = time.monotonic() - start
+
+        # Bounded well below the 2s "hang" (with generous slack for scheduling).
+        assert elapsed < 1.0
+        # The poll was attempted, then abandoned; the ceiling falls back to the
+        # bundled resource value rather than blocking on the hung API.
+        assert provider.get_constraints().max_tokens_ceiling == 128000
+
+
+class TestMatchCeilingUnification:
+    """The dynamic cache and the resource share one family-matching rule (#3).
+
+    The unit-level rule is symmetric (exact, then longest substring in either
+    direction). The end-to-end tests prove the dynamic cache uses the *same*
+    rule as the resource, so a bare-alias request resolves a dated cache key
+    (and vice versa) — reproduce-first against the pre-change exact-only cache
+    lookup, which silently fell through to the resource on any alias mismatch.
+    """
+
+    def test_exact_match_wins(self) -> None:
+        assert _claude_shared.match_ceiling(
+            "claude-x", [("claude-x", 42), ("claude", 7)]
+        ) == 42
+
+    def test_family_alias_short_key_in_long_request(self) -> None:
+        # Resource-style: short family key matches a longer dated request.
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5-20260514", [("claude-sonnet-5", 128000)]
+        ) == 128000
+
+    def test_bare_alias_request_in_long_dated_key(self) -> None:
+        # Dynamic-style: bare request matches a longer dated cache key.
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5", [("claude-sonnet-5-20260514", 200000)]
+        ) == 200000
+
+    def test_longest_family_wins_over_shorter_prefix(self) -> None:
+        assert _claude_shared.match_ceiling(
+            "claude-sonnet-5-x",
+            [("claude", 1), ("claude-sonnet-5", 128000)],
+        ) == 128000
+
+    def test_no_match_is_none(self) -> None:
+        assert _claude_shared.match_ceiling("gpt-4", [("claude", 1)]) is None
+
+    async def test_bare_alias_resolves_dynamic_dated_ceiling(self) -> None:
+        """A bare-alias request resolves a *dynamic* dated cache entry.
+
+        The live API returns a dated id; a request for the bare family alias
+        must resolve against that cached dynamic value (200000), not fall
+        through to the resource (128000). Reproduce-first: FAILS against the
+        exact-only cache lookup → resolved to the resource value.
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [
+            _ScriptedModel("claude-sonnet-5-20260930", 200000)
+        ]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+    async def test_dated_request_resolves_dynamic_family_ceiling(self) -> None:
+        """A dated request resolves a *dynamic* family-keyed cache entry.
+
+        Reproduce-first: FAILS against the exact-only cache lookup → resolved to
+        the resource value (128000) instead of the dynamic value (200000).
+        """
+        provider, client = _provider_with_capture("claude-sonnet-5-20261231")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+        await provider.refresh_model_limits()
+        assert provider.get_constraints().max_tokens_ceiling == 200000
+
+
+class TestPerLoopStateKeying:
+    """Per-loop refresh state is keyed by the loop *object*, not ``id(loop)`` (#4).
+
+    ``id(loop)`` in a plain dict never evicts a dead loop's entry (a leak) and,
+    worse, lets a *new* loop that happens to reuse a freed id inherit the dead
+    loop's stale last-fetch timestamp and wrongly skip a needed refresh. Keying
+    a ``WeakKeyDictionary`` on the loop object evicts the entry when the loop is
+    collected and makes every new loop a distinct key.
+
+    Note: the id-reuse *mis-skip* is inherently non-deterministic (it depends on
+    the allocator reusing a freed id), so it cannot be reproduced reliably in a
+    unit test. This test pins the deterministic, observable consequence of the
+    fix — automatic eviction when the loop is GC'd — which the pre-change plain
+    ``dict[int, ...]`` fails (the entry persists after the loop is gone).
+    """
+
+    def test_state_is_weak_keyed(self) -> None:
+        import weakref
+
+        assert isinstance(
+            anthropic_mod._MODEL_LIMITS_LAST_FETCH, weakref.WeakKeyDictionary
+        )
+        assert isinstance(
+            anthropic_mod._MODEL_LIMITS_LOCKS, weakref.WeakKeyDictionary
+        )
+
+    def test_dead_loop_entry_is_evicted(self) -> None:
+        import gc
+
+        provider, client = _provider_with_capture("claude-sonnet-5")
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(provider.refresh_model_limits())
+        finally:
+            loop.close()
+
+        # The refresh recorded per-loop state keyed by the loop object.
+        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 1
+
+        del loop
+        gc.collect()
+
+        # WeakKeyDictionary drops the dead loop's entry — no leak, and no stale
+        # timestamp a future (id-reused) loop could inherit. A plain
+        # ``dict[int, float]`` (the pre-change keying) would still hold it.
+        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 0
