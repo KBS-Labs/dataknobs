@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-24T01:58:29Z",
+  "timestamp": "2026-07-24T02:21:04Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.31 (Homebrew 2026-07-22 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/max-tokens-ceiling-clamp",
-  "git_commit": "a786b331086013803fc663fe51560f1a89448b7f",
+  "git_branch": "sbk/finalize-synthesis-timeout-budget",
+  "git_commit": "2182054629462a4feebb7c3ca196ef26d0d2b2fc",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
