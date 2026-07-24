@@ -734,6 +734,18 @@ class LLMConfig(StructuredConfig):
     # gaining or dropping a rejected param).
     constraints: Dict[str, Any] | None = None
 
+    # Model-profile overrides — the highest-precedence layer of the unified
+    # model-metadata substrate (see ``dataknobs_llm.llm.model_profile``). When
+    # set, wins per facet over the provider's live / bundled-resource / heuristic
+    # sources.  Loose mapping resolved to a ModelProfile partial at runtime, never
+    # stored typed.  Either a flat mapping keyed by facet name (applies to the
+    # configured model) or a ``{model_id: {facets}}`` per-model mapping.  Facet
+    # keys: "capabilities" (list[str]), "rejected_params" (list[str]),
+    # "context_window" / "max_output_tokens" (int), "pricing" (mapping),
+    # "param_remaps" (mapping), "available" (bool), "aliases" (list[str]).  Lets a
+    # consumer supply or correct any model fact without a dataknobs release.
+    model_profile_overrides: Dict[str, Any] | None = None
+
     # ``from_dict`` / ``to_dict`` are inherited from ``StructuredConfig``:
     #  - ``from_dict`` ignores unknown keys (so a dataknobs ``Config``'s
     #    ``type`` / ``name`` / ``factory`` are dropped automatically) and

@@ -330,6 +330,54 @@ reconciles it against the live API — `bin/update-model-limits.sh --check` repo
 drift (a key-gated CI signal) and `--update` rewrites the file from live values.
 Both are a clean no-op when `ANTHROPIC_API_KEY` is unset.
 
+### Unified model-metadata substrate (`ModelProfile`)
+
+Capabilities, request-shape rules, token ceilings, and pricing are all
+*model-keyed facts* that go stale on each vendor release. Rather than each
+provider hand-maintaining scattered literals for each, they resolve through one
+substrate (`dataknobs_llm.llm.model_profile`): a single `ModelProfile` record
+holding every facet, resolved by a `LayeredModelProfileResolver` that merges an
+ordered list of sources **facet-by-facet, highest precedence first**.
+
+| `ModelProfile` facet | Feeds |
+|----------------------|-------|
+| `context_window` | `ModelConstraints.max_input_tokens` |
+| `max_output_tokens` | `ModelConstraints.max_tokens_ceiling` |
+| `capabilities` | `get_capabilities()` |
+| `rejected_params` | `ModelConstraints.rejected_params` (family rule) |
+| `param_remaps`, `pricing`, `available`, `aliases` | (per-provider bindings) |
+
+The merge is **override, not union**: for each facet the first source with a
+non-`None` value wins, and no lower source can displace it. `None` means
+"unknown"; a *present* value — including an empty `frozenset()` — means
+"authoritatively known," so a config that pins `capabilities=frozenset()`
+("this model has none") replaces a lower layer's guess. `AnthropicProvider`
+composes its resolver as **config override → live Models-API cache → bundled
+resource → heuristic**, so the ceiling facets resolve live-else-resource while
+capabilities and the `temperature` rule come from the heuristic — all overridable
+per facet.
+
+The highest-precedence layer is `LLMConfig.model_profile_overrides`, a loose
+mapping that lets a consumer supply or correct *any* facet without a dataknobs
+release — either a flat facet mapping (applies to the configured model) or a
+`{model_id: {facets}}` per-model mapping:
+
+```python
+create_llm_provider({
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    # correct one facet; everything else still resolves normally
+    "model_profile_overrides": {"max_output_tokens": 8192},
+})
+```
+
+Sources implement the `ModelMetadataSource` protocol (a synchronous, I/O-free
+`resolve(model) -> ModelProfile`; a live-backed source refreshes its cache
+out-of-band). An in-house gateway or proxy registers its own source via the
+consumer-extensible `model_metadata_sources` registry — no dataknobs release
+required. This is the substrate every provider binds to as it is migrated onto
+it.
+
 ### Vendor-error translation (all providers)
 
 Every provider translates raw vendor transport errors into

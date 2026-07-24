@@ -85,6 +85,13 @@ from ._claude_shared import (
     resource_ceiling,
     resource_input_ceiling,
 )
+from ..model_profile import (
+    CAPABILITY_ORDER,
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    ModelProfile,
+)
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
@@ -206,55 +213,140 @@ def _model_limits_lock() -> asyncio.Lock:
     return lock
 
 
-def _resolve_ceiling(model: str) -> int | None:
-    """Synchronous ceiling resolution read by ``_detect_constraints``.
+#: Claude family-name substrings that carry the modern (Claude 3+) capability
+#: set — vision, function calling, JSON mode. Matched as lowercased substrings
+#: of the model id. The Claude 5 generation adds names (``fable`` / ``mythos``)
+#: that carry no opus/sonnet/haiku marker, so they are listed explicitly or they
+#: would be mis-detected as lacking these. Consumed by the heuristic profile
+#: source (:func:`_heuristic_profile`).
+_MODERN_CAPABILITY_FAMILIES: tuple[str, ...] = (
+    "claude-3", "claude-3.5", "claude-4", "claude-5",
+    "claude-sonnet", "claude-opus", "claude-haiku",
+    "claude-fable", "claude-mythos",
+)
 
-    Precedence: a dynamically-fetched value in :data:`_MODEL_LIMITS_CACHE`
-    (the normal-operation source, kept fresh by the TTL-gated async refresh)
-    else the bundled :func:`~._claude_shared.resource_ceiling` fallback else
-    ``None``. Both consult the *same* family-matching rule
-    (:func:`~._claude_shared.match_ceiling` — exact, then longest substring in
-    either direction) so the dynamic cache and the resource never disagree on
-    how a model id resolves: a bare-alias request (``claude-sonnet-5``) matches
-    a dated cache key (``claude-sonnet-5-<snapshot>``) fetched from the API, and
-    a dated request matches a family resource key. Purely a cache/dict read — no
-    I/O — so it is safe on the synchronous detect path.
+
+def _live_profile(model: str) -> ModelProfile:
+    """Live-API source: the *dynamic* half of the per-model ceiling resolution.
+
+    Reads the process-level :data:`_MODEL_LIMITS_CACHE` (populated out-of-band by
+    the TTL-gated :meth:`AnthropicProvider._refresh_model_limits`) via the shared
+    family-matcher (:func:`~._claude_shared.match_ceiling` — exact, then longest
+    substring in either direction), so a bare-alias request
+    (``claude-sonnet-5``) matches a dated cache key (``claude-sonnet-5-<snapshot>``)
+    fetched from the API. Purely a cache read — no I/O — safe on the synchronous
+    detect path. Contributes only the two ceiling facets (``None`` elsewhere); the
+    resource fallback is a separate, lower-precedence source
+    (:func:`_resource_profile`) that the resolver merges beneath this one, exactly
+    reproducing the historical "dynamic else resource" precedence per facet.
     """
     key = model.lower()
-    dynamic = match_ceiling(
-        key,
-        (
-            (cached_id, entry.ceiling)
-            for cached_id, entry in _MODEL_LIMITS_CACHE.items()
-            if entry.ceiling is not None
+    return ModelProfile(
+        max_output_tokens=match_ceiling(
+            key,
+            (
+                (cached_id, entry.ceiling)
+                for cached_id, entry in _MODEL_LIMITS_CACHE.items()
+                if entry.ceiling is not None
+            ),
+        ),
+        context_window=match_ceiling(
+            key,
+            (
+                (cached_id, entry.input_ceiling)
+                for cached_id, entry in _MODEL_LIMITS_CACHE.items()
+                if entry.input_ceiling is not None
+            ),
         ),
     )
-    if dynamic is not None:
-        return dynamic
-    return resource_ceiling(key)
 
 
-def _resolve_input_ceiling(model: str) -> int | None:
-    """Synchronous input-ceiling resolution read by ``_detect_constraints``.
+def _resource_profile(model: str) -> ModelProfile:
+    """Bundled-resource source: the *fallback* half of the ceiling resolution.
 
-    The ``max_input_tokens`` (context window) sibling of :func:`_resolve_ceiling`
-    with identical precedence and family-matching: a dynamically-fetched value in
-    :data:`_MODEL_LIMITS_CACHE` (``entry.input_ceiling``) else the bundled
-    :func:`~._claude_shared.resource_input_ceiling` fallback else ``None``. Purely
-    a cache/dict read — no I/O — safe on the synchronous detect path.
+    Resolves the two ceiling facets against the bundled resource
+    (:func:`~._claude_shared.resource_ceiling` /
+    :func:`~._claude_shared.resource_input_ceiling`), using the *same*
+    family-matching rule as :func:`_live_profile`. Lower precedence than the live
+    source, so it fills a ceiling only when the dynamic cache has no value for it
+    — per facet. Contributes only the ceiling facets (``None`` elsewhere).
     """
     key = model.lower()
-    dynamic = match_ceiling(
-        key,
-        (
-            (cached_id, entry.input_ceiling)
-            for cached_id, entry in _MODEL_LIMITS_CACHE.items()
-            if entry.input_ceiling is not None
-        ),
+    return ModelProfile(
+        max_output_tokens=resource_ceiling(key),
+        context_window=resource_input_ceiling(key),
     )
-    if dynamic is not None:
-        return dynamic
-    return resource_input_ceiling(key)
+
+
+def _heuristic_profile(model: str) -> ModelProfile:
+    """Heuristic source: capabilities + family ``rejected_params`` by name.
+
+    The last-resort family-substring rules for the two non-ceiling facets:
+
+    - ``capabilities`` — the base set (text/chat/streaming/code) always, plus the
+      modern set (vision/function-calling/JSON) for a
+      :data:`_MODERN_CAPABILITY_FAMILIES` match.
+    - ``rejected_params`` — ``{"temperature"}`` for the Claude 5 family (which
+      rejects it with a 400), else an authoritative empty set.
+
+    Contributes only these two facets (``None`` ceilings); the ceilings come from
+    the live / resource sources above.
+    """
+    model_lower = model.lower()
+    capabilities = {
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+        ModelCapability.CODE,
+    }
+    if any(m in model_lower for m in _MODERN_CAPABILITY_FAMILIES):
+        capabilities |= {
+            ModelCapability.VISION,
+            ModelCapability.FUNCTION_CALLING,
+            ModelCapability.JSON_MODE,
+        }
+    rejected = (
+        frozenset({"temperature"})
+        if claude_rejects_temperature(model_lower)
+        else frozenset()
+    )
+    return ModelProfile(
+        capabilities=frozenset(capabilities),
+        rejected_params=rejected,
+    )
+
+
+#: The Anthropic model-metadata source list, in descending precedence. The live
+#: and bundled-resource sources are stateless module singletons (they read the
+#: shared cache / resource); the config-override source is prepended per config
+#: so a per-call model override honors that config's overrides.
+_LIVE_PROFILE_SOURCE = CallableModelMetadataSource("live_api", _live_profile)
+_RESOURCE_PROFILE_SOURCE = CallableModelMetadataSource(
+    "bundled_resource", _resource_profile
+)
+_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
+    "heuristic", _heuristic_profile
+)
+
+
+def _profile_resolver(config: LLMConfig) -> LayeredModelProfileResolver:
+    """Compose the Anthropic profile resolver for *config*.
+
+    Precedence (highest first): config override → live Models-API cache → bundled
+    resource → heuristic. The ceiling facets resolve live-else-resource; the
+    capability / rejected-param facets come from the heuristic; a consumer's
+    ``LLMConfig.model_profile_overrides`` wins over all of them per facet.
+    """
+    return LayeredModelProfileResolver(
+        [
+            ConfigOverrideSource(
+                getattr(config, "model_profile_overrides", None)
+            ),
+            _LIVE_PROFILE_SOURCE,
+            _RESOURCE_PROFILE_SOURCE,
+            _HEURISTIC_PROFILE_SOURCE,
+        ]
+    )
 
 
 def _extract_max_tokens(model_obj: Any) -> int | None:
@@ -900,7 +992,7 @@ class AnthropicProvider(AsyncLLMProvider):
             accepts_inline_system=self.get_constraints().accepts_inline_system,
         )
         # Dynamic max_tokens-ceiling resolution knobs (see the module-level
-        # _resolve_ceiling / _refresh_model_limits docs). Read once from options
+        # _live_profile / _refresh_model_limits docs). Read once from options
         # with defensive coercion — config-file values may be strings.
         self._model_limits_dynamic = _coerce_bool(
             llm_config.options.get("model_limits_dynamic"), default=True
@@ -1080,32 +1172,18 @@ class AnthropicProvider(AsyncLLMProvider):
         )
 
     def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect Anthropic model capabilities."""
-        model = self.config.model.lower()
-        capabilities = [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.CHAT,
-            ModelCapability.STREAMING,
-            ModelCapability.CODE,
-        ]
+        """Auto-detect Anthropic model capabilities.
 
-        # Claude 3+ models support vision, tools, and JSON mode. The family
-        # names are matched by substring; the Claude 5 generation adds names
-        # (fable/mythos) that carry no opus/sonnet/haiku marker, so they are
-        # listed explicitly or they would be mis-detected as lacking these.
-        modern_models = [
-            'claude-3', 'claude-3.5', 'claude-4', 'claude-5',
-            'claude-sonnet', 'claude-opus', 'claude-haiku',
-            'claude-fable', 'claude-mythos',
-        ]
-        if any(m in model for m in modern_models):
-            capabilities.extend([
-                ModelCapability.VISION,
-                ModelCapability.FUNCTION_CALLING,
-                ModelCapability.JSON_MODE,
-            ])
-
-        return capabilities
+        A one-line read off the resolved :class:`~..model_profile.ModelProfile`
+        (the heuristic source supplies the capability set; a consumer's
+        ``model_profile_overrides.capabilities`` wins per the resolver
+        precedence). The capability *set* is projected back to an ordered list via
+        :data:`~..model_profile.CAPABILITY_ORDER` so the historical ordering is
+        preserved.
+        """
+        profile = _profile_resolver(self.config).resolve(self.config.model)
+        capabilities = profile.capabilities or frozenset()
+        return [c for c in CAPABILITY_ORDER if c in capabilities]
 
     def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
         """Auto-detect Anthropic request-shape constraints for *config*'s model.
@@ -1121,17 +1199,19 @@ class AnthropicProvider(AsyncLLMProvider):
           returns a 400 when ``temperature`` is supplied. The Claude 4.x
           family (``claude-opus-4-8``, ``claude-haiku-4-5-...``) still accepts
           it, so the match distinguishes the generations.
-        - ``max_tokens_ceiling`` from :func:`_resolve_ceiling` — the live
-          Models-API value cached per-process (kept fresh by the TTL-gated
+        - ``max_tokens_ceiling`` from the resolved profile's
+          ``max_output_tokens`` facet (:func:`_live_profile` else
+          :func:`_resource_profile`) — the live Models-API value cached
+          per-process (kept fresh by the TTL-gated
           :meth:`_refresh_model_limits_if_stale` refresh) else the bundled
           fallback resource else ``None`` (permissive). Read by
           :meth:`_build_api_kwargs` to clamp an over-ceiling ``max_tokens`` down
           before the call. The read is a synchronous cache lookup (no I/O); the
           async refresh at the request boundary keeps the cache current.
-        - ``max_input_tokens`` from :func:`_resolve_input_ceiling` — the model's
-          input/context-window size (same live/cached/fallback machinery as
-          ``max_tokens_ceiling``). Informational (not clamped); a consumer reads
-          it to size an input budget (e.g. proactive history compaction).
+        - ``max_input_tokens`` from the profile's ``context_window`` facet — the
+          model's input/context-window size (same live/cached/fallback machinery
+          as ``max_tokens_ceiling``). Informational (not clamped); a consumer
+          reads it to size an input budget (e.g. proactive history compaction).
 
         Matches on ``config.model`` (not ``self.config.model``) so a per-call
         model override resolves the overriding family's constraints — see
@@ -1144,17 +1224,23 @@ class AnthropicProvider(AsyncLLMProvider):
 
         Both are the auto-detected defaults; a consumer overrides either via
         ``LLMConfig.constraints`` (see :meth:`_resolve_constraints`).
+
+        The two ceiling facets and the family ``rejected_params`` come from the
+        resolved :class:`~..model_profile.ModelProfile` (live cache → resource →
+        heuristic, config-override on top); the runtime-discovered rejected params
+        (:data:`_DISCOVERED_REJECTED_PARAMS`) are *unioned* on afterward — a
+        process-local self-correction overlay that is deliberately additive to,
+        not overridden by, the declarative profile.
         """
         model = config.model.lower()
-        rejected: set[str] = set()
-        if claude_rejects_temperature(model):
-            rejected.add("temperature")
+        profile = _profile_resolver(config).resolve(config.model)
+        rejected: set[str] = set(profile.rejected_params or ())
         rejected |= _DISCOVERED_REJECTED_PARAMS.get(model, set())
         return ModelConstraints(
             rejected_params=frozenset(rejected),
             accepts_inline_system=False,
-            max_tokens_ceiling=_resolve_ceiling(model),
-            max_input_tokens=_resolve_input_ceiling(model),
+            max_tokens_ceiling=profile.max_output_tokens,
+            max_input_tokens=profile.context_window,
         )
 
     def _build_api_kwargs(self, config: LLMConfig) -> Dict[str, Any]:

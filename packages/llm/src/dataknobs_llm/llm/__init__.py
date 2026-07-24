@@ -18,6 +18,18 @@ from .base import (
     ToolCall,
     normalize_llm_config,
 )
+from .model_profile import (
+    BundledResourceSource,
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    ModelMetadataSource,
+    ModelPricing,
+    ModelProfile,
+    PartialModelProfile,
+    merge_partials,
+    model_metadata_sources,
+)
 from .providers import (
     OpenAIProvider,
     AnthropicProvider,
@@ -60,6 +72,17 @@ __all__ = [
     'ModelConstraints',
     'ToolCall',
     'normalize_llm_config',
+    # Model-metadata substrate
+    'ModelProfile',
+    'ModelPricing',
+    'PartialModelProfile',
+    'ModelMetadataSource',
+    'LayeredModelProfileResolver',
+    'CallableModelMetadataSource',
+    'ConfigOverrideSource',
+    'BundledResourceSource',
+    'merge_partials',
+    'model_metadata_sources',
     # Providers
     'OpenAIProvider',
     'AnthropicProvider',
