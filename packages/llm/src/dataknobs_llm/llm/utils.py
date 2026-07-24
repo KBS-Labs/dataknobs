@@ -398,25 +398,29 @@ class TokenCounter:
     @classmethod
     def estimate_tokens(
         cls,
-        text: str,
+        text: str | None,
         model: str = 'default'
     ) -> int:
         """Estimate token count for text.
-        
+
         Args:
-            text: Input text
+            text: Input text. ``None`` / empty → 0 (an assistant message that
+                carried only tool calls has no text content).
             model: Model name
-            
+
         Returns:
             Estimated token count
         """
+        if not text:
+            return 0
+
         # Find matching model pattern
         ratio = cls.TOKENS_PER_CHAR['default']
         for pattern, r in cls.TOKENS_PER_CHAR.items():
             if pattern in model.lower():
                 ratio = r
                 break
-                
+
         # Estimate based on character count
         return int(len(text) * ratio)
         
@@ -444,7 +448,19 @@ class TokenCounter:
             # Add name tokens if present
             if msg.name:
                 total += cls.estimate_tokens(msg.name, model)
-                
+            # Add tool-call payload tokens.  An assistant ``tool_use`` turn
+            # carries its arguments here while ``content`` is ``None``; in a
+            # long tool loop these call payloads (and the paired observations)
+            # dominate the history, so counting only ``content`` systematically
+            # under-reports the very turns a history budget exists to bound.
+            if msg.tool_calls:
+                serialized = json.dumps(
+                    [tc.to_dict() for tc in msg.tool_calls],
+                    default=str,
+                    sort_keys=True,
+                )
+                total += cls.estimate_tokens(serialized, model)
+
         return total
         
     @classmethod

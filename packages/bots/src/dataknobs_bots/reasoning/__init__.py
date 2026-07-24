@@ -52,8 +52,14 @@ from .observability import (
     transition_record_to_execution_record,
     transition_stats_to_execution_stats,
 )
+from .compaction import (
+    CompactionStrategy,
+    SummarizeCompaction,
+    WindowCompaction,
+    build_compaction_strategy,
+)
 from .react import ReActReasoning, ReActTurnHandle
-from .react_config import ReActReasoningConfig
+from .react_config import HistoryCompactionConfig, ReActReasoningConfig
 from .registry import (
     StrategyFactory,
     get_registry,
@@ -115,6 +121,11 @@ __all__ = [
     "SimpleReasoningConfig",
     "ReActReasoning",
     "ReActReasoningConfig",
+    "HistoryCompactionConfig",
+    "CompactionStrategy",
+    "WindowCompaction",
+    "SummarizeCompaction",
+    "build_compaction_strategy",
     "ReActTurnHandle",
     "GroundedReasoning",
     "GroundedReasoningConfig",

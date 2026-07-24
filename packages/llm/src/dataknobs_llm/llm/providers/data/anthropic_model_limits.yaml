@@ -1,26 +1,53 @@
-# Anthropic model output-token ceilings (max_tokens), synchronous Messages API.
-# FALLBACK ONLY -- the primary source is the live Models API `max_tokens` field.
+# Anthropic model token ceilings, synchronous Messages API.
+# FALLBACK ONLY -- the primary source is the live Models API `max_tokens`
+#   (output) and `max_input_tokens` (input/context window) fields.
 # Source: https://platform.claude.com/docs/en/docs/about-claude/models/overview
-# Last verified: 2026-07-23
+# Last verified: 2026-07-24
 # NOTE: the Batches API supports higher output (up to 300k) via the
 #   output-300k-2026-03-24 beta header; not represented here (sync-API values).
-# Values are the documented (rounded) maxima; exactness comes from the dynamic
-# Models-API path. Maintained by:
+#   Some models support a 1M-token input window via a beta header; the values
+#   here are the documented default context windows (exactness comes from the
+#   dynamic Models-API path).
+# Shape: each model maps to {max_tokens (output), max_input_tokens (context)}.
+#   The loader is tolerant of the legacy flat `model: <int>` (output-only) form.
+# Maintained by:
 #   uv run python -m dataknobs_llm.tooling.model_limits --update
 models:
-  claude-opus-4-8: 128000
-  claude-sonnet-5: 128000
-  claude-fable-5: 128000
-  # Glasswing (invitation-only); shares Fable 5's output ceiling.
-  claude-mythos-5: 128000
+  claude-opus-4-8:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  claude-sonnet-5:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  claude-fable-5:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  # Glasswing (invitation-only); shares Fable 5's ceilings.
+  claude-mythos-5:
+    max_tokens: 128000
+    max_input_tokens: 200000
   # Short family alias (like the current-gen keys above). Resolves the bare
   # alias AND every dated snapshot (`claude-haiku-4-5-YYYYMMDD`) via the
   # match_ceiling family-alias rule; a dated key would miss future snapshots.
-  claude-haiku-4-5: 64000
+  claude-haiku-4-5:
+    max_tokens: 64000
+    max_input_tokens: 200000
   # legacy (still available)
-  claude-opus-4-7: 128000
-  claude-opus-4-6: 128000
-  claude-sonnet-4-6: 128000
-  claude-sonnet-4-5-20250929: 64000
-  claude-opus-4-5-20251101: 64000
-  claude-opus-4-1-20250805: 32000
+  claude-opus-4-7:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  claude-opus-4-6:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  claude-sonnet-4-6:
+    max_tokens: 128000
+    max_input_tokens: 200000
+  claude-sonnet-4-5-20250929:
+    max_tokens: 64000
+    max_input_tokens: 200000
+  claude-opus-4-5-20251101:
+    max_tokens: 64000
+    max_input_tokens: 200000
+  claude-opus-4-1-20250805:
+    max_tokens: 32000
+    max_input_tokens: 200000

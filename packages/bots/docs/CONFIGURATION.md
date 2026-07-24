@@ -1649,6 +1649,10 @@ reasoning:
   early_stopping: true    # Stop when answer found
   truncation_retry_max_tokens: 8192  # Optional: retry a truncated tool call once
   greeting_template: "Hi! I can help with research using tools."  # Optional
+  history_compaction:     # Optional: bound in-loop history growth
+    enabled: true
+    keep_recent_iterations: 3
+    strategy: window      # "window" (default) or "summarize"
 ```
 
 **Configuration Options:**
@@ -1656,6 +1660,37 @@ reasoning:
 - `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
 - `store_trace` (bool): Store reasoning trace in conversation metadata for debugging (default: false)
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
+- `history_compaction` (mapping, optional): Opt into bounding the conversation
+  history a **long tool loop** accumulates, so it never trips a vendor
+  input-context overflow. Disabled by default — an unset/`enabled: false` block
+  is byte-identical to no compaction (no token estimation, no compaction call).
+  When enabled, before each in-loop completion the strategy estimates the path's
+  tokens and, if over budget, compacts the **oldest complete tool iterations**
+  while always keeping the system prompt, the current-turn user message, and the
+  most recent `keep_recent_iterations` iterations. A `tool_use` is never
+  separated from its `tool_result` (compaction happens only at whole-iteration
+  boundaries). A caught context-overflow error is also a backstop: it compacts
+  once and retries instead of failing the turn. Fields:
+    - `enabled` (bool): Master switch (default `false`).
+    - `budget_fraction` (float, default `0.75`): The proactive threshold as a
+      fraction of the provider's resolved input ceiling
+      (`ModelConstraints.max_input_tokens` — the Claude family resolves this from
+      the live Models API / bundled fallback). The common path. Must be in
+      `(0, 1]`.
+    - `history_token_budget` (int, optional): Absolute-token fallback used when
+      no input ceiling resolves (non-Anthropic providers / unknown model). When
+      neither a ceiling nor this is available, proactive compaction is disabled
+      and only the reactive backstop applies.
+    - `keep_recent_iterations` (int, default `3`): How many recent tool
+      iterations to retain verbatim. Must be `>= 0`.
+    - `strategy` (string, default `"window"`): `"window"` drops the oldest
+      iterations (LLM-free); `"summarize"` folds them into one summary node via
+      an LLM call.
+    - `summary_llm` (mapping, optional): Provider config for the `"summarize"`
+      strategy. `None` reuses the bot's main provider as the summarizer.
+  > **Note:** the proactive token count uses a character-ratio heuristic
+  > (`TokenCounter`), not the vendor's exact tokenizer — it can occasionally
+  > under-estimate, which is precisely why the reactive overflow backstop exists.
 - `truncation_retry_max_tokens` (int, optional): When set, a tool-call turn the
   provider truncated at the token budget (`LLMResponse.truncated`) is retried
   **once per truncated tool-call iteration** at this `max_tokens` before being

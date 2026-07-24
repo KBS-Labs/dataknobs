@@ -88,8 +88,13 @@ from contextlib import asynccontextmanager
 from typing import List, Dict, Any, AsyncIterator, Iterator
 from datetime import datetime
 
+from typing import TYPE_CHECKING
+
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm import AsyncLLMProvider, LLMMessage, LLMResponse, LLMStreamResponse
+
+if TYPE_CHECKING:
+    from dataknobs_llm.summarization import Summarizer
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.conversations.flow.flow import ConversationFlow
 from dataknobs_llm.conversations.middleware import ConversationMiddleware
@@ -1127,6 +1132,152 @@ class ConversationManager:
 
         parent_id = calculate_node_id(sibling_node.parent)
         await self.switch_to_node(parent_id)
+
+    async def compact_history(
+        self,
+        keep_recent_iterations: int,
+        *,
+        summarizer: "Summarizer | None" = None,
+    ) -> int:
+        """Re-root the active path, dropping/summarizing older tool iterations.
+
+        Bounds the in-loop growth of a long tool-using turn: the current path is
+        segmented at the **last user message** (the message that began the
+        current tool loop). Everything up to and including it — the system
+        prompt(s), any prior turns, and the current user input — is always
+        retained. The tool iterations *after* it are the compaction candidates:
+        the most recent ``keep_recent_iterations`` are kept and the older ones
+        are either dropped (``summarizer=None`` — windowing, the cheap default)
+        or folded into a single summary node (``summarizer`` provided).
+
+        **Scope — the current tool loop only.** The head (the system prompt(s)
+        and every prior turn, tool loops included) is retained verbatim; only
+        the in-flight turn's loop body is bounded. Cross-turn accumulation over
+        a long multi-turn conversation is deliberately out of scope — call this
+        once per tool-using turn to bound that turn, not to compact history
+        across turns.
+
+        **Pairing safety (the load-bearing invariant):** an iteration *unit* is a
+        message that is not a tool result (an assistant ``tool_use`` turn, or a
+        stray text turn) together with the ``role="tool"`` observation messages
+        that follow it. Compaction keeps or drops whole units, so a
+        ``tool_result`` is never separated from the ``tool_use`` that produced it
+        — the re-sent history always stays a valid message sequence.
+
+        The retained tail subtree is moved under the retained head (after an
+        optional summary node); the dropped nodes remain in the tree as an
+        abandoned branch, untraversed by the current path — consistent with
+        :meth:`branch_from`'s existing "navigate away, leave the old nodes"
+        semantics (there is no destructive ``prune`` of stored nodes).
+
+        Args:
+            keep_recent_iterations: The number of most-recent iteration units to
+                retain verbatim. ``0`` drops/summarizes the entire current loop
+                body. Must be ``>= 0``.
+            summarizer: Optional :class:`~dataknobs_llm.summarization.Summarizer`.
+                When provided, the dropped span is folded into one summary
+                message (``role="system"`` — the adapter's mid-conversation
+                system-message handling keeps the sequence valid); when ``None``
+                the dropped span is simply windowed out.
+
+        Returns:
+            The number of iteration units compacted (``0`` == nothing to do:
+            no state, no user anchor, or fewer units than must be kept).
+        """
+        if keep_recent_iterations < 0:
+            raise ValueError("keep_recent_iterations must be >= 0")
+        if not self.state:
+            return 0
+
+        current_tree = get_node_by_id(
+            self.state.message_tree, self.state.current_node_id
+        )
+        if current_tree is None:
+            return 0
+
+        # Root -> current path, restricted to real conversation nodes so the
+        # tree-node list and message list stay index-aligned.
+        conv_nodes = [
+            tn
+            for tn in current_tree.get_path()
+            if isinstance(tn.data, ConversationNode)
+        ]
+        messages = [tn.data.message for tn in conv_nodes]
+
+        # Anchor at the LAST user message — the start of the current tool loop.
+        head_end: int | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].role == "user":
+                head_end = i
+                break
+        if head_end is None:
+            return 0  # no user anchor — nothing safely compactable
+
+        body_nodes = conv_nodes[head_end + 1:]
+        body_messages = messages[head_end + 1:]
+        if not body_messages:
+            return 0
+
+        # Segment the body into iteration units: a unit begins at each non-tool
+        # message and absorbs the following tool observations. A tool result is
+        # never a unit start, so it can never be split from its tool_use.
+        unit_starts = [
+            i for i, m in enumerate(body_messages) if m.role != "tool"
+        ]
+        if not unit_starts or unit_starts[0] != 0:
+            # Leading tool messages with no owning assistant in the body — a
+            # malformed sequence; refuse to compact rather than risk a split.
+            logger.debug(
+                "compact_history: body does not start at an iteration "
+                "boundary; skipping compaction"
+            )
+            return 0
+        if len(unit_starts) <= keep_recent_iterations:
+            return 0  # fewer units than we must keep — no-op
+
+        first_kept_unit = len(unit_starts) - keep_recent_iterations
+        dropped_count = first_kept_unit
+        if first_kept_unit < len(unit_starts):
+            first_kept_body_index = unit_starts[first_kept_unit]
+            dropped_messages = body_messages[:first_kept_body_index]
+            first_kept_tree: Tree | None = body_nodes[first_kept_body_index]
+        else:  # keep_recent_iterations == 0 → the whole body is dropped
+            dropped_messages = body_messages
+            first_kept_tree = None
+
+        branch_parent = conv_nodes[head_end]  # the current user's tree node
+
+        anchor = branch_parent
+        if summarizer is not None and dropped_messages:
+            summary_text = await summarizer.summarize(dropped_messages)
+            summary_node = Tree(
+                ConversationNode(
+                    message=LLMMessage(role="system", content=summary_text),
+                    node_id="",
+                    metadata={"compaction_summary": True},
+                )
+            )
+            branch_parent.add_child(summary_node)
+            summary_node.data.node_id = calculate_node_id(summary_node)
+            anchor = summary_node
+
+        if first_kept_tree is not None:
+            # Move the retained tail under the anchor (prunes it from the dropped
+            # chain, which stays as an abandoned branch off ``branch_parent``).
+            anchor.add_child(first_kept_tree)
+            # Re-stamp node ids across the moved subtree so the cached
+            # ``data.node_id`` stays consistent with the new ancestry.
+            for node in first_kept_tree.find_nodes(lambda _n: True):
+                if isinstance(node.data, ConversationNode):
+                    node.data.node_id = calculate_node_id(node)
+            tail = current_tree
+        else:
+            tail = anchor  # summary node (summarize) or the user node (window)
+
+        self.state.current_node_id = calculate_node_id(tail)
+        self.state.updated_at = datetime.now()
+        await self._save_state()
+        return dropped_count
 
     async def execute_flow(
         self,

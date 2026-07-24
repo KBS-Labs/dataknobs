@@ -331,23 +331,24 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
             messages_to_summarize, self._compiled_redactions
         )
 
-        # Format messages for the summarization prompt
-        formatted = "\n".join(
-            f"{msg['role']}: {msg['content']}" for msg in redacted_for_summary
-        )
-
-        prompt = self.summary_prompt.format(
-            existing_summary=self._summary or "(none)",
-            new_messages=formatted,
-        )
-
+        # Fold the overflow into the running summary via the shared llm-layer
+        # seam (composed, not re-implemented — the same prompt-fill + complete
+        # pattern also backs ConversationManager.compact_history). Behaviour is
+        # unchanged: the same ``role: content`` formatting, the same resolved
+        # ``summary_prompt``, and the same running-summary carry-forward.
         try:
             from dataknobs_llm.llm.base import LLMMessage
+            from dataknobs_llm.summarization import summarize_messages
 
-            response = await self.llm_provider.complete(
-                messages=[LLMMessage(role="user", content=prompt)],
+            self._summary = await summarize_messages(
+                self.llm_provider,
+                [
+                    LLMMessage(role=msg["role"], content=msg["content"])
+                    for msg in redacted_for_summary
+                ],
+                existing_summary=self._summary,
+                prompt=self.summary_prompt,
             )
-            self._summary = response.content
             logger.debug(
                 "Summary updated, %d messages compressed",
                 len(messages_to_summarize),

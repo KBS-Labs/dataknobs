@@ -219,11 +219,21 @@ class ModelConstraints:
             from the live Models API (cached, TTL-refreshed) with a bundled
             fallback resource, and always config-overridable; ``None`` (the
             default and any unknown model) leaves ``max_tokens`` untouched.
+        max_input_tokens: The model's input/context-window size in tokens, or
+            ``None`` when unknown. Unlike ``max_tokens_ceiling`` this is **not**
+            clamped by the provider — it is an *informational* datum a consumer
+            reads to size an input budget (e.g. proactively compacting a long
+            tool-loop history before it overflows the context window). Populated
+            by :class:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider`
+            from the live Models API (cached, TTL-refreshed) with a bundled
+            fallback resource, and config-overridable; ``None`` for any other
+            provider or unknown model.
     """
 
     rejected_params: frozenset[str] = frozenset()
     accepts_inline_system: bool = True
     max_tokens_ceiling: int | None = None
+    max_input_tokens: int | None = None
 
     def with_overrides(self, overrides: Dict[str, Any]) -> "ModelConstraints":
         """Return a copy with the given loose-dict overrides overlaid.
@@ -232,13 +242,15 @@ class ModelConstraints:
         so a config can adjust one constraint without redeclaring the rest.
         ``rejected_params`` is *replaced* (the override declares the full set
         the consumer wants rejected — pass ``[]`` to withdraw a stale rule);
-        ``accepts_inline_system`` / ``max_tokens_ceiling`` are coerced/passed
-        through. Mirrors the loose ``LLMConfig.capabilities`` override shape.
+        ``accepts_inline_system`` / ``max_tokens_ceiling`` / ``max_input_tokens``
+        are coerced/passed through. Mirrors the loose ``LLMConfig.capabilities``
+        override shape.
 
         Args:
             overrides: Loose mapping with any of ``"rejected_params"``
                 (iterable of str, or ``None`` → empty), ``"accepts_inline_system"``
-                (bool), ``"max_tokens_ceiling"`` (int or ``None``).
+                (bool), ``"max_tokens_ceiling"`` (int or ``None``),
+                ``"max_input_tokens"`` (int or ``None``).
 
         Returns:
             A new ``ModelConstraints`` (the receiver is never mutated).
@@ -257,6 +269,8 @@ class ModelConstraints:
             )
         if "max_tokens_ceiling" in overrides:
             changes["max_tokens_ceiling"] = overrides["max_tokens_ceiling"]
+        if "max_input_tokens" in overrides:
+            changes["max_input_tokens"] = overrides["max_input_tokens"]
         return replace(self, **changes)
 
 

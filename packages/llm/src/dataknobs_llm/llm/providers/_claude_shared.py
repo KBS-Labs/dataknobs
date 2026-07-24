@@ -32,7 +32,8 @@ from __future__ import annotations
 
 import importlib.resources
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from dataknobs_common.config_loading import load_yaml_or_json
 
@@ -57,14 +58,58 @@ CLAUDE_5_TEMPERATURE_REJECTORS: tuple[str, ...] = (
 )
 
 
-def load_model_limits_resource() -> dict[str, int]:
-    """Load the bundled Claude ``max_tokens`` fallback resource.
+def _project_field(entry: Any, field: str) -> int | None:
+    """Project one ``models:`` entry to an int ceiling for *field*, or ``None``.
 
-    Read once at import (below) into :data:`RESOURCE_MODEL_LIMITS`. The resource
-    is fallback-only: the primary source is the live Models API ``max_tokens``
-    on the native Anthropic endpoint (see
-    :meth:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider._refresh_model_limits`).
+    Tolerant of **both** resource shapes so a stale on-disk file always loads:
+
+    - **Nested** (current): ``{max_tokens: N, max_input_tokens: M}`` — the named
+      field is read (missing → ``None``).
+    - **Legacy flat int** (pre-input-ceiling): a bare ``int`` is the *output*
+      ``max_tokens`` ceiling only; there is no input value (``max_input_tokens``
+      → ``None``).
     """
+    if isinstance(entry, dict):
+        value = entry.get(field)
+    elif field == "max_tokens":
+        value = entry  # legacy flat form: the bare int is the output ceiling
+    else:
+        return None
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def project_model_limits(
+    section: Mapping[str, Any],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Project a raw ``models:`` mapping into (output, input) ceiling maps.
+
+    The single tolerant projection shared by the packaged-resource loaders
+    (below) and the maintainer tooling
+    (:mod:`dataknobs_llm.tooling.model_limits`), so the two can never drift on
+    how the nested / legacy-flat resource shapes are read. Each returned map is
+    ``{lowercased-model-id: ceiling}`` and omits models with no value for that
+    field.
+    """
+    output: dict[str, int] = {}
+    input_ceilings: dict[str, int] = {}
+    for key, entry in section.items():
+        lower = str(key).lower()
+        out = _project_field(entry, "max_tokens")
+        if out is not None:
+            output[lower] = out
+        inp = _project_field(entry, "max_input_tokens")
+        if inp is not None:
+            input_ceilings[lower] = inp
+    return output, input_ceilings
+
+
+def _load_models_section() -> Mapping[str, Any]:
+    """Read the bundled resource's raw ``models:`` mapping (id → int | dict)."""
     ref = (
         importlib.resources.files("dataknobs_llm.llm.providers")
         / "data"
@@ -72,25 +117,57 @@ def load_model_limits_resource() -> dict[str, int]:
     )
     with importlib.resources.as_file(ref) as path:
         data = load_yaml_or_json(path, require_dict=True)
-    models = data.get("models") or {}
-    return {str(k).lower(): int(v) for k, v in models.items()}
+    return data.get("models") or {}
+
+
+def load_model_limits_resource() -> dict[str, int]:
+    """Load the bundled Claude ``max_tokens`` (output) fallback resource.
+
+    Read once at import (below) into :data:`RESOURCE_MODEL_LIMITS`. The resource
+    is fallback-only: the primary source is the live Models API ``max_tokens``
+    on the native Anthropic endpoint (see
+    :meth:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider._refresh_model_limits`).
+    """
+    output, _ = project_model_limits(_load_models_section())
+    return output
+
+
+def load_model_input_limits_resource() -> dict[str, int]:
+    """Load the bundled Claude ``max_input_tokens`` (context) fallback resource.
+
+    The input-ceiling sibling of :func:`load_model_limits_resource`, read once at
+    import into :data:`RESOURCE_MODEL_INPUT_LIMITS`. Fallback-only: the primary
+    source is the live Models API ``max_input_tokens`` column.
+    """
+    _, input_ceilings = project_model_limits(_load_models_section())
+    return input_ceilings
 
 
 try:
-    #: Bundled fallback map ``{lowercased-model-id: max_tokens}``, read once at
+    #: Bundled fallback maps ``{lowercased-model-id: ceiling}`` for the output
+    #: (``max_tokens``) and input (``max_input_tokens``) ceilings, read once at
     #: import. Consulted only when the dynamic Models-API path has produced no
     #: value for a model (see
-    #: :func:`~dataknobs_llm.llm.providers.anthropic._resolve_ceiling`).
-    #: Degrades to ``{}`` if the resource is unreadable so a data-file issue
+    #: :func:`~dataknobs_llm.llm.providers.anthropic._resolve_ceiling` /
+    #: :func:`~dataknobs_llm.llm.providers.anthropic._resolve_input_ceiling`).
+    #: Degrade to ``{}`` if the resource is unreadable so a data-file issue
     #: never breaks import — the packaging regression is caught instead by an
     #: ``importlib.resources`` test.
-    RESOURCE_MODEL_LIMITS: dict[str, int] = load_model_limits_resource()
+    _section = _load_models_section()
+    RESOURCE_MODEL_LIMITS: dict[str, int]
+    RESOURCE_MODEL_INPUT_LIMITS: dict[str, int]
+    RESOURCE_MODEL_LIMITS, RESOURCE_MODEL_INPUT_LIMITS = project_model_limits(
+        _section
+    )
+    del _section
 except Exception:  # pragma: no cover - resource ships + is guarded by a test
     logger.exception(
         "Failed to load bundled Claude model-limits resource; "
-        "max_tokens ceilings will resolve dynamically or not at all"
+        "max_tokens/max_input_tokens ceilings will resolve dynamically "
+        "or not at all"
     )
     RESOURCE_MODEL_LIMITS = {}
+    RESOURCE_MODEL_INPUT_LIMITS = {}
 
 
 def match_ceiling(
@@ -146,6 +223,18 @@ def resource_ceiling(model_lower: str) -> int | None:
     nothing matches → permissive (no clamp).
     """
     return match_ceiling(model_lower, RESOURCE_MODEL_LIMITS.items())
+
+
+def resource_input_ceiling(model_lower: str) -> int | None:
+    """Resolve *model_lower* against the bundled input-ceiling resource.
+
+    Input-ceiling sibling of :func:`resource_ceiling` over
+    :data:`RESOURCE_MODEL_INPUT_LIMITS`, using the *same* family-matching rule
+    (:func:`match_ceiling`). ``None`` when nothing matches → the input ceiling is
+    simply unknown (the consumer's proactive budget falls back to a configured
+    absolute or is disabled).
+    """
+    return match_ceiling(model_lower, RESOURCE_MODEL_INPUT_LIMITS.items())
 
 
 def claude_rejects_temperature(model_lower: str) -> bool:

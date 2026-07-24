@@ -76,11 +76,14 @@ from ..base import (
 )
 from ._claude_shared import (
     CLAUDE_5_TEMPERATURE_REJECTORS,
+    RESOURCE_MODEL_INPUT_LIMITS,
     RESOURCE_MODEL_LIMITS,
     claude_rejects_temperature,
+    load_model_input_limits_resource,
     load_model_limits_resource,
     match_ceiling,
     resource_ceiling,
+    resource_input_ceiling,
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -93,8 +96,11 @@ logger = logging.getLogger(__name__)
 #: historical ``_``-prefixed names some call sites / tests reference.
 _CLAUDE_5_TEMPERATURE_REJECTORS = CLAUDE_5_TEMPERATURE_REJECTORS
 _RESOURCE_MODEL_LIMITS = RESOURCE_MODEL_LIMITS
+_RESOURCE_MODEL_INPUT_LIMITS = RESOURCE_MODEL_INPUT_LIMITS
 _load_model_limits_resource = load_model_limits_resource
+_load_model_input_limits_resource = load_model_input_limits_resource
 _resource_ceiling = resource_ceiling
+_resource_input_ceiling = resource_input_ceiling
 
 #: Sampling parameters that ``adapt_config`` may forward and that a model
 #: family might reject. Used by the 400-retry safety net to identify which
@@ -133,7 +139,7 @@ _DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT: float = 10.0
 
 @dataclass
 class _CeilingEntry:
-    """One cached per-model ``max_tokens`` ceiling and its provenance.
+    """One cached per-model set of token ceilings and their provenance.
 
     ``source`` distinguishes a value fetched from the live Models API
     (``"dynamic"``) from the bundled fallback (``"resource"``) so a transient
@@ -142,11 +148,17 @@ class _CeilingEntry:
     :meth:`AnthropicProvider._refresh_model_limits`. ``fetched_at`` is a
     ``time.monotonic()`` stamp (provenance/debugging; the refresh cadence is
     gated per-loop by :data:`_MODEL_LIMITS_LAST_FETCH`, not per entry).
+
+    ``ceiling`` is the output ``max_tokens`` ceiling; ``input_ceiling`` is the
+    input/context-window ceiling (``max_input_tokens``). One Models-API poll
+    populates both from the same model object, so they share a cache entry.
+    Either may be ``None`` when the model object omits that column.
     """
 
     ceiling: int | None
     source: str  # "dynamic" | "resource"
     fetched_at: float
+    input_ceiling: int | None = None
 
 
 #: Process-level cache keyed by lowercased model id, populated by the async
@@ -222,6 +234,29 @@ def _resolve_ceiling(model: str) -> int | None:
     return resource_ceiling(key)
 
 
+def _resolve_input_ceiling(model: str) -> int | None:
+    """Synchronous input-ceiling resolution read by ``_detect_constraints``.
+
+    The ``max_input_tokens`` (context window) sibling of :func:`_resolve_ceiling`
+    with identical precedence and family-matching: a dynamically-fetched value in
+    :data:`_MODEL_LIMITS_CACHE` (``entry.input_ceiling``) else the bundled
+    :func:`~._claude_shared.resource_input_ceiling` fallback else ``None``. Purely
+    a cache/dict read — no I/O — safe on the synchronous detect path.
+    """
+    key = model.lower()
+    dynamic = match_ceiling(
+        key,
+        (
+            (cached_id, entry.input_ceiling)
+            for cached_id, entry in _MODEL_LIMITS_CACHE.items()
+            if entry.input_ceiling is not None
+        ),
+    )
+    if dynamic is not None:
+        return dynamic
+    return resource_input_ceiling(key)
+
+
 def _extract_max_tokens(model_obj: Any) -> int | None:
     """Read a model object's ``max_tokens`` (output ceiling), or ``None``.
 
@@ -230,16 +265,39 @@ def _extract_max_tokens(model_obj: Any) -> int | None:
     the REST payload. A missing / non-integer value yields ``None`` (the model
     then resolves via the resource fallback).
     """
-    mt = getattr(model_obj, "max_tokens", None)
-    if mt is None and hasattr(model_obj, "model_dump"):
+    return _extract_model_int(model_obj, "max_tokens")
+
+
+def _extract_max_input_tokens(model_obj: Any) -> int | None:
+    """Read a model object's ``max_input_tokens`` (input ceiling), or ``None``.
+
+    The input/context-window sibling of :func:`_extract_max_tokens`. The typed
+    ``anthropic`` ``ModelInfo`` exposes ``max_input_tokens`` directly; a missing
+    / non-integer value (or an older SDK that predates the column) yields
+    ``None`` (the model then resolves via the resource fallback).
+    """
+    return _extract_model_int(model_obj, "max_input_tokens")
+
+
+def _extract_model_int(model_obj: Any, field: str) -> int | None:
+    """Read an integer *field* off a Models-API model object, or ``None``.
+
+    Shared core of :func:`_extract_max_tokens` / :func:`_extract_max_input_tokens`
+    so the two ceiling extractions cannot drift on the typed-attr →
+    ``model_dump()`` fallback → int-coercion logic. The typed ``anthropic``
+    ``ModelInfo`` exposes the field directly; the ``model_dump()`` fallback is
+    defensive for an SDK whose typed surface lags the REST payload.
+    """
+    value = getattr(model_obj, field, None)
+    if value is None and hasattr(model_obj, "model_dump"):
         try:
-            mt = model_obj.model_dump().get("max_tokens")
+            value = model_obj.model_dump().get(field)
         except Exception:  # pragma: no cover - defensive against SDK shape
-            mt = None
-    if mt is None:
+            value = None
+    if value is None:
         return None
     try:
-        return int(mt)
+        return int(value)
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return None
 
@@ -946,10 +1004,18 @@ class AnthropicProvider(AsyncLLMProvider):
             now = time.monotonic()
             for model_obj in models:
                 mt = _extract_max_tokens(model_obj)
+                mit = _extract_max_input_tokens(model_obj)
                 model_id = getattr(model_obj, "id", None)
-                if mt is not None and model_id:
+                # Cache the entry when the model carries *either* ceiling — a
+                # model that reports only its input window still populates the
+                # input cache (a None-``ceiling`` entry is ignored by the
+                # output resolver, so this never fabricates an output clamp).
+                if model_id and (mt is not None or mit is not None):
                     _MODEL_LIMITS_CACHE[str(model_id).lower()] = _CeilingEntry(
-                        ceiling=mt, source="dynamic", fetched_at=now
+                        ceiling=mt,
+                        source="dynamic",
+                        fetched_at=now,
+                        input_ceiling=mit,
                     )
 
     async def _list_models(self) -> list[Any]:
@@ -1033,6 +1099,10 @@ class AnthropicProvider(AsyncLLMProvider):
           :meth:`_build_api_kwargs` to clamp an over-ceiling ``max_tokens`` down
           before the call. The read is a synchronous cache lookup (no I/O); the
           async refresh at the request boundary keeps the cache current.
+        - ``max_input_tokens`` from :func:`_resolve_input_ceiling` — the model's
+          input/context-window size (same live/cached/fallback machinery as
+          ``max_tokens_ceiling``). Informational (not clamped); a consumer reads
+          it to size an input budget (e.g. proactive history compaction).
 
         Matches on ``config.model`` (not ``self.config.model``) so a per-call
         model override resolves the overriding family's constraints — see
@@ -1055,6 +1125,7 @@ class AnthropicProvider(AsyncLLMProvider):
             rejected_params=frozenset(rejected),
             accepts_inline_system=False,
             max_tokens_ceiling=_resolve_ceiling(model),
+            max_input_tokens=_resolve_input_ceiling(model),
         )
 
     def _build_api_kwargs(self, config: LLMConfig) -> Dict[str, Any]:

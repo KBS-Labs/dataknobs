@@ -73,6 +73,39 @@ await manager.branch_from("node-id")  # Navigates to parent
 response_alt = await manager.complete()  # New sibling node
 ```
 
+### History Compaction (bounding a long tool loop)
+
+A long tool-using loop grows the conversation path unboundedly and can trip a
+model's input-context window. `compact_history` re-roots the active path,
+dropping (or summarizing) the oldest **complete tool iterations** while
+preserving the system prompt, the current-turn user message, and the most
+recent `keep_recent_iterations` iterations:
+
+```python
+# Window: drop the oldest complete tool iterations (LLM-free).
+dropped = await manager.compact_history(keep_recent_iterations=3)
+
+# Summarize: fold the dropped iterations into one summary node via an LLM call.
+from dataknobs_llm import LLMSummarizer
+summarizer = LLMSummarizer(llm)  # any Summarizer; LLMSummarizer is the default
+dropped = await manager.compact_history(3, summarizer=summarizer)
+```
+
+Compaction happens only at **whole-iteration boundaries**, so a `tool_use` is
+never separated from its `tool_result` — the re-sent history always stays a
+valid message sequence. Dropped nodes are left in the tree (untraversed),
+consistent with `branch_from`'s "navigate away, keep the old nodes" semantics —
+there is no destructive prune. Returns the number of iterations compacted (`0`
+== nothing to do).
+
+> The bots-layer ReAct strategy drives this automatically when
+> `history_compaction` is enabled in its config (proactive token-budget check +
+> a reactive context-overflow backstop) — see the bots configuration guide.
+
+The `Summarizer` seam (`summarize_messages`, `LLMSummarizer`) is shared with
+`dataknobs_bots`' `SummaryMemory`, so the prompt-fill + `llm.complete` pattern
+lives in exactly one place.
+
 ### RAG Caching
 
 ```python
