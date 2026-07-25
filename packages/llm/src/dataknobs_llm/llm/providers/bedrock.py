@@ -840,10 +840,19 @@ class BedrockProvider(AsyncLLMProvider):
         )
 
         request = self.adapter.adapt_config(shaped_config)
-        # Wire-level param renames (base mechanism). No Claude family declares one,
-        # so this is a no-op today; wired symmetric with the OpenAI/Anthropic choke
-        # points so a consumer LLMConfig.constraints param_remaps override — or a
-        # future family that needs one — is honored on Bedrock too, not dropped.
+        # Wire-level param renames (base mechanism), wired symmetric with the
+        # OpenAI/Anthropic choke points. Applies only to *top-level* Converse
+        # request keys: ``_apply_param_remaps`` renames a key present at the top
+        # level, but Bedrock nests every sampling param under
+        # ``request["inferenceConfig"]`` in Converse's normalized camelCase
+        # (``maxTokens``/``topP``/``temperature``/``stopSequences``), so a
+        # sampling-param remap does not reach — and does not need to reach — the
+        # nested key. Unlike OpenAI (whose reasoning families genuinely rename
+        # ``max_tokens`` -> ``max_completion_tokens`` at the same altitude),
+        # Converse's ``inferenceConfig`` *is* the cross-family normalization
+        # layer, so no Bedrock family declares a sampling-param remap. The call
+        # is retained for symmetry and to honor any remap targeting a genuine
+        # top-level Converse key; today it is a uniform no-op.
         request = self._apply_param_remaps(request, constraints.param_remaps)
         request["messages"] = converse_messages
         if system_blocks:

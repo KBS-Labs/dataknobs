@@ -177,7 +177,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kwarg is clamped/dropped/remapped; a wire-only Converse param passes through).
   `validate_model` moves from a hardcoded vendor-prefix whitelist to the resolved
   `available` facet (a bug fix — the whitelist rejected nothing it should and the
-  vision list mis-detected). Claude-on-Bedrock capability detection now reports
+  vision list mis-detected). Concretely, an id whose *vendor* segment is unknown
+  but which begins with a region prefix (e.g. `us.<unknown-vendor>.model`)
+  previously validated `True` merely for starting with `us.` / `eu.` / `apac.` /
+  `us-gov.` and now resolves `False` (the region prefix is stripped and the bare
+  vendor is checked against the resolved catalog); real cross-region ids such as
+  `us.anthropic.claude-…` still validate via the `available` facet. Claude-on-Bedrock capability detection now reports
   the same set as the native Anthropic provider (adds `code` / `json_mode`),
   since both compose the shared Claude capability source — strictly widening.
 - **The Anthropic live Models-API ceiling cache is now per-provider-instance**
