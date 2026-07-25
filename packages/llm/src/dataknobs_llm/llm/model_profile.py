@@ -201,7 +201,10 @@ def profile_from_loose(data: Mapping[str, Any]) -> ModelProfile:
     Shared by :class:`ConfigOverrideSource` (reads ``LLMConfig.model_profile_overrides``)
     and :class:`BundledResourceSource` (reads a per-model resource entry) so the
     two can never drift on how a loose facet is coerced. Every key is optional; an
-    absent key leaves that facet ``None`` (unknown). Unknown keys are ignored.
+    absent key leaves that facet ``None`` (unknown). Unknown keys are ignored **with
+    a warning** — a mistyped facet name (``max_output_token`` for
+    ``max_output_tokens``) would otherwise silently no-op, which is the exact
+    failure mode a config-override layer must not have.
 
     Coercions:
 
@@ -257,6 +260,15 @@ def profile_from_loose(data: Mapping[str, Any]) -> ModelProfile:
 
     if data.get("available") is not None:
         parsed["available"] = bool(data["available"])
+
+    unknown = sorted(str(k) for k in data if k not in _PROFILE_FACETS)
+    if unknown:
+        logger.warning(
+            "Ignoring unrecognized model-profile facet key(s) %s; valid facets "
+            "are %s. A mistyped facet name is silently dropped.",
+            unknown,
+            _PROFILE_FACETS,
+        )
 
     return ModelProfile(**parsed)
 
@@ -365,6 +377,11 @@ class ConfigOverrideSource:
     an all-``None`` partial (no effect). Model-keyed: the override may be a single
     flat mapping (applies to the configured model) or a ``{model_id: {...}}``
     mapping (per-model), matched by :func:`match_family_key`.
+
+    A misconfigured override never silently no-ops: a mistyped facet name is
+    warned by :func:`profile_from_loose`, and a flat override that carries *only*
+    mistyped facet keys (so it looks like a per-model map, yet matches no model)
+    is warned here.
     """
 
     name = "config_override"
@@ -382,6 +399,21 @@ class ConfigOverrideSource:
             return profile_from_loose(self._overrides)
         key = match_family_key(model.lower(), (str(k).lower() for k in self._overrides))
         if key is None:
+            # Routed to the per-model path (no top-level facet key present) but no
+            # model id matched. A genuine per-model map that simply doesn't cover
+            # this model has all-mapping values and is silent; a *non*-mapping
+            # value means the override is almost certainly a flat override with a
+            # mistyped facet name (e.g. ``max_output_token``) that silently
+            # no-ops — surface that, since it never reached
+            # :func:`profile_from_loose` to be caught there.
+            if any(not isinstance(v, Mapping) for v in self._overrides.values()):
+                logger.warning(
+                    "model_profile_overrides has no recognized facet key and no "
+                    "model id matching %r; the override will have no effect. "
+                    "Check for a mistyped facet name (valid facets: %s).",
+                    model,
+                    _PROFILE_FACETS,
+                )
             return ModelProfile()
         # Recover the original-cased key whose lowercase matched.
         for original in self._overrides:

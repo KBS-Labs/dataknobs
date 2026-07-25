@@ -17,6 +17,8 @@ surface (no mocks).
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from dataknobs_llm.llm.base import ModelCapability
@@ -170,6 +172,31 @@ class TestProfileFromLoose:
         assert prof.max_output_tokens == 8192
         assert prof.available is True
 
+    def test_unknown_facet_key_is_dropped_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A mistyped facet name (``max_output_token``) drops — but not silently.
+
+        Reproduce-first: before the warning was added, the typo yielded an empty
+        profile with no signal. The drop behavior is unchanged; the warning is new.
+        """
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.model_profile"):
+            prof = profile_from_loose({"max_output_token": 4096})
+        assert prof == ModelProfile()  # typo dropped -> nothing set
+        assert any(
+            "max_output_token" in r.message and "unrecognized" in r.message.lower()
+            for r in caplog.records
+        )
+
+    def test_recognized_keys_do_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.model_profile"):
+            profile_from_loose({"max_output_tokens": 4096, "context_window": 8000})
+        assert not [
+            r for r in caplog.records if "unrecognized" in r.message.lower()
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Sources
@@ -201,6 +228,57 @@ class TestConfigOverrideSource:
         assert src.resolve("claude-opus-5-20260101").max_output_tokens == 4096
         # a different model is untouched
         assert src.resolve("gpt-4").max_output_tokens is None
+
+    def test_all_typo_flat_override_warns_and_noops(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An override made entirely of mistyped facet keys must not silently no-op.
+
+        ``{"max_output_token": 4096}`` has no recognized facet key, so it is
+        classified per-model, matches no model id, and never reaches
+        ``profile_from_loose`` — the exact two-axis silent-drop the review flagged.
+        Reproduce-first: the empty result is unchanged; the warning is new.
+        """
+        src = ConfigOverrideSource({"max_output_token": 4096})
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.model_profile"):
+            prof = src.resolve("claude-opus-5")
+        assert prof == ModelProfile()
+        assert any(
+            "no effect" in r.message and "claude-opus-5" in r.message
+            for r in caplog.records
+        )
+
+    def test_legit_per_model_map_not_covering_model_is_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A real per-model map that just doesn't cover this model is NOT a typo.
+
+        False-positive guard: all values are facet mappings, so no warning fires
+        even though the override has no effect for this particular model.
+        """
+        src = ConfigOverrideSource({"claude-opus-5": {"max_output_tokens": 4096}})
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.model_profile"):
+            prof = src.resolve("gpt-4")
+        assert prof == ModelProfile()
+        assert not [r for r in caplog.records if "no effect" in r.message]
+
+    def test_flat_override_with_stray_model_key_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A mixed dict (a facet key + a model-id key) is treated flat; the stray
+        model key is an unrecognized facet and is warned (via profile_from_loose),
+        while the valid facet still applies.
+        """
+        src = ConfigOverrideSource(
+            {"capabilities": ["vision"], "claude-opus-5": {"max_output_tokens": 1}}
+        )
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.model_profile"):
+            prof = src.resolve("claude-opus-5")
+        assert prof.capabilities == frozenset({ModelCapability.VISION})
+        assert any(
+            "claude-opus-5" in r.message and "unrecognized" in r.message.lower()
+            for r in caplog.records
+        )
 
 
 class TestBundledResourceSource:
