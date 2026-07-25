@@ -286,15 +286,54 @@ class TestOllamaCapabilitiesHeuristicFallback:
         return set(provider._detect_capabilities())
 
     async def test_show_without_capabilities_falls_back(self) -> None:
-        """An older server (no ``capabilities`` field) → name-based heuristic."""
+        """An older server (no ``capabilities`` field) → name-based heuristic,
+        while the reported context window still populates ``max_input_tokens``.
+        """
         session = RoutingSession(
             installed=("mistral:7b",),
             show={"mistral:7b": _show(context_length=32768)},
         )
-        caps = await self._caps(session, "mistral:7b")
+        provider = _provider(session, model="mistral:7b")
+        await provider._live_source.refresh_if_stale()
+        caps = set(provider._detect_capabilities())
         # Heuristic classifies the tool family; context still comes from show.
         assert ModelCapability.FUNCTION_CALLING in caps
         assert ModelCapability.JSON_MODE in caps
+        assert provider.get_constraints().max_input_tokens == 32768
+
+    async def test_empty_capabilities_array_falls_back(self) -> None:
+        """Reproduce-first: a present-but-empty ``capabilities: []`` must NOT
+        authoritative-empty shadow the heuristic to zero capabilities.
+
+        The substrate merge treats a present empty ``frozenset()`` as
+        "authoritatively known", so before the extractor coerced an empty mapped
+        set to ``None`` the model resolved *no* capabilities (not even CHAT). A
+        proxy/gateway server reporting ``[]`` is the plausible trigger.
+        """
+        session = RoutingSession(
+            installed=("mistral:7b",),
+            show={"mistral:7b": _show(capabilities=[], context_length=32768)},
+        )
+        provider = _provider(session, model="mistral:7b")
+        await provider._live_source.refresh_if_stale()
+        caps = set(provider._detect_capabilities())
+        assert ModelCapability.CHAT in caps  # heuristic supplies the base set
+        assert ModelCapability.FUNCTION_CALLING in caps
+        # The live context window still resolves alongside the fallback caps.
+        assert provider.get_constraints().max_input_tokens == 32768
+
+    async def test_unmapped_only_capabilities_falls_back(self) -> None:
+        """Reproduce-first: an array of only capabilities we map none of (a
+        future FIM/reasoning-only report) degrades to the heuristic, not empty.
+        """
+        session = RoutingSession(
+            installed=("mistral:7b",),
+            show={"mistral:7b": _show(capabilities=["insert"])},
+        )
+        provider = _provider(session, model="mistral:7b")
+        await provider._live_source.refresh_if_stale()
+        caps = set(provider._detect_capabilities())
+        assert ModelCapability.CHAT in caps
 
     async def test_show_error_falls_back(self) -> None:
         """A ``/api/show`` transport error degrades to the heuristic (no crash)."""
@@ -374,6 +413,51 @@ class TestOllamaValidateModel:
         session = RoutingSession(tags_exc=aiohttp.ClientConnectionError("down"))
         provider = _provider(session, model="llama3.1:8b")
         assert await provider.validate_model() is False
+
+    async def test_validate_reflects_model_pulled_within_ttl(self) -> None:
+        """Reproduce-first: an authoritative liveness check.
+
+        A model pulled *after* the metadata cache warmed must be seen on the
+        next ``validate_model`` — a TTL-gated ``refresh_if_stale`` would keep
+        returning the stale ``False`` for up to an hour; the force-refresh sees
+        the freshly-installed model immediately (matching the pre-binding
+        fresh-every-call ``/api/tags`` probe).
+        """
+        session = RoutingSession(installed=(), show={})
+        provider = _provider(session, model="llama3.1:8b")
+        assert await provider.validate_model() is False  # warms cache: absent
+        # Consumer pulls the model — /api/tags now lists it, /api/show reports it.
+        session._installed = ["llama3.1:8b"]
+        session._show = {"llama3.1:8b": _show(["completion"])}
+        assert await provider.validate_model() is True
+
+
+class TestOllamaListModels:
+    """The N+1 metadata poll enriches every installed model, best-effort."""
+
+    async def test_all_models_enriched_with_mixed_show(self) -> None:
+        """Every installed model yields one entry even when some ``/api/show``
+        calls 404 — concurrent enrichment preserves per-model best-effort.
+        """
+        session = RoutingSession(
+            installed=("a:1", "b:1", "c:1"),
+            show={
+                "a:1": _show(["completion"], context_length=4096),
+                "c:1": _show(["embedding"]),
+                # b:1 has no show entry → 404 → capabilities/context stay None
+            },
+        )
+        provider = _provider(session, model="a:1")
+        entries = await provider._list_ollama_models()
+        by_name = {e["name"]: e for e in entries}
+        assert set(by_name) == {"a:1", "b:1", "c:1"}
+        assert by_name["a:1"]["capabilities"] == ["completion"]
+        assert by_name["a:1"]["context_length"] == 4096
+        assert by_name["b:1"]["capabilities"] is None  # 404 tolerated
+        assert by_name["c:1"]["capabilities"] == ["embedding"]
+        # All three /api/show probes were issued in the one poll.
+        show_posts = [u for u, _ in session.post_urls if u.endswith("/api/show")]
+        assert len(show_posts) == 3
 
 
 class TestOllamaShapingParity:

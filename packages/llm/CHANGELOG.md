@@ -15,13 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-provider source walks `GET /api/tags` (installed models) and enriches each
   with `POST /api/show` (the server's authoritative `capabilities` array and
   `model_info.<arch>.context_length`), with a corrected name-based heuristic as
-  the graceful-degradation fallback for older servers. This replaces the
-  hardcoded capability-substring lists that went stale each release — modern
-  families the old lists missed (`llama4`, `gpt-oss`, `qwen3`, …) are now
+  the graceful-degradation fallback for older servers (or any server that reports
+  no usable capability array — an empty or all-unrecognized report degrades to
+  the heuristic rather than resolving the model to zero capabilities). This
+  replaces the hardcoded capability-substring lists that went stale each release
+  — modern families the old lists missed (`llama4`, `gpt-oss`, `qwen3`, …) are now
   tool/vision-detected from the server's own report, and `max_input_tokens` is
   populated for Ollama (the input budget was previously dead). `validate_model`
   now reads the resolved `available` facet (installed → `True`, not-installed /
-  unreachable → `False`). A consumer's `LLMConfig.model_profile_overrides` wins
+  unreachable → `False`), force-refreshing the live cache first so a model pulled
+  since the last request is seen immediately (an authoritative liveness check, not
+  a value that can lag by up to the metadata TTL). A consumer's `LLMConfig.model_profile_overrides` wins
   per facet — including an optional `pricing` override to model private GPU cost,
   which lights up `get_pricing` / `estimate_cost` (Ollama sources no pricing of
   its own — local/free). The live cache is tunable via `options`

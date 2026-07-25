@@ -485,9 +485,14 @@ release: modern families the old lists missed (`llama4`, `gpt-oss`, `qwen3`, …
 are now tool/vision-detected from the server's own report, `max_input_tokens` is
 populated from the reported context window (previously dead for Ollama), and
 `validate_model` reads the resolved `available` facet (installed → `True`;
-not-installed / unreachable → `False`). A dedicated embedding model resolves an
-`EMBEDDINGS`-only set. The name-based heuristic is the graceful-degradation
-fallback for older servers that predate the `capabilities` field.
+not-installed / unreachable → `False`), force-refreshing the live cache first so
+a model pulled since the last request is seen immediately (an authoritative
+liveness check, not a value that can lag by up to the metadata TTL). A dedicated
+embedding model resolves an `EMBEDDINGS`-only set. The name-based heuristic is
+the graceful-degradation fallback for older servers that predate the
+`capabilities` field — or any server reporting no usable capability array (an
+empty or all-unrecognized report degrades to the heuristic rather than resolving
+the model to zero capabilities).
 
 Because Ollama ids are `name:tag` (e.g. `llama3.1:8b`), the live source is
 constructed with a `name:tag`-aware `match=` matcher — the default substring

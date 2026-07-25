@@ -337,15 +337,23 @@ def _ollama_live_extractor(entry: dict[str, Any]) -> ModelProfile:
       locally (from ``/api/tags``), which for Ollama *is* availability.
     - ``capabilities`` — the complete set from the server-reported array
       (:func:`_ollama_caps_from_server`), or ``None`` when the server did not
-      report one (older Ollama), so the heuristic fallback supplies it per facet.
+      report one (older Ollama) **or reported one that maps to nothing** (an
+      empty or all-unrecognized array), so the heuristic fallback supplies the
+      set per facet rather than an authoritative-empty set shadowing it away.
     - ``context_window`` — the server-reported input window, or ``None``.
     """
     reported = entry.get("capabilities")
-    capabilities = (
-        _ollama_caps_from_server(entry.get("name", ""), reported)
-        if reported is not None
-        else None
-    )
+    capabilities: frozenset[ModelCapability] | None = None
+    if reported is not None:
+        mapped = _ollama_caps_from_server(entry.get("name", ""), reported)
+        # An empty mapped set means the server reported an array we recognize
+        # none of — a proxy/gateway's ``[]``, or a future FIM/reasoning-only
+        # capability not yet in ``_OLLAMA_CAPABILITY_MAP``. Under the substrate
+        # merge (first-non-``None``-per-facet) a present empty ``frozenset()`` is
+        # *authoritatively known* and would whole-set-shadow the heuristic to
+        # zero capabilities (no CHAT). Degrade to ``None`` so the heuristic
+        # fallback supplies the set instead of the model losing every capability.
+        capabilities = mapped or None
     return ModelProfile(
         capabilities=capabilities,
         context_window=entry.get("context_length"),
@@ -403,6 +411,14 @@ def _coerce_ttl(value: Any, *, default: float) -> float:
 #: (Ollama is local — no least-privilege concern) and disablable via
 #: ``options["model_metadata_live"]=false``.
 _DEFAULT_MODEL_METADATA_TTL: float = 3600.0
+
+#: Max concurrent ``/api/show`` probes during one metadata poll. The per-model
+#: shows are independent, so they run concurrently rather than sequentially: a
+#: box with many installed models would otherwise pay N sequential round-trips
+#: under the held refresh lock and could exhaust ``refresh_timeout`` (leaving the
+#: cache empty → capabilities always heuristic). Bounded so a large install set
+#: does not open an unbounded fan-out at the local server.
+_MODEL_SHOW_CONCURRENCY: int = 8
 _DEFAULT_MODEL_METADATA_REFRESH_TIMEOUT: float = 10.0
 
 
@@ -914,39 +930,50 @@ class OllamaProvider(AsyncLLMProvider):
         extractor's input). The source drives this out-of-band (TTL-gated,
         per-loop-locked, ``refresh_timeout``-bounded), so the N+1 shape (one
         tags call + N show calls, N = installed-model count) is off the request
-        path. A per-model ``/api/show`` failure is tolerated — that model still
-        contributes ``available=True`` (from ``/api/tags``) with unknown
+        path. The N ``/api/show`` probes run **concurrently** (bounded by
+        :data:`_MODEL_SHOW_CONCURRENCY`) rather than sequentially, so a box with
+        many installed models does not exhaust ``refresh_timeout`` on serial
+        round-trips. A per-model ``/api/show`` failure is tolerated — that model
+        still contributes ``available=True`` (from ``/api/tags``) with unknown
         capabilities / context (the heuristic then supplies capabilities).
         """
         async with self._session.get(f"{self.base_url}/api/tags") as response:
             if response.status != 200:
                 return []
             data = await response.json()
-        entries: list[dict[str, Any]] = []
-        for model in data.get("models", []):
-            name = model.get("name")
-            if not name:
-                continue
+        names = [
+            name for model in data.get("models", []) if (name := model.get("name"))
+        ]
+        if not names:
+            return []
+        sem = asyncio.Semaphore(_MODEL_SHOW_CONCURRENCY)
+
+        async def _enrich(name: str) -> dict[str, Any]:
             entry: dict[str, Any] = {
                 "name": name,
                 "capabilities": None,
                 "context_length": None,
             }
-            try:
-                async with self._session.post(
-                    f"{self.base_url}/api/show", json={"model": name}
-                ) as show_response:
-                    if show_response.status == 200:
-                        show = await show_response.json()
-                        entry["capabilities"] = show.get("capabilities")
-                        entry["context_length"] = _extract_context_length(
-                            show.get("model_info")
-                        )
-            except Exception as exc:  # per-model best-effort — keep availability
-                logger.debug(
-                    "Ollama /api/show failed for %s: %s", name, exc
-                )
-            entries.append(entry)
+            async with sem:
+                try:
+                    async with self._session.post(
+                        f"{self.base_url}/api/show", json={"model": name}
+                    ) as show_response:
+                        if show_response.status == 200:
+                            show = await show_response.json()
+                            entry["capabilities"] = show.get("capabilities")
+                            entry["context_length"] = _extract_context_length(
+                                show.get("model_info")
+                            )
+                except Exception as exc:  # per-model best-effort — keep availability
+                    logger.debug(
+                        "Ollama /api/show failed for %s: %s", name, exc
+                    )
+            return entry
+
+        entries: list[dict[str, Any]] = await asyncio.gather(
+            *(_enrich(name) for name in names)
+        )
         return entries
 
     def _profile_resolver(
@@ -993,14 +1020,18 @@ class OllamaProvider(AsyncLLMProvider):
         ``/api/tags`` set), so a model absent from the box resolves
         ``available=None`` → ``False`` — no bespoke direct-consult needed
         (unlike a provider whose lower resource layer sets a permissive
-        ``available``). Refreshes the cache best-effort first; an unreachable
-        server leaves the cache empty → ``False``. Preserves the pre-binding
-        behavior (installed → ``True``; not-installed / unreachable → ``False``)
-        as a resolved facet.
+        ``available``). **Force-refreshes** the cache first (bypassing the TTL
+        gate) so a model pulled since the last poll is seen immediately — an
+        authoritative liveness check matching the pre-binding fresh-every-call
+        ``/api/tags`` probe, not a value that can lag by up to a TTL. A cold
+        cache against an unreachable server resolves ``False``; on a warm cache
+        a transient poll failure leaves the last known state intact (a blip does
+        not flip availability). Preserves the pre-binding behavior (installed →
+        ``True``; not-installed / unreachable-cold → ``False``) as a resolved facet.
         """
         if not self._is_initialized or not hasattr(self, '_session'):
             return False
-        await self._live_source.refresh_if_stale()
+        await self._live_source.force_refresh()
         profile = self._profile_resolver(self.config).resolve(self.config.model)
         return bool(profile.available)
 
