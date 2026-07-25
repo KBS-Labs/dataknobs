@@ -61,10 +61,7 @@ import asyncio
 import json
 import logging
 import os
-import time
 import warnings
-import weakref
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from dataknobs_common.exceptions import ValidationError
@@ -81,7 +78,6 @@ from ._claude_shared import (
     claude_rejects_temperature,
     load_model_input_limits_resource,
     load_model_limits_resource,
-    match_ceiling,
     resource_ceiling,
     resource_input_ceiling,
 )
@@ -90,6 +86,7 @@ from ..model_profile import (
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
+    LiveApiSource,
     ModelProfile,
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -144,75 +141,6 @@ _DEFAULT_MODEL_LIMITS_TTL: float = 3600.0
 _DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT: float = 10.0
 
 
-@dataclass
-class _CeilingEntry:
-    """One cached per-model set of token ceilings and their provenance.
-
-    ``source`` distinguishes a value fetched from the live Models API
-    (``"dynamic"``) from the bundled fallback (``"resource"``) so a transient
-    Models-API failure never degrades a known-good dynamic value back to the
-    (possibly rounded-down) resource — see
-    :meth:`AnthropicProvider._refresh_model_limits`. ``fetched_at`` is a
-    ``time.monotonic()`` stamp (provenance/debugging; the refresh cadence is
-    gated per-loop by :data:`_MODEL_LIMITS_LAST_FETCH`, not per entry).
-
-    ``ceiling`` is the output ``max_tokens`` ceiling; ``input_ceiling`` is the
-    input/context-window ceiling (``max_input_tokens``). One Models-API poll
-    populates both from the same model object, so they share a cache entry.
-    Either may be ``None`` when the model object omits that column.
-    """
-
-    ceiling: int | None
-    source: str  # "dynamic" | "resource"
-    fetched_at: float
-    input_ceiling: int | None = None
-
-
-#: Process-level cache keyed by lowercased model id, populated by the async
-#: Models-API refresh and read synchronously by :meth:`AnthropicProvider._detect_constraints`.
-#: Module-global (shared across provider instances) so one refresh serves every
-#: consumer on the loop. Mirrors the :data:`_DISCOVERED_REJECTED_PARAMS`
-#: process-cache precedent.
-_MODEL_LIMITS_CACHE: dict[str, _CeilingEntry] = {}
-
-#: Per-event-loop monotonic timestamp of the last Models-API refresh *attempt*
-#: (success or failure). Gates the refresh cadence: a refresh fires only when
-#: ``now - last >= ttl`` for the running loop, so it is bounded to ≤1
-#: ``models.list()`` per TTL per loop regardless of request volume or outcome.
-#: Keyed on the **loop object** via a :class:`weakref.WeakKeyDictionary`: the
-#: entry is dropped automatically when the loop is garbage-collected (no leak),
-#: and identity keying means a *new* loop is always a distinct key — closing the
-#: ``id(loop)``-reuse hole where a fresh loop could inherit a dead loop's stale
-#: timestamp and wrongly skip a needed refresh.
-_MODEL_LIMITS_LAST_FETCH: "weakref.WeakKeyDictionary[Any, float]" = (
-    weakref.WeakKeyDictionary()
-)
-
-#: Per-event-loop locks serializing the refresh critical section so concurrent
-#: requests on a cold/stale cache coalesce into a single ``models.list()``.
-#: Keyed on the loop object (same :class:`weakref.WeakKeyDictionary` rationale
-#: as :data:`_MODEL_LIMITS_LAST_FETCH`) — a plain module-level
-#: :class:`asyncio.Lock` is loop-bound and breaks under multiple loops.
-_MODEL_LIMITS_LOCKS: "weakref.WeakKeyDictionary[Any, asyncio.Lock]" = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _model_limits_lock() -> asyncio.Lock:
-    """Return (lazily creating) the refresh lock for the running loop.
-
-    Lazy creation is race-free within a loop: no ``await`` separates the
-    ``get`` from the assignment, so a single loop cannot interleave two
-    creations, and distinct loops key on distinct loop objects.
-    """
-    loop = asyncio.get_running_loop()
-    lock = _MODEL_LIMITS_LOCKS.get(loop)
-    if lock is None:
-        lock = asyncio.Lock()
-        _MODEL_LIMITS_LOCKS[loop] = lock
-    return lock
-
-
 #: Claude family-name substrings that carry the modern (Claude 3+) capability
 #: set — vision, function calling, JSON mode. Matched as lowercased substrings
 #: of the model id. The Claude 5 generation adds names (``fable`` / ``mythos``)
@@ -226,38 +154,22 @@ _MODERN_CAPABILITY_FAMILIES: tuple[str, ...] = (
 )
 
 
-def _live_profile(model: str) -> ModelProfile:
-    """Live-API source: the *dynamic* half of the per-model ceiling resolution.
+def _anthropic_live_extractor(model_obj: Any) -> ModelProfile:
+    """Project one Anthropic Models-API model object into a partial profile.
 
-    Reads the process-level :data:`_MODEL_LIMITS_CACHE` (populated out-of-band by
-    the TTL-gated :meth:`AnthropicProvider._refresh_model_limits`) via the shared
-    family-matcher (:func:`~._claude_shared.match_ceiling` — exact, then longest
-    substring in either direction), so a bare-alias request
-    (``claude-sonnet-5``) matches a dated cache key (``claude-sonnet-5-<snapshot>``)
-    fetched from the API. Purely a cache read — no I/O — safe on the synchronous
-    detect path. Contributes only the two ceiling facets (``None`` elsewhere); the
-    resource fallback is a separate, lower-precedence source
-    (:func:`_resource_profile`) that the resolver merges beneath this one, exactly
-    reproducing the historical "dynamic else resource" precedence per facet.
+    The ``extractor`` half of the Anthropic :class:`~..model_profile.LiveApiSource`
+    binding: reads the two ceiling columns off a live ``ModelInfo``
+    (:func:`_extract_max_tokens` / :func:`_extract_max_input_tokens`) into a
+    :class:`~..model_profile.ModelProfile` partial. Anthropic serves only the two
+    ceilings live, so the other facets stay ``None`` (a model reporting only its
+    input window yields ``max_output_tokens=None`` — the ceiling then resolves via
+    the lower-precedence bundled resource, per facet). The
+    :class:`~..model_profile.LiveApiSource` caches the entry only when at least one
+    facet is known, so a model reporting neither column is skipped.
     """
-    key = model.lower()
     return ModelProfile(
-        max_output_tokens=match_ceiling(
-            key,
-            (
-                (cached_id, entry.ceiling)
-                for cached_id, entry in _MODEL_LIMITS_CACHE.items()
-                if entry.ceiling is not None
-            ),
-        ),
-        context_window=match_ceiling(
-            key,
-            (
-                (cached_id, entry.input_ceiling)
-                for cached_id, entry in _MODEL_LIMITS_CACHE.items()
-                if entry.input_ceiling is not None
-            ),
-        ),
+        max_output_tokens=_extract_max_tokens(model_obj),
+        context_window=_extract_max_input_tokens(model_obj),
     )
 
 
@@ -267,9 +179,10 @@ def _resource_profile(model: str) -> ModelProfile:
     Resolves the two ceiling facets against the bundled resource
     (:func:`~._claude_shared.resource_ceiling` /
     :func:`~._claude_shared.resource_input_ceiling`), using the *same*
-    family-matching rule as :func:`_live_profile`. Lower precedence than the live
-    source, so it fills a ceiling only when the dynamic cache has no value for it
-    — per facet. Contributes only the ceiling facets (``None`` elsewhere).
+    family-matching rule as the live :class:`~..model_profile.LiveApiSource`.
+    Lower precedence than the live source, so it fills a ceiling only when the
+    dynamic cache has no value for it — per facet. Contributes only the ceiling
+    facets (``None`` elsewhere).
     """
     key = model.lower()
     return ModelProfile(
@@ -316,37 +229,19 @@ def _heuristic_profile(model: str) -> ModelProfile:
     )
 
 
-#: The Anthropic model-metadata source list, in descending precedence. The live
-#: and bundled-resource sources are stateless module singletons (they read the
-#: shared cache / resource); the config-override source is prepended per config
-#: so a per-call model override honors that config's overrides.
-_LIVE_PROFILE_SOURCE = CallableModelMetadataSource("live_api", _live_profile)
+#: The stateless lower-precedence Anthropic model-metadata sources — module
+#: singletons because they read only the bundled resource / apply a pure
+#: family-substring rule (no per-instance state). The live source is per-provider
+#: (:class:`~..model_profile.LiveApiSource`, owning its own Models-API cache),
+#: and the config-override source is prepended per config so a per-call model
+#: override honors that config's overrides — both composed in
+#: :meth:`AnthropicProvider._profile_resolver`.
 _RESOURCE_PROFILE_SOURCE = CallableModelMetadataSource(
     "bundled_resource", _resource_profile
 )
 _HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
     "heuristic", _heuristic_profile
 )
-
-
-def _profile_resolver(config: LLMConfig) -> LayeredModelProfileResolver:
-    """Compose the Anthropic profile resolver for *config*.
-
-    Precedence (highest first): config override → live Models-API cache → bundled
-    resource → heuristic. The ceiling facets resolve live-else-resource; the
-    capability / rejected-param facets come from the heuristic; a consumer's
-    ``LLMConfig.model_profile_overrides`` wins over all of them per facet.
-    """
-    return LayeredModelProfileResolver(
-        [
-            ConfigOverrideSource(
-                getattr(config, "model_profile_overrides", None)
-            ),
-            _LIVE_PROFILE_SOURCE,
-            _RESOURCE_PROFILE_SOURCE,
-            _HEURISTIC_PROFILE_SOURCE,
-        ]
-    )
 
 
 def _extract_max_tokens(model_obj: Any) -> int | None:
@@ -987,13 +882,12 @@ class AnthropicProvider(AsyncLLMProvider):
                 "system_message_policy", _DEFAULT_SYSTEM_MESSAGE_POLICY
             )
         )
-        self.adapter = AnthropicAdapter(
-            system_message_policy=policy,
-            accepts_inline_system=self.get_constraints().accepts_inline_system,
-        )
-        # Dynamic max_tokens-ceiling resolution knobs (see the module-level
-        # _live_profile / _refresh_model_limits docs). Read once from options
-        # with defensive coercion — config-file values may be strings.
+        # Dynamic ceiling resolution knobs (see the module-level
+        # _anthropic_live_extractor / LiveApiSource docs). Read once from options
+        # with defensive coercion — config-file values may be strings. The live
+        # Models-API source is per-provider (each provider owns its own cache):
+        # it wraps this provider's paginated `_list_models` walker + the ceiling
+        # extractor, carrying the TTL / per-loop-lock / source-aware refresh.
         self._model_limits_dynamic = _coerce_bool(
             llm_config.options.get("model_limits_dynamic"), default=True
         )
@@ -1004,6 +898,20 @@ class AnthropicProvider(AsyncLLMProvider):
         self._model_limits_refresh_timeout = _coerce_ttl(
             llm_config.options.get("model_limits_refresh_timeout"),
             default=_DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT,
+        )
+        self._live_source = LiveApiSource(
+            self._list_models,
+            _anthropic_live_extractor,
+            name="live_api",
+            ttl=self._model_limits_ttl,
+            refresh_timeout=self._model_limits_refresh_timeout,
+            enabled=self._model_limits_dynamic,
+        )
+        # Built after the live source because the adapter's accepts_inline_system
+        # datum resolves constraints through _profile_resolver → self._live_source.
+        self.adapter = AnthropicAdapter(
+            system_message_policy=policy,
+            accepts_inline_system=self.get_constraints().accepts_inline_system,
         )
 
     async def initialize(self) -> None:
@@ -1026,95 +934,18 @@ class AnthropicProvider(AsyncLLMProvider):
         # NOTE: initialize() deliberately does NO network I/O beyond building
         # the client. The per-model max_tokens ceilings are refreshed lazily at
         # the first request boundary (complete/stream_complete/function_call all
-        # call _refresh_model_limits_if_stale before the clamp), so the first
-        # completion already clamps against fresh data without initialize()
+        # call self._live_source.refresh_if_stale() before the clamp), so the
+        # first completion already clamps against fresh data without initialize()
         # incurring a swallowed Models-API round-trip.
-
-    async def _refresh_model_limits_if_stale(self) -> None:
-        """Refresh the per-model ``max_tokens`` cache if the loop's TTL expired.
-
-        The synchronous detect/clamp path must not do I/O, so the refresh fires
-        here — from the async request boundary — *before* :meth:`_build_api_kwargs`.
-        TTL-gated on the running loop's last-fetch timestamp, so a fresh cache is
-        a no-op (no I/O) and a refresh happens **at most once per TTL per loop**,
-        never per request. A no-op when dynamic resolution is disabled.
-        """
-        if not self._model_limits_dynamic:
-            return
-        if not self._loop_fetch_stale():
-            return
-        await self._refresh_model_limits()
-
-    def _loop_fetch_stale(self) -> bool:
-        """Whether the running loop is due for a Models-API refresh (per TTL)."""
-        last = _MODEL_LIMITS_LAST_FETCH.get(asyncio.get_running_loop())
-        if last is None:
-            return True
-        return (time.monotonic() - last) >= self._model_limits_ttl
-
-    async def _refresh_model_limits(self, *, force: bool = False) -> None:
-        """Poll the live Models API and refresh the per-model ceiling cache.
-
-        Serialized per loop so concurrent callers on a cold/stale cache coalesce
-        into a single ``models.list()`` (the double-check after acquiring the
-        lock returns early for the losers). The last-fetch timer is re-armed
-        **before** the API call — success or failure — so a Models-API outage
-        cannot busy-retry: it is bounded to one attempt per TTL, and on failure
-        the last-known-good ``dynamic`` entries are left intact (never degraded
-        to the resource; see :class:`_CeilingEntry`). A ``resource``-sourced
-        model is promoted to ``dynamic`` once a later poll returns it — how a
-        model published after ``initialize`` resolves without a restart. Never
-        fatal: on error the cached/resource value is served and the request
-        proceeds. ``force`` bypasses the TTL gate (public
-        :meth:`refresh_model_limits` / manual drive) but still honors the
-        dynamic-disabled switch.
-        """
-        if not self._model_limits_dynamic:
-            return
-        async with _model_limits_lock():
-            if not force and not self._loop_fetch_stale():
-                return
-            _MODEL_LIMITS_LAST_FETCH[asyncio.get_running_loop()] = (
-                time.monotonic()
-            )
-            try:
-                # Bound the poll independently of the client's request timeout:
-                # the lock is held across it, so a *hung* control-plane would
-                # otherwise stall every cold-cache caller for the full
-                # config.timeout. On timeout the poll is cancelled and the
-                # request proceeds on the cached/resource value.
-                models = await asyncio.wait_for(
-                    self._list_models(),
-                    timeout=self._model_limits_refresh_timeout,
-                )
-            except Exception as exc:  # never fatal — serve cached/resource value
-                logger.debug(
-                    "Anthropic Models API refresh failed, using fallback: %s",
-                    exc,
-                )
-                return
-            now = time.monotonic()
-            for model_obj in models:
-                mt = _extract_max_tokens(model_obj)
-                mit = _extract_max_input_tokens(model_obj)
-                model_id = getattr(model_obj, "id", None)
-                # Cache the entry when the model carries *either* ceiling — a
-                # model that reports only its input window still populates the
-                # input cache (a None-``ceiling`` entry is ignored by the
-                # output resolver, so this never fabricates an output clamp).
-                if model_id and (mt is not None or mit is not None):
-                    _MODEL_LIMITS_CACHE[str(model_id).lower()] = _CeilingEntry(
-                        ceiling=mt,
-                        source="dynamic",
-                        fetched_at=now,
-                        input_ceiling=mit,
-                    )
 
     async def _list_models(self) -> list[Any]:
         """Collect every model from the Models API (auto-paged).
 
         ``client.models.list()`` returns an ``AsyncPaginator``; iterating it
-        with ``async for`` walks all pages, so no model is missed.
+        with ``async for`` walks all pages, so no model is missed. Passed to the
+        provider's :class:`~..model_profile.LiveApiSource` as its ``list_models``
+        callable — the source drives it out-of-band (TTL-gated, per-loop-locked)
+        and caches the extracted ceilings.
         """
         collected: list[Any] = []
         async for model_obj in self._client.models.list(limit=1000):
@@ -1127,11 +958,32 @@ class AnthropicProvider(AsyncLLMProvider):
         Public entry point for a consumer that prefers to drive freshness on
         their own schedule instead of relying on the TTL. Bypasses the TTL gate
         but honors ``options["model_limits_dynamic"]=false`` (a no-op then).
-        Never raises — the underlying poll is best-effort.
+        Never raises — the underlying poll is best-effort. Delegates to the
+        provider's :class:`~..model_profile.LiveApiSource`.
         """
         if not self._is_initialized:
             await self.initialize()
-        await self._refresh_model_limits(force=True)
+        await self._live_source.force_refresh()
+
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
+        """Compose the Anthropic profile resolver for *config*.
+
+        Precedence (highest first): config override → live Models-API cache
+        (the per-provider :class:`~..model_profile.LiveApiSource`) → bundled
+        resource → heuristic. The ceiling facets resolve live-else-resource; the
+        capability / rejected-param facets come from the heuristic; a consumer's
+        ``LLMConfig.model_profile_overrides`` wins over all of them per facet.
+        """
+        return LayeredModelProfileResolver(
+            [
+                ConfigOverrideSource(
+                    getattr(config, "model_profile_overrides", None)
+                ),
+                self._live_source,
+                _RESOURCE_PROFILE_SOURCE,
+                _HEURISTIC_PROFILE_SOURCE,
+            ]
+        )
 
     async def _close_client(self) -> None:
         """Close the Anthropic client."""
@@ -1156,7 +1008,7 @@ class AnthropicProvider(AsyncLLMProvider):
         try:
             if not self._is_initialized:
                 await self.initialize()
-            # Bound the poll like ``_refresh_model_limits`` so a hung
+            # Bound the poll like the LiveApiSource refresh so a hung
             # control-plane cannot stall the caller for the full client timeout.
             models = await asyncio.wait_for(
                 self._list_models(),
@@ -1181,7 +1033,7 @@ class AnthropicProvider(AsyncLLMProvider):
         :data:`~..model_profile.CAPABILITY_ORDER` so the historical ordering is
         preserved.
         """
-        profile = _profile_resolver(self.config).resolve(self.config.model)
+        profile = self._profile_resolver(self.config).resolve(self.config.model)
         capabilities = profile.capabilities or frozenset()
         return [c for c in CAPABILITY_ORDER if c in capabilities]
 
@@ -1200,11 +1052,11 @@ class AnthropicProvider(AsyncLLMProvider):
           family (``claude-opus-4-8``, ``claude-haiku-4-5-...``) still accepts
           it, so the match distinguishes the generations.
         - ``max_tokens_ceiling`` from the resolved profile's
-          ``max_output_tokens`` facet (:func:`_live_profile` else
-          :func:`_resource_profile`) — the live Models-API value cached
-          per-process (kept fresh by the TTL-gated
-          :meth:`_refresh_model_limits_if_stale` refresh) else the bundled
-          fallback resource else ``None`` (permissive). Read by
+          ``max_output_tokens`` facet (the per-provider
+          :class:`~..model_profile.LiveApiSource` else :func:`_resource_profile`)
+          — the live Models-API value cached per-provider (kept fresh by the
+          TTL-gated :meth:`LiveApiSource.refresh_if_stale` refresh) else the
+          bundled fallback resource else ``None`` (permissive). Read by
           :meth:`_build_api_kwargs` to clamp an over-ceiling ``max_tokens`` down
           before the call. The read is a synchronous cache lookup (no I/O); the
           async refresh at the request boundary keeps the cache current.
@@ -1233,7 +1085,7 @@ class AnthropicProvider(AsyncLLMProvider):
         not overridden by, the declarative profile.
         """
         model = config.model.lower()
-        profile = _profile_resolver(config).resolve(config.model)
+        profile = self._profile_resolver(config).resolve(config.model)
         rejected: set[str] = set(profile.rejected_params or ())
         rejected |= _DISCOVERED_REJECTED_PARAMS.get(model, set())
         return ModelConstraints(
@@ -1405,7 +1257,7 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Keep the per-model max_tokens ceiling fresh (TTL-gated, ≤1 poll per
         # TTL per loop) so the clamp in _build_api_kwargs reads a current value.
-        await self._refresh_model_limits_if_stale()
+        await self._live_source.refresh_if_stale()
 
         # Build API call kwargs (drops params the model family rejects)
         api_kwargs = self._build_api_kwargs(runtime_config)
@@ -1456,7 +1308,7 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
         # clamp — same choke point as the buffered path.
-        await self._refresh_model_limits_if_stale()
+        await self._live_source.refresh_if_stale()
 
         # Build stream kwargs (drops params the model family rejects)
         stream_kwargs = self._build_api_kwargs(runtime_config)
@@ -1550,7 +1402,7 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
         # clamp — same choke point as complete()/stream_complete().
-        await self._refresh_model_limits_if_stale()
+        await self._live_source.refresh_if_stale()
 
         try:
             fc_kwargs = self._build_api_kwargs(self.config)

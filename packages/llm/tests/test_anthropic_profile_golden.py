@@ -1,22 +1,24 @@
 """Golden-master characterization of the Anthropic model-metadata substrate.
 
-**Purpose.** The Anthropic provider's live token-ceiling cache (the process
-globals ``_MODEL_LIMITS_CACHE`` / ``_CeilingEntry`` and the ``_refresh_model_limits``
-poll) is scheduled to be lifted into a *generic*, reusable ``LiveApiSource`` class,
-so any provider — not just Anthropic — can source a facet live with the same
-provenance / TTL / lock machinery. That lift is a genuine structural change: it
-moves where the cache lives and rewrites the tests that pin the current module
-globals. So the invariant W1 relied on — *"the existing tests pass byte-for-byte
-through the refactor"* — no longer applies (the pinning tests move with the cache
-to the layer where the logic now lives).
+**Purpose.** The Anthropic provider's live token-ceiling cache (formerly the
+process globals ``_MODEL_LIMITS_CACHE`` / ``_CeilingEntry`` and the
+``_refresh_model_limits`` poll) was lifted into a *generic*, reusable
+``LiveApiSource`` class, so any provider — not just Anthropic — can source a facet
+live with the same provenance / TTL / lock machinery. That lift was a genuine
+structural change: it moved where the cache lives and rewrote the tests that
+pinned the old module globals. So the invariant W1 relied on — *"the existing
+tests pass byte-for-byte through the refactor"* — did not apply (the pinning tests
+moved with the cache to the layer where the logic now lives,
+``test_live_api_source.py``).
 
-**This file is the replacement proof.** It captures the provider's *observable*
-model-metadata behavior — resolved capabilities and request-shape constraints —
-across a ``(model x cache-state x config)`` matrix, from the **pre-lift** code on
-``main``, into a committed fixture (``golden/anthropic_profile_golden.json``). The
-lifted code must reproduce that fixture **exactly**. This decouples the proof from
-the internal cache *structure* (which is deliberately changing) and pins the only
-thing a consumer can actually observe (which must not change).
+**This file is the replacement proof (now the durable guard).** It captures the
+provider's *observable* model-metadata behavior — resolved capabilities and
+request-shape constraints — across a ``(model x cache-state x config)`` matrix,
+from the **pre-lift** code on ``main``, into a committed fixture
+(``golden/anthropic_profile_golden.json``). The lifted code reproduces that fixture
+**exactly** (the acceptance gate). This decoupled the proof from the internal cache
+*structure* (which deliberately changed) and pins the only thing a consumer can
+actually observe (which must not change).
 
 Kept afterward, the fixture is a permanent regression + **vendor-drift** guard:
 if a resource edit or a family-matching change silently shifts a resolved ceiling
@@ -33,9 +35,9 @@ class the substrate exists to kill, so the guard earns its keep beyond the lift.
 - outputs are read through ``get_capabilities()`` / ``get_constraints()`` — the
   consumer-facing template methods, not the internal resolver free functions.
 
-The single seam that *may* need a one-line touch when the cache moves is
-:func:`_reset_caches` (per-cell isolation of the process-global cache). It clears
-whatever known caches exist defensively; the lift note there says what to add.
+The single seam that needed a touch when the cache moved was :func:`_reset_caches`
+(per-cell isolation): the per-instance ``LiveApiSource`` cache is now cold per cell
+by construction, so it only clears the still-global rejected-params overlay.
 
 **Scope.** This characterizes the *substrate* — capability + constraint (ceiling /
 rejected-param) resolution, which flows through the cache being lifted.
@@ -74,24 +76,23 @@ _DYN_IN = 888_888
 
 
 def _reset_caches() -> None:
-    """Isolate the process-global model-metadata caches between matrix cells.
+    """Isolate the process-global model-metadata state between matrix cells.
 
-    Clears the dynamic ceiling cache, the per-loop last-fetch timestamps, the
-    refresh locks, and the discovered-rejected-params overlay so no cell inherits
-    another cell's dynamic state. Defensive by name so it stays correct as the
-    module evolves.
+    Post-lift, the live ceiling cache is **per-provider-instance** (owned by each
+    provider's ``LiveApiSource``), and every cell builds a fresh provider via
+    :func:`_provider_with_capture`, so the live cache starts cold per cell with no
+    clearing needed. Only the discovered-rejected-params overlay remains
+    process-global (a separate self-correction cache, not part of the live-source
+    lift) — cleared here so no cell inherits another's 400-recovery discovery.
+    Defensive by name so it stays correct as the module evolves.
 
-    LIFT NOTE: when the live ceiling cache moves out of these module globals into
-    a generic ``LiveApiSource`` singleton, add that source's cache-clear here (one
-    line). This is the *only* place in this harness that knows where the cache
-    physically lives — the matrix and the fixture do not.
+    LIFT NOTE (resolved): the live ceiling cache moved out of the module globals
+    (``_MODEL_LIMITS_CACHE`` / ``_MODEL_LIMITS_LAST_FETCH`` / ``_MODEL_LIMITS_LOCKS``)
+    into the per-instance ``LiveApiSource``; per-cell isolation is now inherent in
+    the fresh-provider-per-cell construction. This is still the *only* place in the
+    harness that knows where cache state lives — the matrix and fixture do not.
     """
-    for name in (
-        "_MODEL_LIMITS_CACHE",
-        "_MODEL_LIMITS_LAST_FETCH",
-        "_MODEL_LIMITS_LOCKS",
-        "_DISCOVERED_REJECTED_PARAMS",
-    ):
+    for name in ("_DISCOVERED_REJECTED_PARAMS",):
         cache = getattr(anthropic_mod, name, None)
         if cache is not None:
             cache.clear()

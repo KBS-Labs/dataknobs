@@ -378,6 +378,19 @@ consumer-extensible `model_metadata_sources` registry — no dataknobs release
 required. This is the substrate every provider binds to as it is migrated onto
 it.
 
+For a facet a vendor serves **live**, the built-in `LiveApiSource` is the
+reusable live layer: construct it with an async `list_models()` and a
+`(api_object) -> ModelProfile` extractor, and it carries the refresh machinery —
+TTL-gated polling (a fresh cache is a no-op; at most one poll per TTL per event
+loop), per-loop-locked dedup (concurrent cold-cache callers coalesce into one
+poll), a bounded poll (`refresh_timeout`), and source-aware non-degradation (a
+transient refresh failure leaves a known-good live value intact rather than
+dropping to the bundled fallback). `resolve` reads the cache synchronously; the
+provider drives `refresh_if_stale()` / `force_refresh()` from its async request
+boundary. `AnthropicProvider` composes one bound to its Models-API listing to
+source the two token ceilings; each provider owns its own instance (its own
+cache).
+
 ### Vendor-error translation (all providers)
 
 Every provider translates raw vendor transport errors into
