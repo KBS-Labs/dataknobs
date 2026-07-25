@@ -555,6 +555,7 @@ class LiveApiSource:
         refresh_timeout: float = 10.0,
         enabled: bool = True,
         model_id: Callable[[Any], str | None] = _default_model_id,
+        match: Callable[[str, Iterable[str]], str | None] = match_family_key,
     ) -> None:
         """Build a live source.
 
@@ -573,6 +574,16 @@ class LiveApiSource:
                 resolves from an empty cache — resource-only via the resolver).
             model_id: ``(api_object) -> str | None`` reading a model object's id
                 (default: ``getattr(obj, "id")``).
+            match: ``(model_lower, cache_keys) -> matched_key | None`` selecting
+                which cache key a request resolves against (per facet). Defaults
+                to the shared :func:`match_family_key` (dated-snapshot substring
+                family-alias rule) — **byte-identical** for every vendor whose id
+                space that rule fits (Anthropic, OpenAI, Bedrock). A vendor whose
+                ids collide under pure substring matching (Ollama's ``name:tag``
+                ids, where ``nomic-embed-text`` is a substring of
+                ``nomic-embed-text-v2-moe:latest``) injects its own id-aware
+                matcher so the live cache does not false-resolve — a general
+                consumer-extensibility seam, not an in-substrate special case.
         """
         self.name = name
         self._list_models = list_models
@@ -581,6 +592,7 @@ class LiveApiSource:
         self._refresh_timeout = refresh_timeout
         self._enabled = enabled
         self._model_id = model_id
+        self._match = match
         self._cache: dict[str, _LiveEntry] = {}
         self._last_fetch: weakref.WeakKeyDictionary[Any, float] = (
             weakref.WeakKeyDictionary()
@@ -594,13 +606,15 @@ class LiveApiSource:
     def resolve(self, model: str) -> ModelProfile:
         """Return the facets the live cache knows for *model* (rest ``None``).
 
-        Resolved **per facet** by the shared family-alias matcher
-        (:func:`match_family_key`): for each facet, the best-matching cache key
-        *among entries that know that facet* wins, so a bare-alias request
-        (``claude-sonnet-5``) resolves against a dated cache key
+        Resolved **per facet** by the configured matcher (:attr:`_match`,
+        default :func:`match_family_key`): for each facet, the best-matching
+        cache key *among entries that know that facet* wins, so a bare-alias
+        request (``claude-sonnet-5``) resolves against a dated cache key
         (``claude-sonnet-5-<snapshot>``) fetched from the API — independently per
         facet, so a model reporting only its input window contributes its input
-        facet without fabricating an output value. Pure cache read (no I/O).
+        facet without fabricating an output value. A vendor-specific matcher
+        (the ``match=`` constructor arg) governs the id-space rule per facet.
+        Pure cache read (no I/O).
         """
         if not self._cache:
             return ModelProfile()
@@ -614,7 +628,7 @@ class LiveApiSource:
             }
             if not known:
                 continue
-            matched = match_family_key(key, known.keys())
+            matched = self._match(key, known.keys())
             if matched is not None:
                 merged[facet] = known[matched]
         return ModelProfile(**merged)

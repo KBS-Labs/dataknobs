@@ -92,13 +92,23 @@ import logging
 import os
 import re
 import warnings
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ToolCall,
+    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
     normalize_llm_config
+)
+from ..model_profile import (
+    CAPABILITY_ORDER,
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    LiveApiSource,
+    ModelPricing,
+    ModelProfile,
 )
 from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -140,9 +150,260 @@ def _find_matching_models(configured_model: str, available_models: list[str]) ->
     ]
 
 
+def ollama_match_key(model_lower: str, keys: Iterable[str]) -> str | None:
+    """Resolve *model_lower* to the best-matching Ollama cache key, or ``None``.
+
+    The ``name:tag``-aware matcher injected into the model-metadata
+    :class:`~..model_profile.LiveApiSource` (its ``match=`` arg) so the live
+    cache uses Ollama's own base-name-or-exact-tag semantics
+    (:func:`_find_matching_models`) instead of the substrate default
+    :func:`~..model_profile.match_family_key`. The default's pure-substring
+    family-alias rule reintroduces the documented prefix-collision bug for
+    Ollama ids — ``nomic-embed-text`` is a substring of
+    ``nomic-embed-text-v2-moe:latest``, so it would false-resolve to the v2-moe
+    model's profile — which :func:`_find_matching_models` exists to prevent.
+
+    Exact id wins; otherwise a bare base name matches its tagged variants
+    (``llama3.1`` → ``llama3.1:8b``) but never a different model that merely
+    shares a prefix. Returns the first match (the cache holds one entry per
+    installed model), or ``None`` when nothing matches.
+    """
+    matches = _find_matching_models(model_lower, list(keys))
+    return matches[0] if matches else None
+
+
 # Regex for <think>...</think> blocks emitted by reasoning models.
 # DOTALL so '.' matches newlines inside the tag.
 _THINK_TAG_RE = re.compile(r"^<think>(.*?)</think>\s*(.*)", re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
+# Model-metadata binding (capabilities + context window + availability)
+# ---------------------------------------------------------------------------
+#
+# Ollama is live-first: the server authoritatively reports each installed
+# model's capabilities and context window via `/api/show`, so the binding
+# sources those facets from the live API (per-provider LiveApiSource) with a
+# name-based heuristic fallback for older servers — inverting the resource-first
+# shape of the cloud providers. There is no pricing (local/free) and no output
+# ceiling (num_predict: -1 = unlimited), so those facets stay unset by design.
+
+#: Ollama `/api/show` `capabilities` vocabulary -> dataknobs ModelCapability.
+#: The server reports these on modern Ollama; the mapping is applied live-first
+#: by :func:`_ollama_caps_from_server` and mirrored by the name-based
+#: :func:`_ollama_heuristic` fallback for servers that predate the field.
+_OLLAMA_CAPABILITY_MAP: dict[str, frozenset[ModelCapability]] = {
+    "completion": frozenset({
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+    }),
+    "tools": frozenset({ModelCapability.FUNCTION_CALLING}),
+    "vision": frozenset({ModelCapability.VISION}),
+    "embedding": frozenset({ModelCapability.EMBEDDINGS}),
+}
+
+#: Ollama model-name substrings carrying function calling — the demoted family
+#: knowledge from the pre-binding ``_detect_capabilities``, used only by the
+#: heuristic fallback. The live ``/api/show`` ``tools`` capability supersedes
+#: this whenever the server reports one.
+_TOOL_CAPABLE_FAMILIES: tuple[str, ...] = (
+    "llama3", "llama4", "mistral", "mixtral", "qwen", "command-r",
+    "phi3", "phi4", "nemotron", "firefunction", "hermes", "gpt-oss",
+)
+
+#: Vision family substrings for the heuristic fallback (server `vision` wins).
+_VISION_FAMILIES: tuple[str, ...] = ("llava", "bakllava")
+
+#: Code family substrings (Ollama does not report CODE as a capability, so it
+#: is always name-derived — on both the live and heuristic paths).
+_CODE_FAMILIES: tuple[str, ...] = ("codellama", "codegemma")
+
+
+def _name_has(model_lower: str, families: tuple[str, ...]) -> bool:
+    """Whether *model_lower* contains any of *families* as a substring."""
+    return any(fam in model_lower for fam in families)
+
+
+def _is_embedding_only_name(model_lower: str) -> bool:
+    """Whether a model *name* denotes a dedicated embedding model.
+
+    Used only by the heuristic fallback (the live path reads the server's
+    ``embedding`` / ``completion`` capabilities). A name carrying ``embed`` with
+    no code marker is treated as embedding-only so it resolves an
+    EMBEDDINGS-only disjoint set — matching how a modern server reports it.
+    """
+    return "embed" in model_lower and not _name_has(model_lower, _CODE_FAMILIES)
+
+
+def _ollama_caps_from_server(
+    model: str, reported: Iterable[str]
+) -> frozenset[ModelCapability]:
+    """Map a server-reported `capabilities` array to the COMPLETE capability set.
+
+    Because a present ``capabilities`` facet whole-set-overrides the lower
+    heuristic layer (the substrate merge is first-non-``None``-per-facet, not a
+    union), the live extractor must emit the full intended set, not a partial —
+    else a live-classified model would lose the heuristic's JSON_MODE / CODE /
+    broad EMBEDDINGS. So on top of the direct vocabulary mapping this adds, for a
+    completion (chat) model:
+
+    - JSON_MODE — Ollama's ``format: json`` is universal for chat models; the
+      server does not report it as a capability.
+    - EMBEDDINGS — ``/api/embeddings`` accepts completion models too, so the
+      historical breadth is preserved; a pure embedding model (``embedding``
+      without ``completion``) stays EMBEDDINGS-only-disjoint.
+    - CODE by model name — the server does not report it.
+    """
+    reported_set = {str(c).lower() for c in reported}
+    caps: set[ModelCapability] = set()
+    for name in reported_set:
+        caps |= _OLLAMA_CAPABILITY_MAP.get(name, frozenset())
+    if "completion" in reported_set:
+        caps.add(ModelCapability.JSON_MODE)
+        caps.add(ModelCapability.EMBEDDINGS)
+        if _name_has(model.lower(), _CODE_FAMILIES):
+            caps.add(ModelCapability.CODE)
+    return frozenset(caps)
+
+
+def _ollama_heuristic(model: str) -> ModelProfile:
+    """Name-based capability fallback (older servers / `/api/show` failure).
+
+    The corrected, demoted form of the pre-binding inline
+    ``_detect_capabilities``: produces the SAME complete-set shape as
+    :func:`_ollama_caps_from_server` from the model name alone. A dedicated
+    embedding model (name carrying ``embed``) resolves an EMBEDDINGS-only
+    disjoint set; every other model resolves the base chat set plus JSON_MODE
+    (universal ``format: json``) and broad EMBEDDINGS, plus FUNCTION_CALLING /
+    VISION / CODE by family. Contributes only the ``capabilities`` facet.
+    """
+    model_lower = model.lower()
+    if _is_embedding_only_name(model_lower):
+        return ModelProfile(
+            capabilities=frozenset({ModelCapability.EMBEDDINGS})
+        )
+    caps: set[ModelCapability] = {
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+        ModelCapability.JSON_MODE,
+        ModelCapability.EMBEDDINGS,
+    }
+    if _name_has(model_lower, _TOOL_CAPABLE_FAMILIES):
+        caps.add(ModelCapability.FUNCTION_CALLING)
+    if _name_has(model_lower, _VISION_FAMILIES):
+        caps.add(ModelCapability.VISION)
+    if _name_has(model_lower, _CODE_FAMILIES):
+        caps.add(ModelCapability.CODE)
+    return ModelProfile(capabilities=frozenset(caps))
+
+
+def _extract_context_length(model_info: Any) -> int | None:
+    """Read the input/context-window size from an `/api/show` `model_info` dict.
+
+    Ollama serves ``model_info`` as a flat dict with architecture-prefixed keys
+    (``{"general.architecture": "llama", "llama.context_length": 131072}``).
+    Reads the architecture's ``<arch>.context_length`` first, falling back to
+    any ``*.context_length`` key. Missing / non-integer → ``None`` (permissive).
+    """
+    if not isinstance(model_info, dict):
+        return None
+    arch = model_info.get("general.architecture")
+    candidates: list[Any] = []
+    if arch:
+        candidates.append(model_info.get(f"{arch}.context_length"))
+    candidates.extend(
+        v for k, v in model_info.items() if k.endswith(".context_length")
+    )
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _ollama_live_extractor(entry: dict[str, Any]) -> ModelProfile:
+    """Project one enriched `/api/tags`+`/api/show` entry into a partial profile.
+
+    The ``extractor`` half of the Ollama live source. Each *entry* is a plain
+    dict ``{name, capabilities, context_length}`` assembled by
+    :meth:`OllamaProvider._list_ollama_models`. Sets:
+
+    - ``available=True`` — the entry exists because the model is installed
+      locally (from ``/api/tags``), which for Ollama *is* availability.
+    - ``capabilities`` — the complete set from the server-reported array
+      (:func:`_ollama_caps_from_server`), or ``None`` when the server did not
+      report one (older Ollama), so the heuristic fallback supplies it per facet.
+    - ``context_window`` — the server-reported input window, or ``None``.
+    """
+    reported = entry.get("capabilities")
+    capabilities = (
+        _ollama_caps_from_server(entry.get("name", ""), reported)
+        if reported is not None
+        else None
+    )
+    return ModelProfile(
+        capabilities=capabilities,
+        context_window=entry.get("context_length"),
+        available=True,
+    )
+
+
+def _ollama_entry_model_id(entry: Any) -> str | None:
+    """Read a live-source entry's model id (its ``name``) — the cache key.
+
+    The entries are dicts, so the substrate's default attribute-based
+    :func:`~..model_profile._default_model_id` does not apply.
+    """
+    value = entry.get("name") if isinstance(entry, dict) else None
+    return str(value) if value is not None else None
+
+
+#: The stateless heuristic Ollama model-metadata source — a module singleton
+#: (a pure name-substring rule, no per-instance state). The live source is
+#: per-provider (it owns its own ``/api/tags`` + ``/api/show`` cache) and the
+#: config-override source is prepended per config, so both are composed in
+#: :meth:`OllamaProvider._profile_resolver`. There is deliberately **no**
+#: bundled-resource layer: Ollama's model space is open-ended and user-pulled,
+#: and the server reports capabilities / context live (see the block comment).
+_OLLAMA_HEURISTIC_SOURCE = CallableModelMetadataSource(
+    "ollama_heuristic", _ollama_heuristic
+)
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Coerce a config ``options`` value to ``bool`` (string-tolerant)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
+def _coerce_ttl(value: Any, *, default: float) -> float:
+    """Coerce a config ``options`` value to a non-negative TTL float."""
+    try:
+        ttl = float(value)
+    except (TypeError, ValueError):
+        return default
+    return ttl if ttl >= 0 else default
+
+
+#: Default TTL / refresh-timeout for the live model-metadata cache. It is
+#: refreshed at most once per TTL per event loop (out-of-band, at the request
+#: boundary) and a single poll is bounded by the timeout. Both are overridable
+#: via ``LLMConfig.options`` (``model_metadata_ttl`` /
+#: ``model_metadata_refresh_timeout``); the live source is enabled by default
+#: (Ollama is local — no least-privilege concern) and disablable via
+#: ``options["model_metadata_live"]=false``.
+_DEFAULT_MODEL_METADATA_TTL: float = 3600.0
+_DEFAULT_MODEL_METADATA_REFRESH_TIMEOUT: float = 10.0
 
 
 class OllamaAdapter(LLMAdapter):
@@ -520,6 +781,34 @@ class OllamaProvider(AsyncLLMProvider):
         # Allow environment variable override
         self.base_url = llm_config.api_base or os.environ.get('OLLAMA_BASE_URL', default_url)
 
+        # Live-first model-metadata source: capabilities + context window +
+        # availability from GET /api/tags (installed set) enriched per-model by
+        # POST /api/show (the server's authoritative `capabilities` array +
+        # `model_info.<arch>.context_length`). Per-provider (owns its own cache);
+        # refreshed out-of-band at the request boundary (TTL-gated, per-loop
+        # locked) and read synchronously on the detect path. Enabled by default
+        # (Ollama is local); disablable / tunable via LLMConfig.options. The
+        # `name:tag`-aware matcher (`ollama_match_key`) is injected so the live
+        # cache does not reintroduce the documented prefix-collision bug.
+        self._live_source = LiveApiSource(
+            self._list_ollama_models,
+            _ollama_live_extractor,
+            name="live_api",
+            ttl=_coerce_ttl(
+                llm_config.options.get("model_metadata_ttl"),
+                default=_DEFAULT_MODEL_METADATA_TTL,
+            ),
+            refresh_timeout=_coerce_ttl(
+                llm_config.options.get("model_metadata_refresh_timeout"),
+                default=_DEFAULT_MODEL_METADATA_REFRESH_TIMEOUT,
+            ),
+            enabled=_coerce_bool(
+                llm_config.options.get("model_metadata_live"), default=True
+            ),
+            model_id=_ollama_entry_model_id,
+            match=ollama_match_key,
+        )
+
     def _build_options(self, config: LLMConfig | None = None) -> Dict[str, Any]:
         """Build options dict for Ollama API calls.
 
@@ -613,56 +902,187 @@ class OllamaProvider(AsyncLLMProvider):
             await self._session.close()
             await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
+    async def _list_ollama_models(self) -> list[dict[str, Any]]:
+        """Collect installed models, enriched with live capabilities + context.
+
+        The ``list_models`` callable for the provider's
+        :class:`~..model_profile.LiveApiSource`. Queries ``GET /api/tags`` for
+        the installed set, then ``POST /api/show`` per model to read the
+        server's authoritative ``capabilities`` array and
+        ``model_info.<arch>.context_length``. Returns one plain dict
+        ``{name, capabilities, context_length}`` per installed model (the
+        extractor's input). The source drives this out-of-band (TTL-gated,
+        per-loop-locked, ``refresh_timeout``-bounded), so the N+1 shape (one
+        tags call + N show calls, N = installed-model count) is off the request
+        path. A per-model ``/api/show`` failure is tolerated — that model still
+        contributes ``available=True`` (from ``/api/tags``) with unknown
+        capabilities / context (the heuristic then supplies capabilities).
+        """
+        async with self._session.get(f"{self.base_url}/api/tags") as response:
+            if response.status != 200:
+                return []
+            data = await response.json()
+        entries: list[dict[str, Any]] = []
+        for model in data.get("models", []):
+            name = model.get("name")
+            if not name:
+                continue
+            entry: dict[str, Any] = {
+                "name": name,
+                "capabilities": None,
+                "context_length": None,
+            }
+            try:
+                async with self._session.post(
+                    f"{self.base_url}/api/show", json={"model": name}
+                ) as show_response:
+                    if show_response.status == 200:
+                        show = await show_response.json()
+                        entry["capabilities"] = show.get("capabilities")
+                        entry["context_length"] = _extract_context_length(
+                            show.get("model_info")
+                        )
+            except Exception as exc:  # per-model best-effort — keep availability
+                logger.debug(
+                    "Ollama /api/show failed for %s: %s", name, exc
+                )
+            entries.append(entry)
+        return entries
+
+    def _profile_resolver(
+        self, config: LLMConfig
+    ) -> LayeredModelProfileResolver:
+        """Compose the Ollama model-profile resolver for *config*.
+
+        Precedence (highest first): config override → live ``/api/show`` cache
+        (the per-provider :class:`~..model_profile.LiveApiSource`) → name-based
+        heuristic. Live-first (the server authoritatively reports capabilities +
+        context for installed models), heuristic as the graceful-degradation
+        fallback for older servers — there is **no** bundled-resource layer
+        (Ollama's model space is open-ended and user-pulled) and **no** pricing /
+        output-ceiling layer (Ollama is local/free with no output cap). A consumer's
+        ``LLMConfig.model_profile_overrides`` wins over all of them per facet.
+        """
+        return LayeredModelProfileResolver(
+            [
+                ConfigOverrideSource(
+                    getattr(config, "model_profile_overrides", None)
+                ),
+                self._live_source,
+                _OLLAMA_HEURISTIC_SOURCE,
+            ]
+        )
+
+    async def refresh_model_metadata(self) -> None:
+        """Force an immediate refresh of the cached live model metadata.
+
+        Public entry point for a consumer that prefers to drive freshness on
+        their own schedule instead of relying on the TTL. Bypasses the TTL gate
+        but honors ``options["model_metadata_live"]=false`` (a no-op then).
+        Never raises — the underlying poll is best-effort.
+        """
+        if not self._is_initialized:
+            await self.initialize()
+        await self._live_source.force_refresh()
+
     async def validate_model(self) -> bool:
-        """Validate model availability."""
+        """Validate model availability against the live ``available`` facet.
+
+        Reads the resolved profile's ``available`` facet: the live source is the
+        only source that sets it (``True`` for a model in the installed
+        ``/api/tags`` set), so a model absent from the box resolves
+        ``available=None`` → ``False`` — no bespoke direct-consult needed
+        (unlike a provider whose lower resource layer sets a permissive
+        ``available``). Refreshes the cache best-effort first; an unreachable
+        server leaves the cache empty → ``False``. Preserves the pre-binding
+        behavior (installed → ``True``; not-installed / unreachable → ``False``)
+        as a resolved facet.
+        """
         if not self._is_initialized or not hasattr(self, '_session'):
             return False
-
-        try:
-            async with self._session.get(f"{self.base_url}/api/tags") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    models = [m['name'] for m in data.get('models', [])]
-                    return bool(_find_matching_models(self.config.model, models))
-        except Exception:
-            return False
-        return False
+        await self._live_source.refresh_if_stale()
+        profile = self._profile_resolver(self.config).resolve(self.config.model)
+        return bool(profile.available)
 
     def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect Ollama model capabilities."""
-        detected = [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.CHAT,
-            ModelCapability.STREAMING,
-            ModelCapability.EMBEDDINGS,  # Ollama supports embed() for all models
-        ]
+        """Auto-detect Ollama model capabilities (one-line profile read).
 
-        model = self.config.model.lower()
+        Reads the ``capabilities`` facet off the resolved
+        :class:`~..model_profile.ModelProfile` — live-first from ``/api/show``
+        (the server's authoritative ``capabilities`` array, mapped by
+        :func:`_ollama_caps_from_server`), heuristic fallback by model name, with
+        ``model_profile_overrides`` on top — projected back to the historical
+        ordered list via :data:`~..model_profile.CAPABILITY_ORDER`. Replaces the
+        pre-binding hardcoded family-substring lists, which went stale each
+        Ollama release (no ``llama4`` / ``gpt-oss`` / ``qwen3``-specific
+        handling). A dedicated embedding model resolves an EMBEDDINGS-only
+        disjoint set.
+        """
+        profile = self._profile_resolver(self.config).resolve(self.config.model)
+        capabilities = profile.capabilities or frozenset()
+        return [c for c in CAPABILITY_ORDER if c in capabilities]
 
-        # Models that support function calling
-        tool_capable_models = [
-            'llama3', 'mistral', 'mixtral', 'qwen',
-            'command-r', 'phi3', 'phi4', 'nemotron',
-            'firefunction', 'hermes',
-        ]
-        if any(m in model for m in tool_capable_models):
-            detected.append(ModelCapability.FUNCTION_CALLING)
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect Ollama request-shape constraints (one-line profile read).
 
-        # JSON mode: tool-capable models + gemma, deepseek support structured output
-        json_capable_models = [
-            *tool_capable_models,
-            'gemma', 'deepseek',
-        ]
-        if any(m in model for m in json_capable_models):
-            detected.append(ModelCapability.JSON_MODE)
+        Reads the resolved profile's facets for *config*'s model:
 
-        if 'llava' in model:
-            detected.append(ModelCapability.VISION)
+        - ``max_input_tokens`` from ``context_window`` — the model's input
+          window, sourced live from ``/api/show``
+          (``model_info.<arch>.context_length``). **Now populated for Ollama**
+          (it never was before), so a consumer's proactive input budget engages.
+          Informational — never clamped.
+        - ``max_tokens_ceiling`` from ``max_output_tokens`` — always ``None`` for
+          Ollama (``num_predict: -1`` = unlimited output; no ceiling to clamp).
+        - ``rejected_params`` / ``param_remaps`` — empty by default (Ollama is
+          permissive), wired so a consumer ``LLMConfig.constraints`` override —
+          or a future family rule — is honored through the shared request-shaping
+          choke point.
 
-        if 'codellama' in model or 'codegemma' in model:
-            detected.append(ModelCapability.CODE)
+        Overridable per request via ``LLMConfig.constraints``.
+        """
+        profile = self._profile_resolver(config).resolve(config.model)
+        return ModelConstraints(
+            rejected_params=frozenset(profile.rejected_params or ()),
+            max_tokens_ceiling=profile.max_output_tokens,
+            max_input_tokens=profile.context_window,
+            param_remaps=dict(profile.param_remaps or {}),
+        )
 
-        return detected
+    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
+        """Read the ``pricing`` facet off the resolved profile (else ``None``).
+
+        Ollama runs models locally for free, so none of its own sources (live
+        ``/api/show``, heuristic) ever set ``pricing`` — this returns ``None`` by
+        default, exactly like the base provider. It reads the resolved profile
+        (rather than hard-returning ``None``) purely so a consumer can model
+        private GPU/hosting cost via ``model_profile_overrides.pricing``, which
+        then lights up :meth:`~..base.LLMProvider.get_pricing` /
+        :meth:`~..base.LLMProvider.estimate_cost` — a consumer-extensibility
+        bonus, not a shipped Ollama price table.
+        """
+        return self._profile_resolver(config).resolve(config.model).pricing
+
+    def _build_shaped_options(self, config: LLMConfig) -> Dict[str, Any]:
+        """Build Ollama ``options`` with the family's request-shape rules applied.
+
+        Request-shaping choke point shared by ``complete`` / ``stream_complete``
+        / ``function_call``, mirroring the other providers' ``_build_api_kwargs``:
+        shapes the runtime config through the shared
+        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
+        family-rejected sampling params, clamps ``max_tokens`` to the ceiling — in
+        canonical config space, independent of Ollama's nested ``options`` wire
+        shape), builds the ``options`` dict, then applies any wire-level
+        :meth:`~..base.LLMProvider._apply_param_remaps`. Ollama's auto-detected
+        rules are empty by default (no ceiling, no rejected params, no remaps), so
+        this is a byte-identical no-op in normal use — wired for the
+        consumer-``constraints``-override / future-family path, symmetric with the
+        other three providers.
+        """
+        constraints = self.get_constraints(config)
+        shaped = self._apply_request_constraints(config, constraints)
+        options = self._build_options(shaped)
+        return self._apply_param_remaps(options, constraints.param_remaps)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw aiohttp transport error into a dataknobs exception.
@@ -734,12 +1154,18 @@ class OllamaProvider(AsyncLLMProvider):
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
 
-        # Build payload for chat endpoint
+        # Keep the live model-metadata cache fresh (TTL-gated, ≤1 poll per TTL
+        # per loop) so the constraint reads in _build_shaped_options see current
+        # context-window / (consumer-overridden) shaping rules.
+        await self._live_source.refresh_if_stale()
+
+        # Build payload for chat endpoint (options shaped by the model family's
+        # constraints — a no-op by default; honors a consumer constraints override)
         payload = {
             'model': runtime_config.model,
             'messages': ollama_messages,
             'stream': False,
-            'options': self._build_options(runtime_config)
+            'options': self._build_shaped_options(runtime_config)
         }
 
         # Add format if JSON mode requested
@@ -824,12 +1250,16 @@ class OllamaProvider(AsyncLLMProvider):
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
 
+        # Keep the live model-metadata cache fresh before shaping (mirrors
+        # complete()) — same choke point, TTL-gated.
+        await self._live_source.refresh_if_stale()
+
         # Build payload for chat endpoint (mirrors complete())
         payload: Dict[str, Any] = {
             'model': runtime_config.model,
             'messages': ollama_messages,
             'stream': True,
-            'options': self._build_options(runtime_config)
+            'options': self._build_shaped_options(runtime_config)
         }
 
         # Add format if JSON mode requested
@@ -935,13 +1365,18 @@ class OllamaProvider(AsyncLLMProvider):
         # to the adapter's raw function converter.
         ollama_tools = self.adapter.adapt_raw_functions(functions)
 
-        # Build payload with tools
+        # Keep the live model-metadata cache fresh before shaping (mirrors
+        # complete()/stream_complete()).
+        await self._live_source.refresh_if_stale()
+
+        # Build payload with tools (options shaped by the model family's
+        # constraints — a no-op by default; honors a consumer constraints override)
         payload = {
             'model': self.config.model,
             'messages': ollama_messages,
             'tools': ollama_tools,
             'stream': False,
-            'options': self._build_options()
+            'options': self._build_shaped_options(self.config)
         }
 
         from ...exceptions import ToolsNotSupportedError
