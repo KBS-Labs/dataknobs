@@ -622,7 +622,14 @@ class LiveApiSource:
     # -- refresh (async, out-of-band) -------------------------------------
 
     def is_stale(self) -> bool:
-        """Whether the running loop is due for a refresh (per ``ttl``)."""
+        """Whether the running loop is due for a refresh (per ``ttl``).
+
+        Must be called from within a running event loop (the refresh state is
+        keyed on the loop object); raises :class:`RuntimeError` otherwise. The
+        refresh entries (:meth:`refresh_if_stale` / :meth:`force_refresh`) are
+        the intended drivers — this is exposed for callers already on the loop
+        that want to gate their own work on freshness.
+        """
         last = self._last_fetch.get(asyncio.get_running_loop())
         if last is None:
             return True

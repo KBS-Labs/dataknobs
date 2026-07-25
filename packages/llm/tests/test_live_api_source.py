@@ -268,6 +268,45 @@ class TestRefreshTimeout:
 
 
 # ---------------------------------------------------------------------------
+# Per-instance cache isolation (module-global -> per-instance behavior change)
+# ---------------------------------------------------------------------------
+
+
+class TestInstanceIsolation:
+    """Each ``LiveApiSource`` owns its cache — no cross-instance leakage.
+
+    The lift moved the ceiling cache from an ``anthropic.py`` module global to a
+    per-instance attribute (``self._cache``), so two providers on distinct
+    accounts no longer share ceiling entries keyed only by model id — the
+    correctness improvement the CHANGELOG claims. This pins that claim as a
+    regression guard: a future refactor reintroducing a shared (class- or
+    module-level) cache would make ``other`` observe ``populated``'s entry and
+    fail here.
+    """
+
+    async def test_refresh_does_not_leak_across_instances(self) -> None:
+        populated, _ = _source([_Model("claude-sonnet-5", out=128000)])
+        other, other_calls = _source([])  # a second "account" that lists nothing
+
+        await populated.force_refresh()
+
+        # The populated instance resolves its live ceiling...
+        assert populated.resolve("claude-sonnet-5").max_output_tokens == 128000
+        # ...but the second instance's cache is untouched (no shared state) and
+        # it never polled.
+        assert other.resolve("claude-sonnet-5").max_output_tokens is None
+        assert other._cache == {}
+        assert other_calls == []
+
+    def test_seed_is_isolated_per_instance(self) -> None:
+        a, _ = _source([])
+        b, _ = _source([])
+        a.seed("claude-opus-5", ModelProfile(max_output_tokens=64000))
+        assert a.resolve("claude-opus-5").max_output_tokens == 64000
+        assert b.resolve("claude-opus-5").max_output_tokens is None
+
+
+# ---------------------------------------------------------------------------
 # Per-loop state weak-keying (moved from test_anthropic_model_constraints)
 # ---------------------------------------------------------------------------
 

@@ -74,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default (no override layer); complements the existing `LLMConfig.constraints`
   overlay.
 - **`LiveApiSource` — generic live-vendor-API model-metadata source
-  (`dataknobs_llm.llm.model_profile`).** A reusable `ModelMetadataSource` any
+  (`from dataknobs_llm.llm import LiveApiSource`, alongside its sibling built-in
+  sources).** A reusable `ModelMetadataSource` any
   provider serving live model metadata can compose: it wraps an async
   `list_models()` + a `(api_object) -> ModelProfile` extractor and carries a
   process cache with **TTL-gated** refresh (a fresh cache is a no-op; ≤1 poll per

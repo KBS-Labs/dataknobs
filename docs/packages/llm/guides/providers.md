@@ -381,8 +381,9 @@ consumer-extensible `model_metadata_sources` registry — no dataknobs release
 required. This is the substrate every provider binds to as it is migrated onto
 it.
 
-For a facet a vendor serves **live**, the built-in `LiveApiSource` is the
-reusable live layer: construct it with an async `list_models()` and a
+For a facet a vendor serves **live**, the built-in `LiveApiSource`
+(`from dataknobs_llm.llm import LiveApiSource`, alongside its sibling sources) is
+the reusable live layer: construct it with an async `list_models()` and a
 `(api_object) -> ModelProfile` extractor, and it carries the refresh machinery —
 TTL-gated polling (a fresh cache is a no-op; at most one poll per TTL per event
 loop), per-loop-locked dedup (concurrent cold-cache callers coalesce into one
