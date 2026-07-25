@@ -1,0 +1,233 @@
+# Amazon Bedrock model profiles — the maintained-fallback source for the Bedrock binding.
+#
+# Bedrock serves TWO model populations behind one provider, and this resource
+# carries a DIFFERENT slice of each:
+#
+# 1. NON-Claude models (amazon.nova / amazon.titan / meta.llama / mistral /
+#    cohere / ai21) — the FULL profile: capabilities, output/context ceilings,
+#    pricing, availability. dataknobs ships no other source for these families.
+#
+# 2. Claude-on-Bedrock (anthropic.claude-...) — ONLY the Bedrock-owned facets:
+#    `pricing` and `available`. A Claude model's capabilities, output ceiling,
+#    context window, and `temperature` rejection are properties of the model
+#    *family*, not the endpoint, so they are sourced from the shared Claude
+#    profile sources (`_claude_shared.claude_resource_profile` /
+#    `claude_heuristic_profile`) that BOTH the Anthropic and Bedrock resolvers
+#    compose — never re-copied here (that would be the exact drift the
+#    substrate exists to remove). AWS bills Bedrock separately and the account
+#    catalog is an AWS question, so only those two facets are Bedrock-owned.
+#
+# NO default live source: `bedrock:ListFoundationModels` is a control-plane
+# permission distinct from `bedrock:InvokeModel`, so a live default would break
+# least-privilege inference-only roles with AccessDenied. This resource is the
+# default availability/capability source; opt into a live-availability
+# `ListFoundationModels` source via `options["model_availability_live"]=true`.
+#
+# Precedence at runtime: LLMConfig.model_profile_overrides (always wins) →
+# [optional live availability] → this resource → the shared Claude ceiling +
+# capability sources (Claude ids only) → a last-resort capability heuristic
+# (unlisted vendor families). A consumer pins any facet for any model via
+# model_profile_overrides without a dataknobs release.
+#
+# Source: https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html
+#         + https://aws.amazon.com/bedrock/pricing/
+# Last verified: 2026-07-25
+# Shape (each model → any of):
+#   context_window     int  -> ModelConstraints.max_input_tokens (input budget)
+#   max_output_tokens  int  -> ModelConstraints.max_tokens_ceiling (output clamp)
+#   capabilities       [str] value strings: text_generation/chat/streaming/code/
+#                            vision/function_calling/json_mode/embeddings
+#   pricing            {*_per_mtok} USD per 1M tokens (on-demand, us-east-1)
+#   available          bool  -> validate_model result (True = a recognized model)
+# Keyed by family alias; the substring matcher resolves a dated / region-prefixed
+# id (e.g. us.amazon.nova-pro-v1:0) to its family key.
+models:
+  # === Claude-on-Bedrock — Bedrock-owned facets only (pricing + available) =====
+  # Capabilities / ceilings / temperature rejection come from _claude_shared.
+  anthropic.claude-3-5-sonnet:
+    pricing: {input_per_mtok: 3.0, output_per_mtok: 15.0}
+    available: true
+  anthropic.claude-3-5-haiku:
+    pricing: {input_per_mtok: 0.8, output_per_mtok: 4.0}
+    available: true
+  anthropic.claude-3-sonnet:
+    pricing: {input_per_mtok: 3.0, output_per_mtok: 15.0}
+    available: true
+  anthropic.claude-3-haiku:
+    pricing: {input_per_mtok: 0.25, output_per_mtok: 1.25}
+    available: true
+  anthropic.claude-3-opus:
+    pricing: {input_per_mtok: 15.0, output_per_mtok: 75.0}
+    available: true
+  anthropic.claude-opus-4:
+    pricing: {input_per_mtok: 15.0, output_per_mtok: 75.0}
+    available: true
+  anthropic.claude-sonnet-4:
+    pricing: {input_per_mtok: 3.0, output_per_mtok: 15.0}
+    available: true
+
+  # === Amazon Nova (nova-lite/pro/premier are multimodal; micro is text) ======
+  amazon.nova-micro:
+    context_window: 128000
+    max_output_tokens: 5120
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 0.035, output_per_mtok: 0.14}
+    available: true
+  amazon.nova-lite:
+    context_window: 300000
+    max_output_tokens: 5120
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 0.06, output_per_mtok: 0.24}
+    available: true
+  amazon.nova-pro:
+    context_window: 300000
+    max_output_tokens: 5120
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 0.8, output_per_mtok: 3.2}
+    available: true
+  amazon.nova-premier:
+    context_window: 1000000
+    max_output_tokens: 5120
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 2.5, output_per_mtok: 12.5}
+    available: true
+
+  # === Amazon Titan (text generation + embeddings) ============================
+  amazon.titan-text-express:
+    context_window: 8192
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming]
+    pricing: {input_per_mtok: 0.2, output_per_mtok: 0.6}
+    available: true
+  amazon.titan-text-lite:
+    context_window: 4096
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming]
+    pricing: {input_per_mtok: 0.15, output_per_mtok: 0.2}
+    available: true
+  amazon.titan-embed:
+    context_window: 8192
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.02}
+    available: true
+
+  # === Meta Llama (llama3-2 11b/90b are multimodal) ===========================
+  meta.llama3-8b:
+    context_window: 8192
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code]
+    pricing: {input_per_mtok: 0.3, output_per_mtok: 0.6}
+    available: true
+  meta.llama3-70b:
+    context_window: 8192
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 2.65, output_per_mtok: 3.5}
+    available: true
+  meta.llama3-1-8b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 0.22, output_per_mtok: 0.22}
+    available: true
+  meta.llama3-1-70b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 0.72, output_per_mtok: 0.72}
+    available: true
+  meta.llama3-1-405b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 2.4, output_per_mtok: 2.4}
+    available: true
+  meta.llama3-2-1b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming]
+    pricing: {input_per_mtok: 0.1, output_per_mtok: 0.1}
+    available: true
+  meta.llama3-2-3b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code]
+    pricing: {input_per_mtok: 0.15, output_per_mtok: 0.15}
+    available: true
+  meta.llama3-2-11b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 0.16, output_per_mtok: 0.16}
+    available: true
+  meta.llama3-2-90b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 0.72, output_per_mtok: 0.72}
+    available: true
+  meta.llama3-3-70b:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 0.72, output_per_mtok: 0.72}
+    available: true
+
+  # === Mistral (pixtral-large is multimodal) ==================================
+  mistral.mistral-7b:
+    context_window: 32000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code]
+    pricing: {input_per_mtok: 0.15, output_per_mtok: 0.2}
+    available: true
+  mistral.mixtral-8x7b:
+    context_window: 32000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code]
+    pricing: {input_per_mtok: 0.45, output_per_mtok: 0.7}
+    available: true
+  mistral.mistral-large:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling]
+    pricing: {input_per_mtok: 2.0, output_per_mtok: 6.0}
+    available: true
+  mistral.pixtral-large:
+    context_window: 128000
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling]
+    pricing: {input_per_mtok: 2.0, output_per_mtok: 6.0}
+    available: true
+
+  # === Cohere (Command text generation + Embed embeddings) ====================
+  cohere.command-r-plus:
+    context_window: 128000
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, function_calling]
+    pricing: {input_per_mtok: 2.5, output_per_mtok: 10.0}
+    available: true
+  cohere.command-r:
+    context_window: 128000
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, function_calling]
+    pricing: {input_per_mtok: 0.15, output_per_mtok: 0.6}
+    available: true
+  cohere.embed:
+    context_window: 512
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.1}
+    available: true
+
+  # === AI21 Jamba =============================================================
+  ai21.jamba-1-5-large:
+    context_window: 256000
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, function_calling]
+    pricing: {input_per_mtok: 2.0, output_per_mtok: 8.0}
+    available: true
+  ai21.jamba-1-5-mini:
+    context_window: 256000
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, function_calling]
+    pricing: {input_per_mtok: 0.2, output_per_mtok: 0.4}
+    available: true

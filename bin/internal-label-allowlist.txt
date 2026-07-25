@@ -32,3 +32,6 @@ packages/xization/tests/test_md_constructs.py	* Item 	markdown list-item test fi
 packages/xization/tests/test_md_constructs.py	+ Item 	markdown list-item test fixture
 packages/xization/tests/test_md_constructs.py	assert "Item 	fixture assertion on markdown list content
 packages/data/src/dataknobs_data/backends/elasticsearch.py	per-item 409	HTTP 409 conflict status code in docstring, not a tracker label
+packages/llm/src/dataknobs_llm/llm/providers/bedrock.py	llama3-2-11b	public Llama model-id size tokens (vision family list; line also has llama3-2-90b)
+packages/llm/tests/test_bedrock_model_binding.py	llama3-2-90b	public Llama model-id in test fixture (meta.llama3-2-90b-instruct)
+packages/llm/tests/test_bedrock_model_binding.py	llama3-1-70b	public Llama model-id in test fixture (meta.llama3-1-70b-instruct)

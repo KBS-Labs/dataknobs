@@ -37,7 +37,6 @@ from dataknobs_llm.llm.providers.bedrock import (
     BedrockConverseAdapter,
     BedrockProvider,
     _canonical_model_id,
-    _estimate_cost,
 )
 
 
@@ -244,10 +243,10 @@ class TestAdaptResponse:
         }
         assert parsed.model == "anthropic.claude-3-haiku-20240307-v1:0"
         assert parsed.tool_calls is None
-        # cost estimated from the static price map
-        assert parsed.cost_usd == pytest.approx(
-            (10 / 1000) * 0.00025 + (5 / 1000) * 0.00125
-        )
+        # The adapter is pure/I-O-free and no longer computes cost — the provider
+        # stamps cost_usd post-adapt from the resolved per-Mtok profile pricing
+        # (see test_bedrock_model_binding.py). adapt_response leaves it None.
+        assert parsed.cost_usd is None
 
     def test_tool_use_blocks(self) -> None:
         adapter = BedrockConverseAdapter()
@@ -277,7 +276,7 @@ class TestAdaptResponse:
         assert parsed.tool_calls[0].name == "search"
         assert parsed.tool_calls[0].parameters == {"query": "x"}
         assert parsed.tool_calls[0].id == "abc"
-        # unknown model → no cost
+        # The pure adapter never computes cost (provider stamps it post-adapt).
         assert parsed.cost_usd is None
 
 
@@ -291,10 +290,6 @@ class TestHelpers:
             _canonical_model_id("amazon.titan-embed-text-v2:0")
             == "amazon.titan-embed-text-v2:0"
         )
-
-    def test_estimate_cost_none_for_unknown(self) -> None:
-        assert _estimate_cost("unknown.model", {"prompt_tokens": 1}) is None
-        assert _estimate_cost("amazon.nova-lite-v1:0", None) is None
 
 
 class TestCapabilities:
@@ -312,7 +307,8 @@ class TestCapabilities:
 
     def test_fable_5_has_vision(self) -> None:
         """Fable 5 on Bedrock carries no opus/sonnet/haiku marker → its vision
-        support was mis-detected until the family name was listed."""
+        support was mis-detected until the family name was listed.
+        """
         provider = BedrockProvider(
             LLMConfig(provider="bedrock", model="anthropic.claude-fable-5")
         )

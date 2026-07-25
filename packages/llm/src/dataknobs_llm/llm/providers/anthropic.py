@@ -73,9 +73,13 @@ from ..base import (
 )
 from ._claude_shared import (
     CLAUDE_5_TEMPERATURE_REJECTORS,
+    CLAUDE_HEURISTIC_PROFILE_SOURCE,
+    CLAUDE_RESOURCE_PROFILE_SOURCE,
+    MODERN_CAPABILITY_FAMILIES,
     RESOURCE_MODEL_INPUT_LIMITS,
     RESOURCE_MODEL_LIMITS,
-    claude_rejects_temperature,
+    claude_heuristic_profile,
+    claude_resource_profile,
     load_model_input_limits_resource,
     load_model_limits_resource,
     resource_ceiling,
@@ -83,7 +87,6 @@ from ._claude_shared import (
 )
 from ..model_profile import (
     CAPABILITY_ORDER,
-    CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
     LiveApiSource,
@@ -93,11 +96,13 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
 
-#: Claude model families that reject ``temperature`` + the ``max_tokens``
-#: fallback resource + the family-matching resolvers are Claude-family knowledge
-#: shared with the Bedrock (Claude-on-Bedrock) provider, so they live in
-#: :mod:`._claude_shared` and are imported above. Module aliases preserve the
-#: historical ``_``-prefixed names some call sites / tests reference.
+#: Claude model families that reject ``temperature``, the ``max_tokens``
+#: fallback resource, the family-matching resolvers, AND the two non-live Claude
+#: family profile sources (capability heuristic + ceiling resource) are all
+#: Claude-family knowledge shared with the Bedrock (Claude-on-Bedrock) provider,
+#: so they live in :mod:`._claude_shared` and are imported above. Module aliases
+#: preserve the historical ``_``-prefixed names some call sites reference — the
+#: profile sources moved verbatim, so the Anthropic resolver is byte-identical.
 _CLAUDE_5_TEMPERATURE_REJECTORS = CLAUDE_5_TEMPERATURE_REJECTORS
 _RESOURCE_MODEL_LIMITS = RESOURCE_MODEL_LIMITS
 _RESOURCE_MODEL_INPUT_LIMITS = RESOURCE_MODEL_INPUT_LIMITS
@@ -105,6 +110,11 @@ _load_model_limits_resource = load_model_limits_resource
 _load_model_input_limits_resource = load_model_input_limits_resource
 _resource_ceiling = resource_ceiling
 _resource_input_ceiling = resource_input_ceiling
+_MODERN_CAPABILITY_FAMILIES = MODERN_CAPABILITY_FAMILIES
+_resource_profile = claude_resource_profile
+_heuristic_profile = claude_heuristic_profile
+_RESOURCE_PROFILE_SOURCE = CLAUDE_RESOURCE_PROFILE_SOURCE
+_HEURISTIC_PROFILE_SOURCE = CLAUDE_HEURISTIC_PROFILE_SOURCE
 
 #: Sampling parameters that ``adapt_config`` may forward and that a model
 #: family might reject. Used by the 400-retry safety net to identify which
@@ -141,19 +151,6 @@ _DEFAULT_MODEL_LIMITS_TTL: float = 3600.0
 _DEFAULT_MODEL_LIMITS_REFRESH_TIMEOUT: float = 10.0
 
 
-#: Claude family-name substrings that carry the modern (Claude 3+) capability
-#: set — vision, function calling, JSON mode. Matched as lowercased substrings
-#: of the model id. The Claude 5 generation adds names (``fable`` / ``mythos``)
-#: that carry no opus/sonnet/haiku marker, so they are listed explicitly or they
-#: would be mis-detected as lacking these. Consumed by the heuristic profile
-#: source (:func:`_heuristic_profile`).
-_MODERN_CAPABILITY_FAMILIES: tuple[str, ...] = (
-    "claude-3", "claude-3.5", "claude-4", "claude-5",
-    "claude-sonnet", "claude-opus", "claude-haiku",
-    "claude-fable", "claude-mythos",
-)
-
-
 def _anthropic_live_extractor(model_obj: Any) -> ModelProfile:
     """Project one Anthropic Models-API model object into a partial profile.
 
@@ -171,77 +168,6 @@ def _anthropic_live_extractor(model_obj: Any) -> ModelProfile:
         max_output_tokens=_extract_max_tokens(model_obj),
         context_window=_extract_max_input_tokens(model_obj),
     )
-
-
-def _resource_profile(model: str) -> ModelProfile:
-    """Bundled-resource source: the *fallback* half of the ceiling resolution.
-
-    Resolves the two ceiling facets against the bundled resource
-    (:func:`~._claude_shared.resource_ceiling` /
-    :func:`~._claude_shared.resource_input_ceiling`), using the *same*
-    family-matching rule as the live :class:`~..model_profile.LiveApiSource`.
-    Lower precedence than the live source, so it fills a ceiling only when the
-    dynamic cache has no value for it — per facet. Contributes only the ceiling
-    facets (``None`` elsewhere).
-    """
-    key = model.lower()
-    return ModelProfile(
-        max_output_tokens=resource_ceiling(key),
-        context_window=resource_input_ceiling(key),
-    )
-
-
-def _heuristic_profile(model: str) -> ModelProfile:
-    """Heuristic source: capabilities + family ``rejected_params`` by name.
-
-    The last-resort family-substring rules for the two non-ceiling facets:
-
-    - ``capabilities`` — the base set (text/chat/streaming/code) always, plus the
-      modern set (vision/function-calling/JSON) for a
-      :data:`_MODERN_CAPABILITY_FAMILIES` match.
-    - ``rejected_params`` — ``{"temperature"}`` for the Claude 5 family (which
-      rejects it with a 400), else an authoritative empty set.
-
-    Contributes only these two facets (``None`` ceilings); the ceilings come from
-    the live / resource sources above.
-    """
-    model_lower = model.lower()
-    capabilities = {
-        ModelCapability.TEXT_GENERATION,
-        ModelCapability.CHAT,
-        ModelCapability.STREAMING,
-        ModelCapability.CODE,
-    }
-    if any(m in model_lower for m in _MODERN_CAPABILITY_FAMILIES):
-        capabilities |= {
-            ModelCapability.VISION,
-            ModelCapability.FUNCTION_CALLING,
-            ModelCapability.JSON_MODE,
-        }
-    rejected = (
-        frozenset({"temperature"})
-        if claude_rejects_temperature(model_lower)
-        else frozenset()
-    )
-    return ModelProfile(
-        capabilities=frozenset(capabilities),
-        rejected_params=rejected,
-    )
-
-
-#: The stateless lower-precedence Anthropic model-metadata sources — module
-#: singletons because they read only the bundled resource / apply a pure
-#: family-substring rule (no per-instance state). The live source is per-provider
-#: (:class:`~..model_profile.LiveApiSource`, owning its own Models-API cache),
-#: and the config-override source is prepended per config so a per-call model
-#: override honors that config's overrides — both composed in
-#: :meth:`AnthropicProvider._profile_resolver`.
-_RESOURCE_PROFILE_SOURCE = CallableModelMetadataSource(
-    "bundled_resource", _resource_profile
-)
-_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
-    "heuristic", _heuristic_profile
-)
 
 
 def _extract_max_tokens(model_obj: Any) -> int | None:
