@@ -233,6 +233,78 @@ class TestRequestShaping:
         await provider.complete("hi")
         assert provider._client.captured_kwargs["max_tokens"] == 99999
 
+    async def test_reasoning_max_tokens_kwarg_does_not_collide(self) -> None:
+        """A per-call ``max_tokens`` kwarg must fold into the single renamed key.
+
+        Reproduces the double-key 400: the pre-fix ``params.update(kwargs)`` at
+        each call site re-added ``max_tokens`` AFTER ``_build_api_kwargs`` had
+        already produced ``max_completion_tokens``, so the request carried BOTH
+        keys (an OpenAI 400) and the kwarg silently lost to the config value.
+        A kwarg naming a config field now routes through the full drop/clamp/
+        remap shaping (like ``config_overrides``), so it wins as the single
+        ``max_completion_tokens``.
+        """
+        provider = _provider("o1", max_tokens=1000)
+        await provider.complete("hi", max_tokens=500)
+        kwargs = provider._client.captured_kwargs
+        assert kwargs.get("max_completion_tokens") == 500
+        assert "max_tokens" not in kwargs
+
+    async def test_reasoning_temperature_kwarg_dropped(self) -> None:
+        """A per-call ``temperature`` kwarg for a reasoning model must be dropped.
+
+        Reproduces the drop-bypass: the pre-fix ``params.update(kwargs)`` re-added
+        a caller ``temperature`` AFTER the rejected-param drop, so it reached the
+        API (a 400 for the o-series). A kwarg naming a config field now flows
+        through the rejected-param drop.
+        """
+        provider = _provider("o1")
+        await provider.complete("hi", temperature=0.9)
+        assert "temperature" not in provider._client.captured_kwargs
+
+    async def test_max_tokens_kwarg_clamped_to_ceiling(self) -> None:
+        """A per-call ``max_tokens`` kwarg is clamped like a config value.
+
+        Guards that folding a config-field kwarg into the config subjects it to
+        the ceiling clamp, not just the remap — a kwarg is no longer an escape
+        hatch around the shaping the PR exists to apply.
+        """
+        provider = _provider("gpt-4o")
+        await provider.complete("hi", max_tokens=50000)
+        assert provider._client.captured_kwargs["max_tokens"] == 16384
+
+    async def test_non_field_kwarg_passes_through(self) -> None:
+        """A genuine wire-only kwarg (not a config field) is still passed through.
+
+        Regression guard: the fix must only route *config-field* kwargs through
+        shaping — a provider-specific wire param the caller supplies (here a
+        ``user`` tracking id) must reach the API untouched.
+        """
+        provider = _provider("gpt-4o")
+        await provider.complete("hi", user="acct-123")
+        assert provider._client.captured_kwargs["user"] == "acct-123"
+
+    async def test_response_format_dict_kwarg_preserved(self) -> None:
+        """A ``response_format`` dict kwarg (the real OpenAI wire form) survives.
+
+        Regression guard: ``response_format`` is an ``LLMConfig`` field whose
+        canonical value is a narrow string (``'json'``/``'text'``), but the
+        OpenAI wire accepts the richer dict form (``{"type": "json_object"}`` /
+        ``{"type": "json_schema", ...}``). A caller passing that dict as a
+        per-call kwarg (as ``dataknobs_bots.review.executor`` does for JSON-mode
+        enforcement) must reach the API untouched. Routing *every* field-named
+        kwarg through ``config.clone`` would fold the dict into the config, where
+        ``adapt_config``'s strict ``response_format == 'json'`` check drops it —
+        silently disabling JSON mode. Only *shaped* fields (dropped/clamped/
+        remapped sampling params) belong in that fold; ``response_format`` is a
+        wire-only passthrough.
+        """
+        provider = _provider("gpt-4o")
+        await provider.complete("hi", response_format={"type": "json_object"})
+        assert provider._client.captured_kwargs["response_format"] == {
+            "type": "json_object"
+        }
+
 
 # ---------------------------------------------------------------------------
 # Pricing — get_pricing (facts) + estimate_cost (convenience) + CostCalculator

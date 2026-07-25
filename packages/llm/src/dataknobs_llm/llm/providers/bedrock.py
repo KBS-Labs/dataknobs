@@ -696,13 +696,21 @@ class BedrockProvider(AsyncLLMProvider):
         # (drop rejected sampling params, clamp max_tokens to the Claude
         # ceiling) via the shared choke point — the same clamp/drop the native
         # Anthropic provider applies, since Bedrock runs the same Claude models.
-        shaped_config = self._apply_request_constraints(runtime_config)
+        # Resolve constraints once and thread them into both the config-space
+        # shaping and the wire remap below.
+        constraints = self.get_constraints(runtime_config)
+        shaped_config = self._apply_request_constraints(runtime_config, constraints)
 
         system_blocks, converse_messages = self.adapter.adapt_messages(
             msg_list, system_prompt=runtime_config.system_prompt
         )
 
         request = self.adapter.adapt_config(shaped_config)
+        # Wire-level param renames (base mechanism). No Claude family declares one,
+        # so this is a no-op today; wired symmetric with the OpenAI/Anthropic choke
+        # points so a consumer LLMConfig.constraints param_remaps override — or a
+        # future family that needs one — is honored on Bedrock too, not dropped.
+        request = self._apply_param_remaps(request, constraints.param_remaps)
         request["messages"] = converse_messages
         if system_blocks:
             request["system"] = system_blocks

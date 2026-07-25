@@ -1363,7 +1363,9 @@ class LLMProvider(ABC):
             return detected
         return detected.with_overrides(override)
 
-    def _apply_request_constraints(self, config: LLMConfig) -> LLMConfig:
+    def _apply_request_constraints(
+        self, config: LLMConfig, constraints: "ModelConstraints | None" = None
+    ) -> LLMConfig:
         """Return a runtime config shaped to satisfy this model's constraints.
 
         Shared request-shaping choke point for **every** provider. Resolves the
@@ -1397,12 +1399,17 @@ class LLMProvider(ABC):
 
         Args:
             config: Runtime config (with any ``config_overrides`` applied).
+            constraints: Pre-resolved constraints for *config*. Pass this when
+                the caller already resolved them (e.g. a ``_build_api_kwargs``
+                choke point that also needs ``param_remaps``) to avoid a second
+                resolver build; ``None`` resolves them here.
 
         Returns:
             The same config when no shaping applies, else a clone with rejected
             sampling params cleared and ``max_tokens`` clamped to the ceiling.
         """
-        constraints = self.get_constraints(config)
+        if constraints is None:
+            constraints = self.get_constraints(config)
         overrides: Dict[str, Any] = {}
 
         for param_name in constraints.rejected_params:
@@ -1454,7 +1461,14 @@ class LLMProvider(ABC):
         remap whose source key is absent from *wire* is a no-op; an empty *remaps*
         returns *wire* unchanged. Shared on the base so any provider whose family
         needs a rename inherits the mechanism — the canonical fix location, not a
-        per-provider re-implementation.
+        per-provider re-implementation. Every provider that carries request-shape
+        constraints wires this into its request-shaping choke point after
+        ``adapt_config`` (OpenAI's and Anthropic's ``_build_api_kwargs``, and
+        Bedrock's ``_build_converse_request`` Converse path), so a family
+        declaring ``param_remaps`` — via its profile *or* a consumer's
+        ``LLMConfig.constraints`` override — is honored on every provider, not
+        only the one that first needed it. The default (no family declares a
+        remap) is a uniform no-op.
 
         Args:
             wire: The adapted provider param dict (mutated in place — pass a
