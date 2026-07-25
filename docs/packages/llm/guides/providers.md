@@ -395,7 +395,10 @@ dropping to the bundled fallback). `resolve` reads the cache synchronously; the
 provider drives `refresh_if_stale()` / `force_refresh()` from its async request
 boundary. `AnthropicProvider` composes one bound to its Models-API listing to
 source the two token ceilings; each provider owns its own instance (its own
-cache).
+cache). A vendor whose id space collides under the default substring
+family-matcher (Ollama's `name:tag` ids) injects its own `match=(model, keys) ->
+key | None` rule — the default is `match_family_key`, byte-identical for every
+other adopter.
 
 #### OpenAI binding
 
@@ -461,6 +464,55 @@ create_llm_provider({
     "provider": "bedrock",
     "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "options": {"model_availability_live": True},
+})
+```
+
+#### Ollama binding
+
+Ollama is **local and live-first** — the only binding whose live source is the
+*primary* layer. The Ollama server authoritatively reports each installed model's
+capabilities and context window via `POST /api/show` (a `capabilities` array like
+`["completion","tools","vision","embedding"]` plus
+`model_info.<arch>.context_length`), so the provider composes a `LiveApiSource`
+that walks `GET /api/tags` (the installed set) and enriches each model with
+`/api/show`. The resolver is **config override → live `/api/show` cache →
+name-based heuristic** — there is **no** bundled resource (Ollama's model space is
+open-ended and user-pulled) and **no** pricing / output-ceiling layer (local/free,
+and `num_predict: -1` means unlimited output — no ceiling to clamp).
+
+The binding replaces the hardcoded capability-substring lists that rotted each
+release: modern families the old lists missed (`llama4`, `gpt-oss`, `qwen3`, …)
+are now tool/vision-detected from the server's own report, `max_input_tokens` is
+populated from the reported context window (previously dead for Ollama), and
+`validate_model` reads the resolved `available` facet (installed → `True`;
+not-installed / unreachable → `False`), force-refreshing the live cache first so
+a model pulled since the last request is seen immediately (an authoritative
+liveness check, not a value that can lag by up to the metadata TTL). A dedicated
+embedding model resolves an `EMBEDDINGS`-only set. The name-based heuristic is
+the graceful-degradation fallback for older servers that predate the
+`capabilities` field — or any server reporting no usable capability array (an
+empty or all-unrecognized report degrades to the heuristic rather than resolving
+the model to zero capabilities).
+
+Because Ollama ids are `name:tag` (e.g. `llama3.1:8b`), the live source is
+constructed with a `name:tag`-aware `match=` matcher — the default substring
+matcher would false-resolve `nomic-embed-text` to `nomic-embed-text-v2-moe:latest`
+(a substring collision). The live cache is tunable via `options`
+(`model_metadata_live` to disable, `model_metadata_ttl`,
+`model_metadata_refresh_timeout`). Ollama sources no pricing of its own, but a
+consumer can still model private GPU cost through
+`model_profile_overrides.pricing`, which lights up `get_pricing` / `estimate_cost`.
+
+```python
+# Capabilities + context window come live from the local server; a bare alias
+# (llama3.1) resolves an installed tagged model (llama3.1:8b).
+create_llm_provider({"provider": "ollama", "model": "llama3.1"})
+
+# Model private GPU cost (Ollama serves no pricing of its own):
+create_llm_provider({
+    "provider": "ollama",
+    "model": "llama3.1:8b",
+    "model_profile_overrides": {"pricing": {"input_per_mtok": 0.0, "output_per_mtok": 0.0}},
 })
 ```
 

@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ollama model-metadata binding (live-first, local).** `OllamaProvider` now
+  resolves capabilities, context window, and availability through the
+  model-metadata substrate, sourced **live-first** from the local server: a
+  per-provider source walks `GET /api/tags` (installed models) and enriches each
+  with `POST /api/show` (the server's authoritative `capabilities` array and
+  `model_info.<arch>.context_length`), with a corrected name-based heuristic as
+  the graceful-degradation fallback for older servers (or any server that reports
+  no usable capability array — an empty or all-unrecognized report degrades to
+  the heuristic rather than resolving the model to zero capabilities). This
+  replaces the hardcoded capability-substring lists that went stale each release
+  — modern families the old lists missed (`llama4`, `gpt-oss`, `qwen3`, …) are now
+  tool/vision-detected from the server's own report, and `max_input_tokens` is
+  populated for Ollama (the input budget was previously dead). `validate_model`
+  now reads the resolved `available` facet (installed → `True`, not-installed /
+  unreachable → `False`), force-refreshing the live cache first so a model pulled
+  since the last request is seen immediately (an authoritative liveness check, not
+  a value that can lag by up to the metadata TTL). A consumer's `LLMConfig.model_profile_overrides` wins
+  per facet — including an optional `pricing` override to model private GPU cost,
+  which lights up `get_pricing` / `estimate_cost` (Ollama sources no pricing of
+  its own — local/free). The live cache is tunable via `options`
+  (`model_metadata_live` / `model_metadata_ttl` / `model_metadata_refresh_timeout`).
+- **`LiveApiSource` gains an injectable `match=` matcher.** The substrate live
+  source now accepts a `match=(model, keys) -> key | None` argument (default
+  `match_family_key`, byte-identical for existing adopters) so a vendor whose id
+  space collides under pure-substring family matching can inject its own rule.
+  Ollama's `name:tag` ids need this: `nomic-embed-text` is a substring of
+  `nomic-embed-text-v2-moe:latest`, so the default matcher would false-resolve
+  the wrong model's profile — Ollama injects a base-name-or-exact-tag matcher
+  that closes the collision. A general consumer-extensibility seam, not an
+  in-substrate special case.
 - **Bedrock model-metadata binding + pricing/cost wiring + opt-in live
   availability.** `BedrockProvider` now resolves capabilities, request-shape
   constraints, token ceilings, and pricing through the model-metadata substrate.
@@ -147,6 +177,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Ollama capabilities are now live-first / data-sourced.** `get_capabilities()`
+  reads the resolved model profile instead of hardcoded family-substring lists, so
+  a model's tool / vision / code support tracks what the server reports (or the
+  corrected heuristic infers) rather than a list that rots each release. Two
+  intentional narrowings: a **dedicated embedding model** (the server reports
+  `embedding` without `completion`, or the name carries `embed`) now correctly
+  drops the chat capabilities and resolves an `EMBEDDINGS`-only set — previously
+  every model, including embed-only ones, was reported as chat-capable; and
+  `JSON_MODE` is now advertised for all completion models (Ollama's `format: json`
+  is universal) rather than a hand-picked subset. `EMBEDDINGS` stays broadly
+  available for completion models, so chat models do not lose it. Ollama's
+  `complete` / `stream_complete` / `function_call` also route through the shared
+  request-shaping choke point — a byte-identical no-op by default (Ollama has no
+  output ceiling and no rejected params) but now honoring a consumer's
+  `LLMConfig.constraints` override.
 - **OpenAI requests are now shaped to the model family's rules.** With the OpenAI
   binding populating request-shape constraints, `complete` / `stream_complete` /
   `function_call` now route through the shared request-shaping choke point:
