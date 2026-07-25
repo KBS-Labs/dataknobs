@@ -964,3 +964,43 @@ class TestMatchCeilingUnification:
 #: Per-loop refresh-state keying (weak-keyed, dead-loop eviction) moved with the
 #: cache to ``test_live_api_source.py`` — the mechanism now lives on
 #: ``LiveApiSource`` rather than module globals (fix-at-the-right-layer).
+
+
+class TestAnthropicParamRemaps:
+    """The base ``param_remaps`` wire-rename mechanism is live on Anthropic too.
+
+    Symmetric with the OpenAI choke point: a family declaring a wire rename — via
+    its profile *or* a consumer ``LLMConfig.constraints`` override — is honored at
+    ``_build_api_kwargs``, not OpenAI-only. No Claude family declares one, so this
+    is a no-op in normal use; the override drives the mechanism to prove it is
+    wired. Reproduce-first for the half-wired state: FAILS against the pre-fix
+    provider (Anthropic never called ``_apply_param_remaps`` → ``max_tokens``
+    reached the API unrenamed).
+    """
+
+    async def test_param_remaps_override_renames_wire_key(self) -> None:
+        provider, client = _provider_with_capture(
+            "claude-sonnet-4-5",
+            max_tokens=100,
+            constraints={"param_remaps": {"max_tokens": "max_completion_tokens"}},
+        )
+        await provider.complete("hi")
+        assert client.captured_kwargs.get("max_completion_tokens") == 100
+        assert "max_tokens" not in client.captured_kwargs
+
+    def test_detect_constraints_carries_profile_param_remaps(self) -> None:
+        """``_detect_constraints`` surfaces the profile's ``param_remaps`` facet.
+
+        Injected via ``model_profile_overrides`` (the per-config
+        ``ConfigOverrideSource`` layer) so the facet flows profile → constraints
+        without a consumer ``constraints=`` override — proving the read added to
+        ``_detect_constraints``, not only the choke-point application.
+        """
+        provider, _ = _provider_with_capture(
+            "claude-sonnet-4-5",
+            model_profile_overrides={
+                "param_remaps": {"max_tokens": "max_completion_tokens"}
+            },
+        )
+        constraints = provider.get_constraints()
+        assert constraints.param_remaps == {"max_tokens": "max_completion_tokens"}

@@ -52,8 +52,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ToolCall,
+    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
     LLMAdapter, normalize_llm_config
+)
+from ..model_profile import (
+    CAPABILITY_ORDER,
+    BundledResourceSource,
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    ModelPricing,
+    ModelProfile,
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -61,6 +70,67 @@ if TYPE_CHECKING:
     from dataknobs_config.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+#: OpenAI model-id substrings that carry tool-calling + JSON mode. Matched as
+#: lowercased substrings. Every modern GPT chat model supports tools + JSON mode,
+#: so the bare ``gpt`` family is included (embedding models are branched out
+#: before this check); the reasoning ``o``-series is listed explicitly. Consumed
+#: only by the last-resort heuristic (:func:`_openai_heuristic`) — a model listed
+#: in the bundled resource resolves its capabilities from there.
+_TOOL_CAPABLE_FAMILIES: tuple[str, ...] = (
+    "gpt", "o1", "o3", "o4",
+)
+
+#: OpenAI model-id substrings that carry vision (multimodal input).
+_VISION_CAPABLE_FAMILIES: tuple[str, ...] = (
+    "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "vision",
+)
+
+
+def _openai_heuristic(model: str) -> ModelProfile:
+    """Last-resort capability source: family-substring rules for unlisted models.
+
+    The corrected, demoted form of the old inline ``_detect_capabilities`` logic.
+    It contributes only the ``capabilities`` facet (ceilings / pricing /
+    ``rejected_params`` / ``param_remaps`` come from the bundled resource for known
+    models). Lowest precedence in the resolver, so a model present in
+    ``openai_models.yaml`` resolves its capabilities from that resource; this only
+    classifies an *unlisted* (e.g. brand-new) family by name.
+    """
+    model_lower = model.lower()
+    capabilities = {
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+    }
+    # Embedding models are a disjoint family (no chat/tool capabilities).
+    if "embedding" in model_lower or model_lower.startswith("text-embedding-"):
+        capabilities.add(ModelCapability.EMBEDDINGS)
+        return ModelProfile(capabilities=frozenset(capabilities))
+    capabilities.add(ModelCapability.CODE)
+    if any(m in model_lower for m in _TOOL_CAPABLE_FAMILIES):
+        capabilities |= {
+            ModelCapability.FUNCTION_CALLING,
+            ModelCapability.JSON_MODE,
+        }
+    if any(m in model_lower for m in _VISION_CAPABLE_FAMILIES):
+        capabilities.add(ModelCapability.VISION)
+    return ModelProfile(capabilities=frozenset(capabilities))
+
+
+#: The stateless lower-precedence OpenAI model-metadata sources — module
+#: singletons. OpenAI serves no ceilings / capabilities / pricing on its live
+#: Models API, so (unlike Anthropic) there is **no** ``LiveApiSource``: the bundled
+#: resource is the primary declarative source, the heuristic a last resort, and a
+#: consumer's ``LLMConfig.model_profile_overrides`` (prepended per config in
+#: :meth:`OpenAIProvider._profile_resolver`) wins over both.
+_OPENAI_RESOURCE_SOURCE = BundledResourceSource.from_resource(
+    "dataknobs_llm.llm.providers", "data/openai_models.yaml"
+)
+_OPENAI_HEURISTIC_SOURCE = CallableModelMetadataSource(
+    "heuristic", _openai_heuristic
+)
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -350,35 +420,133 @@ class OpenAIProvider(AsyncLLMProvider):
         except Exception:
             return False
 
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
+        """Compose the OpenAI model-profile resolver for *config*.
+
+        Precedence (highest first): config override → bundled resource →
+        heuristic. There is no live source — OpenAI's Models API serves only
+        model ids, so ceilings / capabilities / pricing / request-shape rules are
+        maintained-fallback (the resource), a corrected family heuristic backs
+        unlisted models, and ``LLMConfig.model_profile_overrides`` wins per facet.
+        """
+        return LayeredModelProfileResolver(
+            [
+                ConfigOverrideSource(
+                    getattr(config, "model_profile_overrides", None)
+                ),
+                _OPENAI_RESOURCE_SOURCE,
+                _OPENAI_HEURISTIC_SOURCE,
+            ]
+        )
+
     def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect OpenAI model capabilities."""
-        model = self.config.model.lower()
-        capabilities = [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.CHAT,
-            ModelCapability.STREAMING,
-        ]
+        """Auto-detect OpenAI model capabilities.
 
-        # GPT and O-series models support function calling and JSON mode
-        tool_capable = [
-            'gpt-4', 'gpt-3.5', 'gpt-4o', 'gpt-4-turbo', 'o1', 'o3', 'o4',
-        ]
-        if any(m in model for m in tool_capable):
-            capabilities.extend([
-                ModelCapability.FUNCTION_CALLING,
-                ModelCapability.JSON_MODE,
-            ])
+        A one-line read off the resolved :class:`~..model_profile.ModelProfile`
+        (resource-primary, heuristic last-resort, config-override on top),
+        projected back to the historical ordered list via
+        :data:`~..model_profile.CAPABILITY_ORDER`.
+        """
+        profile = self._profile_resolver(self.config).resolve(self.config.model)
+        capabilities = profile.capabilities or frozenset()
+        return [c for c in CAPABILITY_ORDER if c in capabilities]
 
-        # Vision models
-        if 'vision' in model or 'gpt-4o' in model:
-            if ModelCapability.VISION not in capabilities:
-                capabilities.append(ModelCapability.VISION)
+    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
+        """Auto-detect OpenAI request-shape constraints for *config*'s model.
 
-        # Embedding models
-        if 'embedding' in model or model.startswith('text-embedding-'):
-            capabilities.append(ModelCapability.EMBEDDINGS)
+        Reads three facets off the resolved profile (the per-provider resolver,
+        matched on ``config.model`` so a per-call model override resolves the
+        overriding family's rules):
 
-        return capabilities
+        - ``max_tokens_ceiling`` from ``max_output_tokens`` — the output ceiling
+          the base clamps an over-budget ``max_tokens`` down to
+          (:meth:`~..base.LLMProvider._apply_request_constraints`).
+        - ``max_input_tokens`` from ``context_window`` — informational input
+          budget (not clamped).
+        - ``rejected_params`` — sampling params the family 400s on (the reasoning
+          families reject ``temperature`` / ``top_p``); dropped before the call.
+        - ``param_remaps`` — wire renames the family requires (the reasoning
+          families take ``max_completion_tokens`` in place of ``max_tokens``);
+          applied after ``adapt_config`` by
+          :meth:`~..base.LLMProvider._apply_param_remaps`.
+
+        ``accepts_inline_system`` stays ``True`` (OpenAI passes ``system`` as a
+        normal message). A consumer overrides any of these via
+        ``LLMConfig.constraints`` (see
+        :meth:`~..base.LLMProvider._resolve_constraints`).
+        """
+        profile = self._profile_resolver(config).resolve(config.model)
+        return ModelConstraints(
+            rejected_params=frozenset(profile.rejected_params or ()),
+            max_tokens_ceiling=profile.max_output_tokens,
+            max_input_tokens=profile.context_window,
+            param_remaps=dict(profile.param_remaps or {}),
+        )
+
+    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
+        """Read the ``pricing`` facet off the resolved profile (else ``None``)."""
+        return self._profile_resolver(config).resolve(config.model).pricing
+
+    def _build_api_kwargs(
+        self, config: LLMConfig, extra: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        """Build OpenAI API params with the family's request-shape rules applied.
+
+        Single choke point shared by ``complete`` / ``stream_complete`` /
+        ``function_call``: shapes the runtime config through the base
+        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
+        family-rejected sampling params, clamps ``max_tokens`` to the ceiling — in
+        canonical config space), adapts to OpenAI wire params, then applies any
+        wire-level :meth:`~..base.LLMProvider._apply_param_remaps` (e.g. the
+        reasoning-family ``max_tokens`` → ``max_completion_tokens`` rename). All
+        rules resolve from the passed *runtime* ``config`` so a per-call model
+        override is honored. An unknown model resolves an all-permissive profile,
+        so this is a pass-through for it (the historical behavior).
+
+        *extra* carries the per-call ``**kwargs`` each entry point accepts. A
+        kwarg that names a *shaped* :class:`LLMConfig` field — one the model
+        family drops (``rejected_params``), clamps (``max_tokens``), or remaps to
+        a different wire key (``param_remaps``) — is folded into the config
+        **before** shaping, so it goes through the same drop/clamp/remap as
+        ``config_overrides`` instead of being appended raw afterward. That closes
+        the double-key footgun: a raw ``max_tokens`` kwarg appended after the
+        remap would collide with the already-renamed ``max_completion_tokens``
+        (an OpenAI 400) and a raw ``temperature`` would bypass the
+        reasoning-family drop. Every other kwarg is passed straight through to
+        the wire untouched — both genuine wire-only params (e.g. ``user``) and
+        config fields whose wire form is richer than the canonical value (e.g. a
+        ``response_format`` dict like ``{"type": "json_object"}``, which the
+        narrow ``str`` config field cannot carry). Constraints are resolved once
+        and threaded into both the config-space shaping and the wire remap.
+        """
+        constraints = self.get_constraints(config)
+        # Only fold a kwarg into the config when it names a field that shaping
+        # actually acts on: a sampling param the family *rejects* (dropped), the
+        # ceiling-*clamped* ``max_tokens``, or a canonical param the family
+        # *remaps* to a different wire key. Those are the ones a raw post-shape
+        # append would corrupt (double-key / drop-bypass). Every other config
+        # field — notably ``response_format``, whose narrow ``str`` config value
+        # differs from the richer OpenAI wire dict a caller passes as a kwarg —
+        # is a wire-only passthrough, preserving the pre-shaping ``update`` shape.
+        shaped_fields = (
+            set(constraints.rejected_params)
+            | set(constraints.param_remaps)
+            | {"max_tokens"}
+        )
+        field_extra: Dict[str, Any] = {}
+        wire_extra: Dict[str, Any] = {}
+        for key, value in (extra or {}).items():
+            if key in config.__dataclass_fields__ and key in shaped_fields:
+                field_extra[key] = value
+            else:
+                wire_extra[key] = value
+        if field_extra:
+            config = config.clone(**field_extra)
+        wire = self.adapter.adapt_config(
+            self._apply_request_constraints(config, constraints)
+        )
+        wire.update(wire_extra)
+        return self._apply_param_remaps(wire, constraints.param_remaps)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw OpenAI SDK error into a dataknobs exception.
@@ -451,10 +619,10 @@ class OpenAIProvider(AsyncLLMProvider):
         if runtime_config.system_prompt and messages[0].role != 'system':
             messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
 
-        # Adapt messages and config
+        # Adapt messages and config (drops rejected params, clamps max_tokens,
+        # applies the family's wire-param remaps — no-op for permissive models).
         adapted_messages = self.adapter.adapt_messages(messages)
-        params = self.adapter.adapt_config(runtime_config)
-        params.update(kwargs)
+        params = self._build_api_kwargs(runtime_config, kwargs)
 
         # Handle tools if provided
         if tools:
@@ -500,11 +668,11 @@ class OpenAIProvider(AsyncLLMProvider):
         if runtime_config.system_prompt and messages[0].role != 'system':
             messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
 
-        # Adapt messages and config
+        # Adapt messages and config (drops rejected params, clamps max_tokens,
+        # applies the family's wire-param remaps — no-op for permissive models).
         adapted_messages = self.adapter.adapt_messages(messages)
-        params = self.adapter.adapt_config(runtime_config)
+        params = self._build_api_kwargs(runtime_config, kwargs)
         params['stream'] = True
-        params.update(kwargs)
 
         # Handle tools if provided
         if tools:
@@ -621,12 +789,12 @@ class OpenAIProvider(AsyncLLMProvider):
         if self.config.system_prompt and messages[0].role != 'system':
             messages.insert(0, LLMMessage(role='system', content=self.config.system_prompt))
 
-        # Adapt messages and config
+        # Adapt messages and config (drops rejected params, clamps max_tokens,
+        # applies the family's wire-param remaps — no-op for permissive models).
         adapted_messages = self.adapter.adapt_messages(messages)
-        params = self.adapter.adapt_config(self.config)
+        params = self._build_api_kwargs(self.config, kwargs)
         params['functions'] = functions
         params['function_call'] = kwargs.get('function_call', 'auto')
-        params.update(kwargs)
 
         # Make API call
         response = await self._call_api(

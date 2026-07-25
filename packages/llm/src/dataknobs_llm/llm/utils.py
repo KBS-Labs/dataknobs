@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Union
 from dataclasses import dataclass, field
 
 from .base import LLMMessage, LLMResponse
+from .model_profile import ModelPricing
 from ..template_utils import TemplateStrategy, render_conditional_template
 
 
@@ -485,54 +486,94 @@ class TokenCounter:
 
 
 class CostCalculator:
-    """Calculate costs for LLM usage."""
-    
-    # Cost per 1K tokens (in USD)
-    PRICING = {
-        'gpt-4': {'input': 0.03, 'output': 0.06},
-        'gpt-4-32k': {'input': 0.06, 'output': 0.12},
-        'gpt-3.5-turbo': {'input': 0.0015, 'output': 0.002},
-        'claude-3-opus': {'input': 0.015, 'output': 0.075},
-        'claude-3-sonnet': {'input': 0.003, 'output': 0.015},
-        'claude-3-haiku': {'input': 0.00025, 'output': 0.00125},
+    """Calculate costs for LLM usage from a :class:`ModelPricing`.
+
+    The provider-agnostic **arithmetic** home for cost computation, paired with a
+    provider's **facts** accessors (:meth:`~dataknobs_llm.llm.base.LLMProvider.get_pricing`
+    / :meth:`~dataknobs_llm.llm.base.LLMProvider.estimate_cost`). Pricing is unified
+    on :class:`~dataknobs_llm.llm.model_profile.ModelPricing` (per-million-token):
+    pass an explicit ``pricing=`` — typically resolved through a provider's model
+    profile — for the accurate, config-overridable value, or rely on the built-in
+    :data:`PRICING` fallback for a provider-less, offline estimate.
+    """
+
+    #: Provider-less fallback pricing, keyed by model-id substring, as
+    #: :class:`~dataknobs_llm.llm.model_profile.ModelPricing` (USD per 1M tokens).
+    #: Migrated from the historical per-1K literal table onto the unified pricing
+    #: shape; superseded per-provider by profile-sourced pricing (pass ``pricing=``
+    #: / use ``provider.estimate_cost``). Kept small and back-compatible so the
+    #: provider-less :meth:`calculate_cost` / :meth:`estimate_cost` calls still work.
+    PRICING: dict[str, ModelPricing] = {
+        'gpt-4': ModelPricing(input_per_mtok=30.0, output_per_mtok=60.0),
+        'gpt-4-32k': ModelPricing(input_per_mtok=60.0, output_per_mtok=120.0),
+        'gpt-3.5-turbo': ModelPricing(input_per_mtok=1.5, output_per_mtok=2.0),
+        'claude-3-opus': ModelPricing(input_per_mtok=15.0, output_per_mtok=75.0),
+        'claude-3-sonnet': ModelPricing(input_per_mtok=3.0, output_per_mtok=15.0),
+        'claude-3-haiku': ModelPricing(input_per_mtok=0.25, output_per_mtok=1.25),
     }
-    
+
+    @classmethod
+    def _fallback_pricing(cls, model: str | None) -> ModelPricing | None:
+        """Resolve *model* to a :data:`PRICING` entry by substring, or ``None``."""
+        if not model:
+            return None
+        model_lower = model.lower()
+        for pattern, pricing in cls.PRICING.items():
+            if pattern in model_lower:
+                return pricing
+        return None
+
+    @staticmethod
+    def _cost_from_pricing(
+        pricing: ModelPricing, input_tokens: int, output_tokens: int
+    ) -> float:
+        """Compute USD cost from a :class:`ModelPricing` (per-Mtok) + token counts.
+
+        A ``None`` rate contributes nothing (an embedding model prices input only).
+        """
+        cost = 0.0
+        if pricing.input_per_mtok is not None:
+            cost += (input_tokens / 1_000_000) * pricing.input_per_mtok
+        if pricing.output_per_mtok is not None:
+            cost += (output_tokens / 1_000_000) * pricing.output_per_mtok
+        return cost
+
     @classmethod
     def calculate_cost(
         cls,
         response: LLMResponse,
-        model: str | None = None
+        model: str | None = None,
+        *,
+        pricing: ModelPricing | None = None,
     ) -> float | None:
-        """Calculate cost for LLM response.
-        
+        """Calculate the USD cost of an LLM response.
+
         Args:
-            response: LLM response with usage info
-            model: Model name (if not in response)
-            
+            response: LLM response with token ``usage``.
+            model: Model name (defaults to ``response.model``); used only to look
+                up the provider-less :data:`PRICING` fallback when ``pricing`` is
+                not supplied.
+            pricing: An explicit :class:`ModelPricing` — typically resolved
+                through a provider's model profile
+                (:meth:`~dataknobs_llm.llm.base.LLMProvider.get_pricing`). When
+                given it is authoritative; otherwise the fallback table is used.
+
         Returns:
-            Cost in USD or None if cannot calculate
+            Cost in USD, or ``None`` when the response carries no usage or no
+            pricing can be resolved.
         """
         if not response.usage:
             return None
-            
-        model = model or response.model
-        
-        # Find matching pricing
-        pricing = None
-        for pattern, prices in cls.PRICING.items():
-            if pattern in model.lower():
-                pricing = prices
-                break
-                
-        if not pricing:
+        if pricing is None:
+            pricing = cls._fallback_pricing(model or response.model)
+        if pricing is None:
             return None
-            
-        # Calculate cost
-        input_cost = (response.usage.get('prompt_tokens', 0) / 1000) * pricing['input']
-        output_cost = (response.usage.get('completion_tokens', 0) / 1000) * pricing['output']
-        
-        return input_cost + output_cost
-        
+        return cls._cost_from_pricing(
+            pricing,
+            response.usage.get('prompt_tokens', 0),
+            response.usage.get('completion_tokens', 0),
+        )
+
     @classmethod
     def estimate_cost(
         cls,
@@ -540,34 +581,22 @@ class CostCalculator:
         model: str,
         expected_output_tokens: int = 100
     ) -> float | None:
-        """Estimate cost for text completion.
-        
+        """Estimate cost for a text completion from the fallback pricing table.
+
         Args:
             text: Input text
             model: Model name
             expected_output_tokens: Expected output length
-            
+
         Returns:
-            Estimated cost in USD
+            Estimated cost in USD, or ``None`` when the model has no fallback
+            pricing.
         """
-        # Find matching pricing
-        pricing = None
-        for pattern, prices in cls.PRICING.items():
-            if pattern in model.lower():
-                pricing = prices
-                break
-                
-        if not pricing:
+        pricing = cls._fallback_pricing(model)
+        if pricing is None:
             return None
-            
-        # Estimate tokens
         input_tokens = TokenCounter.estimate_tokens(text, model)
-        
-        # Calculate cost
-        input_cost = (input_tokens / 1000) * pricing['input']
-        output_cost = (expected_output_tokens / 1000) * pricing['output']
-        
-        return input_cost + output_cost
+        return cls._cost_from_pricing(pricing, input_tokens, expected_output_tokens)
 
 
 def chain_prompts(

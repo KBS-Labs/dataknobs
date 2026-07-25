@@ -1093,6 +1093,7 @@ class AnthropicProvider(AsyncLLMProvider):
             accepts_inline_system=False,
             max_tokens_ceiling=profile.max_output_tokens,
             max_input_tokens=profile.context_window,
+            param_remaps=dict(profile.param_remaps or {}),
         )
 
     def _build_api_kwargs(self, config: LLMConfig) -> Dict[str, Any]:
@@ -1103,14 +1104,23 @@ class AnthropicProvider(AsyncLLMProvider):
         runtime config through the shared
         :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
         (drops family-rejected sampling params and clamps ``max_tokens`` down to
-        the family ceiling — both drop/clamp-and-warn, never silent), then adapts
-        the shaped config to Anthropic wire params. Because the shaping happens in
-        canonical config space, the exact same clamp/drop logic serves the Bedrock
-        (Claude-on-Bedrock) provider too — no per-provider duplication.
+        the family ceiling — both drop/clamp-and-warn, never silent), adapts the
+        shaped config to Anthropic wire params, then applies any wire-level
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_param_remaps`. Because
+        the config-space shaping happens in canonical config space, the exact same
+        clamp/drop logic serves the Bedrock (Claude-on-Bedrock) provider too — no
+        per-provider duplication.
+
+        No current Claude family declares a ``param_remaps``, so the wire remap is
+        a no-op today; it is wired here (symmetric with the OpenAI choke point) so
+        a family that later needs a rename — or a consumer supplying one via
+        ``LLMConfig.constraints`` — is honored without re-plumbing the provider.
 
         The shaping resolves from the passed *runtime* ``config`` (not
         ``self.config``), so a per-call model or ``constraints`` override is
-        honored — the shaping reflects the model actually being sent.
+        honored — the shaping reflects the model actually being sent. Constraints
+        are resolved once and threaded into both the config-space shaping and the
+        wire remap.
 
         Args:
             config: Runtime config (with any ``config_overrides`` applied).
@@ -1119,9 +1129,11 @@ class AnthropicProvider(AsyncLLMProvider):
             Anthropic API parameter dict with rejected params removed and
             ``max_tokens`` clamped to the family ceiling.
         """
-        return self.adapter.adapt_config(
-            self._apply_request_constraints(config)
+        constraints = self.get_constraints(config)
+        wire = self.adapter.adapt_config(
+            self._apply_request_constraints(config, constraints)
         )
+        return self._apply_param_remaps(wire, constraints.param_remaps)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw Anthropic SDK error into a dataknobs exception.

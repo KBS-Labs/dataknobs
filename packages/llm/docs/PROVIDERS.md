@@ -210,6 +210,7 @@ capabilities are the feature set; constraints are request-shape rules).
 | `rejected_params` | Generation/sampling params the family rejects — the provider **drops them before the call and logs a warning** (drop-and-warn, never silent). |
 | `accepts_inline_system` | Whether the family accepts a `role="system"` message at a non-leading position (Anthropic hoists all system messages, so `False`). |
 | `max_tokens_ceiling` | Upper bound on `max_tokens` for the model. When a request asks for more, the provider **clamps it down to the ceiling and logs a warning** (clamp-and-warn, never silent) — applied at a shared base choke point, so both the Anthropic and Bedrock (Claude) providers get it. Resolved from the live Models API on the native Anthropic endpoint (cached, TTL-refreshed) with a bundled fallback resource (the primary source on Bedrock); `None` (unknown model, or none overridden) leaves `max_tokens` untouched. |
+| `param_remaps` | Wire-level `{canonical: wire}` parameter renames the family requires (e.g. the OpenAI reasoning families take `max_completion_tokens` in place of `max_tokens`). Applied **after** `adapt_config` at each provider's request-shaping choke point via the shared `LLMProvider._apply_param_remaps`, so a rename declared by a profile **or** a `LLMConfig.constraints` override is honored on any provider — not only the one that first needed it. Default empty (a no-op for families that need no rename). |
 
 Both Claude providers — the native `AnthropicProvider` and the Bedrock provider
 (Claude-on-Bedrock) — auto-detect the Claude 5 → `temperature`-rejection rule
@@ -391,6 +392,45 @@ provider drives `refresh_if_stale()` / `force_refresh()` from its async request
 boundary. `AnthropicProvider` composes one bound to its Models-API listing to
 source the two token ceilings; each provider owns its own instance (its own
 cache).
+
+#### OpenAI binding
+
+`OpenAIProvider` binds to the substrate with a **maintained-fallback** resolver —
+**config override → bundled resource → heuristic**. There is no `LiveApiSource`:
+OpenAI's Models API serves only model *ids* (no ceilings / capabilities /
+pricing), so the bundled `openai_models.yaml` resource is the primary declarative
+source, a corrected family heuristic backs unlisted models, and
+`model_profile_overrides` wins per facet. The binding turns on capabilities for
+current families the old substring lists missed (`gpt-5` / o-series tools, JSON,
+vision), the `max_tokens` clamp + input budget (previously dead for OpenAI), and
+two request-shape rules for the reasoning families: `rejected_params`
+(`temperature` / `top_p` are dropped) and `param_remaps` — a **wire-level** rename
+declared as data (`{"max_tokens": "max_completion_tokens"}`) applied after
+`adapt_config` by the shared `LLMProvider._apply_param_remaps`. An unknown model
+resolves an all-permissive profile, so it is shaped exactly as before.
+
+```python
+# max_tokens is renamed to max_completion_tokens and temperature is dropped —
+# no 400 — for an o-series request; a gpt-4o request is clamped to its ceiling.
+create_llm_provider({"provider": "openai", "model": "o1"})
+```
+
+#### Pricing (`get_pricing` / `estimate_cost`)
+
+Pricing is unified on `ModelPricing` (per-million-token) and reachable through the
+provider without touching its resolver. `provider.get_pricing(model=None)` reads
+the resolved profile's `pricing` facet (the **facts** accessor, symmetric with
+`get_constraints`); `provider.estimate_cost(response, model=None)` is the one-call
+**convenience** that resolves pricing and computes the cost via the
+provider-agnostic `CostCalculator`. For costing a stored/replayed response
+offline, call `CostCalculator.calculate_cost(response, pricing=...)` directly with
+a `ModelPricing`; passing no `pricing` falls back to a small built-in table.
+
+```python
+llm = create_llm_provider({"provider": "openai", "model": "gpt-4o"})
+cost = llm.estimate_cost(response)          # resolves gpt-4o pricing, then computes
+price = llm.get_pricing("gpt-4o-mini")      # ModelPricing (facts only)
+```
 
 ### Vendor-error translation (all providers)
 

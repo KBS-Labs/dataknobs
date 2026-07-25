@@ -219,3 +219,36 @@ class TestBedrockConstraintsSurface:
             )
         )
         assert provider.get_constraints().rejected_params == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# The base-level param_remaps wire-rename mechanism is live on Bedrock too
+# ---------------------------------------------------------------------------
+
+
+class TestBedrockParamRemaps:
+    """Bedrock's Converse choke point applies ``ModelConstraints.param_remaps``.
+
+    No Claude family declares a wire rename, so the mechanism is a no-op in
+    normal use — but it must be *wired* on Bedrock, not OpenAI-only. This drives
+    a rename through a consumer ``LLMConfig.constraints`` override and asserts the
+    Converse request key is renamed. Reproduce-first for the half-wired state:
+    FAILS against the pre-fix provider (Bedrock never called ``_apply_param_remaps``
+    → ``inferenceConfig`` reached the API unrenamed).
+    """
+
+    async def test_param_remaps_override_renames_wire_key(self) -> None:
+        client = _converse_client()
+        provider = _stub_provider(
+            LLMConfig(
+                provider="bedrock",
+                model="anthropic.claude-sonnet-5-v1:0",
+                max_tokens=100,
+                constraints={"param_remaps": {"inferenceConfig": "inferenceConfig_x"}},
+            ),
+            client,
+        )
+        await provider.complete("hi")
+        captured = client.converse_calls[0]
+        assert "inferenceConfig_x" in captured
+        assert "inferenceConfig" not in captured
