@@ -541,6 +541,11 @@ class LLMStreamResponse:
         usage: Token usage stats (only set on final chunk)
         tool_calls: Tool calls requested by the model (only set on final chunk)
         model: Model identifier (only set on final chunk)
+        cost_usd: Estimated USD cost for the request (only set on final chunk,
+            when the provider sources per-model pricing). ``None`` otherwise —
+            the streaming path previously carried no cost at all, so populating
+            it is a strict, additive improvement (parity with
+            :attr:`LLMResponse.cost_usd` on the buffered path).
         metadata: Additional chunk metadata
 
     Example:
@@ -584,6 +589,7 @@ class LLMStreamResponse:
     usage: Dict[str, int] | None = None
     tool_calls: list["ToolCall"] | None = None  # Only set on final chunk
     model: str | None = None  # Only set on final chunk
+    cost_usd: float | None = None  # Estimated USD cost (only set on final chunk)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

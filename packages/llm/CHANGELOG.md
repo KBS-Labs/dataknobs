@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bedrock model-metadata binding + pricing/cost wiring + opt-in live
+  availability.** `BedrockProvider` now resolves capabilities, request-shape
+  constraints, token ceilings, and pricing through the model-metadata substrate.
+  A bundled `bedrock_models.yaml` resource carries the **full** profile for
+  non-Claude families (`amazon.nova-*`, `amazon.titan-*`, `meta.llama*`,
+  `mistral.*`, `cohere.*`, `ai21.*`) and the **Bedrock-owned** facets (pricing,
+  availability) of Claude-on-Bedrock; the Claude capabilities, output ceiling,
+  context window, and Claude-5 `temperature` rejection are sourced from the
+  **shared Claude sources** the native `AnthropicProvider` also composes — no
+  duplication, no drift. This fixes vision detection for the multimodal
+  non-Claude families the old substring list missed (Nova lite/pro/premier,
+  Llama-3.2 vision, Pixtral), populates `max_input_tokens` for Bedrock (the input
+  budget was previously dead), and replaces the hardcoded `validate_model` prefix
+  whitelist with a data-sourced `available` read. `cost_usd` is now computed off
+  the resolved per-Mtok `ModelPricing` on **both** the buffered and streaming
+  paths (the stream path previously carried no cost), and `get_pricing` /
+  `estimate_cost` are lit up for Bedrock. An opt-in
+  `options["model_availability_live"]=true` validates against the account's live
+  `ListFoundationModels` catalog (a model absent from the account resolves
+  `False`); off by default so an inference-only IAM role — which lacks the
+  distinct `bedrock:ListFoundationModels` control-plane permission — is never
+  broken. `LLMStreamResponse` gains a `cost_usd` field (additive; only set on the
+  final chunk when the provider sources pricing).
+- **`model_limits` tooling `--provider`.** The bundled-resource reconciliation
+  tool (`dataknobs_llm.tooling.model_limits`) gains `--provider {anthropic,bedrock}`
+  (default `anthropic`, byte-identical to before). The drift semantic is
+  per-provider: anthropic diffs the live Models-API output ceilings (with
+  `--update`); bedrock diffs the `ListFoundationModels` available-model set and
+  vision/streaming modalities against `bedrock_models.yaml` (a model AWS added, or
+  one that gained vision). Bedrock `--update` is unsupported (its ceilings/pricing
+  are not live-sourced) and its check is a clean no-op without control-plane
+  access.
 - **OpenAI model-metadata binding + provider pricing accessors.** `OpenAIProvider`
   now resolves capabilities, request-shape constraints, token ceilings, and
   pricing through the model-metadata substrate (a bundled `openai_models.yaml`
@@ -135,6 +167,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   params (e.g. `user`) and config fields whose wire form is richer than the
   canonical value (e.g. a `response_format` dict `{"type": "json_object"}`, which
   the narrow `str` config field cannot carry).
+- **Bedrock requests now clamp/drop where the rules were dead, and
+  `validate_model` is data-sourced.** With the Bedrock binding populating
+  request-shape constraints for non-Claude families and `max_input_tokens` for
+  all families, a previously-unclamped Bedrock request may now clamp `max_tokens`
+  down to the model's output ceiling (the intended fix; `model_profile_overrides`
+  is the escape hatch). Per-call `**kwargs` route through the same Converse
+  request-shaping choke point as the OpenAI change above (a shaped config-field
+  kwarg is clamped/dropped/remapped; a wire-only Converse param passes through).
+  `validate_model` moves from a hardcoded vendor-prefix whitelist to the resolved
+  `available` facet (a bug fix — the whitelist rejected nothing it should and the
+  vision list mis-detected). Claude-on-Bedrock capability detection now reports
+  the same set as the native Anthropic provider (adds `code` / `json_mode`),
+  since both compose the shared Claude capability source — strictly widening.
 - **The Anthropic live Models-API ceiling cache is now per-provider-instance**
   (each provider owns its own `LiveApiSource`) rather than a single module-global
   cache shared across all `AnthropicProvider` instances. Single-provider behavior

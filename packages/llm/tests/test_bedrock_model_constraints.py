@@ -100,13 +100,33 @@ class TestBedrockMaxTokensClamp:
         await provider.complete("hi")
         assert _inference_config(client)["maxTokens"] == 128000
 
-    async def test_no_clamp_for_non_claude_model(self) -> None:
-        """A non-Claude Bedrock model has no ceiling data → no clamp."""
+    async def test_clamp_for_listed_non_claude_model(self) -> None:
+        """A listed non-Claude model now clamps to its resource ceiling.
+
+        Before the binding, non-Claude Bedrock models carried no ceiling data so
+        an over-budget request went unclamped; the maintained resource now gives
+        e.g. Mistral Large an 8192 output ceiling, so the clamp engages — the
+        intended, documented behavior change.
+        """
         client = _converse_client()
         provider = _stub_provider(
             LLMConfig(
                 provider="bedrock",
                 model="mistral.mistral-large-2402-v1:0",
+                max_tokens=500_000,
+            ),
+            client,
+        )
+        await provider.complete("hi")
+        assert _inference_config(client)["maxTokens"] == 8192
+
+    async def test_no_clamp_for_unlisted_model(self) -> None:
+        """An unlisted model (no resource ceiling) is still permissive → no clamp."""
+        client = _converse_client()
+        provider = _stub_provider(
+            LLMConfig(
+                provider="bedrock",
+                model="acme.mystery-model-v9:0",
                 max_tokens=500_000,
             ),
             client,
@@ -201,13 +221,30 @@ class TestBedrockConstraintsSurface:
         )
         assert "temperature" in provider.get_constraints().rejected_params
 
-    def test_detect_non_claude_is_permissive(self) -> None:
+    def test_detect_listed_non_claude_has_ceiling(self) -> None:
+        """A listed non-Claude model resolves its resource ceiling + context.
+
+        Nova has no rejected params (permissive sampling) but now carries an
+        output ceiling and — newly for Bedrock — an input/context window, so the
+        input budget engages where it was dead before.
+        """
         provider = BedrockProvider(
             LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0")
         )
         constraints = provider.get_constraints()
         assert constraints.rejected_params == frozenset()
+        assert constraints.max_tokens_ceiling == 5120
+        assert constraints.max_input_tokens == 300000
+
+    def test_detect_unlisted_model_is_permissive(self) -> None:
+        """An unlisted, non-Claude model resolves an all-permissive profile."""
+        provider = BedrockProvider(
+            LLMConfig(provider="bedrock", model="acme.mystery-model-v9:0")
+        )
+        constraints = provider.get_constraints()
+        assert constraints.rejected_params == frozenset()
         assert constraints.max_tokens_ceiling is None
+        assert constraints.max_input_tokens is None
 
     def test_config_override_withdraws_temperature_rule(self) -> None:
         """A consumer can withdraw the auto-detected rejection at runtime."""

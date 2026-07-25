@@ -85,7 +85,20 @@ from ..base import (
     normalize_claude_stop_reason,
     normalize_llm_config,
 )
-from ._claude_shared import claude_rejects_temperature, resource_ceiling
+from ..model_profile import (
+    CAPABILITY_ORDER,
+    BundledResourceSource,
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    LiveApiSource,
+    ModelPricing,
+    ModelProfile,
+)
+from ._claude_shared import (
+    CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE,
+    CLAUDE_RESOURCE_PROFILE_SOURCE,
+)
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
@@ -107,34 +120,25 @@ _CONNECT_TIMEOUT_SECONDS = 10
 # family / capability detection.
 _REGION_PREFIXES: tuple[str, ...] = ("us.", "eu.", "apac.", "us-gov.")
 
-# Prefixes recognised as valid Bedrock model ids / inference profiles by the
-# heuristic ``validate_model`` (no control-plane call — avoids needing
-# ``bedrock:ListFoundationModels`` on the task role).
-_KNOWN_MODEL_PREFIXES: tuple[str, ...] = (
-    "amazon.",
-    "anthropic.",
-    "meta.",
-    "mistral.",
-    "cohere.",
-    "ai21.",
-    "us.",
-    "eu.",
-    "apac.",
-    "us-gov.",
+# Non-Claude vendor-id prefixes recognised as valid Bedrock foundation models
+# by the data-sourced ``validate_model`` heuristic. Region / inference-profile
+# prefixes (``us.`` / ``eu.`` / ``apac.`` / ``us-gov.``) are stripped by
+# :func:`_canonical_model_id` before this check, so only the bare vendor segment
+# matters. No control-plane call — inference-only task roles keep working (the
+# opt-in ``ListFoundationModels`` availability source is separate; see
+# :meth:`BedrockProvider.validate_model`).
+_VENDOR_PREFIXES: tuple[str, ...] = (
+    "amazon.", "anthropic.", "meta.", "mistral.", "cohere.", "ai21.",
 )
 
-# Best-effort, deliberately incomplete static price map
-# (``model_id -> (input_usd_per_1k, output_usd_per_1k)``) for computing
-# ``LLMResponse.cost_usd``. Never gates behaviour — an absent model leaves
-# ``cost_usd`` as ``None``. Prices are a convenience estimate only.
-_MODEL_PRICE_USD: dict[str, tuple[float, float]] = {
-    "anthropic.claude-3-5-sonnet-20240620-v1:0": (0.003, 0.015),
-    "anthropic.claude-3-sonnet-20240229-v1:0": (0.003, 0.015),
-    "anthropic.claude-3-haiku-20240307-v1:0": (0.00025, 0.00125),
-    "anthropic.claude-3-opus-20240229-v1:0": (0.015, 0.075),
-    "amazon.nova-lite-v1:0": (0.00006, 0.00024),
-    "amazon.nova-pro-v1:0": (0.0008, 0.0032),
-}
+# Non-Claude family-id substrings that carry vision (multimodal input).
+# Consumed only by the last-resort :func:`_bedrock_heuristic` — a model present
+# in ``bedrock_models.yaml`` resolves its capabilities from that resource, and
+# Claude vision comes from the shared Claude capability source.
+_VISION_FAMILIES: tuple[str, ...] = (
+    "nova-lite", "nova-pro", "nova-premier",
+    "llama3-2-11b", "llama3-2-90b", "pixtral",
+)
 
 
 def _canonical_model_id(model: str) -> str:
@@ -150,25 +154,85 @@ def _canonical_model_id(model: str) -> str:
     return model
 
 
-def _estimate_cost(
-    model: str, usage: dict[str, int] | None
-) -> float | None:
-    """Best-effort USD cost from token usage and the static price map.
+def _bedrock_heuristic(model: str) -> ModelProfile:
+    """Last-resort capability/availability source for unlisted Bedrock models.
 
-    Returns ``None`` when the model is not in :data:`_MODEL_PRICE_USD` or
-    usage is missing — cost is a convenience estimate, never load-bearing.
+    The corrected, demoted form of the old inline ``_detect_capabilities`` +
+    ``_KNOWN_MODEL_PREFIXES`` logic. Lowest precedence in the resolver, so a
+    model present in ``bedrock_models.yaml`` (or, for Claude, the shared Claude
+    sources) resolves from there; this only classifies an *unlisted* family by
+    name. Contributes:
+
+    - ``capabilities`` — EMBEDDINGS-only for an embedding family (disjoint: an
+      embed model cannot chat / stream / call tools), else the base chat set
+      plus VISION for a known multimodal family.
+    - ``available`` — ``True`` for a recognised vendor prefix (preserving the
+      old permissive prefix ``validate_model``, now data-sourced), else ``None``
+      so an unknown vendor resolves to unavailable.
     """
-    if not usage:
-        return None
-    price = _MODEL_PRICE_USD.get(_canonical_model_id(model))
-    if price is None:
-        return None
-    in_per_1k, out_per_1k = price
-    prompt_tokens = usage.get("prompt_tokens", 0)
-    completion_tokens = usage.get("completion_tokens", 0)
-    return (prompt_tokens / 1000.0) * in_per_1k + (
-        completion_tokens / 1000.0
-    ) * out_per_1k
+    model_lower = _canonical_model_id(model.lower())
+    available = model_lower.startswith(_VENDOR_PREFIXES) or None
+    if any(
+        token in model_lower
+        for token in ("titan-embed", "cohere.embed", "-embed-")
+    ):
+        return ModelProfile(
+            capabilities=frozenset({ModelCapability.EMBEDDINGS}),
+            available=available,
+        )
+    capabilities = {
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+        ModelCapability.FUNCTION_CALLING,
+    }
+    if any(token in model_lower for token in _VISION_FAMILIES):
+        capabilities.add(ModelCapability.VISION)
+    return ModelProfile(
+        capabilities=frozenset(capabilities), available=available
+    )
+
+
+def _bedrock_availability_extractor(summary: dict[str, Any]) -> ModelProfile:
+    """Project one ``ListFoundationModels`` summary into an availability partial.
+
+    ``ListFoundationModels`` returns model *summaries* — it serves availability
+    and modalities but **not** token ceilings — so the only facet the live
+    source contributes is ``available=True`` (a model in the account catalog is
+    available). Capabilities stay resource-authoritative: a partial capability
+    set derived from modalities would, under the first-non-``None``-per-facet
+    merge, *replace* the resource's full set — so modalities feed only the
+    tooling drift check, not the runtime resolver.
+    """
+    return ModelProfile(available=True)
+
+
+def _bedrock_summary_model_id(summary: dict[str, Any]) -> str | None:
+    """Read a ``ListFoundationModels`` summary's ``modelId`` (LiveApiSource key).
+
+    The summaries are dicts, so the default attribute-based
+    :func:`~..model_profile._default_model_id` does not apply.
+    """
+    value = summary.get("modelId")
+    return str(value) if value is not None else None
+
+
+#: The stateless lower-precedence Bedrock model-metadata sources — module
+#: singletons (they read only the bundled resource / apply a pure family rule,
+#: no per-instance state). The Claude family ceiling + capability sources are the
+#: SHARED ``_claude_shared`` singletons, composed *between* the Bedrock resource
+#: and the Bedrock heuristic (see :meth:`BedrockProvider._profile_resolver`) so a
+#: Claude-on-Bedrock id draws its Bedrock-owned pricing/availability from the
+#: resource and its family caps/ceilings from the shared sources — no
+#: duplication.
+_BEDROCK_RESOURCE_SOURCE = BundledResourceSource.from_resource(
+    "dataknobs_llm.llm.providers",
+    "data/bedrock_models.yaml",
+    name="bedrock_resource",
+)
+_BEDROCK_HEURISTIC_SOURCE = CallableModelMetadataSource(
+    "bedrock_heuristic", _bedrock_heuristic
+)
 
 
 class BedrockConverseAdapter(LLMAdapter):
@@ -339,12 +403,15 @@ class BedrockConverseAdapter(LLMAdapter):
         Args:
             response: The ``converse`` response dict.
             model: The model id used for the request. The Converse response
-                body does not echo it, so the provider supplies it (also
-                used for best-effort cost estimation).
+                body does not echo it, so the provider supplies it.
 
         Returns:
-            Standard ``LLMResponse`` with content, tool_calls, usage,
-            finish_reason, and best-effort ``cost_usd``.
+            Standard ``LLMResponse`` with content, tool_calls, usage, and
+            finish_reason. ``cost_usd`` is left ``None`` here — this adapter is
+            pure/I-O-free and cannot resolve a model profile, so the provider
+            stamps cost post-adapt from the resolved per-Mtok
+            :class:`~..model_profile.ModelPricing` (see
+            :meth:`BedrockProvider._cost_for`).
         """
         message = response.get("output", {}).get("message", {})
         content = ""
@@ -388,7 +455,6 @@ class BedrockConverseAdapter(LLMAdapter):
             usage=usage,
             tool_calls=tool_calls or None,
             metadata=metadata,
-            cost_usd=_estimate_cost(model or "", usage),
         )
 
 
@@ -578,6 +644,35 @@ class BedrockProvider(AsyncLLMProvider):
         # kwargs). Partial explicit credentials fail closed here at
         # construction via ``AwsSessionConfig.__post_init__``.
         self._session_config = AwsSessionConfig.from_dict(self.config.options)
+        # Opt-in live-availability source (control-plane ListFoundationModels).
+        # Off by default so an inference-only IAM role (no
+        # ``bedrock:ListFoundationModels``) is never broken; when
+        # ``options["model_availability_live"]`` is set, ``validate_model``
+        # resolves availability against the account's live catalog. The live
+        # source is consulted directly by ``validate_model`` (not composed into
+        # ``_profile_resolver``) because "absent from the catalog" must resolve
+        # to unavailable — a fact only the live cache can assert, and one the
+        # per-facet resolver merge cannot express.
+        self._availability_source: LiveApiSource | None = None
+        if _bool_option(
+            self.config.options, "model_availability_live", False
+        ):
+            self._availability_source = LiveApiSource(
+                self.list_foundation_models,
+                _bedrock_availability_extractor,
+                name="live_availability",
+                enabled=True,
+                model_id=_bedrock_summary_model_id,
+                ttl=_numeric_option(
+                    self.config.options, "model_availability_ttl", 3600.0, float
+                ),
+                refresh_timeout=_numeric_option(
+                    self.config.options,
+                    "model_availability_refresh_timeout",
+                    10.0,
+                    float,
+                ),
+            )
 
     async def initialize(self) -> None:
         """Build and cache the shared aioboto3 session for Bedrock.
@@ -680,25 +775,64 @@ class BedrockProvider(AsyncLLMProvider):
         messages: str | list[LLMMessage],
         runtime_config: LLMConfig,
         tools: list[Any] | None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the shared ``converse`` / ``converse_stream`` request kwargs.
 
-        Shared by :meth:`complete` and :meth:`stream_complete` so the two
-        methods differ only in ``converse`` vs ``converse_stream`` and
-        buffered-vs-streamed delivery (no parameter drift).
+        Shared by :meth:`complete`, :meth:`stream_complete`, and
+        :meth:`function_call` so the entry points differ only in ``converse`` vs
+        ``converse_stream`` and buffered-vs-streamed delivery (no parameter
+        drift). This is the request-shaping choke point: it drops
+        family-rejected sampling params, clamps ``max_tokens`` to the model
+        ceiling (both in canonical config space via
+        :meth:`~..base.LLMProvider._apply_request_constraints`), then applies any
+        wire-level :meth:`~..base.LLMProvider._apply_param_remaps` — the same
+        clamp/drop the native Anthropic provider applies, since Bedrock runs the
+        same Claude models. An unknown model resolves an all-permissive profile,
+        so shaping is a pass-through for it (the historical behavior).
+
+        *extra* carries the per-call ``**kwargs`` each entry point accepts.
+        Symmetric with the OpenAI binding's ``_build_api_kwargs``: a kwarg that
+        names a *shaped* :class:`LLMConfig` field — one the family drops
+        (``rejected_params``), clamps (``max_tokens``), or remaps to a different
+        wire key (``param_remaps``) — is folded into the config **before**
+        shaping, so it goes through the same drop/clamp/remap as
+        ``config_overrides``. That closes the bypass where a raw ``max_tokens=``
+        kwarg appended after shaping would land as an un-clamped top-level
+        Converse key (a hard ``converse()`` ValidationException) instead of the
+        shaped ``inferenceConfig.maxTokens``, and a ``temperature=`` kwarg on a
+        Claude-5 id would bypass the rejected-param drop. Every other kwarg
+        passes straight through to the request untouched — both genuine wire-only
+        Converse params (``additionalModelRequestFields``, ...) and config fields
+        whose wire form is richer than the canonical value.
         """
         if isinstance(messages, str):
             msg_list = [LLMMessage(role="user", content=messages)]
         else:
             msg_list = list(messages)
 
-        # Shape the runtime config to the model family's ModelConstraints
-        # (drop rejected sampling params, clamp max_tokens to the Claude
-        # ceiling) via the shared choke point — the same clamp/drop the native
-        # Anthropic provider applies, since Bedrock runs the same Claude models.
         # Resolve constraints once and thread them into both the config-space
-        # shaping and the wire remap below.
+        # shaping and the wire remap below. Only a kwarg naming a *shaped* field
+        # (dropped / clamped / remapped) is folded into the config — the ones a
+        # raw post-shape merge would corrupt; every other kwarg is a wire-only
+        # passthrough (preserving the pre-fix ``request.update(kwargs)`` shape
+        # for genuine Converse-only params).
         constraints = self.get_constraints(runtime_config)
+        shaped_fields = (
+            set(constraints.rejected_params)
+            | set(constraints.param_remaps)
+            | {"max_tokens"}
+        )
+        field_extra: dict[str, Any] = {}
+        wire_extra: dict[str, Any] = {}
+        for key, value in (extra or {}).items():
+            if key in runtime_config.__dataclass_fields__ and key in shaped_fields:
+                field_extra[key] = value
+            else:
+                wire_extra[key] = value
+        if field_extra:
+            runtime_config = runtime_config.clone(**field_extra)
+
         shaped_config = self._apply_request_constraints(runtime_config, constraints)
 
         system_blocks, converse_messages = self.adapter.adapt_messages(
@@ -719,99 +853,181 @@ class BedrockProvider(AsyncLLMProvider):
         guardrail = self._guardrail_config(runtime_config)
         if guardrail:
             request["guardrailConfig"] = guardrail
+        request.update(wire_extra)
         return request
 
-    async def validate_model(self) -> bool:
-        """Heuristic model-id validation (no control-plane call).
+    def _profile_resolver(
+        self, config: LLMConfig
+    ) -> LayeredModelProfileResolver:
+        """Compose the Bedrock model-profile resolver for *config*.
 
-        Returns ``True`` for a recognised foundation-model or
-        inference-profile prefix. Deliberately does not call
-        ``ListFoundationModels`` so the task role needs only inference
-        permissions.
+        Precedence (highest first): config override → the Bedrock bundled
+        resource (non-Claude full profiles + Claude-on-Bedrock
+        pricing/availability) → the SHARED Claude ceiling source → the SHARED
+        Claude capability/rejected-param source → the Bedrock last-resort
+        capability/availability heuristic. Per facet, first non-``None`` wins,
+        so a Claude-on-Bedrock id draws its Bedrock-owned
+        pricing/availability from the Bedrock resource and its
+        ceilings/capabilities/rejected-params from the shared Claude sources —
+        zero duplication — while a non-Claude id draws everything from the
+        Bedrock resource (heuristic last-resort). ``LLMConfig.model_profile_overrides``
+        wins over all of them per facet.
+
+        The opt-in live-availability source is deliberately **not** composed
+        here — it is consulted directly by :meth:`validate_model` (see the
+        ``__init__`` note), because "absent from the account catalog →
+        unavailable" is a fact the per-facet merge cannot express (an absent
+        model yields no partial, so a lower-precedence permissive ``available``
+        would win). The live source contributes only the ``available`` facet,
+        which no other resolver consumer reads.
         """
-        return self.config.model.startswith(_KNOWN_MODEL_PREFIXES)
+        return LayeredModelProfileResolver(
+            [
+                ConfigOverrideSource(
+                    getattr(config, "model_profile_overrides", None)
+                ),
+                _BEDROCK_RESOURCE_SOURCE,
+                CLAUDE_RESOURCE_PROFILE_SOURCE,
+                CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE,
+                _BEDROCK_HEURISTIC_SOURCE,
+            ]
+        )
+
+    async def list_foundation_models(self) -> list[dict[str, Any]]:
+        """Fetch the account's Bedrock foundation-model catalog (control-plane).
+
+        Uses a ``bedrock`` **control-plane** client — distinct from the
+        ``bedrock-runtime`` clients used for inference — so it requires the
+        ``bedrock:ListFoundationModels`` permission. Passed to the provider's
+        :class:`~..model_profile.LiveApiSource` as its ``list_models`` callable
+        when ``options["model_availability_live"]`` is set; the source drives it
+        out-of-band (TTL-gated, per-loop-locked). ``ListFoundationModels``
+        returns the full catalog in one call (no pagination) and serves
+        availability + modalities, but not token ceilings.
+        """
+        if not self._is_initialized:
+            await self.initialize()
+        async with self._session.client(
+            "bedrock", **self._client_kwargs(read_timeout=self.config.timeout)
+        ) as client:
+            response = await client.list_foundation_models()
+        return list(response.get("modelSummaries", []))
+
+    async def validate_model(self) -> bool:
+        """Validate the configured model against data-sourced availability.
+
+        Default (no ``options["model_availability_live"]``): reads the
+        ``available`` facet off the resolved model profile — ``True`` for a
+        model listed in ``bedrock_models.yaml`` or under a recognised vendor
+        prefix (the old permissive-prefix behavior, now data-sourced), ``False``
+        for an unknown vendor. **No control-plane call**, so an inference-only
+        IAM role keeps working (``bedrock:ListFoundationModels`` is a separate
+        permission).
+
+        Opt-in (``options["model_availability_live"]=true``): resolves
+        availability against the account's live ``ListFoundationModels`` catalog
+        — a model absent from the account is ``False``, so an entitlement gap is
+        caught at validation time. The live source carries the TTL / per-loop
+        lock / non-degradation refresh from the shared
+        :class:`~..model_profile.LiveApiSource`.
+        """
+        canonical = _canonical_model_id(self.config.model)
+        if self._availability_source is not None:
+            if not self._is_initialized:
+                await self.initialize()
+            await self._availability_source.refresh_if_stale()
+            # The live cache holds only listed (available) models, so an absent
+            # model resolves ``available=None`` → ``False`` — the authoritative
+            # "not in this account" answer the maintained resource cannot give.
+            return bool(self._availability_source.resolve(canonical).available)
+        return bool(self._profile_resolver(self.config).resolve(canonical).available)
 
     def _detect_capabilities(self) -> list[ModelCapability]:
-        """Auto-detect Bedrock model capabilities from the model id.
+        """Auto-detect Bedrock model capabilities (one-line profile read).
 
-        Embedding models advertise **only** ``EMBEDDINGS`` — they cannot
-        chat, stream, or call tools, so reporting those would let
-        capability-driven routing send a chat request to an embed-only
-        model. Chat / generation models advertise text generation, chat,
-        streaming, and function calling (plus ``VISION`` for multimodal
-        Claude 3+ / Nova).
+        Reads the ``capabilities`` facet off the resolved
+        :class:`~..model_profile.ModelProfile` (Bedrock resource → shared Claude
+        capability source for Claude ids → Bedrock heuristic last-resort, with
+        config-override on top), projected back to the historical ordered list
+        via :data:`~..model_profile.CAPABILITY_ORDER`. Embedding models resolve
+        an ``EMBEDDINGS``-only set (disjoint — they cannot chat / stream / call
+        tools); multimodal families (Claude 3+, Nova lite/pro/premier,
+        Llama-3.2 vision, Pixtral) resolve ``VISION``.
         """
-        model = _canonical_model_id(self.config.model.lower())
-
-        if any(
-            token in model
-            for token in ("titan-embed", "cohere.embed", "-embed-")
-        ):
-            return [ModelCapability.EMBEDDINGS]
-
-        capabilities = [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.CHAT,
-            ModelCapability.STREAMING,
-            ModelCapability.FUNCTION_CALLING,
-        ]
-        # Multimodal Claude 3+ / Nova models accept image content. The Claude 5
-        # generation adds family names (fable/mythos) that carry no
-        # opus/sonnet/haiku marker, so they are listed explicitly or they would
-        # be mis-detected as lacking vision.
-        if any(
-            token in model
-            for token in (
-                "claude-3",
-                "claude-5",
-                "claude-sonnet",
-                "claude-opus",
-                "claude-haiku",
-                "claude-fable",
-                "claude-mythos",
-                "nova",
-            )
-        ):
-            capabilities.append(ModelCapability.VISION)
-        return capabilities
+        profile = self._profile_resolver(self.config).resolve(
+            _canonical_model_id(self.config.model)
+        )
+        capabilities = profile.capabilities or frozenset()
+        return [c for c in CAPABILITY_ORDER if c in capabilities]
 
     def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
-        """Auto-detect request-shape constraints for a Claude-on-Bedrock model.
+        """Auto-detect request-shape constraints (one-line profile read).
 
-        Bedrock Converse serves Claude behind AWS, so the **model-family**
-        constraints are identical to the native Anthropic provider's — a Claude
-        model's output ceiling and its ``temperature`` support are properties of
-        the model, not the endpoint. Both are sourced from the shared Claude
-        helper (:mod:`._claude_shared`), so the two providers cannot drift:
+        Reads three facets off the resolved profile (matched on the canonical,
+        region-stripped ``config.model`` so a cross-region inference-profile id
+        resolves the same family as its base id):
 
-        - ``max_tokens_ceiling`` from the bundled Claude fallback resource
-          (:func:`~._claude_shared.resource_ceiling`), read by the shared
+        - ``max_tokens_ceiling`` from ``max_output_tokens`` — the output ceiling
+          the shared
           :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
-          to clamp an over-ceiling ``max_tokens`` down before the call. Bedrock
-          does **not** have the Anthropic Models API, so it uses the resource
-          fallback only (no live dynamic sourcing); the resource is family-keyed,
-          so it resolves through the Bedrock model id's ``anthropic.claude-...``
-          substring.
-        - ``rejected_params={"temperature"}`` for the Claude 5 family
-          (:func:`~._claude_shared.claude_rejects_temperature`) — Claude 5 does
-          not support ``temperature``, so it is dropped (drop-and-warn) rather
-          than sent. Claude 4.x still accepts it.
+          clamps an over-budget ``max_tokens`` down to. For a Claude-on-Bedrock
+          id this comes from the shared Claude ceiling resource (identical to the
+          native Anthropic provider, no drift); for a non-Claude id from the
+          Bedrock resource.
+        - ``max_input_tokens`` from ``context_window`` — the input/context
+          budget (informational, never clamped). **Now populated for Bedrock**
+          (it never was before), so a consumer's proactive input budget engages.
+        - ``rejected_params`` — sampling params the family 400s on (the Claude 5
+          family rejects ``temperature``); dropped before the call.
+        - ``param_remaps`` — wire renames the family requires (none for any
+          Bedrock family today — Converse unifies params across families in
+          ``adapt_config`` — but wired for a consumer override / future family).
 
-        A non-Claude Bedrock model (Llama, Mistral, Nova, Titan) matches neither
-        the resource nor the Claude-5 rule, so it resolves to permissive
-        (no ceiling, no rejected params) — dataknobs ships ceiling data for
-        Claude only. Matches on ``config.model`` (the per-call runtime config)
-        with the region / inference-profile prefix stripped, so a cross-region
-        profile id resolves the same family as its base id. Overridable per
-        request via ``LLMConfig.constraints``.
+        An unlisted, non-Claude model resolves an all-permissive profile (no
+        ceiling, no rejected params). Overridable per request via
+        ``LLMConfig.constraints``.
         """
-        model = _canonical_model_id(config.model.lower())
-        rejected: set[str] = set()
-        if claude_rejects_temperature(model):
-            rejected.add("temperature")
+        profile = self._profile_resolver(config).resolve(
+            _canonical_model_id(config.model)
+        )
         return ModelConstraints(
-            rejected_params=frozenset(rejected),
-            max_tokens_ceiling=resource_ceiling(model),
+            rejected_params=frozenset(profile.rejected_params or ()),
+            max_tokens_ceiling=profile.max_output_tokens,
+            max_input_tokens=profile.context_window,
+            param_remaps=dict(profile.param_remaps or {}),
+        )
+
+    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
+        """Read the ``pricing`` facet off the resolved profile (else ``None``).
+
+        Lights up :meth:`~..base.LLMProvider.get_pricing` /
+        :meth:`~..base.LLMProvider.estimate_cost` for Bedrock — the profile
+        carries per-Mtok :class:`~..model_profile.ModelPricing` for the
+        Bedrock-owned pricing of both non-Claude models and Claude-on-Bedrock.
+        """
+        return self._profile_resolver(config).resolve(
+            _canonical_model_id(config.model)
+        ).pricing
+
+    def _cost_for(
+        self, model: str, usage: dict[str, int] | None
+    ) -> float | None:
+        """Provider-side USD cost from resolved per-Mtok pricing (post-adapt).
+
+        Keeps :class:`BedrockConverseAdapter` pure/I-O-free (it cannot resolve a
+        profile): the provider stamps ``cost_usd`` after ``adapt_response`` via
+        the base :meth:`~..base.LLMProvider.estimate_cost` →
+        :meth:`~..base.LLMProvider.get_pricing` →
+        :class:`~..utils.CostCalculator` path. ``None`` when the model has no
+        profile pricing or the response carries no usage. Shared by the
+        buffered (:meth:`complete` / :meth:`function_call`) and streaming
+        (:meth:`stream_complete` final chunk) paths so cost is computed
+        identically on both.
+        """
+        if not usage:
+            return None
+        return self.estimate_cost(
+            LLMResponse(content="", model=model, usage=usage), model=model
         )
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
@@ -866,14 +1082,19 @@ class BedrockProvider(AsyncLLMProvider):
             messages: Input prompt or message list.
             config_overrides: Optional per-request config overrides.
             tools: Optional list of Tool objects for tool use.
-            **kwargs: Additional Converse request parameters (merged in).
+            **kwargs: Additional Converse request parameters. Routed through the
+                request-shaping choke point (:meth:`_build_converse_request`): a
+                kwarg naming a shaped ``LLMConfig`` field is clamped/dropped/
+                remapped like a config override; a genuine wire-only Converse
+                param passes straight through.
         """
         if not self._is_initialized:
             await self.initialize()
 
         runtime_config = self._get_runtime_config(config_overrides)
-        request = self._build_converse_request(messages, runtime_config, tools)
-        request.update(kwargs)
+        request = self._build_converse_request(
+            messages, runtime_config, tools, extra=kwargs
+        )
 
         start = time.perf_counter()
         async with self._session.client(
@@ -885,9 +1106,11 @@ class BedrockProvider(AsyncLLMProvider):
             except Exception as exc:
                 self._raise_translated(exc)
 
-        result = self._analyze_response(
-            self.adapter.adapt_response(response, model=runtime_config.model)
-        )
+        parsed = self.adapter.adapt_response(response, model=runtime_config.model)
+        # Stamp cost post-adapt from the resolved per-Mtok profile pricing —
+        # the pure adapter cannot resolve a profile.
+        parsed.cost_usd = self._cost_for(runtime_config.model, parsed.usage)
+        result = self._analyze_response(parsed)
         logger.debug(
             "Bedrock converse complete (model=%s, finish=%s, tokens=%s, "
             "latency_ms=%d)",
@@ -917,14 +1140,17 @@ class BedrockProvider(AsyncLLMProvider):
             messages: Input prompt or message list.
             config_overrides: Optional per-request config overrides.
             tools: Optional list of Tool objects for tool use.
-            **kwargs: Additional Converse request parameters (merged in).
+            **kwargs: Additional Converse request parameters. Routed through the
+                request-shaping choke point (:meth:`_build_converse_request`), as
+                in :meth:`complete`.
         """
         if not self._is_initialized:
             await self.initialize()
 
         runtime_config = self._get_runtime_config(config_overrides)
-        request = self._build_converse_request(messages, runtime_config, tools)
-        request.update(kwargs)
+        request = self._build_converse_request(
+            messages, runtime_config, tools, extra=kwargs
+        )
 
         logger.debug(
             "Bedrock converse_stream start (model=%s)", runtime_config.model
@@ -1018,6 +1244,10 @@ class BedrockProvider(AsyncLLMProvider):
                 tool_calls=tool_calls,
                 usage=usage,
                 model=runtime_config.model,
+                # Stamp cost on the final chunk from the resolved per-Mtok
+                # profile pricing — the buffered path stamps LLMResponse.cost_usd
+                # the same way; the stream previously carried no cost at all.
+                cost_usd=self._cost_for(runtime_config.model, usage),
             )
             self._warn_if_truncated(final_chunk)
             yield final_chunk
@@ -1118,7 +1348,9 @@ class BedrockProvider(AsyncLLMProvider):
             await self.initialize()
 
         runtime_config = self._get_runtime_config(None)
-        request = self._build_converse_request(messages, runtime_config, None)
+        request = self._build_converse_request(
+            messages, runtime_config, None, extra=kwargs
+        )
         request["toolConfig"] = {
             "tools": self.adapter.adapt_raw_functions(functions)
         }
@@ -1135,6 +1367,8 @@ class BedrockProvider(AsyncLLMProvider):
         parsed = self.adapter.adapt_response(
             response, model=runtime_config.model
         )
+        # Stamp cost post-adapt from the resolved per-Mtok pricing, like complete().
+        parsed.cost_usd = self._cost_for(runtime_config.model, parsed.usage)
 
         # Surface the first tool call as the legacy function_call dict and route
         # through the shared _analyze_response choke point, so a truncated

@@ -276,8 +276,9 @@ drop) apply in canonical config space at a shared base choke point
 (`LLMProvider._apply_request_constraints`), so the **same** behavior serves both
 Claude providers — the native **Anthropic** Messages API and **Bedrock**
 Converse (Claude-on-Bedrock) — from one implementation. Non-Claude Bedrock
-models (Llama, Mistral, Nova, Titan) resolve to a permissive `None` ceiling
-(dataknobs ships ceiling data for Claude only).
+models (Llama, Mistral, Nova, Titan, Cohere, AI21) resolve their ceilings from
+the bundled `bedrock_models.yaml` resource (see the Bedrock binding above); an
+unlisted model resolves a permissive `None` ceiling.
 
 The ceiling is **resolved dynamically**, in this precedence per model:
 
@@ -416,6 +417,51 @@ resolves an all-permissive profile, so it is shaped exactly as before.
 # max_tokens is renamed to max_completion_tokens and temperature is dropped —
 # no 400 — for an o-series request; a gpt-4o request is clamped to its ceiling.
 create_llm_provider({"provider": "openai", "model": "o1"})
+```
+
+#### Bedrock binding
+
+Bedrock serves **two model populations** behind one provider, and the binding
+sources a different slice of each. For **non-Claude** families (`amazon.nova-*`,
+`amazon.titan-*`, `meta.llama*`, `mistral.*`, `cohere.*`, `ai21.*`) the bundled
+`bedrock_models.yaml` resource carries the **full** profile — capabilities,
+output/context ceilings, and pricing. For **Claude-on-Bedrock**
+(`anthropic.claude-...`) it carries **only** the Bedrock-owned facets (`pricing`,
+`available`); the capabilities, output ceiling, context window, and Claude-5
+`temperature` rejection come from the **shared Claude sources** that the native
+`AnthropicProvider` also composes — a Claude model's family facts are a property
+of the model, not the endpoint, so they are never re-copied (no drift). The
+resolver is **config override → bedrock resource → shared Claude ceiling → shared
+Claude (Claude-only) capabilities → bedrock heuristic**, first-non-`None` per
+facet.
+
+The binding fixes vision detection for the multimodal non-Claude families the old
+substring list missed (Nova lite/pro/premier, Llama-3.2 vision, Pixtral),
+populates `max_input_tokens` for Bedrock (the input budget was previously dead),
+wires `cost_usd` off the resolved per-Mtok `ModelPricing` on **both** the buffered
+and streaming paths, and turns `validate_model` from a hardcoded prefix whitelist
+into a data-sourced `available` read. A cross-region inference-profile id
+(`us.`/`eu.`/`apac.`/`us-gov.`) resolves the same family as its base id.
+
+**Opt-in live availability.** By default `validate_model` makes **no**
+control-plane call — `bedrock:ListFoundationModels` is a permission distinct from
+`bedrock:InvokeModel`, so a live default would break least-privilege
+inference-only roles. Set `options["model_availability_live"] = true` to validate
+against the account's live `ListFoundationModels` catalog instead (a model absent
+from the account resolves `False`); it reuses the substrate's TTL / per-loop-lock
+refresh. Capabilities and ceilings stay maintained-resource regardless — the live
+catalog serves availability + modalities, not ceilings.
+
+```python
+# Default: data-sourced availability, no control-plane call.
+create_llm_provider({"provider": "bedrock", "model": "amazon.nova-pro-v1:0"})
+
+# Opt in to live catalog validation (needs bedrock:ListFoundationModels):
+create_llm_provider({
+    "provider": "bedrock",
+    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "options": {"model_availability_live": True},
+})
 ```
 
 #### Pricing (`get_pricing` / `estimate_cost`)

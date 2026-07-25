@@ -38,6 +38,9 @@ from typing import Any
 
 from dataknobs_common.config_loading import load_yaml_or_json
 
+from ..base import ModelCapability
+from ..model_profile import CallableModelMetadataSource, ModelProfile
+
 logger = logging.getLogger(__name__)
 
 #: Claude model families that reject the ``temperature`` sampling parameter at
@@ -149,8 +152,7 @@ try:
     #: Bundled fallback maps ``{lowercased-model-id: ceiling}`` for the output
     #: (``max_tokens``) and input (``max_input_tokens``) ceilings, read once at
     #: import. Consulted only when the dynamic Models-API path has produced no
-    #: value for a model (see
-    #: :func:`~dataknobs_llm.llm.providers.anthropic._resource_profile`, the
+    #: value for a model (see :func:`claude_resource_profile`, the
     #: bundled-resource half of the layered ceiling resolution).
     #: Degrade to ``{}`` if the resource is unreadable so a data-file issue
     #: never breaks import — the packaging regression is caught instead by an
@@ -247,3 +249,127 @@ def claude_rejects_temperature(model_lower: str) -> bool:
     for the native Anthropic API and Bedrock Converse alike.
     """
     return any(m in model_lower for m in CLAUDE_5_TEMPERATURE_REJECTORS)
+
+
+# ---------------------------------------------------------------------------
+# Claude family model-metadata sources (shared by the Anthropic and Bedrock
+# resolvers). A Claude model's capabilities, output/context ceilings, and
+# ``temperature`` rejection are properties of the *model family*, not the
+# endpoint — identical whether served by the native Anthropic Messages API or
+# Amazon Bedrock Converse — so the two non-live profile sources live here and
+# are composed by both providers' resolvers. Pricing and availability, by
+# contrast, ARE endpoint properties (AWS bills Bedrock separately; the account
+# catalog is an AWS question), so those two facets are provider-owned and NOT
+# sourced here.
+# ---------------------------------------------------------------------------
+
+#: Claude family-name substrings that carry the modern (Claude 3+) capability
+#: set — vision, function calling, JSON mode. Matched as lowercased substrings
+#: of the model id. The Claude 5 generation adds names (``fable`` / ``mythos``)
+#: that carry no opus/sonnet/haiku marker, so they are listed explicitly or they
+#: would be mis-detected as lacking these. Consumed by
+#: :func:`claude_heuristic_profile`.
+MODERN_CAPABILITY_FAMILIES: tuple[str, ...] = (
+    "claude-3", "claude-3.5", "claude-4", "claude-5",
+    "claude-sonnet", "claude-opus", "claude-haiku",
+    "claude-fable", "claude-mythos",
+)
+
+
+def claude_resource_profile(model: str) -> ModelProfile:
+    """Bundled-resource source: the Claude ceiling facets (output + context).
+
+    Resolves the two ceiling facets against the bundled Claude resource
+    (:func:`resource_ceiling` / :func:`resource_input_ceiling`), using the
+    family-alias matching rule. Contributes only the ceiling facets (``None``
+    elsewhere), so it fills a ceiling only when a higher-precedence source (a
+    live Models-API cache on the native Anthropic endpoint, or a config
+    override) has no value for it — per facet. Endpoint-agnostic: a Claude
+    model's ceilings are a property of the model, so both the Anthropic and
+    Bedrock (Claude-on-Bedrock) resolvers compose this source. Bedrock has no
+    live Models API, so on Bedrock this resource is the sole ceiling source.
+    """
+    key = model.lower()
+    return ModelProfile(
+        max_output_tokens=resource_ceiling(key),
+        context_window=resource_input_ceiling(key),
+    )
+
+
+def claude_heuristic_profile(model: str) -> ModelProfile:
+    """Heuristic source: Claude capabilities + family ``rejected_params`` by name.
+
+    The last-resort family-substring rules for the two non-ceiling Claude facets:
+
+    - ``capabilities`` — the base set (text/chat/streaming/code) always, plus the
+      modern set (vision/function-calling/JSON) for a
+      :data:`MODERN_CAPABILITY_FAMILIES` match.
+    - ``rejected_params`` — ``{"temperature"}`` for the Claude 5 family (which
+      rejects it with a 400), else an authoritative empty set.
+
+    Contributes only these two facets (``None`` ceilings). This is the
+    *unconditional* form the native Anthropic resolver uses — it returns the
+    base capability set for *any* id (an unknown model is a Claude family on the
+    Anthropic endpoint, so a permissive base fallback is correct there). The
+    Bedrock resolver, which serves non-Claude families too, composes the
+    Claude-*only* variant (:func:`claude_only_heuristic_profile`) so this
+    heuristic never clobbers a non-Claude model's capabilities.
+    """
+    model_lower = model.lower()
+    capabilities = {
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CHAT,
+        ModelCapability.STREAMING,
+        ModelCapability.CODE,
+    }
+    if any(m in model_lower for m in MODERN_CAPABILITY_FAMILIES):
+        capabilities |= {
+            ModelCapability.VISION,
+            ModelCapability.FUNCTION_CALLING,
+            ModelCapability.JSON_MODE,
+        }
+    rejected = (
+        frozenset({"temperature"})
+        if claude_rejects_temperature(model_lower)
+        else frozenset()
+    )
+    return ModelProfile(
+        capabilities=frozenset(capabilities),
+        rejected_params=rejected,
+    )
+
+
+def claude_only_heuristic_profile(model: str) -> ModelProfile:
+    """Claude-only variant of :func:`claude_heuristic_profile`.
+
+    Abstains (returns an all-``None`` partial) for a non-Claude id, so it can sit
+    *above* a provider's own capability heuristic in a multi-family resolver
+    without clobbering a non-Claude model's capabilities. Used by the Bedrock
+    resolver (which serves non-Claude families); the native Anthropic resolver
+    uses the unconditional :func:`claude_heuristic_profile` (an unknown id there
+    is a Claude family, so the permissive base fallback is correct).
+    """
+    if "claude" not in model.lower():
+        return ModelProfile()
+    return claude_heuristic_profile(model)
+
+
+#: The stateless lower-precedence Claude family sources as module singletons
+#: (they read only the bundled resource / apply a pure family-substring rule — no
+#: per-instance state). The ceiling resource + the unconditional heuristic are
+#: composed by the native Anthropic resolver
+#: (:meth:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider._profile_resolver`);
+#: the ceiling resource + the *Claude-only* heuristic are composed by the Bedrock
+#: resolver
+#: (:meth:`~dataknobs_llm.llm.providers.bedrock.BedrockProvider._profile_resolver`).
+#: Living here — rather than in either provider — is what keeps the two from
+#: drifting on the Claude ceilings / capabilities they share.
+CLAUDE_RESOURCE_PROFILE_SOURCE = CallableModelMetadataSource(
+    "bundled_resource", claude_resource_profile
+)
+CLAUDE_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
+    "heuristic", claude_heuristic_profile
+)
+CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
+    "claude_heuristic", claude_only_heuristic_profile
+)
