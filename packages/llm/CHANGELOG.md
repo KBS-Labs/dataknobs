@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OpenAI model-metadata binding + provider pricing accessors.** `OpenAIProvider`
+  now resolves capabilities, request-shape constraints, token ceilings, and
+  pricing through the model-metadata substrate (a bundled `openai_models.yaml`
+  resource → a corrected last-resort capability heuristic →
+  `model_profile_overrides`), replacing the stale inline substring lists. This
+  detects current families the old lists missed (`gpt-5` / o-series function
+  calling, JSON mode, and vision), supplies per-model output ceilings and input
+  context windows, and unifies pricing on `ModelPricing`. `ModelConstraints` gains
+  a `param_remaps` field (a `{canonical: wire}` rename mapping, applied after
+  `adapt_config` by the new shared `LLMProvider._apply_param_remaps`) so the OpenAI
+  reasoning families correctly send `max_completion_tokens` in place of
+  `max_tokens`. New `LLMProvider.get_pricing(model=None)` (facts) and
+  `LLMProvider.estimate_cost(response, model=None)` (convenience) make
+  profile-sourced pricing reachable; `CostCalculator.calculate_cost` gains a
+  `pricing=` parameter and its fallback table is migrated onto `ModelPricing`
+  (per-million-token). Config-override wins over every facet. Additive for other
+  providers (`get_pricing`/`estimate_cost` default to `None`; `param_remaps`
+  defaults to empty).
 - **In-loop conversation history compaction.** New
   `ConversationManager.compact_history(keep_recent_iterations, *, summarizer=None)`
   re-roots the active conversation path to bound a long tool loop's history
@@ -92,6 +110,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **OpenAI requests are now shaped to the model family's rules.** With the OpenAI
+  binding populating request-shape constraints, `complete` / `stream_complete` /
+  `function_call` now route through the shared request-shaping choke point:
+  `max_tokens` is clamped down to the model's output ceiling (clamp-and-warn),
+  sampling params the family rejects are dropped (the reasoning families reject
+  `temperature` / `top_p` — drop-and-warn), and the reasoning-family `max_tokens`
+  → `max_completion_tokens` rename is applied. Previously OpenAI shaped nothing, so
+  a request could truncate or 400 on these rules. An unknown model resolves an
+  all-permissive profile and is shaped exactly as before;
+  `LLMConfig.constraints` / `model_profile_overrides` are the escape hatches.
 - **The Anthropic live Models-API ceiling cache is now per-provider-instance**
   (each provider owns its own `LiveApiSource`) rather than a single module-global
   cache shared across all `AnthropicProvider` instances. Single-provider behavior

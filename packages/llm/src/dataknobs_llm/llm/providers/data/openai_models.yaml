@@ -1,0 +1,133 @@
+# OpenAI model profiles — the maintained-fallback source for the OpenAI binding.
+#
+# Unlike the Anthropic resource, this is the PRIMARY declarative source: the
+# OpenAI Models API (`models.list()`) serves only model ids, not token ceilings /
+# capabilities / pricing, so there is no live source to reconcile against — this
+# file is hand-maintained and its staleness is guarded by the reproduce-first
+# "a current model the stale list misses" tests (test_openai_model_binding.py).
+#
+# Precedence at runtime: LLMConfig.model_profile_overrides (always wins) → this
+# resource → a corrected last-resort capability heuristic (for unlisted future
+# families). A consumer pins any facet for any model via model_profile_overrides
+# without a dataknobs release.
+#
+# Source: https://platform.openai.com/docs/models  +  .../docs/pricing
+# Last verified: 2026-07-25
+# Shape (each model → any of):
+#   context_window     int  -> ModelConstraints.max_input_tokens (input budget)
+#   max_output_tokens  int  -> ModelConstraints.max_tokens_ceiling (output clamp)
+#   capabilities       [str] value strings: text_generation/chat/streaming/code/
+#                            vision/function_calling/json_mode/embeddings
+#   rejected_params    [str] sampling params the family 400s on (reasoning models
+#                            reject temperature/top_p)
+#   param_remaps       {from: to} wire-param renames (reasoning models take
+#                            max_completion_tokens, not max_tokens)
+#   pricing            {*_per_mtok} USD per 1M tokens
+models:
+  # --- GPT-5 family (reasoning; max_completion_tokens, fixed sampling) --------
+  gpt-5:
+    context_window: 400000
+    max_output_tokens: 128000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 1.25, output_per_mtok: 10.0, cached_input_per_mtok: 0.125}
+  gpt-5-mini:
+    context_window: 400000
+    max_output_tokens: 128000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 0.25, output_per_mtok: 2.0, cached_input_per_mtok: 0.025}
+  gpt-5-nano:
+    context_window: 400000
+    max_output_tokens: 128000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 0.05, output_per_mtok: 0.4}
+  # --- GPT-4.1 family --------------------------------------------------------
+  gpt-4.1:
+    context_window: 1047576
+    max_output_tokens: 32768
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 2.0, output_per_mtok: 8.0, cached_input_per_mtok: 0.5}
+  gpt-4.1-mini:
+    context_window: 1047576
+    max_output_tokens: 32768
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 0.4, output_per_mtok: 1.6, cached_input_per_mtok: 0.1}
+  gpt-4.1-nano:
+    context_window: 1047576
+    max_output_tokens: 32768
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 0.1, output_per_mtok: 0.4, cached_input_per_mtok: 0.025}
+  # --- GPT-4o family (multimodal) --------------------------------------------
+  gpt-4o:
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 2.5, output_per_mtok: 10.0, cached_input_per_mtok: 1.25}
+  gpt-4o-mini:
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 0.15, output_per_mtok: 0.6, cached_input_per_mtok: 0.075}
+  # --- Legacy GPT-4 / 3.5 ----------------------------------------------------
+  gpt-4-turbo:
+    context_window: 128000
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    pricing: {input_per_mtok: 10.0, output_per_mtok: 30.0}
+  gpt-4:
+    context_window: 8192
+    max_output_tokens: 8192
+    capabilities: [text_generation, chat, streaming, code, function_calling, json_mode]
+    pricing: {input_per_mtok: 30.0, output_per_mtok: 60.0}
+  gpt-3.5-turbo:
+    context_window: 16385
+    max_output_tokens: 4096
+    capabilities: [text_generation, chat, streaming, code, function_calling, json_mode]
+    pricing: {input_per_mtok: 0.5, output_per_mtok: 1.5}
+  # --- o-series (reasoning; max_completion_tokens, fixed sampling) ------------
+  o1:
+    context_window: 200000
+    max_output_tokens: 100000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 15.0, output_per_mtok: 60.0, cached_input_per_mtok: 7.5}
+  o1-mini:
+    context_window: 128000
+    max_output_tokens: 65536
+    capabilities: [text_generation, chat, streaming, code]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 1.1, output_per_mtok: 4.4, cached_input_per_mtok: 0.55}
+  o3:
+    context_window: 200000
+    max_output_tokens: 100000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 2.0, output_per_mtok: 8.0, cached_input_per_mtok: 0.5}
+  o4-mini:
+    context_window: 200000
+    max_output_tokens: 100000
+    capabilities: [text_generation, chat, streaming, code, vision, function_calling, json_mode]
+    rejected_params: [temperature, top_p]
+    param_remaps: {max_tokens: max_completion_tokens}
+    pricing: {input_per_mtok: 1.1, output_per_mtok: 4.4, cached_input_per_mtok: 0.275}
+  # --- Embedding models ------------------------------------------------------
+  text-embedding-3-small:
+    context_window: 8191
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.02}
+  text-embedding-3-large:
+    context_window: 8191
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.13}
+  text-embedding-ada-002:
+    context_window: 8191
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.1}

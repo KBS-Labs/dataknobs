@@ -392,6 +392,45 @@ boundary. `AnthropicProvider` composes one bound to its Models-API listing to
 source the two token ceilings; each provider owns its own instance (its own
 cache).
 
+#### OpenAI binding
+
+`OpenAIProvider` binds to the substrate with a **maintained-fallback** resolver —
+**config override → bundled resource → heuristic**. There is no `LiveApiSource`:
+OpenAI's Models API serves only model *ids* (no ceilings / capabilities /
+pricing), so the bundled `openai_models.yaml` resource is the primary declarative
+source, a corrected family heuristic backs unlisted models, and
+`model_profile_overrides` wins per facet. The binding turns on capabilities for
+current families the old substring lists missed (`gpt-5` / o-series tools, JSON,
+vision), the `max_tokens` clamp + input budget (previously dead for OpenAI), and
+two request-shape rules for the reasoning families: `rejected_params`
+(`temperature` / `top_p` are dropped) and `param_remaps` — a **wire-level** rename
+declared as data (`{"max_tokens": "max_completion_tokens"}`) applied after
+`adapt_config` by the shared `LLMProvider._apply_param_remaps`. An unknown model
+resolves an all-permissive profile, so it is shaped exactly as before.
+
+```python
+# max_tokens is renamed to max_completion_tokens and temperature is dropped —
+# no 400 — for an o-series request; a gpt-4o request is clamped to its ceiling.
+create_llm_provider({"provider": "openai", "model": "o1"})
+```
+
+#### Pricing (`get_pricing` / `estimate_cost`)
+
+Pricing is unified on `ModelPricing` (per-million-token) and reachable through the
+provider without touching its resolver. `provider.get_pricing(model=None)` reads
+the resolved profile's `pricing` facet (the **facts** accessor, symmetric with
+`get_constraints`); `provider.estimate_cost(response, model=None)` is the one-call
+**convenience** that resolves pricing and computes the cost via the
+provider-agnostic `CostCalculator`. For costing a stored/replayed response
+offline, call `CostCalculator.calculate_cost(response, pricing=...)` directly with
+a `ModelPricing`; passing no `pricing` falls back to a small built-in table.
+
+```python
+llm = create_llm_provider({"provider": "openai", "model": "gpt-4o"})
+cost = llm.estimate_cost(response)          # resolves gpt-4o pricing, then computes
+price = llm.get_pricing("gpt-4o-mini")      # ModelPricing (facts only)
+```
+
 ### Vendor-error translation (all providers)
 
 Every provider translates raw vendor transport errors into

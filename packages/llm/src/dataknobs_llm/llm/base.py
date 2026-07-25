@@ -59,13 +59,16 @@ import asyncio
 import logging
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, ClassVar, Coroutine, Dict, List, NoReturn, TypeVar, Union,
-    AsyncIterator, Iterator, Callable, Protocol
+    Any, ClassVar, Coroutine, Dict, List, NoReturn, TYPE_CHECKING, TypeVar,
+    Union, AsyncIterator, Iterator, Callable, Protocol
 )
+
+if TYPE_CHECKING:
+    from .model_profile import ModelPricing
 
 from dataknobs_common.exceptions import (
     OperationError, RateLimitError, ResourceError, ValidationError,
@@ -228,12 +231,21 @@ class ModelConstraints:
             from the live Models API (cached, TTL-refreshed) with a bundled
             fallback resource, and config-overridable; ``None`` for any other
             provider or unknown model.
+        param_remaps: Wire-parameter renames the family requires, as a
+            ``{canonical_name: wire_name}`` mapping (e.g. the OpenAI reasoning
+            families take ``max_completion_tokens`` in place of ``max_tokens``).
+            Applied by a provider **after** ``adapt_config`` via
+            :meth:`LLMProvider._apply_param_remaps` — a wire-level rename, so it
+            sits past the canonical-space request shaping (drop/clamp). Empty by
+            default (no rename); populated from the resolved model profile and
+            config-overridable.
     """
 
     rejected_params: frozenset[str] = frozenset()
     accepts_inline_system: bool = True
     max_tokens_ceiling: int | None = None
     max_input_tokens: int | None = None
+    param_remaps: Mapping[str, str] = field(default_factory=dict)
 
     def with_overrides(self, overrides: Dict[str, Any]) -> "ModelConstraints":
         """Return a copy with the given loose-dict overrides overlaid.
@@ -250,7 +262,9 @@ class ModelConstraints:
             overrides: Loose mapping with any of ``"rejected_params"``
                 (iterable of str, or ``None`` → empty), ``"accepts_inline_system"``
                 (bool), ``"max_tokens_ceiling"`` (int or ``None``),
-                ``"max_input_tokens"`` (int or ``None``).
+                ``"max_input_tokens"`` (int or ``None``), ``"param_remaps"``
+                (``{from: to}`` mapping, or ``None`` → empty). Like
+                ``rejected_params``, ``param_remaps`` is *replaced* wholesale.
 
         Returns:
             A new ``ModelConstraints`` (the receiver is never mutated).
@@ -271,6 +285,11 @@ class ModelConstraints:
             changes["max_tokens_ceiling"] = overrides["max_tokens_ceiling"]
         if "max_input_tokens" in overrides:
             changes["max_input_tokens"] = overrides["max_input_tokens"]
+        if "param_remaps" in overrides:
+            raw = overrides["param_remaps"]
+            changes["param_remaps"] = (
+                {str(k): str(v) for k, v in dict(raw).items()} if raw else {}
+            )
         return replace(self, **changes)
 
 
@@ -1235,6 +1254,71 @@ class LLMProvider(ABC):
         cfg = config if config is not None else self.config
         return self._resolve_constraints(self._detect_constraints(cfg), cfg)
 
+    def get_pricing(self, model: str | None = None) -> "ModelPricing | None":
+        """Resolve this provider's per-model USD pricing, or ``None`` if unknown.
+
+        The public **facts** accessor for pricing, symmetric with
+        :meth:`get_capabilities` / :meth:`get_constraints`: it reads the
+        ``pricing`` facet off the resolved model profile (so config-override /
+        bundled-resource layering — and per-provider isolation — apply), making
+        profile-sourced pricing reachable without touching a provider's private
+        resolver. The paired **arithmetic** convenience is :meth:`estimate_cost`;
+        the provider-agnostic calculator is
+        :class:`~dataknobs_llm.llm.utils.CostCalculator`.
+
+        Args:
+            model: The model id to price; defaults to the configured model. A
+                different id resolves that model's pricing via a config clone
+                (mirroring how :meth:`get_constraints` honors a per-call model).
+
+        Returns:
+            The resolved :class:`~dataknobs_llm.llm.model_profile.ModelPricing`,
+            or ``None`` when the provider does not source pricing / the model is
+            unknown (the default base behavior — see :meth:`_detect_pricing`).
+        """
+        cfg = self.config if model is None else self.config.clone(model=model)
+        return self._detect_pricing(cfg)
+
+    def _detect_pricing(self, config: LLMConfig) -> "ModelPricing | None":
+        """Auto-detect per-model pricing for *config*'s model (hook).
+
+        Default: ``None`` (the base provider sources no pricing). A provider
+        bound to the model-metadata substrate overrides this to read the
+        ``pricing`` facet off its resolved profile, mirroring how
+        :meth:`_detect_constraints` reads the ceiling / rejected-param facets.
+        """
+        return None
+
+    def estimate_cost(
+        self, response: "LLMResponse", model: str | None = None
+    ) -> float | None:
+        """Estimate the USD cost of *response* from this provider's pricing.
+
+        The one-call **convenience** over :meth:`get_pricing` (facts) +
+        :class:`~dataknobs_llm.llm.utils.CostCalculator` (arithmetic): resolves
+        the model's :class:`~dataknobs_llm.llm.model_profile.ModelPricing` through
+        the provider's profile, then computes the cost from the response's token
+        usage. Returns ``None`` when pricing is unknown or the response carries no
+        usage. For costing a stored/replayed response without a provider, call
+        ``CostCalculator.calculate_cost(response, pricing=...)`` directly.
+
+        Args:
+            response: The response whose token usage is priced.
+            model: The model to price; defaults to ``response.model`` (else the
+                configured model).
+
+        Returns:
+            The estimated USD cost, or ``None`` when it cannot be computed.
+        """
+        pricing = self.get_pricing(model or response.model or None)
+        if pricing is None:
+            return None
+        # Lazy import: utils imports LLMResponse from this module, so a top-level
+        # import here would be circular. CostCalculator is the arithmetic home.
+        from .utils import CostCalculator
+
+        return CostCalculator.calculate_cost(response, pricing=pricing)
+
     def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
         """Auto-detect request-shape constraints for *config*'s model.
 
@@ -1353,6 +1437,39 @@ class LLMProvider(ABC):
             )
 
         return config.clone(**overrides) if overrides else config
+
+    @staticmethod
+    def _apply_param_remaps(
+        wire: Dict[str, Any], remaps: Mapping[str, str]
+    ) -> Dict[str, Any]:
+        """Rename wire params per *remaps*, in place, returning *wire*.
+
+        The **wire-level** half of request shaping, complementary to
+        :meth:`_apply_request_constraints` (which drops/clamps in canonical
+        :class:`LLMConfig` space): a family that names a parameter differently on
+        the wire (e.g. the OpenAI reasoning families take ``max_completion_tokens``
+        in place of ``max_tokens``) declares the rename as
+        ``ModelConstraints.param_remaps`` data, and the provider applies it here
+        *after* ``adapt_config`` has produced the provider-specific param dict. A
+        remap whose source key is absent from *wire* is a no-op; an empty *remaps*
+        returns *wire* unchanged. Shared on the base so any provider whose family
+        needs a rename inherits the mechanism — the canonical fix location, not a
+        per-provider re-implementation.
+
+        Args:
+            wire: The adapted provider param dict (mutated in place — pass a
+                fresh dict from ``adapt_config``, never a shared structure).
+            remaps: ``{canonical_name: wire_name}`` renames to apply.
+
+        Returns:
+            The same *wire* dict, with each present source key renamed.
+        """
+        if not remaps:
+            return wire
+        for source, dest in remaps.items():
+            if source in wire:
+                wire[dest] = wire.pop(source)
+        return wire
 
     def _check_ready(self) -> None:
         """Raise if provider is not ready for requests.
