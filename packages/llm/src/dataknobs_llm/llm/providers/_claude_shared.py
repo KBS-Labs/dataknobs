@@ -149,8 +149,8 @@ try:
     #: (``max_tokens``) and input (``max_input_tokens``) ceilings, read once at
     #: import. Consulted only when the dynamic Models-API path has produced no
     #: value for a model (see
-    #: :func:`~dataknobs_llm.llm.providers.anthropic._resolve_ceiling` /
-    #: :func:`~dataknobs_llm.llm.providers.anthropic._resolve_input_ceiling`).
+    #: :func:`~dataknobs_llm.llm.providers.anthropic._resource_profile`, the
+    #: bundled-resource half of the layered ceiling resolution).
     #: Degrade to ``{}`` if the resource is unreadable so a data-file issue
     #: never breaks import — the packaging regression is caught instead by an
     #: ``importlib.resources`` test.

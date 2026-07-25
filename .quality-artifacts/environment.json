@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-24T22:28:16Z",
+  "timestamp": "2026-07-24T23:10:18Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.32 (Homebrew 2026-07-23 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/llm-claude5-model-metadata-fixes",
-  "git_commit": "a9cc1363d426dc839accaf83f2d8b807f9160d90",
+  "git_branch": "sbk/llm-model-profile-substrate",
+  "git_commit": "d947999056fd456625338576fe863db60ed27d02",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

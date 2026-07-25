@@ -48,6 +48,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vision / function calling / JSON mode. The bundled Anthropic model-limits
   resource adds `claude-opus-5` (128k output, 1M input) and corrects the
   input-context ceiling of the current 1M-context models to `1000000`.
+- **Unified model-metadata substrate (`dataknobs_llm.llm.model_profile`).** A
+  single `ModelProfile` record holds every model-keyed facet (context window,
+  output-token ceiling, capabilities, rejected params, param remaps, pricing,
+  availability, aliases), resolved through one `LayeredModelProfileResolver`
+  whose ordered `ModelMetadataSource`s merge **facet-by-facet, highest precedence
+  first** (`merge_partials` — override, not union; a present empty `frozenset()`
+  is an authoritative "known none" that beats a lower-precedence guess, distinct
+  from `None` = "unknown"). Ships the built-in sources (`CallableModelMetadataSource`,
+  `ConfigOverrideSource`, `BundledResourceSource`) plus the consumer-extensible
+  `model_metadata_sources` registry, so an in-house gateway / proxy can register a
+  source without a dataknobs release. This collapses the "each provider
+  hand-maintains scattered literals that go stale every vendor release" pattern
+  into one operation applied as a per-provider *binding*. `AnthropicProvider` is
+  the first adopter: its capability / constraint / ceiling detection now reads a
+  resolved `ModelProfile` (live Models-API cache → bundled resource → heuristic,
+  with a config override on top) — a behavior-preserving refactor of the existing
+  detection, no change to `get_capabilities` / `get_constraints` / `validate_model`
+  results.
+- **`LLMConfig.model_profile_overrides`.** New loose-mapping field: the
+  highest-precedence layer of the substrate, letting a consumer supply or correct
+  any model facet (capabilities, ceilings, rejected params, pricing, …) per facet
+  without a dataknobs release. Either a flat facet mapping (applies to the
+  configured model) or a `{model_id: {facets}}` per-model mapping. Additive — absent
+  by default (no override layer); complements the existing `LLMConfig.constraints`
+  overlay.
 
 ### Fixed
 
