@@ -1,0 +1,1443 @@
+[
+  {
+    "config": {},
+    "id": "cross::claude-opus-5::cold",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-5::dyn_full",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-opus-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-5::dyn_input_only",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-opus-5",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-5::dyn_noise",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5::cold",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5::dyn_full",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5::dyn_input_only",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5::dyn_noise",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-mythos-5::cold",
+    "model": "claude-mythos-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-mythos-5::dyn_full",
+    "model": "claude-mythos-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-mythos-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-mythos-5::dyn_input_only",
+    "model": "claude-mythos-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-mythos-5",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-mythos-5::dyn_noise",
+    "model": "claude-mythos-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-fable-5::cold",
+    "model": "claude-fable-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-fable-5::dyn_full",
+    "model": "claude-fable-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-fable-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-fable-5::dyn_input_only",
+    "model": "claude-fable-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-fable-5",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-fable-5::dyn_noise",
+    "model": "claude-fable-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-haiku-4-5-20251001::cold",
+    "model": "claude-haiku-4-5-20251001",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 200000,
+        "max_tokens_ceiling": 64000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-haiku-4-5-20251001::dyn_full",
+    "model": "claude-haiku-4-5-20251001",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-haiku-4-5-20251001",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-haiku-4-5-20251001::dyn_input_only",
+    "model": "claude-haiku-4-5-20251001",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 64000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-haiku-4-5-20251001",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-haiku-4-5-20251001::dyn_noise",
+    "model": "claude-haiku-4-5-20251001",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 200000,
+        "max_tokens_ceiling": 64000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-4-8::cold",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-4-8::dyn_full",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-opus-4-8",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-4-8::dyn_input_only",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-opus-4-8",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-opus-4-8::dyn_noise",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5-20260514::cold",
+    "model": "claude-sonnet-5-20260514",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5-20260514::dyn_full",
+    "model": "claude-sonnet-5-20260514",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5-20260514",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5-20260514::dyn_input_only",
+    "model": "claude-sonnet-5-20260514",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5-20260514",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-sonnet-5-20260514::dyn_noise",
+    "model": "claude-sonnet-5-20260514",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-3-5-sonnet-20241022::cold",
+    "model": "claude-3-5-sonnet-20241022",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::claude-3-5-sonnet-20241022::dyn_full",
+    "model": "claude-3-5-sonnet-20241022",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-3-5-sonnet-20241022",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-3-5-sonnet-20241022::dyn_input_only",
+    "model": "claude-3-5-sonnet-20241022",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-3-5-sonnet-20241022",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::claude-3-5-sonnet-20241022::dyn_noise",
+    "model": "claude-3-5-sonnet-20241022",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::some-unknown-model::cold",
+    "model": "some-unknown-model",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::some-unknown-model::dyn_full",
+    "model": "some-unknown-model",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "some-unknown-model",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::some-unknown-model::dyn_input_only",
+    "model": "some-unknown-model",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "some-unknown-model",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::some-unknown-model::dyn_noise",
+    "model": "some-unknown-model",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::gpt-4o::cold",
+    "model": "gpt-4o",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {},
+    "id": "cross::gpt-4o::dyn_full",
+    "model": "gpt-4o",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "gpt-4o",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::gpt-4o::dyn_input_only",
+    "model": "gpt-4o",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "gpt-4o",
+        null,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "cross::gpt-4o::dyn_noise",
+    "model": "gpt-4o",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": null,
+        "max_tokens_ceiling": null,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-zzz-unrelated-9",
+        111,
+        222
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "special::bare_alias_dynamic",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5-20260514",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {},
+    "id": "special::family_alias_dynamic",
+    "model": "claude-haiku-4-5-20251001",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 222222,
+        "rejected_params": []
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-haiku-4-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "capabilities": [
+          "vision"
+        ]
+      }
+    },
+    "id": "special::override_caps_profile",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "vision"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "max_output_tokens": 4096
+      }
+    },
+    "id": "special::override_output_ceiling",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 4096,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "context_window": 50000
+      }
+    },
+    "id": "special::override_input_ceiling",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 50000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "rejected_params": [
+          "top_p"
+        ]
+      }
+    },
+    "id": "special::override_rejected_params",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "top_p"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "claude-opus-5": {
+          "max_output_tokens": 333
+        }
+      }
+    },
+    "id": "special::override_per_model_mapping",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 333,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "model_profile_overrides": {
+        "max_output_tokens": 4096
+      }
+    },
+    "id": "special::override_beats_dynamic",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 888888,
+        "max_tokens_ceiling": 4096,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": [
+      [
+        "claude-sonnet-5",
+        222222,
+        888888
+      ]
+    ]
+  },
+  {
+    "config": {
+      "capabilities": [
+        "json_mode",
+        "chat"
+      ]
+    },
+    "id": "special::config_capabilities_override",
+    "model": "claude-opus-5",
+    "outputs": {
+      "capabilities": [
+        "json_mode",
+        "chat"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "constraints": {
+        "max_tokens_ceiling": 100
+      }
+    },
+    "id": "special::config_constraints_ceiling",
+    "model": "claude-sonnet-5",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 100,
+        "rejected_params": [
+          "temperature"
+        ]
+      }
+    },
+    "scripted_models": []
+  },
+  {
+    "config": {
+      "constraints": {
+        "rejected_params": [
+          "frequency_penalty"
+        ]
+      }
+    },
+    "id": "special::config_constraints_rejected",
+    "model": "claude-opus-4-8",
+    "outputs": {
+      "capabilities": [
+        "text_generation",
+        "chat",
+        "streaming",
+        "code",
+        "vision",
+        "function_calling",
+        "json_mode"
+      ],
+      "constraints": {
+        "accepts_inline_system": false,
+        "max_input_tokens": 1000000,
+        "max_tokens_ceiling": 128000,
+        "rejected_params": [
+          "frequency_penalty"
+        ]
+      }
+    },
+    "scripted_models": []
+  }
+]

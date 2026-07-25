@@ -45,8 +45,11 @@ override, heuristic rule) have no cache and no I/O at all.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Iterable, Mapping
+import time
+import weakref
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
 from typing import Any, Protocol, runtime_checkable
 
@@ -458,6 +461,269 @@ class BundledResourceSource:
         return self._profiles[key]
 
 
+def _default_model_id(model_obj: Any) -> str | None:
+    """Read a live-API model object's id (the ``getattr(obj, "id")`` default).
+
+    The default ``model_id`` extractor for :class:`LiveApiSource`. A vendor
+    whose model objects key their id under a different attribute passes its own
+    ``model_id`` callable.
+    """
+    value = getattr(model_obj, "id", None)
+    return str(value) if value is not None else None
+
+
+def _has_known_facet(profile: ModelProfile) -> bool:
+    """Whether *profile* carries at least one non-``None`` facet.
+
+    The generic form of the "cache the entry only when the model reports a
+    ceiling" gate: a live model object the extractor projects to an all-``None``
+    partial contributes nothing, so it is not cached (a lower-precedence source
+    supplies the fallback).
+    """
+    return any(getattr(profile, facet) is not None for facet in _PROFILE_FACETS)
+
+
+@dataclass
+class _LiveEntry:
+    """One cached per-model partial profile fetched from a live vendor API.
+
+    ``source`` tags provenance (``"dynamic"`` — from the live API): the cache
+    holds only live-sourced entries, so the **non-degradation** guarantee (a
+    transient refresh failure never drops a known-good live value) is achieved by
+    leaving the cache untouched on failure — a lower-precedence source (the
+    bundled resource) supplies the fallback separately, never overwriting a live
+    entry.
+    ``fetched_at`` is a :func:`time.monotonic` stamp (provenance/debugging; the
+    refresh cadence is gated per-loop, not per entry).
+    """
+
+    profile: ModelProfile
+    source: str  # "dynamic"
+    fetched_at: float
+
+
+class LiveApiSource:
+    """A :class:`ModelMetadataSource` backed by a live vendor Models API, cached.
+
+    Generalizes the Anthropic live Models-API ceiling cache into a reusable
+    source any provider serving live model metadata can compose. It wraps:
+
+    - ``list_models`` — an async ``() -> Iterable[api_object]`` collecting every
+      model the vendor lists (the provider already owns one — e.g. Anthropic's
+      auto-paged ``client.models.list()`` walker).
+    - ``extractor`` — a synchronous ``(api_object) -> ModelProfile`` projecting
+      one vendor model object into the facets it reports (a *partial* profile;
+      the facets the API does not serve stay ``None``).
+
+    **Synchronous resolve, out-of-band refresh** (the substrate contract):
+    :meth:`resolve` is a pure cache read (no I/O), safe on the provider's
+    per-request / construction-time detect path; the provider drives
+    :meth:`refresh_if_stale` / :meth:`force_refresh` from its async request
+    boundary to keep the cache current.
+
+    **The refresh carries three properties (lifted from the Anthropic cache):**
+
+    - **TTL-gated** — a fresh cache is a no-op (no I/O); a refresh fires at most
+      once per ``ttl`` per event loop, never per request (:meth:`is_stale`).
+    - **Per-loop-locked** — concurrent callers on a cold/stale cache coalesce
+      into a single ``list_models()`` (the double-check after the lock returns
+      the losers early). Locks + last-fetch timestamps are keyed on the loop
+      *object* via a :class:`weakref.WeakKeyDictionary`, so a collected loop's
+      state is evicted (no leak) and a fresh loop is always a distinct key
+      (closing the ``id(loop)``-reuse mis-skip hole where a new loop could
+      inherit a dead loop's stale timestamp).
+    - **Source-aware non-degradation** — the last-fetch timer is re-armed
+      *before* the poll (success or failure), so a Models-API outage cannot
+      busy-retry (bounded to one attempt per TTL); on failure the cache is left
+      intact, so a known-good live value is never dropped back to the bundled
+      fallback (which a lower-precedence source supplies). A model absent from
+      the cache resolves via that fallback until a poll returns it, at which
+      point its ``dynamic`` entry outranks the fallback in the layered resolver.
+
+    The cache is **per-instance**: each provider owns its live source (D-KEY —
+    provider identity is structural), so two providers on distinct accounts keep
+    isolated caches rather than sharing one keyed only by model id.
+    """
+
+    def __init__(
+        self,
+        list_models: Callable[[], Awaitable[Iterable[Any]]],
+        extractor: Callable[[Any], ModelProfile],
+        *,
+        name: str = "live_api",
+        ttl: float = 3600.0,
+        refresh_timeout: float = 10.0,
+        enabled: bool = True,
+        model_id: Callable[[Any], str | None] = _default_model_id,
+    ) -> None:
+        """Build a live source.
+
+        Args:
+            list_models: Async ``() -> Iterable[api_object]`` collecting every
+                model the vendor lists.
+            extractor: Sync ``(api_object) -> ModelProfile`` projecting one
+                model object into the facets it reports.
+            name: Stable identifier for logging / debugging.
+            ttl: Seconds between Models-API refreshes per loop. A fresh cache is
+                a no-op; ``0`` re-polls each stale check (maximal freshness).
+            refresh_timeout: Hard timeout (seconds) on a single poll — the lock
+                is held across it, so a *hung* control-plane is bounded here
+                rather than stalling every cold-cache caller.
+            enabled: When ``False``, both refresh entries are no-ops (the source
+                resolves from an empty cache — resource-only via the resolver).
+            model_id: ``(api_object) -> str | None`` reading a model object's id
+                (default: ``getattr(obj, "id")``).
+        """
+        self.name = name
+        self._list_models = list_models
+        self._extractor = extractor
+        self._ttl = ttl
+        self._refresh_timeout = refresh_timeout
+        self._enabled = enabled
+        self._model_id = model_id
+        self._cache: dict[str, _LiveEntry] = {}
+        self._last_fetch: weakref.WeakKeyDictionary[Any, float] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._locks: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
+            weakref.WeakKeyDictionary()
+        )
+
+    # -- read path (synchronous, I/O-free) --------------------------------
+
+    def resolve(self, model: str) -> ModelProfile:
+        """Return the facets the live cache knows for *model* (rest ``None``).
+
+        Resolved **per facet** by the shared family-alias matcher
+        (:func:`match_family_key`): for each facet, the best-matching cache key
+        *among entries that know that facet* wins, so a bare-alias request
+        (``claude-sonnet-5``) resolves against a dated cache key
+        (``claude-sonnet-5-<snapshot>``) fetched from the API — independently per
+        facet, so a model reporting only its input window contributes its input
+        facet without fabricating an output value. Pure cache read (no I/O).
+        """
+        if not self._cache:
+            return ModelProfile()
+        key = model.lower()
+        merged: dict[str, Any] = {}
+        for facet in _PROFILE_FACETS:
+            known = {
+                cache_key: value
+                for cache_key, entry in self._cache.items()
+                if (value := getattr(entry.profile, facet)) is not None
+            }
+            if not known:
+                continue
+            matched = match_family_key(key, known.keys())
+            if matched is not None:
+                merged[facet] = known[matched]
+        return ModelProfile(**merged)
+
+    # -- refresh (async, out-of-band) -------------------------------------
+
+    def is_stale(self) -> bool:
+        """Whether the running loop is due for a refresh (per ``ttl``).
+
+        Must be called from within a running event loop (the refresh state is
+        keyed on the loop object); raises :class:`RuntimeError` otherwise. The
+        refresh entries (:meth:`refresh_if_stale` / :meth:`force_refresh`) are
+        the intended drivers — this is exposed for callers already on the loop
+        that want to gate their own work on freshness.
+        """
+        last = self._last_fetch.get(asyncio.get_running_loop())
+        if last is None:
+            return True
+        return (time.monotonic() - last) >= self._ttl
+
+    async def refresh_if_stale(self) -> None:
+        """Refresh the cache if this loop's TTL expired (the hot-path entry).
+
+        A no-op (no lock, no I/O) when disabled or the cache is fresh, so it is
+        cheap to call on every request; a stale/cold cache coalesces concurrent
+        callers into one poll under the per-loop lock. Best-effort — never raises.
+        """
+        if not self._enabled or not self.is_stale():
+            return
+        await self._locked_refresh(force=False)
+
+    async def force_refresh(self) -> None:
+        """Poll now, bypassing the TTL gate (honors the disabled switch).
+
+        The public force-refresh entry for a consumer driving freshness on its
+        own schedule instead of relying on the TTL. Best-effort — never raises.
+        """
+        if not self._enabled:
+            return
+        await self._locked_refresh(force=True)
+
+    async def _locked_refresh(self, *, force: bool) -> None:
+        """Serialize the poll per loop; re-arm the timer before the call.
+
+        The double-check after acquiring the lock returns the losers of a
+        cold-cache race early (one shared poll). The timer is re-armed *before*
+        the API call — success or failure — so an outage is bounded to one
+        attempt per TTL and never busy-retries; on any error the cache is left
+        intact (non-degradation) and the request proceeds on the cached/fallback
+        value.
+        """
+        async with self._lock():
+            if not force and not self.is_stale():
+                return
+            self._last_fetch[asyncio.get_running_loop()] = time.monotonic()
+            try:
+                # Bound the poll independently of the client's request timeout:
+                # the lock is held across it, so a *hung* control-plane would
+                # otherwise stall every cold-cache caller.
+                models = await asyncio.wait_for(
+                    self._list_models(), timeout=self._refresh_timeout
+                )
+            except Exception as exc:  # never fatal — serve cached/fallback value
+                logger.debug(
+                    "%s live model refresh failed, using fallback: %s",
+                    self.name,
+                    exc,
+                )
+                return
+            now = time.monotonic()
+            for model_obj in models:
+                profile = self._extractor(model_obj)
+                model_id = self._model_id(model_obj)
+                if model_id and _has_known_facet(profile):
+                    self._cache[model_id.lower()] = _LiveEntry(
+                        profile=profile, source="dynamic", fetched_at=now,
+                    )
+
+    def _lock(self) -> asyncio.Lock:
+        """Return (lazily creating) the refresh lock for the running loop.
+
+        Lazy creation is race-free within a loop: no ``await`` separates the
+        ``get`` from the assignment, so a single loop cannot interleave two
+        creations, and distinct loops key on distinct loop objects.
+        """
+        loop = asyncio.get_running_loop()
+        lock = self._locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[loop] = lock
+        return lock
+
+    # -- seeding / lifecycle helpers --------------------------------------
+
+    def seed(
+        self, model_id: str, profile: ModelProfile, *, source: str = "dynamic"
+    ) -> None:
+        """Seed a cache entry directly (manual-priming / test helper)."""
+        self._cache[model_id.lower()] = _LiveEntry(
+            profile=profile, source=source, fetched_at=time.monotonic()
+        )
+
+    def clear(self) -> None:
+        """Drop all cached entries + per-loop refresh state."""
+        self._cache.clear()
+        self._last_fetch.clear()
+        self._locks.clear()
+
+
 # ---------------------------------------------------------------------------
 # The layered resolver
 # ---------------------------------------------------------------------------
@@ -501,6 +767,7 @@ __all__ = [
     "CallableModelMetadataSource",
     "ConfigOverrideSource",
     "LayeredModelProfileResolver",
+    "LiveApiSource",
     "ModelMetadataSource",
     "ModelPricing",
     "ModelProfile",

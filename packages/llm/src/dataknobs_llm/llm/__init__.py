@@ -23,6 +23,7 @@ from .model_profile import (
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
+    LiveApiSource,
     ModelMetadataSource,
     ModelPricing,
     ModelProfile,
@@ -81,6 +82,7 @@ __all__ = [
     'CallableModelMetadataSource',
     'ConfigOverrideSource',
     'BundledResourceSource',
+    'LiveApiSource',
     'merge_partials',
     'model_metadata_sources',
     # Providers

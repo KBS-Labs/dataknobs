@@ -149,27 +149,18 @@ class _CaptureAnthropicClient:
 
 @pytest.fixture(autouse=True)
 def _reset_model_limits_cache() -> Any:
-    """Isolate the module-level process caches between tests.
+    """Isolate the module-level process cache between tests.
 
-    The dynamic ceiling cache, per-loop last-fetch timestamps, refresh locks,
-    and the discovered-rejected-params cache are process-global; clearing them
-    before each test keeps state from leaking across tests.
+    The live Models-API ceiling cache is now **per-provider-instance** (owned by
+    each provider's :class:`~dataknobs_llm.llm.model_profile.LiveApiSource`), so a
+    fresh provider per test already starts cold — no cross-test leak to clear. The
+    runtime-discovered-rejected-params cache remains process-global (a separate
+    self-correction overlay, not part of the live-source lift); clearing it before
+    and after each test keeps a 400-recovery discovery from leaking across tests.
     """
-    for cache in (
-        anthropic_mod._MODEL_LIMITS_CACHE,
-        anthropic_mod._MODEL_LIMITS_LAST_FETCH,
-        anthropic_mod._MODEL_LIMITS_LOCKS,
-        anthropic_mod._DISCOVERED_REJECTED_PARAMS,
-    ):
-        cache.clear()
+    anthropic_mod._DISCOVERED_REJECTED_PARAMS.clear()
     yield
-    for cache in (
-        anthropic_mod._MODEL_LIMITS_CACHE,
-        anthropic_mod._MODEL_LIMITS_LAST_FETCH,
-        anthropic_mod._MODEL_LIMITS_LOCKS,
-        anthropic_mod._DISCOVERED_REJECTED_PARAMS,
-    ):
-        cache.clear()
+    anthropic_mod._DISCOVERED_REJECTED_PARAMS.clear()
 
 
 def _provider_with_capture(
@@ -970,51 +961,6 @@ class TestMatchCeilingUnification:
         assert provider.get_constraints().max_tokens_ceiling == 200000
 
 
-class TestPerLoopStateKeying:
-    """Per-loop refresh state is keyed by the loop *object*, not ``id(loop)`` (#4).
-
-    ``id(loop)`` in a plain dict never evicts a dead loop's entry (a leak) and,
-    worse, lets a *new* loop that happens to reuse a freed id inherit the dead
-    loop's stale last-fetch timestamp and wrongly skip a needed refresh. Keying
-    a ``WeakKeyDictionary`` on the loop object evicts the entry when the loop is
-    collected and makes every new loop a distinct key.
-
-    Note: the id-reuse *mis-skip* is inherently non-deterministic (it depends on
-    the allocator reusing a freed id), so it cannot be reproduced reliably in a
-    unit test. This test pins the deterministic, observable consequence of the
-    fix — automatic eviction when the loop is GC'd — which the pre-change plain
-    ``dict[int, ...]`` fails (the entry persists after the loop is gone).
-    """
-
-    def test_state_is_weak_keyed(self) -> None:
-        import weakref
-
-        assert isinstance(
-            anthropic_mod._MODEL_LIMITS_LAST_FETCH, weakref.WeakKeyDictionary
-        )
-        assert isinstance(
-            anthropic_mod._MODEL_LIMITS_LOCKS, weakref.WeakKeyDictionary
-        )
-
-    def test_dead_loop_entry_is_evicted(self) -> None:
-        import gc
-
-        provider, client = _provider_with_capture("claude-sonnet-5")
-        client.models.models = [_ScriptedModel("claude-sonnet-5", 200000)]
-
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(provider.refresh_model_limits())
-        finally:
-            loop.close()
-
-        # The refresh recorded per-loop state keyed by the loop object.
-        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 1
-
-        del loop
-        gc.collect()
-
-        # WeakKeyDictionary drops the dead loop's entry — no leak, and no stale
-        # timestamp a future (id-reused) loop could inherit. A plain
-        # ``dict[int, float]`` (the pre-change keying) would still hold it.
-        assert len(anthropic_mod._MODEL_LIMITS_LAST_FETCH) == 0
+#: Per-loop refresh-state keying (weak-keyed, dead-loop eviction) moved with the
+#: cache to ``test_live_api_source.py`` — the mechanism now lives on
+#: ``LiveApiSource`` rather than module globals (fix-at-the-right-layer).

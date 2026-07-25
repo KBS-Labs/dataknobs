@@ -73,6 +73,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured model) or a `{model_id: {facets}}` per-model mapping. Additive — absent
   by default (no override layer); complements the existing `LLMConfig.constraints`
   overlay.
+- **`LiveApiSource` — generic live-vendor-API model-metadata source
+  (`from dataknobs_llm.llm import LiveApiSource`, alongside its sibling built-in
+  sources).** A reusable `ModelMetadataSource` any
+  provider serving live model metadata can compose: it wraps an async
+  `list_models()` + a `(api_object) -> ModelProfile` extractor and carries a
+  process cache with **TTL-gated** refresh (a fresh cache is a no-op; ≤1 poll per
+  TTL per event loop), **per-loop-locked** dedup (concurrent cold-cache callers
+  coalesce into one poll; locks/timestamps weak-keyed on the loop object so a
+  collected loop's state is evicted), a **bounded** poll (`refresh_timeout`), and
+  **source-aware non-degradation** (a transient refresh failure leaves a
+  known-good live value intact rather than dropping to the bundled fallback).
+  `resolve` is a synchronous, I/O-free per-facet family-alias cache read, safe on
+  the detect path. `AnthropicProvider` is migrated onto it — its former in-module
+  live Models-API ceiling cache is absorbed into a per-provider `LiveApiSource`,
+  so single-provider resolution is unchanged (verified by a committed
+  golden-master snapshot over a model × cache-state × config matrix).
+
+### Changed
+
+- **The Anthropic live Models-API ceiling cache is now per-provider-instance**
+  (each provider owns its own `LiveApiSource`) rather than a single module-global
+  cache shared across all `AnthropicProvider` instances. Single-provider behavior
+  is identical (golden-master verified). For deployments running multiple
+  `AnthropicProvider` instances: each now refreshes its own cache (bounded by the
+  same per-instance TTL) instead of sharing one poll, and instances on distinct
+  accounts no longer share ceiling entries keyed only by model id — a correctness
+  improvement (no cross-account leakage). The runtime-discovered-rejected-params
+  self-correction cache is unaffected (remains process-global).
 
 ### Fixed
 

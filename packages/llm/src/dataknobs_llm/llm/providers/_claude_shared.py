@@ -13,10 +13,11 @@ Two kinds of Claude constraint live here:
 - **``max_tokens`` ceilings** — the bundled fallback resource
   (``data/anthropic_model_limits.yaml``) and the family-matching resolver
   (:func:`match_ceiling` / :func:`resource_ceiling`). The native Anthropic
-  provider layers a *live Models-API* cache on top of this fallback (that
-  dynamic sourcing is Anthropic-endpoint-specific and stays in
-  ``anthropic.py``); the resource resolution itself is shared because a Claude
-  model's output ceiling is a property of the *model*, not the endpoint.
+  provider layers a *live Models-API* source on top of this fallback (a generic
+  :class:`~dataknobs_llm.llm.model_profile.LiveApiSource` bound to the
+  Anthropic ``list_models`` walker + ceiling extractor in ``anthropic.py``); the
+  resource resolution itself is shared because a Claude model's output ceiling
+  is a property of the *model*, not the endpoint.
 - **Claude-5 ``temperature`` rejection** (:func:`claude_rejects_temperature`) —
   the Claude 5 generation does not support the ``temperature`` sampling
   parameter; this is a model-family property, true regardless of which endpoint
@@ -126,8 +127,8 @@ def load_model_limits_resource() -> dict[str, int]:
 
     Read once at import (below) into :data:`RESOURCE_MODEL_LIMITS`. The resource
     is fallback-only: the primary source is the live Models API ``max_tokens``
-    on the native Anthropic endpoint (see
-    :meth:`~dataknobs_llm.llm.providers.anthropic.AnthropicProvider._refresh_model_limits`).
+    on the native Anthropic endpoint (the per-provider
+    :class:`~dataknobs_llm.llm.model_profile.LiveApiSource`).
     """
     output, _ = project_model_limits(_load_models_section())
     return output
