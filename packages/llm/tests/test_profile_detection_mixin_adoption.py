@@ -38,12 +38,15 @@ from dataknobs_llm.llm.base import LLMConfig, LLMProvider
 from dataknobs_llm.llm.profile_detection import ProfileDetectionMixin
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
 from dataknobs_llm.llm.providers.bedrock import BedrockProvider
+from dataknobs_llm.llm.providers.huggingface import HuggingFaceProvider
 from dataknobs_llm.llm.providers.ollama import OllamaProvider
 from dataknobs_llm.llm.providers.openai import OpenAIProvider
 
 # Providers that inherit the ENTIRE trio unchanged and keep the default
-# lookup key (their resolve key is ``config.model``).
-FULLY_INHERITING = [OpenAIProvider, OllamaProvider]
+# lookup key (their resolve key is ``config.model``). HuggingFace is the first
+# *clean* adopter of the extraction — it supplies only ``_profile_resolver`` and
+# inherits capabilities, constraints, pricing, AND the default lookup key.
+FULLY_INHERITING = [OpenAIProvider, OllamaProvider, HuggingFaceProvider]
 
 
 def _all_subclasses(root: type) -> set[type]:
@@ -166,12 +169,13 @@ class TestNoSubstrateBoundProviderReCopiesTrio:
     def test_enumeration_finds_the_known_adopters(self) -> None:
         # Guard against the guard silently degrading to an empty set (which would
         # make every parametrized check below vacuously pass). The discovered set
-        # must at least contain the four current adopters; a new one may be added.
+        # must at least contain the five current adopters; a new one may be added.
         assert set(_BOUND_PROVIDERS) >= {
             OpenAIProvider,
             AnthropicProvider,
             BedrockProvider,
             OllamaProvider,
+            HuggingFaceProvider,
         }
 
     @pytest.mark.parametrize(

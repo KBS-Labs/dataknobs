@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HuggingFace model-metadata binding (heuristic-primary, override-rich).**
+  `HuggingFaceProvider` now resolves capabilities through the model-metadata
+  substrate and lights up config-`model_profile_overrides` for **every** facet —
+  the last provider migrated off the inline capability-substring lists. Its
+  resolver is the leanest of the bindings: **config override → repo-name
+  capability heuristic**, with no live source (HuggingFace has no walker-shaped
+  offered-set — the per-model Hub lookup is a distinct source shape deferred to
+  its own design pass) and no bundled resource / vendor pricing / output ceiling
+  (its model space is unbounded and community-driven; per-repo facts come from
+  the consumer override). The heuristic emits the complete capability set from the
+  repo name — `TEXT_GENERATION` always, `CHAT` for `chat`/`instruct`/
+  `conversational`, and `EMBEDDINGS` for the dominant embedding families
+  (`sentence-transformers/*`, `feature-extraction`, `all-minilm`, `bge-`, `gte-`)
+  — deliberately never `STREAMING` (HuggingFace's stream is a simulated single
+  yield) or `FUNCTION_CALLING` (the Inference API rejects tools). Context window,
+  rejected params, param remaps, pricing, and availability are `None` from the
+  heuristic and lit up only by `model_profile_overrides` (including a `pricing`
+  override to model private-endpoint cost, which lights up `get_pricing` /
+  `estimate_cost` — HuggingFace sources no pricing of its own). `validate_model`
+  keeps its authoritative `GET {base}/{model}` liveness probe but honors an
+  `available` override pin (a private-gateway / TGI consumer that wants to skip
+  the probe).
+- **`ConfigOverrideSource` gains an injectable `match=` matcher.** The
+  config-override layer now accepts the same `match=(model, keys) -> key | None`
+  argument the live source already had (default `match_family_key`,
+  byte-identical for existing adopters) so a provider whose **per-repo override
+  map** keys collide under pure-substring matching can inject its own rule.
+  HuggingFace needs this: its repo ids share prefixes (`meta-llama/Llama-3.1-8B`
+  is a substring of `meta-llama/Llama-3.1-8B-Instruct`), so the default matcher
+  would resolve a request for the base repo to the `-Instruct` override —
+  HuggingFace injects an exact repo-id matcher that closes the collision. A
+  general consumer-extensibility seam, not a HuggingFace special case.
 - **Ollama model-metadata binding (live-first, local).** `OllamaProvider` now
   resolves capabilities, context window, and availability through the
   model-metadata substrate, sourced **live-first** from the local server: a
@@ -177,6 +209,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **HuggingFace capabilities are now resolver-sourced.** `get_capabilities()`
+  reads the resolved model profile instead of the inline substring lists.
+  Strictly more correct: the embedding-family widening now classifies
+  `sentence-transformers/*` and `feature-extraction` repos the old bare
+  `embedding` test missed, an embedding-only repo resolves `EMBEDDINGS` disjoint
+  from `CHAT` (no longer silently chat-capable), and the historical
+  `chat`/`instruct`/`conversational` cases are unchanged. HuggingFace's
+  `complete` now routes its `parameters` through the shared request-shaping choke
+  point (so a consumer's `constraints.rejected_params` / `param_remaps` are
+  honored) and the hardcoded `max_new_tokens=100` output default is now a named
+  constant — both **byte-identical** in normal use (no override → the same
+  `parameters`, the same `100` default when the caller sets no `max_tokens`).
+  `max_input_tokens` populates for HuggingFace where it was previously always
+  dead, once a consumer overrides `context_window`.
 - **Ollama capabilities are now live-first / data-sourced.** `get_capabilities()`
   reads the resolved model profile instead of hardcoded family-substring lists, so
   a model's tool / vision / code support tracks what the server reports (or the
@@ -242,6 +288,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AnthropicProvider` now honors a `model_profile_overrides.pricing` override.**
+  It previously had no `_detect_pricing` override, so the base `None` default
+  silently dropped a consumer-declared pricing override — `get_pricing` /
+  `estimate_cost` stayed `None` even when the consumer supplied a price table.
+  It now reads the `pricing` facet off its resolved profile (like every other
+  substrate-bound provider), so the documented override path works. Anthropic
+  sources no pricing of its own, so the default is still `None`; only a
+  consumer-supplied override changes behavior.
 - **`AnthropicProvider.validate_model` no longer rejects every current model.**
   It matched against a hardcoded version whitelist that predated Claude 4, so it
   returned `False` for every model shipped since. It now queries the provider's
