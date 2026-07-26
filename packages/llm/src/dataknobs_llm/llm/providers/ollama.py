@@ -98,18 +98,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
 from ..model_profile import (
-    CAPABILITY_ORDER,
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
     LiveApiSource,
-    ModelPricing,
     ModelProfile,
 )
+from ..profile_detection import ProfileDetectionMixin
 from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -620,7 +619,7 @@ class OllamaAdapter(LLMAdapter):
         }
 
 
-class OllamaProvider(AsyncLLMProvider):
+class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
     """Ollama local LLM provider for privacy-first, offline LLM usage.
 
     Provides async access to locally-hosted Ollama models, enabling
@@ -1034,65 +1033,6 @@ class OllamaProvider(AsyncLLMProvider):
         await self._live_source.force_refresh()
         profile = self._profile_resolver(self.config).resolve(self.config.model)
         return bool(profile.available)
-
-    def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect Ollama model capabilities (one-line profile read).
-
-        Reads the ``capabilities`` facet off the resolved
-        :class:`~..model_profile.ModelProfile` — live-first from ``/api/show``
-        (the server's authoritative ``capabilities`` array, mapped by
-        :func:`_ollama_caps_from_server`), heuristic fallback by model name, with
-        ``model_profile_overrides`` on top — projected back to the historical
-        ordered list via :data:`~..model_profile.CAPABILITY_ORDER`. Replaces the
-        pre-binding hardcoded family-substring lists, which went stale each
-        Ollama release (no ``llama4`` / ``gpt-oss`` / ``qwen3``-specific
-        handling). A dedicated embedding model resolves an EMBEDDINGS-only
-        disjoint set.
-        """
-        profile = self._profile_resolver(self.config).resolve(self.config.model)
-        capabilities = profile.capabilities or frozenset()
-        return [c for c in CAPABILITY_ORDER if c in capabilities]
-
-    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
-        """Auto-detect Ollama request-shape constraints (one-line profile read).
-
-        Reads the resolved profile's facets for *config*'s model:
-
-        - ``max_input_tokens`` from ``context_window`` — the model's input
-          window, sourced live from ``/api/show``
-          (``model_info.<arch>.context_length``). **Now populated for Ollama**
-          (it never was before), so a consumer's proactive input budget engages.
-          Informational — never clamped.
-        - ``max_tokens_ceiling`` from ``max_output_tokens`` — always ``None`` for
-          Ollama (``num_predict: -1`` = unlimited output; no ceiling to clamp).
-        - ``rejected_params`` / ``param_remaps`` — empty by default (Ollama is
-          permissive), wired so a consumer ``LLMConfig.constraints`` override —
-          or a future family rule — is honored through the shared request-shaping
-          choke point.
-
-        Overridable per request via ``LLMConfig.constraints``.
-        """
-        profile = self._profile_resolver(config).resolve(config.model)
-        return ModelConstraints(
-            rejected_params=frozenset(profile.rejected_params or ()),
-            max_tokens_ceiling=profile.max_output_tokens,
-            max_input_tokens=profile.context_window,
-            param_remaps=dict(profile.param_remaps or {}),
-        )
-
-    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
-        """Read the ``pricing`` facet off the resolved profile (else ``None``).
-
-        Ollama runs models locally for free, so none of its own sources (live
-        ``/api/show``, heuristic) ever set ``pricing`` — this returns ``None`` by
-        default, exactly like the base provider. It reads the resolved profile
-        (rather than hard-returning ``None``) purely so a consumer can model
-        private GPU/hosting cost via ``model_profile_overrides.pricing``, which
-        then lights up :meth:`~..base.LLMProvider.get_pricing` /
-        :meth:`~..base.LLMProvider.estimate_cost` — a consumer-extensibility
-        bonus, not a shipped Ollama price table.
-        """
-        return self._profile_resolver(config).resolve(config.model).pricing
 
     def _build_shaped_options(self, config: LLMConfig) -> Dict[str, Any]:
         """Build Ollama ``options`` with the family's request-shape rules applied.
