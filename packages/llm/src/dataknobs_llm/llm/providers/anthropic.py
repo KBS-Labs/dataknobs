@@ -68,7 +68,7 @@ from dataknobs_common.exceptions import ValidationError
 
 from ..base import (
     LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
+    AsyncLLMProvider, ModelConstraints, ToolCall,
     normalize_claude_stop_reason, normalize_llm_config
 )
 from ._claude_shared import (
@@ -86,12 +86,12 @@ from ._claude_shared import (
     resource_input_ceiling,
 )
 from ..model_profile import (
-    CAPABILITY_ORDER,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
     LiveApiSource,
     ModelProfile,
 )
+from ..profile_detection import ProfileDetectionMixin
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
@@ -666,7 +666,7 @@ class AnthropicAdapter(LLMAdapter):
         ]
 
 
-class AnthropicProvider(AsyncLLMProvider):
+class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
     r"""Anthropic Claude LLM provider with full API support.
 
     Provides async access to Anthropic's Claude models including Claude 3
@@ -949,20 +949,6 @@ class AnthropicProvider(AsyncLLMProvider):
             for mid in listed
         )
 
-    def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect Anthropic model capabilities.
-
-        A one-line read off the resolved :class:`~..model_profile.ModelProfile`
-        (the heuristic source supplies the capability set; a consumer's
-        ``model_profile_overrides.capabilities`` wins per the resolver
-        precedence). The capability *set* is projected back to an ordered list via
-        :data:`~..model_profile.CAPABILITY_ORDER` so the historical ordering is
-        preserved.
-        """
-        profile = self._profile_resolver(self.config).resolve(self.config.model)
-        capabilities = profile.capabilities or frozenset()
-        return [c for c in CAPABILITY_ORDER if c in capabilities]
-
     def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
         """Auto-detect Anthropic request-shape constraints for *config*'s model.
 
@@ -1011,7 +997,7 @@ class AnthropicProvider(AsyncLLMProvider):
         not overridden by, the declarative profile.
         """
         model = config.model.lower()
-        profile = self._profile_resolver(config).resolve(config.model)
+        profile = self._resolve_profile(config)
         rejected: set[str] = set(profile.rejected_params or ())
         rejected |= _DISCOVERED_REJECTED_PARAMS.get(model, set())
         return ModelConstraints(

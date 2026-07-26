@@ -80,21 +80,19 @@ from ..base import (
     LLMResponse,
     LLMStreamResponse,
     ModelCapability,
-    ModelConstraints,
     ToolCall,
     normalize_claude_stop_reason,
     normalize_llm_config,
 )
 from ..model_profile import (
-    CAPABILITY_ORDER,
     BundledResourceSource,
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
     LiveApiSource,
-    ModelPricing,
     ModelProfile,
 )
+from ..profile_detection import ProfileDetectionMixin
 from ._claude_shared import (
     CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE,
     CLAUDE_RESOURCE_PROFILE_SOURCE,
@@ -582,7 +580,7 @@ _EMBED_FAMILIES: tuple[tuple[str, Any], ...] = (
 )
 
 
-class BedrockProvider(AsyncLLMProvider):
+class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
     """Amazon Bedrock LLM provider (Converse chat + Titan/Cohere embeddings).
 
     Authenticates via the AWS credential chain (IAM role, environment, or
@@ -951,72 +949,18 @@ class BedrockProvider(AsyncLLMProvider):
             return bool(self._availability_source.resolve(canonical).available)
         return bool(self._profile_resolver(self.config).resolve(canonical).available)
 
-    def _detect_capabilities(self) -> list[ModelCapability]:
-        """Auto-detect Bedrock model capabilities (one-line profile read).
+    def _profile_lookup_key(self, config: LLMConfig) -> str:
+        """Resolve profiles under the canonical, region-stripped model id.
 
-        Reads the ``capabilities`` facet off the resolved
-        :class:`~..model_profile.ModelProfile` (Bedrock resource → shared Claude
-        capability source for Claude ids → Bedrock heuristic last-resort, with
-        config-override on top), projected back to the historical ordered list
-        via :data:`~..model_profile.CAPABILITY_ORDER`. Embedding models resolve
-        an ``EMBEDDINGS``-only set (disjoint — they cannot chat / stream / call
-        tools); multimodal families (Claude 3+, Nova lite/pro/premier,
-        Llama-3.2 vision, Pixtral) resolve ``VISION``.
+        A Bedrock id may carry a cross-region inference-profile prefix
+        (``us.``/``eu.``/``apac.``) that is not part of the model family. Stripping
+        it via :func:`_canonical_model_id` before the catalog lookup makes a
+        cross-region id resolve the same profile (capabilities / ceiling /
+        pricing) as its base id — so the shared
+        :class:`~..profile_detection.ProfileDetectionMixin` trio reads the right
+        family for every regional variant.
         """
-        profile = self._profile_resolver(self.config).resolve(
-            _canonical_model_id(self.config.model)
-        )
-        capabilities = profile.capabilities or frozenset()
-        return [c for c in CAPABILITY_ORDER if c in capabilities]
-
-    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
-        """Auto-detect request-shape constraints (one-line profile read).
-
-        Reads three facets off the resolved profile (matched on the canonical,
-        region-stripped ``config.model`` so a cross-region inference-profile id
-        resolves the same family as its base id):
-
-        - ``max_tokens_ceiling`` from ``max_output_tokens`` — the output ceiling
-          the shared
-          :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
-          clamps an over-budget ``max_tokens`` down to. For a Claude-on-Bedrock
-          id this comes from the shared Claude ceiling resource (identical to the
-          native Anthropic provider, no drift); for a non-Claude id from the
-          Bedrock resource.
-        - ``max_input_tokens`` from ``context_window`` — the input/context
-          budget (informational, never clamped). **Now populated for Bedrock**
-          (it never was before), so a consumer's proactive input budget engages.
-        - ``rejected_params`` — sampling params the family 400s on (the Claude 5
-          family rejects ``temperature``); dropped before the call.
-        - ``param_remaps`` — wire renames the family requires (none for any
-          Bedrock family today — Converse unifies params across families in
-          ``adapt_config`` — but wired for a consumer override / future family).
-
-        An unlisted, non-Claude model resolves an all-permissive profile (no
-        ceiling, no rejected params). Overridable per request via
-        ``LLMConfig.constraints``.
-        """
-        profile = self._profile_resolver(config).resolve(
-            _canonical_model_id(config.model)
-        )
-        return ModelConstraints(
-            rejected_params=frozenset(profile.rejected_params or ()),
-            max_tokens_ceiling=profile.max_output_tokens,
-            max_input_tokens=profile.context_window,
-            param_remaps=dict(profile.param_remaps or {}),
-        )
-
-    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
-        """Read the ``pricing`` facet off the resolved profile (else ``None``).
-
-        Lights up :meth:`~..base.LLMProvider.get_pricing` /
-        :meth:`~..base.LLMProvider.estimate_cost` for Bedrock — the profile
-        carries per-Mtok :class:`~..model_profile.ModelPricing` for the
-        Bedrock-owned pricing of both non-Claude models and Claude-on-Bedrock.
-        """
-        return self._profile_resolver(config).resolve(
-            _canonical_model_id(config.model)
-        ).pricing
+        return _canonical_model_id(config.model)
 
     def _cost_for(
         self, model: str, usage: dict[str, int] | None

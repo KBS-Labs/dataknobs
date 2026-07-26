@@ -52,18 +52,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ModelConstraints, ToolCall,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     LLMAdapter, normalize_llm_config
 )
 from ..model_profile import (
-    CAPABILITY_ORDER,
     BundledResourceSource,
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
-    ModelPricing,
     ModelProfile,
 )
+from ..profile_detection import ProfileDetectionMixin
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
@@ -280,7 +279,7 @@ class OpenAIAdapter(LLMAdapter):
         ]
 
 
-class OpenAIProvider(AsyncLLMProvider):
+class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
     """OpenAI LLM provider with full API support.
 
     Provides async access to OpenAI's chat, completion, embedding, and
@@ -438,54 +437,6 @@ class OpenAIProvider(AsyncLLMProvider):
                 _OPENAI_HEURISTIC_SOURCE,
             ]
         )
-
-    def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect OpenAI model capabilities.
-
-        A one-line read off the resolved :class:`~..model_profile.ModelProfile`
-        (resource-primary, heuristic last-resort, config-override on top),
-        projected back to the historical ordered list via
-        :data:`~..model_profile.CAPABILITY_ORDER`.
-        """
-        profile = self._profile_resolver(self.config).resolve(self.config.model)
-        capabilities = profile.capabilities or frozenset()
-        return [c for c in CAPABILITY_ORDER if c in capabilities]
-
-    def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
-        """Auto-detect OpenAI request-shape constraints for *config*'s model.
-
-        Reads three facets off the resolved profile (the per-provider resolver,
-        matched on ``config.model`` so a per-call model override resolves the
-        overriding family's rules):
-
-        - ``max_tokens_ceiling`` from ``max_output_tokens`` — the output ceiling
-          the base clamps an over-budget ``max_tokens`` down to
-          (:meth:`~..base.LLMProvider._apply_request_constraints`).
-        - ``max_input_tokens`` from ``context_window`` — informational input
-          budget (not clamped).
-        - ``rejected_params`` — sampling params the family 400s on (the reasoning
-          families reject ``temperature`` / ``top_p``); dropped before the call.
-        - ``param_remaps`` — wire renames the family requires (the reasoning
-          families take ``max_completion_tokens`` in place of ``max_tokens``);
-          applied after ``adapt_config`` by
-          :meth:`~..base.LLMProvider._apply_param_remaps`.
-
-        ``accepts_inline_system`` stays ``True`` (OpenAI passes ``system`` as a
-        normal message). A consumer overrides any of these via
-        ``LLMConfig.constraints`` (see
-        :meth:`~..base.LLMProvider._resolve_constraints`).
-        """
-        profile = self._profile_resolver(config).resolve(config.model)
-        return ModelConstraints(
-            rejected_params=frozenset(profile.rejected_params or ()),
-            max_tokens_ceiling=profile.max_output_tokens,
-            max_input_tokens=profile.context_window,
-            param_remaps=dict(profile.param_remaps or {}),
-        )
-
-    def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
-        """Read the ``pricing`` facet off the resolved profile (else ``None``)."""
-        return self._profile_resolver(config).resolve(config.model).pricing
 
     def _build_api_kwargs(
         self, config: LLMConfig, extra: Dict[str, Any] | None = None

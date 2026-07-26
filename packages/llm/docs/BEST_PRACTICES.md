@@ -1275,6 +1275,43 @@ class MyProvider(AsyncLLMProvider):
         return caps
 ```
 
+### Substrate-Bound Providers: `ProfileDetectionMixin`
+
+If your provider draws its capabilities, constraints, and pricing from the
+model-metadata substrate (`dataknobs_llm.llm.model_profile`) — the pattern the
+built-in OpenAI, Anthropic, Bedrock, and Ollama providers use — you do **not**
+hand-write the detection trio. Adopt `ProfileDetectionMixin` (listed **first**
+among the bases) and supply a single hook, `_profile_resolver()`; the mixin then
+implements `_detect_capabilities()`, `_detect_constraints()`, and
+`_detect_pricing()` as reads off the resolved `ModelProfile`:
+
+```python
+from dataknobs_llm.llm.profile_detection import ProfileDetectionMixin
+
+class MyBoundProvider(ProfileDetectionMixin, AsyncLLMProvider):
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
+        return LayeredModelProfileResolver([
+            ConfigOverrideSource(getattr(config, "model_profile_overrides", None)),
+            _MY_RESOURCE_SOURCE,   # bundled fallback facts
+            _MY_HEURISTIC_SOURCE,  # last-resort family classification
+        ])
+```
+
+Two optional hooks cover the only per-provider variances:
+
+- Override `_profile_lookup_key(config)` when the resolve key is not
+  `config.model` (the Bedrock provider strips a cross-region inference-profile
+  prefix before the catalog lookup).
+- Override `_detect_constraints(config)` — calling the mixin's
+  `_resolve_profile(config)` helper so the lookup-key logic stays shared — when
+  the family adds constraint rules beyond the four profile facets (the Anthropic
+  provider bans inline system messages and unions a runtime-discovered
+  rejected-param overlay).
+
+The base `_detect_capabilities()` stays abstract, so an *unbound* provider (like
+the hand-written `MyProvider` above) is unaffected — the mixin is opt-in by
+inheritance.
+
 ---
 
 ## Response Analysis Hooks
