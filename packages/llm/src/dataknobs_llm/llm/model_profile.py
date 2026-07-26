@@ -367,13 +367,32 @@ class ConfigOverrideSource:
     The override is a loose mapping parsed by :func:`profile_from_loose`; absent →
     an all-``None`` partial (no effect). Model-keyed: the override may be a single
     flat mapping (applies to the configured model) or a ``{model_id: {...}}``
-    mapping (per-model), matched by :func:`match_family_key`.
+    mapping (per-model), matched by :attr:`_match` (default :func:`match_family_key`).
+
+    The per-model-map matcher is injectable via the ``match=`` constructor arg,
+    mirroring :class:`LiveApiSource`'s seam. It defaults to
+    :func:`match_family_key` (the dated-snapshot substring family-alias rule) —
+    **byte-identical** for every vendor whose id space that rule fits (OpenAI,
+    Bedrock, Ollama, Anthropic, none of which pass ``match=``). A vendor whose
+    per-model override keys collide under substring matching injects its own
+    rule: HuggingFace passes an **exact** repo-id matcher, so a per-repo override
+    map for both ``meta-llama/Llama-3.1-8B`` and its ``-Instruct`` variant does
+    not resolve a request for the base repo to the ``-Instruct`` override (the
+    base id is a substring of the variant id). A general consumer-extensibility
+    seam, not an in-substrate special case. The **flat single-model branch does
+    no key matching**, so it is unaffected by ``match=``.
     """
 
     name = "config_override"
 
-    def __init__(self, overrides: Mapping[str, Any] | None) -> None:
+    def __init__(
+        self,
+        overrides: Mapping[str, Any] | None,
+        *,
+        match: Callable[[str, Iterable[str]], str | None] = match_family_key,
+    ) -> None:
         self._overrides = overrides or {}
+        self._match = match
 
     def resolve(self, model: str) -> ModelProfile:
         if not self._overrides:
@@ -383,7 +402,7 @@ class ConfigOverrideSource:
         # flat override; otherwise treat top-level keys as model ids.
         if any(k in _PROFILE_FACETS for k in self._overrides):
             return profile_from_loose(self._overrides)
-        key = match_family_key(model.lower(), (str(k).lower() for k in self._overrides))
+        key = self._match(model.lower(), [str(k).lower() for k in self._overrides])
         if key is None:
             return ModelProfile()
         # Recover the original-cased key whose lowercase matched.

@@ -116,3 +116,40 @@ class ProfileDetectionMixin(LLMProvider):
     def _detect_pricing(self, config: LLMConfig) -> ModelPricing | None:
         """Read the ``pricing`` facet off the resolved profile (else ``None``)."""
         return self._resolve_profile(config).pricing
+
+    async def validate_model(self) -> bool:
+        """Honor a consumer ``available`` pin, else run the live probe.
+
+        The shared ``validate_model`` for a substrate-bound provider whose profile
+        has **no source populating the** ``available`` **facet** (OpenAI,
+        HuggingFace): a consumer ``model_profile_overrides.available`` pin
+        short-circuits the network probe — a private-gateway / TGI / known-live
+        endpoint that wants to skip the round-trip — and otherwise the provider's
+        authoritative :meth:`_probe_model_available` runs. Because those providers'
+        sources never set ``available``, the resolved facet is exactly the pin (or
+        ``None``), so an unpinned call is byte-identical to a bare probe.
+
+        A provider whose profile **does** resolve ``available`` from a live /
+        resource source (Ollama's ``/api/tags`` set, Bedrock's account catalog)
+        overrides ``validate_model`` directly and reads the resolved facet; the pin
+        is then just one resolver layer and is honored for free. Such a provider
+        does not implement :meth:`_probe_model_available`.
+        """
+        pinned = self._resolve_profile(self.config).available
+        if pinned is not None:
+            return pinned
+        return await self._probe_model_available()
+
+    async def _probe_model_available(self) -> bool:
+        """Authoritative network liveness probe for a probe-style provider.
+
+        Reached by the inherited :meth:`validate_model` only when no ``available``
+        pin is set. A provider that inherits the mixin's ``validate_model`` (rather
+        than overriding it with a facet read) must override this. Not marked
+        ``@abstractmethod`` because a facet-resolved provider (Ollama, Bedrock)
+        overrides ``validate_model`` instead and never needs a probe.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} inherits ProfileDetectionMixin.validate_model "
+            "but does not override _probe_model_available()"
+        )

@@ -406,3 +406,35 @@ class TestResource:
             "dataknobs_llm.llm.providers", "data/openai_models.yaml"
         )
         assert source.resolve("gpt-4o-2024-11-20").max_output_tokens == 16384
+
+
+class TestValidateModelAvailablePin:
+    """``model_profile_overrides.available`` short-circuits the Models-API probe.
+
+    OpenAI's profile has no source populating ``available`` (the heuristic emits
+    only capabilities; the bundled resource carries no ``available``), so the pin
+    is the only non-probe availability signal — it must win over the network list,
+    matching HuggingFace / Ollama / Bedrock. Reproduce-first: the pre-fix
+    ``validate_model`` always listed, silently ignoring the pin. The shared
+    ``ProfileDetectionMixin.validate_model`` template now honors it before probing.
+    """
+
+    async def test_available_true_pin_short_circuits_probe(self) -> None:
+        # Empty model list → the probe would resolve False; the True pin wins.
+        provider = _provider("gpt-4o", model_profile_overrides={"available": True})
+        provider._client = _CaptureOpenAIClient(model_ids=())
+        assert await provider.validate_model() is True
+
+    async def test_available_false_pin_overrides_a_live_probe(self) -> None:
+        # Model present in the list → the probe would resolve True; the False pin wins.
+        provider = _provider("gpt-4o", model_profile_overrides={"available": False})
+        provider._client = _CaptureOpenAIClient(model_ids=("gpt-4o",))
+        assert await provider.validate_model() is False
+
+    async def test_no_pin_falls_through_to_the_probe(self) -> None:
+        present = _provider("gpt-4o")
+        present._client = _CaptureOpenAIClient(model_ids=("gpt-4o",))
+        assert await present.validate_model() is True
+        absent = _provider("gpt-4o")
+        absent._client = _CaptureOpenAIClient(model_ids=("other-model",))
+        assert await absent.validate_model() is False

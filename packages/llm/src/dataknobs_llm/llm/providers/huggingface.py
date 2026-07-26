@@ -2,7 +2,9 @@
 
 import asyncio
 import os
+import re
 import warnings
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -10,6 +12,13 @@ from ..base import (
     AsyncLLMProvider, ModelCapability,
     normalize_llm_config
 )
+from ..model_profile import (
+    CallableModelMetadataSource,
+    ConfigOverrideSource,
+    LayeredModelProfileResolver,
+    ModelProfile,
+)
+from ..profile_detection import ProfileDetectionMixin
 from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -20,8 +29,142 @@ if TYPE_CHECKING:
 # callbacks can drain before event loop shutdown.  See dk-29 for full context.
 _AIOHTTP_DRAIN_SECS = 0.25
 
+#: Default output-token budget when neither the caller's ``max_tokens`` nor a
+#: consumer override supplies one — the historical inline literal, now a named
+#: constant routed through the request-shaping choke point.
+_HF_DEFAULT_MAX_NEW_TOKENS = 100
 
-class HuggingFaceProvider(AsyncLLMProvider):
+#: Repo-name substrings marking a chat / instruction-tuned model, matched
+#: anywhere in the lowercased repo id. Substring (not token-boundary) matching is
+#: deliberate: real chat repos fuse the marker with another word into a single
+#: alphanumeric run — ``THUDM/chatglm3-6b`` (``chatglm3``), ``openchat/openchat``
+#: — which a whole-token match would silently drop. The ``instruct`` ⇄
+#: ``instructor`` false positive that motivated token matching is instead
+#: neutralized structurally: ``instructor`` is an embedding **token**
+#: (:data:`_HF_EMBED_TOKENS`) and embed is resolved first, suppressing the chat
+#: check (deep-review finding). So no chat marker needs token-boundary matching.
+_HF_CHAT_SUBSTRINGS: tuple[str, ...] = ("chat", "instruct", "conversational")
+
+#: Distinctive multi-character embedding-family substrings (matched anywhere in
+#: the lowercased repo id). The pre-binding bare ``'embedding'`` test missed the
+#: dominant ``sentence-transformers`` / feature-extraction repos.
+_HF_EMBED_SUBSTRINGS: tuple[str, ...] = (
+    "embedding",
+    "sentence-transformers/",
+    "feature-extraction",
+)
+
+#: Short embedding-family name markers matched at **token** boundaries (not as
+#: substrings), so ``e5`` marks ``intfloat/e5-mistral-7b-instruct`` but not an
+#: unrelated ``phase5`` run, and ``bge`` marks the family without over-reaching.
+#: ``instructor`` (the Instructor embedding family) and ``e5`` are the correctness
+#: additions that reclassify names the substring chat markers previously stole.
+_HF_EMBED_TOKENS: tuple[str, ...] = (
+    "minilm",
+    "bge",
+    "gte",
+    "e5",
+    "instructor",
+)
+
+#: Token marking a cross-encoder **reranker** repo. A reranker matches an embed
+#: family prefix (``bge``/``gte``) but is not an embedding model, so this token
+#: suppresses the embed classification (deep-review finding).
+_HF_RERANKER_TOKEN = "reranker"
+
+#: Split a lowercased repo id into its alphanumeric tokens (``org/name-v1.5`` →
+#: ``{"org", "name", "v1", "5"}``) for token-boundary marker matching.
+_HF_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def _hf_repo_tokens(model_lower: str) -> frozenset[str]:
+    """The alphanumeric tokens of a lowercased repo id (empty runs dropped)."""
+    return frozenset(t for t in _HF_TOKEN_SPLIT.split(model_lower) if t)
+
+
+def hf_match_key(model_lower: str, keys: Iterable[str]) -> str | None:
+    """Exact case-insensitive repo-id match for a per-repo override map.
+
+    The HuggingFace matcher injected into :class:`ConfigOverrideSource` (its
+    ``match=`` seam). HuggingFace repo ids are exact strings that share prefixes
+    (``meta-llama/Llama-3.1-8B`` is a substring of
+    ``meta-llama/Llama-3.1-8B-Instruct``), so the substrate default
+    :func:`~..model_profile.match_family_key` would resolve a request for the
+    base repo to the ``-Instruct`` override. This matches by exact id only (no
+    substring, no family aliasing): a request either names a declared repo or it
+    does not. Both arguments arrive already lowercased from the source.
+    """
+    for key in keys:
+        if key == model_lower:
+            return key
+    return None
+
+
+def _hf_heuristic(model: str) -> ModelProfile:
+    """Repo-name capability heuristic — the **complete** capability set.
+
+    The corrected form of the pre-binding inline ``_detect_capabilities``.
+    Because a present ``capabilities`` facet whole-set-overrides lower layers
+    under the substrate merge (first-non-``None``-per-facet, not a union), this
+    must emit the full intended set. Mapping:
+
+    - ``TEXT_GENERATION`` — always (every HF text model; preserves the historical
+      unconditional base capability).
+    - ``EMBEDDINGS`` — repo name matches an embedding-family marker (a distinctive
+      substring in :data:`_HF_EMBED_SUBSTRINGS` or a token in
+      :data:`_HF_EMBED_TOKENS`) **and** is not a reranker
+      (:data:`_HF_RERANKER_TOKEN` — a cross-encoder matches the ``bge``/``gte``
+      family prefix but is not an embedding model).
+    - ``CHAT`` — repo name has a chat substring (:data:`_HF_CHAT_SUBSTRINGS`)
+      **and** the repo is not an embedding model.
+
+    ``EMBEDDINGS`` and ``CHAT`` are **structurally disjoint**: an embedding repo
+    never also resolves ``CHAT`` (embed suppresses chat), because the HF Inference
+    API serves a given repo as one task, not both. Chat markers are matched as
+    substrings (so fused real-world names such as ``chatglm3`` / ``openchat``
+    keep resolving ``CHAT``), while the short embed-family markers ``e5`` / ``bge``
+    / ``gte`` are matched at token boundaries (so ``e5`` does not fire inside an
+    unrelated ``phase5`` run). The ``instruct`` ⇄ ``instructor`` collision that
+    substring chat matching would otherwise cause is neutralized by the disjoint
+    ordering: ``instructor`` is an embed token, resolved first, so the chat check
+    never runs for it.
+
+    Deliberately asserts **no** ``STREAMING`` (HF's ``stream_complete`` is a
+    simulated single yield, not real token streaming) and **no**
+    ``FUNCTION_CALLING`` (the Inference API rejects tools). ``VISION`` /
+    ``JSON_MODE`` / ``CODE`` are not heuristically asserted — a consumer running
+    a known VLM / code / JSON-grammar repo declares them via
+    ``model_profile_overrides.capabilities``. Contributes only the
+    ``capabilities`` facet; every other facet is left ``None`` for a consumer
+    override to supply.
+    """
+    model_lower = model.lower()
+    tokens = _hf_repo_tokens(model_lower)
+    caps: set[ModelCapability] = {ModelCapability.TEXT_GENERATION}
+    is_embed = _HF_RERANKER_TOKEN not in tokens and (
+        any(sub in model_lower for sub in _HF_EMBED_SUBSTRINGS)
+        or any(tok in tokens for tok in _HF_EMBED_TOKENS)
+    )
+    if is_embed:
+        caps.add(ModelCapability.EMBEDDINGS)
+    elif any(sub in model_lower for sub in _HF_CHAT_SUBSTRINGS):
+        caps.add(ModelCapability.CHAT)
+    return ModelProfile(capabilities=frozenset(caps))
+
+
+#: The stateless heuristic HuggingFace model-metadata source — a module
+#: singleton (a pure name-substring rule, no per-instance state). The
+#: config-override source is prepended per config in
+#: :meth:`HuggingFaceProvider._profile_resolver`. There is deliberately **no**
+#: live-API layer (HF has no walker-shaped offered-set — the authoritative live
+#: signal is a per-model Hub lookup, a distinct source shape deferred to its own
+#: design pass) and **no** bundled-resource / pricing / output-ceiling layer
+#: (HF's model space is unbounded and community-driven; per-repo facts come from
+#: the consumer override).
+_HF_HEURISTIC_SOURCE = CallableModelMetadataSource("hf_heuristic", _hf_heuristic)
+
+
+class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
     """HuggingFace Inference API provider."""
 
     def __init__(
@@ -57,8 +200,16 @@ class HuggingFaceProvider(AsyncLLMProvider):
             await self._session.close()
             await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
-    async def validate_model(self) -> bool:
-        """Validate model availability."""
+    async def _probe_model_available(self) -> bool:
+        """Authoritative ``GET {base_url}/{model}`` liveness probe.
+
+        HuggingFace has **no** source populating the ``available`` facet (unlike
+        Ollama's live ``/api/tags`` source), so the live HTTP probe is the default
+        signal. The inherited :meth:`~..profile_detection.ProfileDetectionMixin.validate_model`
+        honors a ``model_profile_overrides.available`` pin before ever reaching
+        here (a private-gateway / TGI consumer skipping the round-trip); with no
+        pin this preserves the pre-binding behavior exactly.
+        """
         try:
             url = f"{self.base_url}/{self.config.model}"
             async with self._session.get(url) as response:
@@ -66,19 +217,32 @@ class HuggingFaceProvider(AsyncLLMProvider):
         except Exception:
             return False
 
-    def _detect_capabilities(self) -> List[ModelCapability]:
-        """Auto-detect HuggingFace model capabilities."""
-        model = self.config.model.lower()
-        capabilities = [ModelCapability.TEXT_GENERATION]
+    def _profile_resolver(
+        self, config: LLMConfig
+    ) -> LayeredModelProfileResolver:
+        """Compose the HuggingFace model-profile resolver for *config*.
 
-        if 'embedding' in model:
-            capabilities.append(ModelCapability.EMBEDDINGS)
-
-        # Chat-capable models
-        if any(m in model for m in ['chat', 'instruct', 'conversational']):
-            capabilities.append(ModelCapability.CHAT)
-
-        return capabilities
+        Two sources only — the leanest of the provider bindings. Precedence
+        (highest first): config override (per-repo keys matched **exactly** via
+        :func:`hf_match_key`, so a per-repo map does not resolve a base repo to a
+        prefix-sharing variant's override) → the repo-name capability heuristic
+        (:data:`_HF_HEURISTIC_SOURCE`). There is deliberately **no** live-API
+        layer (HF has no walker-shaped offered-set; the per-model Hub lookup is a
+        distinct source shape deferred to its own design pass) and **no**
+        bundled-resource / pricing / output-ceiling layer. Every non-capability
+        facet (context_window, rejected_params, param_remaps, pricing, available)
+        is ``None`` from the heuristic and lit up only by a consumer's
+        ``LLMConfig.model_profile_overrides``, which wins per facet.
+        """
+        return LayeredModelProfileResolver(
+            [
+                ConfigOverrideSource(
+                    getattr(config, "model_profile_overrides", None),
+                    match=hf_match_key,
+                ),
+                _HF_HEURISTIC_SOURCE,
+            ]
+        )
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw aiohttp transport error into a dataknobs exception.
@@ -112,6 +276,38 @@ class HuggingFaceProvider(AsyncLLMProvider):
                 None, f"HuggingFace API error: {exc}"
             )
         return None
+
+    def _build_hf_parameters(self, runtime_config: LLMConfig) -> Dict[str, Any]:
+        """Build the Inference-API ``parameters`` dict with request shaping.
+
+        The HuggingFace request-shaping choke point, mirroring the other
+        providers' ``_build_api_kwargs`` / ``_build_shaped_options``: shapes the
+        runtime config through the shared
+        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
+        family-rejected sampling params, clamps ``max_tokens`` to a ceiling — in
+        canonical config space, independent of HF's flat ``parameters`` wire
+        shape), builds the ``parameters`` dict, then applies any wire-level
+        :meth:`~..base.LLMProvider._apply_param_remaps`. HF's auto-detected rules
+        are empty by default (no ceiling, no rejected params, no remaps), so this
+        is a **byte-identical no-op** in normal use — the ``max_new_tokens``
+        default still lands at :data:`_HF_DEFAULT_MAX_NEW_TOKENS` when the caller
+        set none, and at the caller's ``max_tokens`` when set. Wired for the
+        consumer-``constraints``-override path, symmetric with the other three
+        providers. ``complete`` is the only caller; ``stream_complete`` routes
+        through it, and ``embed`` posts no ``parameters`` (nothing to shape).
+        """
+        constraints = self.get_constraints(runtime_config)
+        shaped = self._apply_request_constraints(runtime_config, constraints)
+        gen = shaped.generation_params()
+        parameters: Dict[str, Any] = {
+            'max_new_tokens': gen.get('max_tokens', _HF_DEFAULT_MAX_NEW_TOKENS),
+            'return_full_text': False,
+        }
+        if 'temperature' in gen:
+            parameters['temperature'] = gen['temperature']
+        if 'top_p' in gen:
+            parameters['top_p'] = gen['top_p']
+        return self._apply_param_remaps(parameters, constraints.param_remaps)
 
     async def complete(
         self,
@@ -151,18 +347,9 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         # Make API call
         url = f"{self.base_url}/{runtime_config.model}"
-        gen = runtime_config.generation_params()
-        parameters: Dict[str, Any] = {
-            'max_new_tokens': gen.get('max_tokens', 100),
-            'return_full_text': False,
-        }
-        if 'temperature' in gen:
-            parameters['temperature'] = gen['temperature']
-        if 'top_p' in gen:
-            parameters['top_p'] = gen['top_p']
         payload = {
             'inputs': prompt,
-            'parameters': parameters,
+            'parameters': self._build_hf_parameters(runtime_config),
         }
 
         try:
