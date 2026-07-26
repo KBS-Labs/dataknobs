@@ -220,6 +220,64 @@ class TestNoSubstrateBoundProviderReCopiesTrio:
         )
 
 
+class TestValidateModelPinTemplate:
+    """Every bound provider resolves an unpinned ``validate_model`` to a probe.
+
+    The ``model_profile_overrides.available`` pin prologue lives once in
+    :meth:`ProfileDetectionMixin.validate_model`, which honors the pin then calls
+    :meth:`_probe_model_available`. Two adoption shapes are valid:
+
+    - *Probe-style* (OpenAI, HuggingFace): inherit the mixin ``validate_model``
+      and override ``_probe_model_available`` with the network probe.
+    - *Facet-resolved* (Ollama, Bedrock, Anthropic): override ``validate_model``
+      directly (availability is read from a resolved facet / offered-set), and
+      never touch ``_probe_model_available``.
+
+    The footgun the guard closes: a *future* probe-style adopter that inherits the
+    mixin ``validate_model`` but forgets the probe override raises
+    ``NotImplementedError`` only when ``validate_model`` is first called without a
+    pin — a runtime failure, not an import/definition one. This pins the invariant
+    structurally instead: a provider that inherits the mixin ``validate_model``
+    MUST override ``_probe_model_available``.
+    """
+
+    def test_current_adopters_split_across_both_shapes(self) -> None:
+        # Guard against the invariant becoming vacuous: pin that both shapes are
+        # actually exercised by the shipped providers.
+        inherits_validate = {
+            c
+            for c in _BOUND_PROVIDERS
+            if c.validate_model is ProfileDetectionMixin.validate_model
+        }
+        overrides_validate = set(_BOUND_PROVIDERS) - inherits_validate
+        assert inherits_validate >= {OpenAIProvider, HuggingFaceProvider}
+        assert overrides_validate >= {
+            OllamaProvider,
+            BedrockProvider,
+            AnthropicProvider,
+        }
+
+    @pytest.mark.parametrize(
+        "provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__
+    )
+    def test_inherited_validate_model_has_a_probe_override(
+        self, provider_cls: type
+    ) -> None:
+        # If the provider inherits the mixin's pin-honoring validate_model, it must
+        # supply the probe the template calls — otherwise an unpinned validate_model
+        # raises NotImplementedError at call time.
+        if provider_cls.validate_model is not ProfileDetectionMixin.validate_model:
+            return  # facet-resolved: overrides validate_model, no probe needed
+        assert (
+            provider_cls._probe_model_available
+            is not ProfileDetectionMixin._probe_model_available
+        ), (
+            f"{provider_cls.__name__} inherits ProfileDetectionMixin.validate_model "
+            "but does not override _probe_model_available — an unpinned "
+            "validate_model() would raise NotImplementedError at call time."
+        )
+
+
 class TestBedrockLookupKeyCanonicalizes:
     """The Bedrock lookup-key override strips the cross-region prefix."""
 

@@ -216,6 +216,71 @@ class TestCapabilities:
             assert ModelCapability.STREAMING not in caps
 
 
+class TestCapabilityHeuristicCorrections:
+    """Root-cause corrections to the repo-name heuristic (deep-review 🟡s).
+
+    Reproduce-first: the embed/reranker/disjointness cases are mis-resolved by the
+    pre-correction additive heuristic (``instruct`` as a bare substring, ``bge-``
+    with no reranker guard, independent embed/chat markers that could both fire).
+    The two fused-name cases (``chatglm3`` / ``openchat``) guard the opposite
+    edge — that correcting the embed side did not regress chat detection for real
+    repos whose name fuses the ``chat`` marker into a single token.
+    """
+
+    def _caps(self, model: str) -> set[ModelCapability]:
+        return set(_provider(model=model).get_capabilities())
+
+    def test_instructor_family_is_embeddings_not_chat(self) -> None:
+        # `instruct` is a *substring* of `instructor`, so under additive markers
+        # the Instructor embedding family resolved CHAT and missed EMBEDDINGS.
+        # The `instructor` embed token + embed-suppresses-chat ordering fixes both
+        # directions: embed is resolved first, so the chat substring never runs.
+        caps = self._caps("hkunlp/instructor-large")
+        assert ModelCapability.EMBEDDINGS in caps
+        assert ModelCapability.CHAT not in caps
+
+    def test_e5_instruct_embedding_is_embeddings_not_chat(self) -> None:
+        # An e5 embedding model whose repo name ends in `-instruct` (real
+        # embedding-family naming) resolved CHAT-only. The `e5` embed marker plus
+        # embed-suppresses-chat classifies it as the embedding model it is.
+        caps = self._caps("intfloat/e5-mistral-7b-instruct")
+        assert ModelCapability.EMBEDDINGS in caps
+        assert ModelCapability.CHAT not in caps
+
+    def test_reranker_is_not_an_embedding_model(self) -> None:
+        # A cross-encoder reranker matches the `bge` family prefix but is not an
+        # embedding model; the `reranker` token suppresses the embed classification.
+        caps = self._caps("BAAI/bge-reranker-large")
+        assert ModelCapability.EMBEDDINGS not in caps
+
+    def test_embeddings_and_chat_are_structurally_disjoint(self) -> None:
+        # A repo matching BOTH an embed marker and a chat token resolves only
+        # EMBEDDINGS — disjointness is guaranteed by the logic (embed suppresses
+        # chat), not merely by the tested names.
+        caps = self._caps("my-org/all-minilm-chat")
+        assert ModelCapability.EMBEDDINGS in caps
+        assert ModelCapability.CHAT not in caps
+
+    def test_instruct_token_still_resolves_chat(self) -> None:
+        # Guard against over-correction: a genuine `instruct` *token* (whole word)
+        # on a non-embedding repo still resolves CHAT.
+        caps = self._caps("mistralai/Mistral-7B-Instruct-v0.2")
+        assert caps == {ModelCapability.TEXT_GENERATION, ModelCapability.CHAT}
+
+    def test_chatglm_fused_name_still_resolves_chat(self) -> None:
+        # Reproduce-first: `chatglm3` fuses the `chat` marker into one token, so a
+        # whole-token chat match would DROP CHAT for this real, widely-used family.
+        # Substring chat matching keeps it — the marker is `chat`, not a token.
+        caps = self._caps("THUDM/chatglm3-6b")
+        assert caps == {ModelCapability.TEXT_GENERATION, ModelCapability.CHAT}
+
+    def test_openchat_fused_name_still_resolves_chat(self) -> None:
+        # Reproduce-first: `openchat` is a single token containing `chat`; a
+        # token-boundary match would lose CHAT. Substring matching preserves it.
+        caps = self._caps("openchat/openchat-3.5")
+        assert caps == {ModelCapability.TEXT_GENERATION, ModelCapability.CHAT}
+
+
 # ---------------------------------------------------------------------------
 # W-A — request-shaping choke point parity (no-op default + override wiring)
 # ---------------------------------------------------------------------------
