@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
 
-from dataknobs_llm import EchoProvider
+from dataknobs_llm import EchoProvider, LLMMessage
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMResponse
 from dataknobs_llm.testing import (
     ConfigurableExtractor,
@@ -1059,6 +1059,27 @@ class BotTestHarness:
     def extractor(self) -> ConfigurableExtractor | None:
         """The ConfigurableExtractor (for call verification)."""
         return self._extractor
+
+    async def get_history(self) -> list[LLMMessage]:
+        """Persisted conversation history the next turn would replay.
+
+        Returns the exact ``list[LLMMessage]`` from the last turn's cached
+        ``ConversationManager`` — the bytes a subsequent provider request
+        replays.  Use this for history-invariant assertions (e.g. that a
+        terminated tool turn left no dangling ``tool_use``) instead of
+        reaching into the bot's internal ``_conversation_managers`` cache.
+
+        Returns an empty list when no conversation manager exists yet (no
+        prior ``greet()`` / ``chat()`` call).
+        """
+        manager = self._bot.get_conversation_manager(
+            self._context.conversation_id,
+        )
+        if manager is None:
+            return []
+        # ``self._bot`` is Any-typed, so annotate the narrowed result.
+        history: list[LLMMessage] = await manager.get_history()
+        return history
 
     def seed_wizard_data(self, data: dict[str, Any]) -> None:
         """Pre-populate wizard data to simulate a prior visit.

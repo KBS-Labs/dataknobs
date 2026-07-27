@@ -59,6 +59,27 @@ class TurnState:
     response_content: str = ""  # extracted text content
     stream_chunks: list[str] = field(default_factory=list)  # stream path only
 
+    # True when the DynaBot tool loop terminated (break/cap) while a tool
+    # call was still pending — i.e. an unexecuted assistant ``tool_use`` was
+    # persisted to history and must be paired before the next turn replays it.
+    # Set by the buffered/streaming monolithic-loop tails; gates the Layer-A
+    # orphan-pairing history read in ``DynaBot._finalize_turn`` so the
+    # already-paired majority (happy-path completion, no-tools, and phased
+    # strategies that pair their own orphans) skips it.
+    #
+    # CONTRACT for future turn paths: this gate makes Layer-A pairing
+    # opt-in, not automatic.  Any NEW path that can persist an unexecuted
+    # ``tool_use`` to LLM history MUST either pair the orphan itself before
+    # it returns (as phased strategies do — ReAct's "Layer B") OR set this
+    # flag True so ``_finalize_turn`` pairs it (Layer A).  A path that does
+    # neither leaves a dangling ``tool_use`` and the next turn's replay 400s
+    # on Anthropic — the exact defect the finalize read exists to close.  If
+    # you add a break/cap route to a tool loop, or a strategy that drives
+    # tool calls without going through these loops, cover it in one of those
+    # two ways and add a reproduce-first test alongside
+    # ``tests/unit/test_finalize_orphan_pairing.py``'s T1-T8.
+    tool_loop_left_pending_call: bool = False
+
     # --- Usage / observability ---
     usage: dict[str, int] | None = None  # token usage from response
     model: str | None = None  # model that generated the response

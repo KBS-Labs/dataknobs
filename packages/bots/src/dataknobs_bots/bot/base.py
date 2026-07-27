@@ -1605,6 +1605,37 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         Args:
             turn: Completed turn state with response content populated.
         """
+        # Layer A — orphan-tool_use pairing at the universal turn-finalize
+        # chokepoint.  Both delivery modes (buffered + streaming) funnel here,
+        # so this single guarded call guarantees no turn persists a dangling
+        # assistant ``tool_use`` (a hard 400 on Anthropic when the next turn
+        # replays the history).  It covers every monolithic-loop break route
+        # (cap / wall-clock timeout / budget) at one site — no per-loop,
+        # per-break-path patching.
+        #
+        # The ``tool_loop_left_pending_call`` gate is a cheap skip of the
+        # ``get_history()`` materialization on the already-paired majority: an
+        # orphan enters history only when the DynaBot tool loop terminated with
+        # an unexecuted tool call, which the buffered/streaming tails record on
+        # the turn.  This deliberately narrows Layer A to exactly the
+        # monolithic orphan-producing routes (the fix's scope): a phased
+        # strategy pairs its own orphan before returning (ReAct's Layer B), and
+        # wizard routes tool results through state (no LLM-history orphan), so
+        # neither relies on an unconditional finalize read.  The pure core stays
+        # idempotent, so on the ReAct path (should the gate ever open there) it
+        # no-ops on the already-paired history.
+        #
+        # Lazy import matches the existing ``..reasoning`` deferral pattern
+        # (avoids the bot ↔ reasoning circular import).
+        if (
+            self.tool_registry
+            and turn.manager is not None
+            and turn.tool_loop_left_pending_call
+        ):
+            from ..reasoning.tool_pairing import pair_orphan_tool_calls_on_manager
+
+            await pair_orphan_tool_calls_on_manager(turn.manager)
+
         # Update memory with assistant response
         if self.memory and turn.response_content:
             await self.memory.add_message(turn.response_content, role="assistant")
@@ -1819,7 +1850,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # assistant tool_use dangling in history.  Correctness is
             # handled at the synthesis chokepoint: the strategy's
             # finalize_turn pairs any orphan tool_use with a tool_result
-            # (see reasoning/react.py::_pair_orphan_tool_calls).  No
+            # (see reasoning/tool_pairing.py::pair_orphan_tool_calls_on_manager;
+            # ReAct also re-aliases it as _pair_orphan_tool_calls).  No
             # mid-conversation role="system" notice is appended here — it
             # would be hoisted out of the message array by adapters that
             # lift system messages to a top-level param (e.g. Anthropic),
@@ -2441,6 +2473,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         )
 
             turn.response = response
+            # Terminating response still carrying tool_calls == the loop broke
+            # or hit the cap with an unexecuted (orphan) tool_use in history.
+            turn.tool_loop_left_pending_call = bool(
+                getattr(response, "tool_calls", None)
+            )
             turn.response_content = self._extract_response_content(response)
             turn.populate_from_response(response, self.llm)
             await self._finalize_turn(turn)
@@ -2905,6 +2942,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # partial data to conversation history).
             if streaming_error is None and stream_fully_consumed:
                 turn.response_content = "".join(turn.stream_chunks)
+                # A still-pending tool call at drain == the loop broke or hit
+                # the cap with an unexecuted (orphan) tool_use in history.
+                # (Streaming never sets ``turn.response``, so the buffered
+                # ``turn.response.tool_calls`` signal does not apply here.)
+                turn.tool_loop_left_pending_call = bool(pending_tool_calls)
                 await self._finalize_turn(turn)
             await self._call_finally_turn_middleware(turn)
 
