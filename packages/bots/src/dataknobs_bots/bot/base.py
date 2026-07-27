@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar
@@ -140,6 +140,50 @@ class UndoResult:
     undone_bot_response: str
     remaining_turns: int
     branching: bool
+
+
+@dataclass
+class _CheckpointLog:
+    """A conversation's undo checkpoints plus a front-drop offset.
+
+    ``entries`` holds the retained ``(node_id, memory_count)`` checkpoints —
+    one appended per turn in ``_prepare_turn`` and popped from the *tail* by
+    ``undo_last_turn``. ``dropped`` counts checkpoints trimmed off the *front*
+    when ``max_undo_checkpoints`` is exceeded.
+
+    Co-locating the offset with its list keeps absolute turn numbering intact
+    after a tail-cap: the checkpoint for absolute turn ``i`` lives at
+    ``entries[i - dropped]`` (or has been dropped when ``i < dropped``), which
+    is what lets ``rewind_to_turn`` map an absolute turn index through
+    ``dropped`` and reject a target older than the retained window instead of
+    landing on the wrong node. With no cap (``max_size is None``) the front is
+    never trimmed, so ``dropped`` stays ``0`` and ``total == len(entries)`` —
+    the pre-cap behavior, byte-for-byte.
+    """
+
+    entries: list[tuple[str, int]] = field(default_factory=list)
+    dropped: int = 0
+
+    def append(
+        self, checkpoint: tuple[str, int], max_size: int | None
+    ) -> None:
+        """Record a checkpoint, tail-capping the front to ``max_size`` entries.
+
+        Appends ``checkpoint`` as the newest turn's undo target, then — when a
+        positive ``max_size`` is exceeded — drops the excess from the front and
+        advances ``dropped`` by exactly that many, so the offset always matches
+        what was trimmed. ``max_size is None`` never trims (unbounded).
+        """
+        self.entries.append(checkpoint)
+        if max_size is not None and len(self.entries) > max_size:
+            overflow = len(self.entries) - max_size
+            del self.entries[:overflow]
+            self.dropped += overflow
+
+    @property
+    def total(self) -> int:
+        """Absolute number of turns ever checkpointed (retained + dropped)."""
+        return self.dropped + len(self.entries)
 
 
 def _node_depth(node_id: str) -> int:
@@ -398,6 +442,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._tool_timeout = self.config.tool_timeout
         self._tool_loop_timeout = self.config.tool_loop_timeout
         self._max_cached_conversations = self.config.max_cached_conversations
+        self._max_undo_checkpoints = self.config.max_undo_checkpoints
         self._finalize_timeout_message = self.config.tool_loop_timeout_message
         # Resolve the dotted-path context_transform now (cheap, sync). The
         # pre-built shape overrides this with a directly-supplied callable.
@@ -428,7 +473,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             max_size=self._max_cached_conversations,
             on_evict=self._on_conversation_evicted,
         )
-        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
+        # Per-conversation undo checkpoints. The value is a ``_CheckpointLog``
+        # (retained ``entries`` + a ``dropped`` front-offset) rather than a raw
+        # list so a ``max_undo_checkpoints`` tail-cap can trim the front while
+        # ``rewind_to_turn`` still maps absolute turn indices correctly.
+        self._turn_checkpoints: dict[str, _CheckpointLog] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
         # Lifetime ownership of the cascade-closed subsystems. Set True by
         # :meth:`_build_collaborators` (config-driven build → the bot
@@ -1422,17 +1471,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # memory_count for accurate memory rollback (node depth is unreliable).
         conv_id = turn.context.conversation_id
         if conv_id not in self._turn_checkpoints:
-            self._turn_checkpoints[conv_id] = []
+            self._turn_checkpoints[conv_id] = _CheckpointLog()
         mem_count = 0
         if self.memory:
             try:
                 mem_count = len(await self.memory.get_context(""))
             except Exception:
                 mem_count = 0
-        self._turn_checkpoints[conv_id].append((
-            turn.manager.state.current_node_id if turn.manager.state else "",
-            mem_count,
-        ))
+        # Append this turn's undo target, tail-capping the front to
+        # ``max_undo_checkpoints`` (``None`` = unbounded, no trim). The cap and
+        # its dropped-offset are maintained together inside ``_CheckpointLog``.
+        self._turn_checkpoints[conv_id].append(
+            (
+                turn.manager.state.current_node_id
+                if turn.manager.state
+                else "",
+                mem_count,
+            ),
+            self._max_undo_checkpoints,
+        )
 
         # Add user message.  When context augmentation was applied (KB
         # results, memory history), store the original raw message in node
@@ -3833,11 +3890,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if manager is None or manager.state is None:
             raise ValueError("No active conversation")
 
-        checkpoints = self._turn_checkpoints.get(conv_id, [])
-        if not checkpoints:
+        log = self._turn_checkpoints.get(conv_id)
+        if log is None or not log.entries:
             raise ValueError("Nothing to undo")
 
-        checkpoint_node_id, checkpoint_mem_count = checkpoints.pop()
+        # Relative undo: pop the newest retained checkpoint. The ``dropped``
+        # front-offset is untouched (undo never restores trimmed checkpoints).
+        checkpoint_node_id, checkpoint_mem_count = log.entries.pop()
 
         # Identify what we're undoing (last user message + last bot response).
         # For user messages, prefer raw_content from node metadata so that
@@ -3917,19 +3976,41 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             UndoResult with details about what was undone.
 
         Raises:
-            ValueError: If turn number is invalid.
+            ValueError: If the turn number is out of range, or — when
+                ``max_undo_checkpoints`` has trimmed the front of the undo
+                history — if the target turn's checkpoint has been dropped
+                (rewinding to it is unrecoverable, so it fails clearly rather
+                than landing on the wrong node).
         """
         conv_id = context.conversation_id
-        checkpoints = self._turn_checkpoints.get(conv_id, [])
-        target_count = turn + 1  # checkpoints[0] is before turn 0
+        log = self._turn_checkpoints.get(conv_id)
+        # Absolute turn numbering: checkpoint index 0 is "before turn 0", so a
+        # rewind to ``turn`` keeps ``turn + 1`` checkpoints. ``total`` counts
+        # every turn ever recorded (retained + trimmed) so out-of-range still
+        # reports the true conversation length after a tail-cap.
+        total = log.total if log is not None else 0
+        dropped = log.dropped if log is not None else 0
+        target_count = turn + 1
 
-        if target_count < 0 or target_count > len(checkpoints):
+        if target_count < 0 or target_count > total:
             raise ValueError(
-                f"Invalid turn {turn}: conversation has "
-                f"{len(checkpoints)} turns"
+                f"Invalid turn {turn}: conversation has {total} turns"
             )
 
-        turns_to_undo = len(checkpoints) - target_count
+        # When ``max_undo_checkpoints`` trimmed the front, the oldest retained
+        # checkpoint sits at absolute index ``dropped`` (rewindable turns start
+        # at ``dropped - 1``). A target whose checkpoint was dropped cannot be
+        # reached — fail with a clear message instead of a wrong-node rewind.
+        # (Unbounded ``dropped == 0`` makes this a no-op: ``target_count < 0``
+        # is already rejected above.)
+        if target_count < dropped:
+            raise ValueError(
+                f"Turn {turn} is beyond the retained undo window "
+                f"(max_undo_checkpoints={self._max_undo_checkpoints}); "
+                f"oldest rewindable turn is {dropped - 1}"
+            )
+
+        turns_to_undo = total - target_count
         result = None
         for _ in range(turns_to_undo):
             result = await self.undo_last_turn(context)

@@ -210,8 +210,9 @@ class TestCheckpointRecording:
         await bot.chat("Second", ctx)
         await bot.chat("Third", ctx)
 
-        checkpoints = bot._turn_checkpoints.get(ctx.conversation_id, [])
-        assert len(checkpoints) == 3
+        log = bot._turn_checkpoints.get(ctx.conversation_id)
+        assert log is not None
+        assert len(log.entries) == 3
 
     @pytest.mark.asyncio
     async def test_checkpoints_per_conversation(self):
@@ -224,8 +225,8 @@ class TestCheckpointRecording:
         await bot.chat("Hello", ctx2)
         await bot.chat("Again", ctx1)
 
-        assert len(bot._turn_checkpoints["conv-1"]) == 2
-        assert len(bot._turn_checkpoints["conv-2"]) == 1
+        assert len(bot._turn_checkpoints["conv-1"].entries) == 2
+        assert len(bot._turn_checkpoints["conv-2"].entries) == 1
 
     @pytest.mark.asyncio
     async def test_undo_pops_checkpoint(self):
@@ -234,10 +235,10 @@ class TestCheckpointRecording:
 
         await bot.chat("First", ctx)
         await bot.chat("Second", ctx)
-        assert len(bot._turn_checkpoints[ctx.conversation_id]) == 2
+        assert len(bot._turn_checkpoints[ctx.conversation_id].entries) == 2
 
         await bot.undo_last_turn(ctx)
-        assert len(bot._turn_checkpoints[ctx.conversation_id]) == 1
+        assert len(bot._turn_checkpoints[ctx.conversation_id].entries) == 1
 
 
 # =====================================================================

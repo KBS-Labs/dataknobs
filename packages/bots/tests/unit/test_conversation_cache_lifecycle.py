@@ -268,6 +268,86 @@ class TestBoundedManagerCache:
             assert "conv-x" in bot._conversation_managers
 
 
+class TestCheckpointCap:
+    """``max_undo_checkpoints`` tail-caps the retained undo checkpoints.
+
+    Only the most-recent N checkpoints are kept; the oldest are trimmed from
+    the front (tracked in ``dropped``) so ``rewind_to_turn`` can still map an
+    absolute turn index correctly and reject a target older than the window.
+    """
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_cap_tail_retains(self):
+        # Cap at 3; drive 5 turns on one conversation. Only the 3 most-recent
+        # checkpoints survive; the 2 oldest are trimmed from the front and
+        # counted in ``dropped`` so absolute turn numbering is preserved.
+        bot_config = {**_BOT_CONFIG, "max_undo_checkpoints": 3}
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=[f"reply-{i}" for i in range(5)],
+        ) as harness:
+            bot = harness.bot
+            conv_id = harness.context.conversation_id
+            for _ in range(5):
+                await harness.chat("hello")
+
+            log = bot._turn_checkpoints[conv_id]
+            assert len(log.entries) == 3  # tail-retained
+            assert log.dropped == 2  # 2 trimmed from the front
+            assert log.total == 5  # absolute turn count preserved
+
+    @pytest.mark.asyncio
+    async def test_rewind_offset_and_undo_after_cap(self):
+        # With the front trimmed, rewind must map absolute turn indices through
+        # the dropped offset: a retained turn lands correctly, a dropped turn
+        # raises the clear "beyond the retained undo window" error (never a
+        # silent wrong-node rewind), and relative undo_last_turn is unaffected.
+        bot_config = {**_BOT_CONFIG, "max_undo_checkpoints": 3}
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=[f"reply-{i}" for i in range(6)],
+        ) as harness:
+            bot = harness.bot
+            ctx = harness.context
+            conv_id = ctx.conversation_id
+            for _ in range(5):
+                await harness.chat("hello")
+
+            log = bot._turn_checkpoints[conv_id]
+            assert log.dropped == 2 and len(log.entries) == 3
+
+            # Turn 0 and turn -1 (the start) had their checkpoints trimmed —
+            # the window guard fires. It raises BEFORE running any undo, so
+            # these assertions are non-mutating. (Without the guard, the stale
+            # turns_to_undo would instead exhaust the retained entries and
+            # raise the wrong "Nothing to undo" — hence matching the specific
+            # message.)
+            with pytest.raises(
+                ValueError, match="beyond the retained undo window"
+            ):
+                await bot.rewind_to_turn(ctx, 0)
+            with pytest.raises(
+                ValueError, match="beyond the retained undo window"
+            ):
+                await bot.rewind_to_turn(ctx, -1)
+
+            # An out-of-range-high turn still reports the true (absolute)
+            # conversation length, unaffected by the front trim.
+            with pytest.raises(
+                ValueError, match="conversation has 5 turns"
+            ):
+                await bot.rewind_to_turn(ctx, 9)
+
+            # Relative undo pops the tail and leaves the dropped offset intact.
+            await bot.undo_last_turn(ctx)
+            assert len(log.entries) == 2
+            assert log.dropped == 2
+
+            # A retained turn still rewinds through the offset without error.
+            result = await bot.rewind_to_turn(ctx, 2)
+            assert result is not None
+
+
 class TestDefaultUnboundedNoRegression:
     """With neither bound set, both caches grow unbounded exactly as before."""
 
