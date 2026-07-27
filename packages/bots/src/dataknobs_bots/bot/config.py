@@ -108,6 +108,25 @@ class DynaBotConfig(StructuredConfig):
             brand / soften the degraded response without subclassing. An
             empty string is a legitimate choice (yields empty content /
             an empty final chunk) and is not rejected.
+        max_cached_conversations: Optional bound on the in-memory
+            ``ConversationManager`` cache. ``None`` (default) keeps the
+            cache unbounded — the current single-user / embedded behavior,
+            byte-for-byte. A positive value turns the cache into an
+            access-ordered LRU that evicts the least-recently-used
+            conversation (and co-drops its undo checkpoints) once the bound
+            is exceeded; the in-flight conversation of an active turn is
+            never evicted. Set this on a long-lived multi-conversation
+            server so per-conversation state cannot grow without limit.
+        max_undo_checkpoints: Optional per-conversation bound on the retained
+            undo checkpoints. ``None`` (default) keeps every turn's checkpoint
+            for the life of the conversation — today's behavior, byte-for-byte.
+            A positive value tail-retains only the most recent N checkpoints:
+            the oldest are trimmed from the front as new turns arrive, so a
+            very long single conversation cannot grow its undo history without
+            limit. ``undo_last_turn`` (relative) is unaffected;
+            ``rewind_to_turn`` to a turn whose checkpoint has been trimmed
+            raises a clear "beyond the retained undo window" error rather than
+            landing on the wrong node.
     """
 
     # Adopt polymorphic-section validation for the subsystem sections whose
@@ -157,6 +176,8 @@ class DynaBotConfig(StructuredConfig):
     tool_timeout: float = 30.0
     tool_loop_timeout: float = 120.0
     tool_loop_timeout_message: str = _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
+    max_cached_conversations: int | None = None
+    max_undo_checkpoints: int | None = None
 
     def __post_init__(self) -> None:
         """Validate the timeout + prompt_envelope invariants against the snapshot.
@@ -173,6 +194,28 @@ class DynaBotConfig(StructuredConfig):
             raise ValueError(
                 f"tool_loop_timeout must be non-negative, got "
                 f"{self.tool_loop_timeout}"
+            )
+        # A zero/negative bound is nonsensical (it would evict everything,
+        # including the just-created in-flight conversation). ``None`` stays
+        # the unbounded opt-out; any set value must retain at least one entry.
+        if (
+            self.max_cached_conversations is not None
+            and self.max_cached_conversations < 1
+        ):
+            raise ValueError(
+                f"max_cached_conversations must be >= 1 or None, got "
+                f"{self.max_cached_conversations}"
+            )
+        # Same rationale for the checkpoint cap: ``None`` is the unbounded
+        # opt-out; a set value must retain at least one checkpoint (a ``0``
+        # cap would drop every turn's undo target as soon as it is recorded).
+        if (
+            self.max_undo_checkpoints is not None
+            and self.max_undo_checkpoints < 1
+        ):
+            raise ValueError(
+                f"max_undo_checkpoints must be >= 1 or None, got "
+                f"{self.max_undo_checkpoints}"
             )
         # Validate prompt_envelope is a known style. Case-insensitive:
         # YAML configs are human-written, so ``"XML"`` / ``"Markdown"``

@@ -450,12 +450,22 @@ class _BankCore:
     # -- Node ancestry (pure) --
 
     @staticmethod
-    def is_ancestor_or_equal(node_id: str, checkpoint_id: str) -> bool:
+    def is_ancestor_or_equal(
+        node_id: str, checkpoint_id: str | None
+    ) -> bool:
         """Check if ``node_id`` is an ancestor of (or equal to) ``checkpoint_id``.
 
         Uses dot-notation node IDs from the conversation tree.
         The root node (``""``) is an ancestor of everything.
+
+        A ``None`` ``checkpoint_id`` denotes the empty "before any message
+        exists" anchor (used when undoing back through the very first turn):
+        nothing is an ancestor of the empty pre-tree state, so this returns
+        ``False`` for every node — every record is post-checkpoint and is
+        removed, reverting the bank to empty.
         """
+        if checkpoint_id is None:
+            return False
         if node_id == checkpoint_id:
             return True
         if node_id == "":
@@ -717,7 +727,7 @@ class MemoryBank:
             self._db.delete(db_record.storage_id)
         logger.debug("Cleared bank '%s'", self._core.name)
 
-    def undo_to_checkpoint(self, checkpoint_node_id: str) -> int:
+    def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> int:
         """Remove records added after the checkpoint node.
 
         Identifies records whose ``source_node_id`` is NOT an ancestor of
@@ -727,15 +737,25 @@ class MemoryBank:
         the checkpoint are NOT reverted to their pre-modification state.
         Only records ADDED after the checkpoint are removed.
 
+        A record with no tree provenance (``source_node_id is None``) is
+        never removed — it is not anchored to any turn, so node-based undo
+        leaves it alone. A record at the root node (``source_node_id == ""``,
+        e.g. a turn-0 record on a no-system-prompt tree) IS a real anchored
+        record: it is an ancestor of every real checkpoint (kept on a
+        later-turn undo) but is removed on a total revert (``None``).
+
         Args:
-            checkpoint_node_id: Node ID to revert to.
+            checkpoint_node_id: Node ID to revert to, or ``None`` for the
+                empty "before any message" anchor (undoing back through the
+                first turn), which removes every anchored record (including
+                root-node records) — reverting the bank to empty.
 
         Returns:
             Number of records removed.
         """
         removed = 0
         for record in self.all():
-            if not record.source_node_id:
+            if record.source_node_id is None:
                 continue
             if not _BankCore.is_ancestor_or_equal(
                 record.source_node_id, checkpoint_node_id
@@ -1191,7 +1211,7 @@ class AsyncMemoryBank:
         for db_record in await self._db_records():
             await self._db.delete(db_record.storage_id)
 
-    async def undo_to_checkpoint(self, checkpoint_node_id: str) -> int:
+    async def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> int:
         """Remove records added after the checkpoint node.
 
         Async version of ``MemoryBank.undo_to_checkpoint()``.
@@ -1199,7 +1219,7 @@ class AsyncMemoryBank:
         """
         removed = 0
         for record in await self.all():
-            if not record.source_node_id:
+            if record.source_node_id is None:
                 continue
             if not _BankCore.is_ancestor_or_equal(
                 record.source_node_id, checkpoint_node_id

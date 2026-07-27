@@ -125,8 +125,11 @@ DynaBot (Orchestrator)
 
 **State Management**:
 - Stateless per request
-- Caches ConversationManager instances per conversation_id
-- Maintains per-conversation turn checkpoints (`_turn_checkpoints`) for undo support
+- Caches ConversationManager instances per conversation_id (optionally bounded
+  as an access-ordered LRU via `max_cached_conversations`; unbounded by default)
+- Maintains per-conversation turn checkpoints (`_turn_checkpoints`) for undo
+  support (optionally tail-capped via `max_undo_checkpoints`; unbounded by
+  default). See [Bounding Per-Conversation State](configuration.md#bounding-per-conversation-state).
 - No shared mutable state between different conversations
 
 **Concurrency**: Fully async, supports concurrent requests

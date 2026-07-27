@@ -281,24 +281,23 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Build the Inference-API ``parameters`` dict with request shaping.
 
         The HuggingFace request-shaping choke point, mirroring the other
-        providers' ``_build_api_kwargs`` / ``_build_shaped_options``: shapes the
-        runtime config through the shared
-        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
-        family-rejected sampling params, clamps ``max_tokens`` to a ceiling — in
-        canonical config space, independent of HF's flat ``parameters`` wire
-        shape), builds the ``parameters`` dict, then applies any wire-level
-        :meth:`~..base.LLMProvider._apply_param_remaps`. HF's auto-detected rules
-        are empty by default (no ceiling, no rejected params, no remaps), so this
-        is a **byte-identical no-op** in normal use — the ``max_new_tokens``
-        default still lands at :data:`_HF_DEFAULT_MAX_NEW_TOKENS` when the caller
-        set none, and at the caller's ``max_tokens`` when set. Wired for the
-        consumer-``constraints``-override path, symmetric with the other three
-        providers. ``complete`` is the only caller; ``stream_complete`` routes
-        through it, and ``embed`` posts no ``parameters`` (nothing to shape).
+        providers' ``_build_api_kwargs`` / ``_build_shaped_options``: delegates the
+        request-shaping front-half to the shared
+        :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
+        once, drops family-rejected sampling params, clamps ``max_tokens`` to a
+        ceiling — in canonical config space, independent of HF's flat
+        ``parameters`` wire shape), builds the ``parameters`` dict, then applies
+        any wire-level :meth:`~..base.LLMProvider._apply_param_remaps`. HF's
+        auto-detected rules are empty by default (no ceiling, no rejected params,
+        no remaps), so this is a **byte-identical no-op** in normal use — the
+        ``max_new_tokens`` default still lands at :data:`_HF_DEFAULT_MAX_NEW_TOKENS`
+        when the caller set none, and at the caller's ``max_tokens`` when set.
+        Wired for the consumer-``constraints``-override path, symmetric with the
+        other three providers. ``complete`` is the only caller; ``stream_complete``
+        routes through it, and ``embed`` posts no ``parameters`` (nothing to shape).
         """
-        constraints = self.get_constraints(runtime_config)
-        shaped = self._apply_request_constraints(runtime_config, constraints)
-        gen = shaped.generation_params()
+        shaped_config, _, constraints = self._shape_request_params(runtime_config)
+        gen = shaped_config.generation_params()
         parameters: Dict[str, Any] = {
             'max_new_tokens': gen.get('max_tokens', _HF_DEFAULT_MAX_NEW_TOKENS),
             'return_full_text': False,

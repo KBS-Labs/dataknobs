@@ -268,7 +268,80 @@ context_transform: string   # Dotted import path to a (str) -> str callable
 max_tool_iterations: int     # Max tool execution rounds (default: 5)
                              # Caps the DynaBot-level tool loop for strategies
                              # that don't handle tool_calls internally
+
+# Optional: Per-conversation state bounds (see "Bounding Per-Conversation
+# State" below). Both default to None (unbounded — today's behavior).
+max_cached_conversations: int  # Bound the in-memory ConversationManager cache;
+                               # a positive value LRU-evicts the least-recently
+                               # -used conversation once exceeded (default: None)
+max_undo_checkpoints: int      # Bound the retained undo checkpoints per
+                               # conversation; a positive value tail-retains only
+                               # the most recent N (default: None)
 ```
+
+---
+
+## Bounding Per-Conversation State
+
+DynaBot keeps two per-conversation structures in memory: the cached
+`ConversationManager` (the conversation's node tree) and the per-turn undo
+checkpoints that back `undo_last_turn` / `rewind_to_turn`. In a single-user
+or embedded bot these are naturally small and never need bounding. A
+**long-lived server that handles many distinct conversations** (or a single
+conversation that runs for a very large number of turns) can grow them
+without limit unless it calls `clear_conversation` for every conversation it
+ever serves. Two independent, opt-in bounds cap that growth.
+
+Both default to `None` — **unbounded, byte-for-byte the historical
+behavior.** Set them only on a long-running multi-conversation deployment. A
+`0` or negative value is rejected at config validation.
+
+```yaml
+# Bound the in-memory conversation-manager cache to 500 conversations.
+max_cached_conversations: 500
+# Retain at most the 100 most-recent undo checkpoints per conversation.
+max_undo_checkpoints: 100
+```
+
+### `max_cached_conversations`
+
+Turns the `ConversationManager` cache into an **access-ordered LRU**. Once the
+number of cached conversations exceeds the bound, the least-recently-used
+conversation is evicted. Any access (a turn, an `undo`, a
+`get_conversation_manager`) marks a conversation most-recently-used, so an
+actively-used conversation stays warm. Eviction co-drops the evicted
+conversation's undo checkpoints through the same teardown path as an explicit
+`clear_conversation`, so the two structures can never drift apart.
+
+The **in-flight conversation of an active turn is pinned** and never evicted
+out from under its own turn — if every cached conversation is currently
+in-flight, the cache is allowed to exceed the bound transiently rather than
+evict a live turn (in-flight correctness wins; the bound is a target, not a
+hard ceiling). Evicting a conversation only drops its in-memory cache entry —
+persisted conversation state (in the configured `conversation_storage`) is
+untouched, and a later message resumes it from storage.
+
+### `max_undo_checkpoints`
+
+Bounds the undo checkpoints retained **per conversation**. A positive value
+tail-retains only the most recent N checkpoints, trimming the oldest from the
+front as new turns arrive, so a single very long conversation cannot grow its
+undo history without limit.
+
+- `undo_last_turn` (relative — "undo the last turn") is unaffected: it always
+  operates on the most-recent retained checkpoint.
+- `rewind_to_turn` (absolute — "rewind to turn N") maps the absolute turn
+  index through the trimmed offset. Rewinding to a turn whose checkpoint has
+  been trimmed raises a clear **"beyond the retained undo window"** error
+  (naming the oldest still-rewindable turn) rather than silently landing on
+  the wrong node. Rewinding to a turn still within the retained window works
+  exactly as before.
+
+Undo checkpoints anchor on a prior turn's terminal node, which always lives in
+the retained head of any later turn's in-loop history compaction (see the
+ReAct `history_compaction` option). Compaction is non-destructive, so it never
+dangles an undo target — bounding undo history and in-loop compaction
+interoperate cleanly.
 
 ---
 
@@ -1654,6 +1727,11 @@ reasoning:
     keep_recent_iterations: 3
     strategy: window      # "window" (default) or "summarize"
 ```
+
+> Building a long-running tool bot? See the LLM Best Practices guide's
+> [Productionizing a Tool-Using Bot](../../llm/guides/best-practices.md#productionizing-a-tool-using-bot)
+> checklist for which provider-boundary protections you get for free and when to
+> opt into `history_compaction` and `truncation_retry_max_tokens`.
 
 **Configuration Options:**
 - `max_iterations` (int): Maximum reasoning loops (default: 5)
@@ -3753,6 +3831,11 @@ reasoning:
   max_iterations: 5
   verbose: false
   store_trace: false
+  history_compaction:               # Recommended for long tool loops
+    enabled: true
+    keep_recent_iterations: 3
+    budget_fraction: 0.75
+  truncation_retry_max_tokens: 8192  # Optional: complete (not just abandon) a truncated tool payload
 
 # Tools
 tool_definitions:

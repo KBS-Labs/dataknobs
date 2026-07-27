@@ -629,7 +629,9 @@ class ReasoningStrategy(ABC):
                 ignored.
         """
 
-    def undo_to_checkpoint(self, checkpoint_node_id: str) -> None:  # noqa: B027
+    def undo_to_checkpoint(  # noqa: B027
+        self, checkpoint_node_id: str | None
+    ) -> None:
         """Revert strategy-owned state to a checkpoint node.
 
         Called by ``DynaBot.undo_last_turn`` / ``rewind_to_turn`` so the
@@ -639,7 +641,9 @@ class ReasoningStrategy(ABC):
         Default: no-op (most strategies hold no node-keyed state).
 
         Args:
-            checkpoint_node_id: The node ID to revert to.
+            checkpoint_node_id: The node ID to revert to, or ``None`` for the
+                empty "before any message" anchor (undoing back through the
+                first turn), which reverts node-keyed state to empty.
         """
 
     async def close(self) -> None:  # noqa: B027

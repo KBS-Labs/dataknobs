@@ -355,6 +355,61 @@ class TestCollectionModeThroughLoadedMetadata:
         assert "amount" not in state.data
 
     @pytest.mark.asyncio
+    async def test_collection_record_stamps_current_node_for_undo(self) -> None:
+        """A collection record is stamped with the current conversation node.
+
+        Without the ``source_node_id`` stamp the record defaults to the root
+        anchor (``""``), which is an ancestor of every checkpoint — so a
+        later-turn undo (``undo_to_checkpoint(<a-real-node>)``) would never
+        revert it (a silent no-op). Reproduce-first: on the un-stamped
+        recording the record survives the undo below.
+        """
+        reasoning = _make_collection_wizard()
+        stage = reasoning._fsm.current_metadata
+
+        config = LLMConfig(
+            provider="echo", model="echo-test", options={"echo_prefix": ""}
+        )
+        provider = EchoProvider(config)
+        builder = AsyncPromptBuilder(
+            library=ConfigPromptLibrary(
+                {"system": {"test": {"template": "Test bot."}}}
+            )
+        )
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+        manager = await ConversationManager.create(
+            llm=provider, prompt_builder=builder,
+            storage=storage, system_prompt_name="test",
+        )
+        state = WizardState(current_stage="collect", data={})
+        await manager.add_message(role="user", content="2 cups of flour")
+        provider.set_responses([text_response("Got it! Anything else?")])
+
+        # The node the record must be anchored to (the turn's user node).
+        turn_node = manager.state.current_node_id
+        assert turn_node not in ("", None)  # a real, non-root node
+
+        await reasoning._handle_collection_mode(
+            user_message="2 cups of flour",
+            extracted_data={"name": "flour", "amount": "2 cups"},
+            stage=stage,
+            state=state,
+            manager=manager,
+            llm=provider,
+            tools=[],
+        )
+
+        bank = reasoning._banks["ingredients"]
+        assert bank.count() == 1
+        # Provenance stamped (not the root default), so undo can locate it.
+        assert bank.all()[0].source_node_id == turn_node
+
+        # A later-turn undo to the pre-turn checkpoint (the "" root, before this
+        # turn's node) now actually reverts the record.
+        bank.undo_to_checkpoint("")
+        assert bank.count() == 0
+
+    @pytest.mark.asyncio
     async def test_done_signal_through_loaded_metadata(self) -> None:
         """'done' keyword triggers exit when using loader-produced metadata."""
         reasoning = _make_collection_wizard()

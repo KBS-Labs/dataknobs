@@ -7,11 +7,12 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
+from dataknobs_common.bounded_cache import BoundedLRUCache
 from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -33,6 +34,7 @@ from ..memory.base import Memory
 from ..middleware.base import Middleware
 from .config import DynaBotConfig
 from .context import BotContext
+from .tool_loop import _BufferedDelivery, _StreamingDelivery, _ToolLoopDelivery
 from .turn import ToolExecution, TurnMode, TurnState
 
 if TYPE_CHECKING:
@@ -139,6 +141,57 @@ class UndoResult:
     undone_bot_response: str
     remaining_turns: int
     branching: bool
+
+
+@dataclass
+class _CheckpointLog:
+    """A conversation's undo checkpoints plus a front-drop offset.
+
+    ``entries`` holds the retained ``(node_id, memory_count)`` checkpoints —
+    one appended per turn in ``_prepare_turn`` and popped from the *tail* by
+    ``undo_last_turn``. ``dropped`` counts checkpoints trimmed off the *front*
+    when ``max_undo_checkpoints`` is exceeded.
+
+    ``node_id`` is ``str | None``: a real dot-path node id (or the system-root
+    ``""``) for a turn recorded against a materialized tree, or the ``None``
+    empty-anchor sentinel for a turn recorded on a genuinely-empty tree (no
+    system prompt), signalling "before any message exists" — ``undo_last_turn``
+    resets the manager to empty for that anchor instead of switching to a node
+    the first message would have reoccupied.
+
+    Co-locating the offset with its list keeps absolute turn numbering intact
+    after a tail-cap: the checkpoint for absolute turn ``i`` lives at
+    ``entries[i - dropped]`` (or has been dropped when ``i < dropped``), which
+    is what lets ``rewind_to_turn`` map an absolute turn index through
+    ``dropped`` and reject a target older than the retained window instead of
+    landing on the wrong node. With no cap (``max_size is None``) the front is
+    never trimmed, so ``dropped`` stays ``0`` and ``total == len(entries)`` —
+    the pre-cap behavior, byte-for-byte.
+    """
+
+    entries: list[tuple[str | None, int]] = field(default_factory=list)
+    dropped: int = 0
+
+    def append(
+        self, checkpoint: tuple[str | None, int], max_size: int | None
+    ) -> None:
+        """Record a checkpoint, tail-capping the front to ``max_size`` entries.
+
+        Appends ``checkpoint`` as the newest turn's undo target, then — when a
+        positive ``max_size`` is exceeded — drops the excess from the front and
+        advances ``dropped`` by exactly that many, so the offset always matches
+        what was trimmed. ``max_size is None`` never trims (unbounded).
+        """
+        self.entries.append(checkpoint)
+        if max_size is not None and len(self.entries) > max_size:
+            overflow = len(self.entries) - max_size
+            del self.entries[:overflow]
+            self.dropped += overflow
+
+    @property
+    def total(self) -> int:
+        """Absolute number of turns ever checkpointed (retained + dropped)."""
+        return self.dropped + len(self.entries)
 
 
 def _node_depth(node_id: str) -> int:
@@ -396,6 +449,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._max_tool_iterations = self.config.max_tool_iterations
         self._tool_timeout = self.config.tool_timeout
         self._tool_loop_timeout = self.config.tool_loop_timeout
+        self._max_cached_conversations = self.config.max_cached_conversations
+        self._max_undo_checkpoints = self.config.max_undo_checkpoints
         self._finalize_timeout_message = self.config.tool_loop_timeout_message
         # Resolve the dotted-path context_transform now (cheap, sync). The
         # pre-built shape overrides this with a directly-supplied callable.
@@ -413,8 +468,24 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._prompt_envelope = PromptEnvelope(
             PromptEnvelopeStyle(self.config.prompt_envelope)
         )
-        self._conversation_managers: dict[str, ConversationManager] = {}
-        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
+        # Access-ordered LRU cache of live conversation managers. ``max_size``
+        # is ``None`` by default (unbounded — today's single-user behavior).
+        # When a positive bound is configured, evicting a conversation
+        # co-drops its undo checkpoints through the single teardown choke
+        # point (``_on_conversation_evicted`` -> ``_drop_conversation_cache``),
+        # and the in-flight conversation of an active turn is pinned so it is
+        # never evicted out from under its own turn.
+        self._conversation_managers: BoundedLRUCache[
+            str, ConversationManager
+        ] = BoundedLRUCache(
+            max_size=self._max_cached_conversations,
+            on_evict=self._on_conversation_evicted,
+        )
+        # Per-conversation undo checkpoints. The value is a ``_CheckpointLog``
+        # (retained ``entries`` + a ``dropped`` front-offset) rather than a raw
+        # list so a ``max_undo_checkpoints`` tail-cap can trim the front while
+        # ``rewind_to_turn`` still maps absolute turn indices correctly.
+        self._turn_checkpoints: dict[str, _CheckpointLog] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
         # Lifetime ownership of the cascade-closed subsystems. Set True by
         # :meth:`_build_collaborators` (config-driven build → the bot
@@ -1384,6 +1455,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         if turn.is_greet:
             turn.manager = await self._get_or_create_conversation(turn.context)
+            # The pin is now held for this turn — mark it so the driver's
+            # ``finally`` releases exactly this turn's pin (see below).
+            turn.pinned_conversation = True
             # Bridge plugin_data to LLM middleware
             if turn.manager.state is not None:
                 turn.manager.state.turn_data = turn.plugin_data
@@ -1396,23 +1470,45 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         # Get or create conversation manager
         turn.manager = await self._get_or_create_conversation(turn.context)
+        # The pin is now held for this turn — mark it so the driver's
+        # ``finally`` releases exactly this turn's pin (see below).
+        turn.pinned_conversation = True
 
         # Record tree position before the turn for undo support.
         # Store (node_id, memory_count) — node_id for tree navigation,
         # memory_count for accurate memory rollback (node depth is unreliable).
         conv_id = turn.context.conversation_id
         if conv_id not in self._turn_checkpoints:
-            self._turn_checkpoints[conv_id] = []
+            self._turn_checkpoints[conv_id] = _CheckpointLog()
         mem_count = 0
         if self.memory:
             try:
                 mem_count = len(await self.memory.get_context(""))
             except Exception:
                 mem_count = 0
-        self._turn_checkpoints[conv_id].append((
-            turn.manager.state.current_node_id if turn.manager.state else "",
-            mem_count,
-        ))
+        # Append this turn's undo target, tail-capping the front to
+        # ``max_undo_checkpoints`` (``None`` = unbounded, no trim). The cap and
+        # its dropped-offset are maintained together inside ``_CheckpointLog``.
+        #
+        # When the tree is genuinely empty (``state is None`` — no system
+        # prompt seeded), store the ``None`` empty-anchor sentinel rather than
+        # ``""``. The very first message *becomes* the root node ``""``, so
+        # ``""`` would be reoccupied by this turn's user message and an
+        # undo-to-``""`` would land back on it (leaking a phantom leading
+        # message). The sentinel records "before any message exists" so
+        # ``undo_last_turn`` resets to empty instead of switching to a
+        # reoccupied node. When ``state`` exists (system prompt present, or any
+        # later turn), store ``current_node_id`` exactly as before — the
+        # system-root ``""`` and every real node id are unchanged.
+        checkpoint_node: str | None = (
+            turn.manager.state.current_node_id
+            if turn.manager.state
+            else None
+        )
+        self._turn_checkpoints[conv_id].append(
+            (checkpoint_node, mem_count),
+            self._max_undo_checkpoints,
+        )
 
         # Add user message.  When context augmentation was applied (KB
         # results, memory history), store the original raw message in node
@@ -1904,6 +2000,61 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         return max(self._remaining_loop_budget(loop_start), _MIN_FINALIZE_BUDGET)
 
+    async def _run_monolithic_tool_loop(
+        self,
+        turn: TurnState,
+        delivery: _ToolLoopDelivery,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Shared cap / timeout / execute / budget / re-call / cap-warning core.
+
+        Drives the one tool-execution lifecycle both non-phased delivery modes
+        share; the ``delivery`` owns the axes on which they differ (see
+        ``bot/tool_loop.py``).  The buffered caller drives this to exhaustion
+        (it yields nothing — the ``complete`` result lands on the delivery);
+        the streaming caller yields each re-stream chunk through.
+
+        This core does **not** finalize: the caller owns the finalize
+        chokepoint (buffered inline, streaming ``finally``-gated), so per-mode
+        finalize placement is unchanged.
+        """
+        extra = {
+            "conversation_id": getattr(turn.manager, "conversation_id", None),
+        }
+        loop_start = time.monotonic()
+        for _iteration in range(self._max_tool_iterations):
+            # Condition order is normalized; both original per-mode orders were
+            # side-effect-free boolean tests, so the result is identical.
+            if not self.tool_registry or not delivery.has_pending():
+                break
+            if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                logger.warning(
+                    delivery.MSG_TIMEOUT, self._tool_loop_timeout, extra=extra
+                )
+                break
+            await self._execute_tools(turn, delivery.pending_calls())
+            delivery.accumulate_usage(turn)
+            # Streaming clears pending here (before the budget gate) so a
+            # budget-break flags no orphan; buffered inherits a no-op.
+            delivery.clear_pending_after_execute()
+            remaining = self._remaining_loop_budget(loop_start)
+            if remaining <= 0:
+                logger.warning(
+                    delivery.MSG_BUDGET, self._tool_loop_timeout, extra=extra
+                )
+                break
+            chunks = await delivery.recall(turn, remaining)
+            if chunks is not None:
+                async for chunk in chunks:
+                    yield chunk
+            if delivery.broke:  # buffered re-call exceeded its per-call deadline
+                break
+        else:
+            # Loop completed without break — cap hit.
+            if self.tool_registry and delivery.has_pending():
+                logger.warning(
+                    delivery.MSG_CAP, self._max_tool_iterations, extra=extra
+                )
+
     def _llm_model_name(self) -> str:
         """Best-effort model identifier for a synthesized fallback response."""
         model = getattr(getattr(self.llm, "config", None), "model", None)
@@ -2269,17 +2420,32 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         Args:
             turn: Turn state at the end of the pipeline.
         """
-        for mw in self.middleware:
-            try:
-                await mw.finally_turn(turn)
-            except Exception as exc:
-                logger.exception(
-                    "Middleware %s.finally_turn raised",
-                    type(mw).__name__,
-                )
-                await self._call_on_hook_error_middleware(
-                    "finally_turn", exc, turn.context
-                )
+        try:
+            for mw in self.middleware:
+                try:
+                    await mw.finally_turn(turn)
+                except Exception as exc:
+                    logger.exception(
+                        "Middleware %s.finally_turn raised",
+                        type(mw).__name__,
+                    )
+                    await self._call_on_hook_error_middleware(
+                        "finally_turn", exc, turn.context
+                    )
+        finally:
+            # Release the in-flight pin taken in _get_or_create_conversation.
+            # This is the one method every turn driver calls inside its
+            # ``finally``, so the release runs on every path — success, error,
+            # and early stream-abandon. Guard it on the per-turn flag: pins are
+            # a global per-key refcount, so a turn that reached here WITHOUT
+            # pinning (the greet no-strategy early-exit, or an exception in
+            # _prepare_turn before the pin point) must NOT decrement a pin it
+            # never took — doing so would drop a *concurrent* same-id turn's
+            # pin and let its live conversation be evicted mid-turn. Releasing
+            # only this turn's own pin is what makes the refcounted
+            # "concurrent turns each hold their own" contract actually hold.
+            if turn.pinned_conversation:
+                self._conversation_managers.unpin(turn.context.conversation_id)
 
     async def _call_on_tool_executed_middleware(
         self, execution: ToolExecution, context: BotContext
@@ -2396,81 +2562,26 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
                 # DynaBot-level tool execution loop.  Strategies that handle
                 # tool_calls internally (e.g. ReAct) return responses without
-                # tool_calls, so this loop is a no-op for them.
-                loop_start = time.monotonic()
-                for _iteration in range(self._max_tool_iterations):
-                    if (
-                        not self.tool_registry
-                        or not getattr(response, "tool_calls", None)
-                    ):
-                        break
-                    if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                        logger.warning(
-                            "Tool execution loop exceeded wall-clock timeout "
-                            "(%.1fs)",
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                    await self._execute_tools(turn, response.tool_calls)
-                    # Accumulate usage from intermediate LLM calls
-                    turn.accumulate_usage(response)
-                    # Enforce remaining loop budget on the LLM re-call
-                    remaining = self._remaining_loop_budget(loop_start)
-                    if remaining <= 0:
-                        logger.warning(
-                            "Tool loop budget exhausted before LLM re-call "
-                            "(%.1fs budget)",
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                    try:
-                        response = await asyncio.wait_for(
-                            turn.manager.complete(
-                                tools=list(self.tool_registry) or None,
-                                temperature=temperature or self.default_temperature,
-                                max_tokens=max_tokens or self.default_max_tokens,
-                                llm_config_overrides=llm_config_overrides,
-                            ),
-                            timeout=remaining,
-                        )
-                    except (TimeoutError, asyncio.TimeoutError):
-                        logger.warning(
-                            "LLM re-call exceeded remaining tool loop "
-                            "budget (%.1fs remaining of %.1fs)",
-                            remaining,
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                else:
-                    # Loop completed without break — cap hit
-                    if self.tool_registry and getattr(
-                        response, "tool_calls", None
-                    ):
-                        logger.warning(
-                            "Tool execution loop reached max iterations (%d) "
-                            "with pending tool_calls",
-                            self._max_tool_iterations,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
+                # tool_calls, so this loop is a no-op for them.  The shared
+                # core (``_run_monolithic_tool_loop``) owns the cap / timeout /
+                # execute / budget / re-call / cap-warning lifecycle; the
+                # buffered delivery owns the ``complete``-per-re-call axis and
+                # drives the core to exhaustion (it yields nothing).
+                buffered = _BufferedDelivery(
+                    response,
+                    recall_kwargs={
+                        "tools": list(self.tool_registry) or None,
+                        "temperature": temperature or self.default_temperature,
+                        "max_tokens": max_tokens or self.default_max_tokens,
+                        "llm_config_overrides": llm_config_overrides,
+                    },
+                    turn_timeout=self._tool_loop_timeout,
+                )
+                async for _chunk in self._run_monolithic_tool_loop(
+                    turn, buffered
+                ):
+                    pass  # buffered mode yields nothing
+                response = buffered.response
 
             turn.response = response
             # Terminating response still carrying tool_calls == the loop broke
@@ -2858,77 +2969,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
             # DynaBot-level tool execution loop for streaming.
             # Execute pending tool_calls, then re-stream until no
-            # more tool_calls or max iterations reached.
-            loop_start = time.monotonic()
-            for _iteration in range(self._max_tool_iterations):
-                if not pending_tool_calls or not self.tool_registry:
-                    break
-                if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                    logger.warning(
-                        "Streaming tool execution loop exceeded "
-                        "wall-clock timeout (%.1fs)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-                await self._execute_tools(turn, pending_tool_calls)
-                # Accumulate usage from intermediate streaming rounds
-                turn.accumulate_usage_from_stream()
-                pending_tool_calls = None
-
-                # Check remaining budget before starting LLM re-stream
-                remaining = self._remaining_loop_budget(loop_start)
-                if remaining <= 0:
-                    logger.warning(
-                        "Streaming tool loop budget exhausted before "
-                        "LLM re-stream (%.1fs budget)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-
-                async for chunk in turn.manager.stream_complete(
-                    tools=list(self.tool_registry) or None,
-                    temperature=temperature or self.default_temperature,
-                    max_tokens=max_tokens or self.default_max_tokens,
-                    llm_config_overrides=llm_config_overrides,
-                ):
-                    turn.stream_chunks.append(chunk.delta)
-                    if chunk.is_final or chunk.usage:
-                        turn.populate_from_final_stream_chunk(
-                            chunk, self.llm
-                        )
-                    if chunk.tool_calls and self.tool_registry:
-                        pending_tool_calls = chunk.tool_calls
-                        yield LLMStreamResponse(
-                            delta=chunk.delta,
-                            is_final=False,
-                            usage=chunk.usage,
-                            model=chunk.model,
-                        )
-                    else:
-                        yield chunk
-            else:
-                # Loop completed without break — cap hit
-                if pending_tool_calls and self.tool_registry:
-                    logger.warning(
-                        "Streaming tool execution loop reached max "
-                        "iterations (%d) with pending tool_calls",
-                        self._max_tool_iterations,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
+            # more tool_calls or max iterations reached.  The shared core
+            # (``_run_monolithic_tool_loop``) owns the cap / timeout /
+            # execute / budget / cap-warning lifecycle; the streaming delivery
+            # owns the re-stream axis and its chunks are yielded through.
+            streaming = _StreamingDelivery(
+                pending_tool_calls,
+                provider=self.llm,
+                has_tools=bool(self.tool_registry),
+                recall_kwargs={
+                    "tools": list(self.tool_registry) or None,
+                    "temperature": temperature or self.default_temperature,
+                    "max_tokens": max_tokens or self.default_max_tokens,
+                    "llm_config_overrides": llm_config_overrides,
+                },
+            )
+            async for chunk in self._run_monolithic_tool_loop(turn, streaming):
+                yield chunk
+            # Write pending back for the finally-gate orphan check below.
+            pending_tool_calls = streaming.pending
 
             stream_fully_consumed = True
 
@@ -2994,6 +3053,22 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         self._conversation_managers.pop(conversation_id, None)
         self._turn_checkpoints.pop(conversation_id, None)
+
+    def _on_conversation_evicted(
+        self, conversation_id: str, _manager: ConversationManager
+    ) -> None:
+        """LRU-eviction hook — route the drop through the single choke point.
+
+        Fired by the bounded manager cache when it evicts the LRU conversation
+        to honor ``max_cached_conversations``. The cache has already removed
+        the manager entry itself; routing through ``_drop_conversation_cache``
+        co-drops the conversation's checkpoints so the two structures cannot
+        drift apart on the eviction path any more than on the explicit-clear
+        path. The redundant manager ``pop`` inside the helper is a harmless
+        no-op here (the entry is already gone) and does not re-fire eviction —
+        ``BoundedLRUCache.pop`` neither evicts nor invokes ``on_evict``.
+        """
+        self._drop_conversation_cache(conversation_id)
 
     async def clear_conversation(self, conversation_id: str) -> bool:
         """Clear a conversation's history.
@@ -3269,9 +3344,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         conv_id = context.conversation_id
 
-        # Check cache
+        # Check cache. Reading via ``[]`` touches the entry most-recently-used
+        # (so an active conversation stays warm), and pinning it marks the
+        # conversation in-flight for the duration of this turn — the pin is
+        # released in ``_call_finally_turn_middleware``, gated on the turn's
+        # ``pinned_conversation`` flag so exactly this turn's pin is dropped.
+        # Pins are refcounted, so concurrent turns on the same id each hold
+        # their own and one finishing never unpins another.
         if conv_id in self._conversation_managers:
-            return self._conversation_managers[conv_id]
+            manager = self._conversation_managers[conv_id]
+            self._conversation_managers.pin(conv_id)
+            return manager
 
         # Try to resume existing conversation
         try:
@@ -3314,8 +3397,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     include_rag=bool(self.system_prompt_rag_configs),
                 )
 
-        # Cache manager
+        # Cache manager. The insert makes it most-recently-used, so a bounded
+        # cache never evicts the conversation it just created; pinning marks it
+        # in-flight for this turn (released in ``_call_finally_turn_middleware``).
         self._conversation_managers[conv_id] = manager
+        self._conversation_managers.pin(conv_id)
         return manager
 
     async def _build_message_with_context(
@@ -3768,14 +3854,23 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         conv_id = context.conversation_id
         manager = self._conversation_managers.get(conv_id)
-        if manager is None or manager.state is None:
+        if manager is None:
             raise ValueError("No active conversation")
 
-        checkpoints = self._turn_checkpoints.get(conv_id, [])
-        if not checkpoints:
+        # An emptied conversation (``state is None`` — e.g. after undoing back
+        # through the first turn reset the manager) is still *active* (its
+        # manager is cached), it simply has nothing left to undo. Treat it as
+        # "Nothing to undo" rather than "No active conversation", preserving the
+        # distinction from a never-started / evicted conversation (manager
+        # absent). This also guarantees ``state`` is materialized below, since a
+        # non-empty checkpoint log implies at least one un-undone turn.
+        log = self._turn_checkpoints.get(conv_id)
+        if manager.state is None or log is None or not log.entries:
             raise ValueError("Nothing to undo")
 
-        checkpoint_node_id, checkpoint_mem_count = checkpoints.pop()
+        # Relative undo: pop the newest retained checkpoint. The ``dropped``
+        # front-offset is untouched (undo never restores trimmed checkpoints).
+        checkpoint_node_id, checkpoint_mem_count = log.entries.pop()
 
         # Identify what we're undoing (last user message + last bot response).
         # For user messages, prefer raw_content from node metadata so that
@@ -3798,10 +3893,24 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     undone_user = content if isinstance(content, str) else str(content)
                 break
 
-        # Navigate back — next add_message() creates a sibling branch
-        await manager.switch_to_node(checkpoint_node_id)
+        # Navigate back to the checkpoint. A real node id switches to it, so
+        # the next add_message() creates a sibling branch preserving this one.
+        # The ``None`` empty-anchor sentinel means the undone turn was the very
+        # first on a genuinely-empty tree (no system prompt) — its user message
+        # *became* the root node ``""``, so there is no earlier node to switch
+        # to; reset the manager to its pre-message state instead, emptying the
+        # tree-path channel in lock-step with memory/banks. The turn-0 branch is
+        # discarded (acceptable only at the conversation-start boundary — see
+        # ConversationManager.reset), so this undo is non-branching.
+        branching = checkpoint_node_id is not None
+        if checkpoint_node_id is None:
+            await manager.reset()
+        else:
+            await manager.switch_to_node(checkpoint_node_id)
 
-        # Roll back memory — use stored message count for accuracy
+        # Roll back memory — use stored message count for accuracy.
+        # For the empty-anchor sentinel ``checkpoint_mem_count`` is 0 (recorded
+        # on the empty tree), so this pops memory back to empty unchanged.
         current_mem_count = 0
         if self.memory:
             try:
@@ -3825,18 +3934,27 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Revert banks via backend-managed checkpointing
         self._undo_banks_to_checkpoint(checkpoint_node_id)
 
-        # Count remaining turns
-        remaining_messages = manager.messages
-        user_count = sum(
-            1 for m in remaining_messages
-            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "user"
-        )
-
         return UndoResult(
             undone_user_message=undone_user,
             undone_bot_response=undone_bot,
-            remaining_turns=user_count,
-            branching=True,
+            remaining_turns=self._count_remaining_turns(manager),
+            branching=branching,
+        )
+
+    @staticmethod
+    def _count_remaining_turns(manager: ConversationManager) -> int:
+        """Count the user messages on the manager's active path.
+
+        Equivalent to the number of turns remaining after an undo/rewind.
+        Shared by ``undo_last_turn`` (after a rollback) and ``rewind_to_turn``
+        (for a zero-work no-op, where no rollback ran) so both report the
+        remaining-turn count the same way.
+        """
+        return sum(
+            1
+            for m in manager.messages
+            if (m.get("role") if isinstance(m, dict)
+                else getattr(m, "role", "")) == "user"
         )
 
     async def rewind_to_turn(
@@ -3855,29 +3973,70 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             UndoResult with details about what was undone.
 
         Raises:
-            ValueError: If turn number is invalid.
+            ValueError: If the turn number is out of range, or — when
+                ``max_undo_checkpoints`` has trimmed the front of the undo
+                history — if the target turn's checkpoint has been dropped
+                (rewinding to it is unrecoverable, so it fails clearly rather
+                than landing on the wrong node).
         """
         conv_id = context.conversation_id
-        checkpoints = self._turn_checkpoints.get(conv_id, [])
-        target_count = turn + 1  # checkpoints[0] is before turn 0
+        log = self._turn_checkpoints.get(conv_id)
+        # Absolute turn numbering: checkpoint index 0 is "before turn 0", so a
+        # rewind to ``turn`` keeps ``turn + 1`` checkpoints. ``total`` counts
+        # every turn ever recorded (retained + trimmed) so out-of-range still
+        # reports the true conversation length after a tail-cap.
+        total = log.total if log is not None else 0
+        dropped = log.dropped if log is not None else 0
+        target_count = turn + 1
 
-        if target_count < 0 or target_count > len(checkpoints):
+        if target_count < 0 or target_count > total:
             raise ValueError(
-                f"Invalid turn {turn}: conversation has "
-                f"{len(checkpoints)} turns"
+                f"Invalid turn {turn}: conversation has {total} turns"
             )
 
-        turns_to_undo = len(checkpoints) - target_count
-        result = None
-        for _ in range(turns_to_undo):
-            result = await self.undo_last_turn(context)
+        # When ``max_undo_checkpoints`` trimmed the front, the oldest retained
+        # checkpoint sits at absolute index ``dropped`` (rewindable turns start
+        # at ``dropped - 1``). A target whose checkpoint was dropped cannot be
+        # reached — fail with a clear message instead of a wrong-node rewind.
+        # (Unbounded ``dropped == 0`` makes this a no-op: ``target_count < 0``
+        # is already rejected above.)
+        if target_count < dropped:
+            raise ValueError(
+                f"Turn {turn} is beyond the retained undo window "
+                f"(max_undo_checkpoints={self._max_undo_checkpoints}); "
+                f"oldest rewindable turn is {dropped - 1}"
+            )
 
-        if result is None:
-            raise ValueError("Nothing to undo")
+        turns_to_undo = total - target_count
+
+        # Rewinding to the turn the conversation already sits at is zero work:
+        # the target is the current state, so nothing is undone. Return a
+        # well-formed no-op result rather than raising — but still require an
+        # active conversation (mirroring ``undo_last_turn``) so a never-started
+        # or evicted conversation (manager absent) reports the clear "No active
+        # conversation". An *emptied* conversation (manager cached but
+        # ``state is None`` after a turn-0 undo reset it) is still active and
+        # rewinds to its already-empty start as a zero-work no-op.
+        if turns_to_undo == 0:
+            manager = self._conversation_managers.get(conv_id)
+            if manager is None:
+                raise ValueError("No active conversation")
+            return UndoResult(
+                undone_user_message="",
+                undone_bot_response="",
+                remaining_turns=self._count_remaining_turns(manager),
+                branching=False,
+            )
+
+        # At least one turn to undo. Run the first outside the loop so the
+        # returned ``UndoResult`` is always well-typed (never ``None``).
+        result = await self.undo_last_turn(context)
+        for _ in range(turns_to_undo - 1):
+            result = await self.undo_last_turn(context)
         return result
 
     def _restore_wizard_from_node(
-        self, manager: ConversationManager, node_id: str
+        self, manager: ConversationManager, node_id: str | None
     ) -> None:
         """Reinstate strategy state from a checkpoint node's metadata.
 
@@ -3889,6 +4048,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         itself is strategy-agnostic.
         """
         if self.reasoning_strategy is None:
+            return
+        # A ``None`` node id is the empty-anchor sentinel (undo back through the
+        # first turn): there is no checkpoint node to restore strategy state
+        # from, and the manager has already been reset to empty. Nothing to do.
+        if node_id is None:
             return
         if manager.state is None:
             return
@@ -3905,7 +4069,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             manager, node_data.metadata
         )
 
-    def _undo_banks_to_checkpoint(self, checkpoint_node_id: str) -> None:
+    def _undo_banks_to_checkpoint(
+        self, checkpoint_node_id: str | None
+    ) -> None:
         """Forward checkpoint-revert to the reasoning strategy.
 
         Strategies that hold node-keyed state (e.g. wizard memory banks)

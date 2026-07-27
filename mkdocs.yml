@@ -182,6 +182,7 @@ nav:
       - packages/llm/quickstart.md
       - Guides:
         - packages/llm/guides/providers.md
+        - packages/llm/guides/best-practices.md
         - packages/llm/guides/prompts.md
         - packages/llm/guides/conversations.md
         - packages/llm/guides/flows.md

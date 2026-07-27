@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bounded conversation-manager cache (`max_cached_conversations`).** DynaBot's
+  in-memory `ConversationManager` cache is now an access-ordered LRU that can be
+  bounded via the new `DynaBotConfig.max_cached_conversations` field. The
+  default is `None` (unbounded — byte-for-byte the prior single-user / embedded
+  behavior); a positive value caps the cache, evicting the least-recently-used
+  conversation once the bound is exceeded so a long-lived multi-conversation
+  server cannot accumulate per-conversation state without limit. Eviction
+  co-drops the evicted conversation's undo checkpoints through the same single
+  teardown choke point as `clear_conversation`, and the in-flight conversation
+  of an active turn is pinned so it is never evicted out from under its own turn
+  (if every cached conversation is in-flight, the bound is exceeded transiently
+  rather than evicting a live turn). Any read of a cached conversation marks it
+  most-recently-used. Built on the new `dataknobs_common.BoundedLRUCache`
+  primitive. A `0` or negative bound is rejected at config validation.
+- **Bounded per-conversation undo history (`max_undo_checkpoints`).** A
+  companion `DynaBotConfig.max_undo_checkpoints` field independently bounds the
+  undo checkpoints retained per conversation. The default is `None` (unbounded
+  — every turn's checkpoint is kept for the life of the conversation, exactly
+  as before); a positive value tail-retains only the most recent N checkpoints,
+  trimming the oldest from the front so a single very long conversation cannot
+  grow its undo history without limit. `undo_last_turn` (relative) is
+  unaffected; `rewind_to_turn` to a turn whose checkpoint has been trimmed
+  raises a clear "beyond the retained undo window" error rather than silently
+  landing on the wrong node. A `0` or negative bound is rejected at config
+  validation.
 - **Structured ReAct termination reason.** Every ReAct turn now surfaces *why*
   it ended as always-on `reasoning_termination` conversation metadata
   (`{"strategy": "react", "reason": <value>, "iterations_used": <int>}`),
@@ -47,7 +72,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compaction). `SummaryMemory` now composes the shared `dataknobs_llm`
   summarization seam (behaviour unchanged).
 
+### Changed
+
+- **Unified DynaBot's buffered and streaming tool-execution loops onto one
+  shared core** (`_run_monolithic_tool_loop` + a per-mode delivery seam in
+  `bot/tool_loop.py`). The `chat()` and `stream_chat()` non-phased paths
+  previously carried two hand-written copies of the same
+  cap / wall-clock-timeout / execute / budget / re-call / cap-warning
+  lifecycle, so a loop-control change had to be made in both and could drift.
+  The lifecycle now lives in one place; each mode supplies only the axes on
+  which it genuinely differs (pending source, usage accounting, the
+  clear-before-budget-gate step, and buffered `complete` vs streaming
+  `stream_complete` re-invocation). Behavior is unchanged — including the two
+  deliberate per-mode asymmetries (streaming clears pending before the budget
+  gate so a budget-break flags no orphan; the buffered re-call is deadlined
+  while the streaming re-stream is bounded only by the pre-stream budget gate).
+  Internal refactor: no public API, config, or behavioral change.
+
 ### Fixed
+
+- **Wizard collection-mode records are now revertable by undo.** Records added
+  in a collection stage were stored without conversation-tree provenance, so
+  they defaulted to the root anchor — an ancestor of every checkpoint — and a
+  later-turn undo silently left them in place. Collection records now stamp the
+  current node, so undoing a collection turn reverts the records added in it
+  (and undoing back to the conversation start clears them entirely).
+- **Undoing or rewinding back through the first turn no longer leaves a phantom
+  leading user message.** With no system prompt, the first user message
+  *becomes* the conversation tree's root node, so the turn-0 undo checkpoint —
+  recorded on the then-empty tree — was reoccupied by that message. Undoing to
+  the start (`rewind_to_turn(context, -1)`, or `undo_last_turn` on a single-turn
+  conversation) switched back onto the reoccupied root and left a stale leading
+  user message in the tree path (`manager.messages`, i.e. what the LLM sees)
+  while memory rolled back correctly. The next turn then sent two consecutive
+  user messages — rejected as a 400 by strict providers (Anthropic) and silent
+  context corruption elsewhere. A start-boundary undo now anchors on an empty
+  sentinel and resets the conversation to genuinely empty (tree, memory, memory
+  banks, and per-turn reasoning-strategy state cleared in lock-step, via the new
+  `ConversationManager.reset()` in `dataknobs-llm`), reusing the same
+  `conversation_id` on the next `chat()`. Strategy state persisted through the
+  conversation-metadata channel (e.g. a wizard's FSM stage/data under
+  `manager.metadata["wizard"]`) no longer resurrects on the next turn — `reset()`
+  restores the pristine pre-turn-0 seed — and the bank clear is total, removing
+  even records stamped at the root node. Two follow-on symptoms are fixed by the
+  same change: `UndoResult.remaining_turns`
+  no longer reports `1` for an emptied conversation (it counted the phantom), and
+  the memory-vs-tree message counts stay consistent through the start boundary.
+  The undone first turn's branch is **discarded** (nothing precedes it to branch
+  from), so a start-boundary undo reports `branching=False`; later-turn undo is
+  unchanged (real-node switch, sibling branch preserved, `branching=True`).
+- **`undo_last_turn` / `rewind_to_turn` now distinguish an *emptied* conversation
+  from an *absent* one.** After a start-boundary undo the conversation is empty
+  but its manager is still cached (active). The guards previously keyed
+  "No active conversation" on the manager's state being absent, which — once a
+  reset can empty an active conversation — would have reported "No active
+  conversation" for a further undo and collapsed the no-op distinction for a
+  rewind. They now key that error on the *manager* being absent (never-started /
+  evicted). A further `undo_last_turn` on an emptied conversation reports the
+  accurate "Nothing to undo", and `rewind_to_turn` to the start remains a clean
+  no-op.
+- **`DynaBot.rewind_to_turn` to the turn a conversation already sits at is now a
+  clean no-op** instead of raising a misleading "Nothing to undo". Rewinding to
+  the current turn computes zero undo work, and the trailing empty-result guard
+  had turned that legal no-op — and a never-started conversation — into an
+  error. It now returns a well-formed `UndoResult` (empty `undone_*` fields,
+  `branching=False`, correct `remaining_turns`) for an active conversation, and
+  raises the accurate "No active conversation" when there is no manager
+  (mirroring `undo_last_turn`). `undo_last_turn`'s own "Nothing to undo" (an
+  empty relative undo) is unchanged.
 
 - **`DynaBot.clear_conversation` now reclaims a conversation's undo
   checkpoints, not just its cached manager.** The per-conversation

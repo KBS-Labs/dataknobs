@@ -1012,12 +1012,13 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Build Anthropic API params with the family's request-shape rules applied.
 
         Single choke point over :meth:`AnthropicAdapter.adapt_config` shared by
-        ``complete``/``stream_complete``/``function_call``: first shapes the
-        runtime config through the shared
-        :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_request_constraints`
-        (drops family-rejected sampling params and clamps ``max_tokens`` down to
-        the family ceiling — both drop/clamp-and-warn, never silent), adapts the
-        shaped config to Anthropic wire params, then applies any wire-level
+        ``complete``/``stream_complete``/``function_call``: delegates the
+        request-shaping front-half to the base
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._shape_request_params`
+        (resolves constraints once, drops family-rejected sampling params and
+        clamps ``max_tokens`` down to the family ceiling — both drop/clamp-and-warn,
+        never silent), adapts the shaped config to Anthropic wire params, then
+        applies any wire-level
         :meth:`~dataknobs_llm.llm.base.LLMProvider._apply_param_remaps`. Because
         the config-space shaping happens in canonical config space, the exact same
         clamp/drop logic serves the Bedrock (Claude-on-Bedrock) provider too — no
@@ -1041,10 +1042,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             Anthropic API parameter dict with rejected params removed and
             ``max_tokens`` clamped to the family ceiling.
         """
-        constraints = self.get_constraints(config)
-        wire = self.adapter.adapt_config(
-            self._apply_request_constraints(config, constraints)
-        )
+        shaped_config, _, constraints = self._shape_request_params(config)
+        wire = self.adapter.adapt_config(shaped_config)
         return self._apply_param_remaps(wire, constraints.param_remaps)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
