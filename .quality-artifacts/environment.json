@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-27T18:33:08Z",
+  "timestamp": "2026-07-27T18:47:52Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.32 (Homebrew 2026-07-23 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/conversation-cache-checkpoint-leak-W5",
-  "git_commit": "0d1c709467eb391b28b518f0eedc4ad77bb2716b",
+  "git_branch": "sbk/monolithic-tool-loop-unification",
+  "git_commit": "dac7ec247c85b945cfa15a7f0fa3559410f69686",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
