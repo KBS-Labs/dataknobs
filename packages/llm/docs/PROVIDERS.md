@@ -395,7 +395,10 @@ source the two token ceilings; each provider owns its own instance (its own
 cache). A vendor whose id space collides under the default substring
 family-matcher (Ollama's `name:tag` ids) injects its own `match=(model, keys) ->
 key | None` rule — the default is `match_family_key`, byte-identical for every
-other adopter.
+other adopter. The same `match=` seam is available on `ConfigOverrideSource`
+(the config-override layer), so a provider whose **per-repo override map** keys
+collide under substring matching injects an exact matcher there too —
+HuggingFace does, for its prefix-sharing repo ids.
 
 #### OpenAI binding
 
@@ -412,6 +415,10 @@ two request-shape rules for the reasoning families: `rejected_params`
 declared as data (`{"max_tokens": "max_completion_tokens"}`) applied after
 `adapt_config` by the shared `LLMProvider._apply_param_remaps`. An unknown model
 resolves an all-permissive profile, so it is shaped exactly as before.
+`validate_model` still lists the Models API by default, but now honors a
+`model_profile_overrides.available` pin first (via the shared
+`ProfileDetectionMixin.validate_model`), so a consumer on a private gateway can
+skip the round-trip — consistent with HuggingFace / Ollama / Bedrock.
 
 ```python
 # max_tokens is renamed to max_completion_tokens and temperature is dropped —
@@ -512,6 +519,89 @@ create_llm_provider({
     "model_profile_overrides": {"pricing": {"input_per_mtok": 0.0, "output_per_mtok": 0.0}},
 })
 ```
+
+#### HuggingFace binding
+
+HuggingFace is **heuristic-primary + override-rich** — the leanest binding, and
+the last provider migrated off the inline capability substring lists. Its model
+space is millions of community repos with no vendor catalog, and the serverless
+Inference API serves no offered-set / ceiling / pricing endpoint, so there is
+**no live source and no bundled resource**: the resolver is just **config
+override → repo-name capability heuristic**. Every non-capability facet
+(context window, rejected params, param remaps, pricing, availability) is `None`
+from the heuristic and lit up **only** by `model_profile_overrides` — exactly
+right for a provider whose "catalog" is whatever repo the consumer points at.
+
+The corrected heuristic classifies from the repo name and emits the complete
+capability set: `TEXT_GENERATION` always; `EMBEDDINGS` for the dominant embedding
+families (`sentence-transformers/*`, `feature-extraction`, and the `minilm` /
+`bge` / `gte` / `e5` / `instructor` family markers), **excluding** cross-encoder
+rerankers (any embed-marker match is dropped when the repo also carries a
+`reranker` token — a reranker is not an embedding model); `CHAT` for a `chat` /
+`instruct` / `conversational` **substring**, so fused real-world names such as
+`chatglm3` and `openchat` keep resolving `CHAT`. The embedding-family name markers
+(`minilm` / `bge` / `gte` / `e5` / `instructor`) are matched at token boundaries
+(so a short marker like `e5` does not fire inside an unrelated `phase5` run),
+while the longer descriptive markers (`sentence-transformers/`,
+`feature-extraction`) match as substrings. `EMBEDDINGS` and `CHAT` are **structurally
+disjoint** — an embedding repo never also resolves `CHAT` (the Inference API
+serves a repo as one task), a property guaranteed by the logic (embed is resolved
+first and suppresses chat), not merely by the tested names. That embed-first
+ordering also neutralizes the `instruct` ⇄ `instructor` collision: `instructor`
+is an embed token, resolved before the chat substring is ever checked. It deliberately asserts **no** `STREAMING` (HF's `stream_complete` is a
+simulated single yield, not real token streaming) and **no** `FUNCTION_CALLING`
+(the Inference API rejects tools); `VISION` / `CODE` / `JSON_MODE` are declared per
+repo via `model_profile_overrides.capabilities`.
+
+The binding also replaces the hardcoded `max_new_tokens=100` output default with
+a named constant routed through the shared request-shaping choke point (a
+consumer's `constraints.rejected_params` / `param_remaps` are now honored — a
+byte-identical no-op otherwise), and `validate_model` keeps its authoritative
+`GET {base}/{model}` liveness probe but honors a `model_profile_overrides.available`
+pin (a private-gateway / TGI consumer that knows its model is live and wants to
+skip the probe). That pin-honoring is the shared `ProfileDetectionMixin.validate_model`
+behavior: a substrate-bound provider whose profile has no source populating
+`available` (HuggingFace, OpenAI) inherits it and overrides only the network probe
+(`_probe_model_available`); a provider whose profile resolves `available` from a
+live / resource source (Ollama, Bedrock) reads the facet directly. HuggingFace
+sources no pricing of its own, but a consumer can model private-endpoint cost
+through `model_profile_overrides.pricing`, which lights up `get_pricing` /
+`estimate_cost`.
+
+Because HuggingFace repo ids are exact strings that share prefixes
+(`meta-llama/Llama-3.1-8B` is a substring of `meta-llama/Llama-3.1-8B-Instruct`),
+the config-override source is constructed with the same injectable `match=` seam
+the Ollama live source uses — here an **exact repo-id matcher** — so a per-repo
+override map does not resolve a base repo to a prefix-sharing variant's override.
+The `match=` argument on `ConfigOverrideSource` defaults to `match_family_key`
+(byte-identical for every other provider); only HuggingFace opts into exact
+matching.
+
+```python
+# Repo-name heuristic: an instruct repo resolves {TEXT_GENERATION, CHAT};
+# a sentence-transformers repo resolves {TEXT_GENERATION, EMBEDDINGS}.
+create_llm_provider({"provider": "huggingface", "model": "mistralai/Mistral-7B-Instruct-v0.2"})
+
+# Declare per-repo facts the heuristic cannot know (context window, vision,
+# private-endpoint pricing, a live-availability short-circuit):
+create_llm_provider({
+    "provider": "huggingface",
+    "model": "llava-hf/llava-1.5-7b-hf",
+    "model_profile_overrides": {
+        "capabilities": ["text_generation", "chat", "vision"],
+        "context_window": 4096,
+        "available": True,
+    },
+})
+```
+
+> **Deferred — the live Hub source.** HuggingFace's authoritative live signal is
+> a **per-model** Hub lookup (`GET huggingface.co/api/models/{id}` →
+> `pipeline_tag` / `tags` / `config.max_position_embeddings`), a fundamentally
+> different shape from the walker-based `LiveApiSource` (per-model on-demand
+> fetch, not list-all-and-cache) on a second host. It is a captured follow-up
+> awaiting its own design pass; today per-repo facts come from
+> `model_profile_overrides`.
 
 #### Pricing (`get_pricing` / `estimate_cost`)
 

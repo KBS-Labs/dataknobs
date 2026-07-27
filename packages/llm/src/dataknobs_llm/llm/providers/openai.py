@@ -409,10 +409,18 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         if self._client:
             await self._client.close()  # type: ignore[unreachable]
 
-    async def validate_model(self) -> bool:
-        """Validate model availability."""
+    async def _probe_model_available(self) -> bool:
+        """Authoritative liveness probe — membership in the Models API list.
+
+        OpenAI's Models API is the live availability signal; no OpenAI profile
+        source sets the ``available`` facet (the heuristic emits only capabilities;
+        the bundled resource carries no ``available``). The inherited
+        :meth:`~..profile_detection.ProfileDetectionMixin.validate_model` honors a
+        ``model_profile_overrides.available`` pin before reaching here (aligning
+        OpenAI with HuggingFace / Ollama / Bedrock); with no pin this preserves the
+        pre-binding behavior exactly (always list, check membership).
+        """
         try:
-            # List available models
             models = await self._client.models.list()
             model_ids = [m.id for m in models.data]
             return self.config.model in model_ids
