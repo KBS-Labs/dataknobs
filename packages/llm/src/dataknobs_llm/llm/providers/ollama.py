@@ -1039,20 +1039,19 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Request-shaping choke point shared by ``complete`` / ``stream_complete``
         / ``function_call``, mirroring the other providers' ``_build_api_kwargs``:
-        shapes the runtime config through the shared
-        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
-        family-rejected sampling params, clamps ``max_tokens`` to the ceiling — in
-        canonical config space, independent of Ollama's nested ``options`` wire
-        shape), builds the ``options`` dict, then applies any wire-level
-        :meth:`~..base.LLMProvider._apply_param_remaps`. Ollama's auto-detected
-        rules are empty by default (no ceiling, no rejected params, no remaps), so
-        this is a byte-identical no-op in normal use — wired for the
+        delegates the request-shaping front-half to the shared
+        :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
+        once, drops family-rejected sampling params, clamps ``max_tokens`` to the
+        ceiling — in canonical config space, independent of Ollama's nested
+        ``options`` wire shape), builds the ``options`` dict, then applies any
+        wire-level :meth:`~..base.LLMProvider._apply_param_remaps`. Ollama's
+        auto-detected rules are empty by default (no ceiling, no rejected params,
+        no remaps), so this is a byte-identical no-op in normal use — wired for the
         consumer-``constraints``-override / future-family path, symmetric with the
         other three providers.
         """
-        constraints = self.get_constraints(config)
-        shaped = self._apply_request_constraints(config, constraints)
-        options = self._build_options(shaped)
+        shaped_config, _, constraints = self._shape_request_params(config)
+        options = self._build_options(shaped_config)
         return self._apply_param_remaps(options, constraints.param_remaps)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:

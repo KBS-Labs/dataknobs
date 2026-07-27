@@ -452,58 +452,29 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Build OpenAI API params with the family's request-shape rules applied.
 
         Single choke point shared by ``complete`` / ``stream_complete`` /
-        ``function_call``: shapes the runtime config through the base
-        :meth:`~..base.LLMProvider._apply_request_constraints` (drops
-        family-rejected sampling params, clamps ``max_tokens`` to the ceiling — in
-        canonical config space), adapts to OpenAI wire params, then applies any
-        wire-level :meth:`~..base.LLMProvider._apply_param_remaps` (e.g. the
-        reasoning-family ``max_tokens`` → ``max_completion_tokens`` rename). All
-        rules resolve from the passed *runtime* ``config`` so a per-call model
-        override is honored. An unknown model resolves an all-permissive profile,
-        so this is a pass-through for it (the historical behavior).
+        ``function_call``. Delegates the request-shaping front-half to the base
+        :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
+        once, folds shaped per-call kwargs into the config, drops family-rejected
+        sampling params, clamps ``max_tokens`` to the ceiling — all in canonical
+        config space), then adapts the shaped config to OpenAI wire params, merges
+        the wire-only kwarg remainder, and applies any wire-level
+        :meth:`~..base.LLMProvider._apply_param_remaps` (e.g. the reasoning-family
+        ``max_tokens`` → ``max_completion_tokens`` rename).
 
-        *extra* carries the per-call ``**kwargs`` each entry point accepts. A
-        kwarg that names a *shaped* :class:`LLMConfig` field — one the model
-        family drops (``rejected_params``), clamps (``max_tokens``), or remaps to
-        a different wire key (``param_remaps``) — is folded into the config
-        **before** shaping, so it goes through the same drop/clamp/remap as
-        ``config_overrides`` instead of being appended raw afterward. That closes
-        the double-key footgun: a raw ``max_tokens`` kwarg appended after the
-        remap would collide with the already-renamed ``max_completion_tokens``
-        (an OpenAI 400) and a raw ``temperature`` would bypass the
-        reasoning-family drop. Every other kwarg is passed straight through to
-        the wire untouched — both genuine wire-only params (e.g. ``user``) and
-        config fields whose wire form is richer than the canonical value (e.g. a
-        ``response_format`` dict like ``{"type": "json_object"}``, which the
-        narrow ``str`` config field cannot carry). Constraints are resolved once
-        and threaded into both the config-space shaping and the wire remap.
+        The vendor-specific tail: ``wire_extra`` is merged **before** the remap,
+        so a wire-only ``response_format`` dict like ``{"type": "json_object"}``
+        (richer than the narrow ``str`` config field) or a genuine wire-only param
+        (``user``) rides through untouched, while the fold-before-shape in the base
+        closes the double-key footgun — a raw ``max_tokens`` kwarg appended after
+        the remap would collide with the already-renamed ``max_completion_tokens``
+        (an OpenAI 400), and a raw ``temperature`` would bypass the
+        reasoning-family drop. An unknown model resolves an all-permissive profile,
+        so this is a pass-through for it (the historical behavior).
         """
-        constraints = self.get_constraints(config)
-        # Only fold a kwarg into the config when it names a field that shaping
-        # actually acts on: a sampling param the family *rejects* (dropped), the
-        # ceiling-*clamped* ``max_tokens``, or a canonical param the family
-        # *remaps* to a different wire key. Those are the ones a raw post-shape
-        # append would corrupt (double-key / drop-bypass). Every other config
-        # field — notably ``response_format``, whose narrow ``str`` config value
-        # differs from the richer OpenAI wire dict a caller passes as a kwarg —
-        # is a wire-only passthrough, preserving the pre-shaping ``update`` shape.
-        shaped_fields = (
-            set(constraints.rejected_params)
-            | set(constraints.param_remaps)
-            | {"max_tokens"}
+        shaped_config, wire_extra, constraints = self._shape_request_params(
+            config, extra
         )
-        field_extra: Dict[str, Any] = {}
-        wire_extra: Dict[str, Any] = {}
-        for key, value in (extra or {}).items():
-            if key in config.__dataclass_fields__ and key in shaped_fields:
-                field_extra[key] = value
-            else:
-                wire_extra[key] = value
-        if field_extra:
-            config = config.clone(**field_extra)
-        wire = self.adapter.adapt_config(
-            self._apply_request_constraints(config, constraints)
-        )
+        wire = self.adapter.adapt_config(shaped_config)
         wire.update(wire_extra)
         return self._apply_param_remaps(wire, constraints.param_remaps)
 

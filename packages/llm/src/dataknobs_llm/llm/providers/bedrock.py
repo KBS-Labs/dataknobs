@@ -780,59 +780,41 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         Shared by :meth:`complete`, :meth:`stream_complete`, and
         :meth:`function_call` so the entry points differ only in ``converse`` vs
         ``converse_stream`` and buffered-vs-streamed delivery (no parameter
-        drift). This is the request-shaping choke point: it drops
-        family-rejected sampling params, clamps ``max_tokens`` to the model
-        ceiling (both in canonical config space via
-        :meth:`~..base.LLMProvider._apply_request_constraints`), then applies any
-        wire-level :meth:`~..base.LLMProvider._apply_param_remaps` — the same
+        drift). Delegates the request-shaping front-half to the base
+        :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
+        once, folds shaped per-call kwargs into the config, drops family-rejected
+        sampling params, clamps ``max_tokens`` to the model ceiling — all in
+        canonical config space), then assembles the Converse request and applies
+        any wire-level :meth:`~..base.LLMProvider._apply_param_remaps` — the same
         clamp/drop the native Anthropic provider applies, since Bedrock runs the
         same Claude models. An unknown model resolves an all-permissive profile,
         so shaping is a pass-through for it (the historical behavior).
 
-        *extra* carries the per-call ``**kwargs`` each entry point accepts.
-        Symmetric with the OpenAI binding's ``_build_api_kwargs``: a kwarg that
-        names a *shaped* :class:`LLMConfig` field — one the family drops
-        (``rejected_params``), clamps (``max_tokens``), or remaps to a different
-        wire key (``param_remaps``) — is folded into the config **before**
-        shaping, so it goes through the same drop/clamp/remap as
-        ``config_overrides``. That closes the bypass where a raw ``max_tokens=``
-        kwarg appended after shaping would land as an un-clamped top-level
-        Converse key (a hard ``converse()`` ValidationException) instead of the
-        shaped ``inferenceConfig.maxTokens``, and a ``temperature=`` kwarg on a
-        Claude-5 id would bypass the rejected-param drop. Every other kwarg
-        passes straight through to the request untouched — both genuine wire-only
-        Converse params (``additionalModelRequestFields``, ...) and config fields
-        whose wire form is richer than the canonical value.
+        The vendor-specific tail: the wire-only kwarg remainder is merged **last**
+        via ``request.update(wire_extra)`` (after the full Converse assembly), so a
+        genuine wire-only Converse param (``additionalModelRequestFields``, ...)
+        lands as a top-level key. The fold-before-shape in the base closes the
+        bypass where a raw ``max_tokens=`` kwarg would otherwise land as an
+        un-clamped top-level Converse key (a hard ``converse()``
+        ValidationException) instead of the shaped ``inferenceConfig.maxTokens``,
+        and a ``temperature=`` kwarg on a Claude-5 id would bypass the
+        rejected-param drop.
         """
         if isinstance(messages, str):
             msg_list = [LLMMessage(role="user", content=messages)]
         else:
             msg_list = list(messages)
 
-        # Resolve constraints once and thread them into both the config-space
-        # shaping and the wire remap below. Only a kwarg naming a *shaped* field
-        # (dropped / clamped / remapped) is folded into the config — the ones a
-        # raw post-shape merge would corrupt; every other kwarg is a wire-only
-        # passthrough (preserving the pre-fix ``request.update(kwargs)`` shape
-        # for genuine Converse-only params).
-        constraints = self.get_constraints(runtime_config)
-        shaped_fields = (
-            set(constraints.rejected_params)
-            | set(constraints.param_remaps)
-            | {"max_tokens"}
+        shaped_config, wire_extra, constraints = self._shape_request_params(
+            runtime_config, extra
         )
-        field_extra: dict[str, Any] = {}
-        wire_extra: dict[str, Any] = {}
-        for key, value in (extra or {}).items():
-            if key in runtime_config.__dataclass_fields__ and key in shaped_fields:
-                field_extra[key] = value
-            else:
-                wire_extra[key] = value
-        if field_extra:
-            runtime_config = runtime_config.clone(**field_extra)
 
-        shaped_config = self._apply_request_constraints(runtime_config, constraints)
-
+        # NOTE: system_prompt / guardrail read the *unshaped* ``runtime_config``,
+        # not ``shaped_config``. This is intentional and byte-identical: shaping
+        # only ever folds/drops/clamps *shaped* fields (the union of
+        # ``rejected_params``, ``param_remaps``, and ``max_tokens`` — all
+        # sampling/output params), never ``system_prompt`` or any guardrail field,
+        # so the two configs are equal on exactly the fields these two calls read.
         system_blocks, converse_messages = self.adapter.adapt_messages(
             msg_list, system_prompt=runtime_config.system_prompt
         )
