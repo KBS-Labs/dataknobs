@@ -37,6 +37,7 @@ This module has three parts:
 from __future__ import annotations
 
 import inspect
+import re
 from typing import Any
 
 from dataknobs_llm.llm.base import LLMConfig, LLMProvider, _ShapedRequest
@@ -107,12 +108,15 @@ class TestRequestShapingParity:
         assert "max_tokens" not in wire
         assert wire.get("temperature") is None
 
-    def test_p2_openai_wire_only_kwargs_pass_through_before_remap(self) -> None:
-        """P2: wire-only kwargs ride through untouched (merge-before-remap order).
+    def test_p2_openai_wire_only_kwargs_pass_through(self) -> None:
+        """P2: wire-only kwargs ride through untouched (the ``wire_extra`` merge).
 
         ``user`` (a genuine wire-only param) and a ``response_format`` dict
         (richer than the narrow ``str`` config field) are not shaped fields, so
-        they land on the wire verbatim.
+        they land on the wire verbatim. This pins passthrough, not merge order:
+        the merge point is unobservable through the public build method here,
+        because every remap *source* is itself a shaped field (always folded,
+        never in ``wire_extra``), so no rename source can reach this path.
         """
         p = _openai(_OPENAI_REASONING)
         rf = {"type": "json_object"}
@@ -341,7 +345,9 @@ class TestOrchestrationSharedOnBase:
                 if not inspect.isfunction(member):
                     continue
                 source = inspect.getsource(member)
-                assert "shaped_fields =" not in source, (
+                # Whitespace-tolerant: catch ``shaped_fields =`` / ``= (`` /
+                # ``=(`` regardless of ruff-format spacing or line wrapping.
+                assert not re.search(r"shaped_fields\s*=", source), (
                     f"{cls.__name__}.{attr} re-inlines the shaped_fields split "
                     f"— route it through LLMProvider._shape_request_params"
                 )
