@@ -78,6 +78,9 @@ from dataknobs_common.lifecycle import (
     close_if_owned,
     close_if_owned_sync,
 )
+from dataknobs_common.bounded_cache import (
+    BoundedLRUCache,
+)
 from dataknobs_common.capabilities import (
     CAPABILITY_FAMILIES,
     Capability,
@@ -292,6 +295,8 @@ __all__ = [
     # Lifecycle
     "close_if_owned",
     "close_if_owned_sync",
+    # Bounded cache
+    "BoundedLRUCache",
     # Capabilities
     "CAPABILITY_FAMILIES",
     "Capability",
