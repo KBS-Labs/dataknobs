@@ -91,6 +91,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wizard collection-mode records are now revertable by undo.** Records added
+  in a collection stage were stored without conversation-tree provenance, so
+  they defaulted to the root anchor — an ancestor of every checkpoint — and a
+  later-turn undo silently left them in place. Collection records now stamp the
+  current node, so undoing a collection turn reverts the records added in it
+  (and undoing back to the conversation start clears them entirely).
+- **Undoing or rewinding back through the first turn no longer leaves a phantom
+  leading user message.** With no system prompt, the first user message
+  *becomes* the conversation tree's root node, so the turn-0 undo checkpoint —
+  recorded on the then-empty tree — was reoccupied by that message. Undoing to
+  the start (`rewind_to_turn(context, -1)`, or `undo_last_turn` on a single-turn
+  conversation) switched back onto the reoccupied root and left a stale leading
+  user message in the tree path (`manager.messages`, i.e. what the LLM sees)
+  while memory rolled back correctly. The next turn then sent two consecutive
+  user messages — rejected as a 400 by strict providers (Anthropic) and silent
+  context corruption elsewhere. A start-boundary undo now anchors on an empty
+  sentinel and resets the conversation to genuinely empty (tree, memory, memory
+  banks, and per-turn reasoning-strategy state cleared in lock-step, via the new
+  `ConversationManager.reset()` in `dataknobs-llm`), reusing the same
+  `conversation_id` on the next `chat()`. Strategy state persisted through the
+  conversation-metadata channel (e.g. a wizard's FSM stage/data under
+  `manager.metadata["wizard"]`) no longer resurrects on the next turn — `reset()`
+  restores the pristine pre-turn-0 seed — and the bank clear is total, removing
+  even records stamped at the root node. Two follow-on symptoms are fixed by the
+  same change: `UndoResult.remaining_turns`
+  no longer reports `1` for an emptied conversation (it counted the phantom), and
+  the memory-vs-tree message counts stay consistent through the start boundary.
+  The undone first turn's branch is **discarded** (nothing precedes it to branch
+  from), so a start-boundary undo reports `branching=False`; later-turn undo is
+  unchanged (real-node switch, sibling branch preserved, `branching=True`).
+- **`undo_last_turn` / `rewind_to_turn` now distinguish an *emptied* conversation
+  from an *absent* one.** After a start-boundary undo the conversation is empty
+  but its manager is still cached (active). The guards previously keyed
+  "No active conversation" on the manager's state being absent, which — once a
+  reset can empty an active conversation — would have reported "No active
+  conversation" for a further undo and collapsed the no-op distinction for a
+  rewind. They now key that error on the *manager* being absent (never-started /
+  evicted). A further `undo_last_turn` on an emptied conversation reports the
+  accurate "Nothing to undo", and `rewind_to_turn` to the start remains a clean
+  no-op.
 - **`DynaBot.rewind_to_turn` to the turn a conversation already sits at is now a
   clean no-op** instead of raising a misleading "Nothing to undo". Rewinding to
   the current turn computes zero undo work, and the trailing empty-result guard

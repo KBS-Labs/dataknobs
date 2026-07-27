@@ -6,6 +6,7 @@ recording, and coordinated undo across tree, memory, wizard state, and banks.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -32,6 +33,30 @@ async def _make_bot(*, with_memory: bool = True) -> DynaBot:
 
 def _ctx(conv_id: str = "conv-undo-1") -> BotContext:
     return BotContext(conversation_id=conv_id, client_id="test")
+
+
+def _role_of(message: Any) -> str:
+    """Role of a message dict or object (memory/tree items use either shape)."""
+    if isinstance(message, dict):
+        return message.get("role", "")
+    return getattr(message, "role", "")
+
+
+def _user_message_count(manager: Any) -> int:
+    """Number of user messages on the manager's active tree path (LLM-visible)."""
+    return sum(1 for m in manager.messages if _role_of(m) == "user")
+
+
+def _no_consecutive_user_messages(manager: Any) -> bool:
+    """True if no two adjacent tree-path messages are both user-role.
+
+    Two consecutive user messages is the shape a strict provider (Anthropic)
+    rejects with a 400 — the downstream symptom of the phantom leading message.
+    """
+    roles = [_role_of(m) for m in manager.messages]
+    return not any(
+        a == "user" and b == "user" for a, b in pairwise(roles)
+    )
 
 
 # =====================================================================
@@ -68,7 +93,11 @@ class TestSimpleChatUndo:
 
         assert isinstance(result, UndoResult)
         assert result.undone_user_message == "Hello"
-        assert result.branching is True
+        # Undoing the only turn (turn 0) resets the conversation to empty and
+        # discards the turn-0 branch (there is nothing before it to branch
+        # from), so this undo is non-branching. Later-turn undo still branches
+        # (see TestLaterTurnUndoUnchanged).
+        assert result.branching is False
 
     @pytest.mark.asyncio
     async def test_undo_restores_memory(self):
@@ -182,6 +211,18 @@ class TestRewindToTurn:
         # The undone message should be "First" (the last undo in the sequence)
         assert result.undone_user_message == "First"
 
+        # The tree-path channel (what the LLM sees) must empty in lock-step
+        # with memory — no phantom leading user message survives the
+        # rewind-to-start. (Before the fix this retained "First" while memory
+        # rolled back, so these three assertions FAILED at the turn-0 boundary.)
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        assert _user_message_count(manager) == 0
+        # No off-by-one: an emptied conversation reports zero remaining turns
+        # (the retained phantom used to make this report 1).
+        assert result.remaining_turns == 0
+        # The turn-0 branch is discarded, so this final undo is non-branching.
+        assert result.branching is False
+
     @pytest.mark.asyncio
     async def test_rewind_invalid_turn_raises(self):
         bot = await _make_bot()
@@ -191,6 +232,187 @@ class TestRewindToTurn:
 
         with pytest.raises(ValueError, match="Invalid turn"):
             await bot.rewind_to_turn(ctx, 5)
+
+
+class TestUndoToStartClearsTreePath:
+    """Undo/rewind back through the first turn empties the tree-path channel.
+
+    Regression guard for the phantom-leading-message defect. With **no system
+    prompt** the first user message *becomes* the conversation-tree root, so a
+    turn-0 checkpoint anchored on the (then-empty) tree used to be reoccupied
+    by that message: undo-to-start switched back onto it and left a stale
+    leading user message in ``manager.messages`` (the LLM-visible path) while
+    memory rolled back correctly. The next turn then sent two consecutive user
+    messages (Anthropic 400). The fix anchors turn-0 on a ``None`` sentinel and
+    resets the manager to its empty pre-message state.
+
+    All tests here use the no-system-prompt ``_make_bot`` — the bug's exact
+    precondition. ``TestSystemPromptUndoToStart`` guards that the seeded-system
+    case (which never took the sentinel path) is unchanged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_undo_only_turn_clears_both_channels(self):
+        # Undoing the sole turn empties BOTH the tree path and memory, resets
+        # the manager, and reports zero remaining turns (no off-by-one).
+        bot = await _make_bot()
+        ctx = _ctx()
+
+        await bot.chat("First", ctx)
+        result = await bot.undo_last_turn(ctx)
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        assert manager.messages == []          # tree path emptied
+        assert manager.state is None           # manager reset to pre-message
+        assert len(await bot.memory.get_context("test")) == 0  # memory emptied
+        assert result.remaining_turns == 0     # no off-by-one
+        assert result.branching is False       # turn-0 branch discarded
+
+    @pytest.mark.asyncio
+    async def test_no_phantom_on_next_chat_after_rewind_to_start(self):
+        # The defining symptom: a fresh chat after rewind-to-start must not
+        # carry the undone first user message into the new branch.
+        bot = await _make_bot()
+        ctx = _ctx()
+
+        await bot.chat("First", ctx)
+        await bot.chat("Second", ctx)
+        await bot.rewind_to_turn(ctx, -1)
+
+        await bot.chat("Fresh", ctx)
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        user_msgs = [
+            m["content"] for m in manager.messages if _role_of(m) == "user"
+        ]
+        # Only the fresh turn's user message — no phantom "First", and no
+        # consecutive-user shape a 400-strict provider would reject.
+        assert user_msgs == ["Fresh"]
+        assert _no_consecutive_user_messages(manager)
+
+    @pytest.mark.asyncio
+    async def test_memory_tree_user_count_invariant_after_each_undo(self):
+        # Memory and the tree path agree on user-message count after every
+        # undo — asserted generally, through the turn-0 boundary. The divergence
+        # at turn 0 *is* the bug.
+        bot = await _make_bot()
+        ctx = _ctx()
+
+        await bot.chat("First", ctx)
+        await bot.chat("Second", ctx)
+        await bot.chat("Third", ctx)
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        for _ in range(3):
+            await bot.undo_last_turn(ctx)
+            mem = await bot.memory.get_context("test")
+            mem_users = sum(1 for m in mem if _role_of(m) == "user")
+            assert mem_users == _user_message_count(manager)
+        # Fully unwound: both channels empty.
+        assert _user_message_count(manager) == 0
+
+    @pytest.mark.asyncio
+    async def test_undo_only_turn_without_memory(self):
+        # The reset path holds with no memory configured (mirrors the existing
+        # test_undo_without_memory for the turn-0 boundary).
+        bot = await _make_bot(with_memory=False)
+        ctx = _ctx()
+
+        await bot.chat("Hello", ctx)
+        result = await bot.undo_last_turn(ctx)
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        assert manager.messages == []
+        assert result.remaining_turns == 0
+        assert result.branching is False
+
+
+class TestLaterTurnUndoUnchanged:
+    """Undo of a non-first turn keeps the pre-fix behavior byte-for-byte.
+
+    Only the turn-0 anchor is a ``None`` sentinel; every later checkpoint is a
+    real node id and takes the unchanged ``switch_to_node`` path (sibling branch
+    preserved, ``branching=True``).
+    """
+
+    @pytest.mark.asyncio
+    async def test_later_undo_preserves_branch_and_flags_branching(self):
+        bot = await _make_bot()
+        ctx = _ctx()
+
+        await bot.chat("First", ctx)
+        await bot.chat("Second", ctx)
+
+        result = await bot.undo_last_turn(ctx)  # undo turn 1, not turn 0
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        # Back to after turn 0: "First" survives on the tree path.
+        user_msgs = [
+            m["content"] for m in manager.messages if _role_of(m) == "user"
+        ]
+        assert user_msgs == ["First"]
+        assert manager.state is not None        # NOT reset — real node switch
+        assert result.remaining_turns == 1
+        assert result.branching is True         # sibling branch preserved
+
+    @pytest.mark.asyncio
+    async def test_bounded_undo_still_functions(self):
+        # FU-cache bounding: with max_undo_checkpoints, later-turn undo still
+        # works and the turn-0 fix does not disturb the cap/dropped bookkeeping.
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {"type": "buffer", "max_messages": 50},
+            "max_undo_checkpoints": 3,
+        }
+        bot = await DynaBot.from_config(config)
+        ctx = _ctx("conv-cap-later")
+
+        for _ in range(5):
+            await bot.chat("hello", ctx)
+
+        log = bot._turn_checkpoints[ctx.conversation_id]
+        assert log.dropped == 2 and len(log.entries) == 3  # cap active
+
+        result = await bot.undo_last_turn(ctx)
+        assert result.branching is True
+        assert result.remaining_turns == 4
+
+
+class TestSystemPromptUndoToStart:
+    """A seeded system prompt keeps undo-to-start on the system root (unchanged).
+
+    With a system prompt the system message occupies root ``""`` and the first
+    *user* message becomes child ``"0"``; the turn-0 checkpoint records the real
+    system-root ``""`` (state is not ``None``), so it never takes the sentinel
+    path. Undo-to-start lands on ``[system]``, not empty.
+    """
+
+    async def _make_system_bot(self) -> DynaBot:
+        config: dict[str, Any] = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {"type": "buffer", "max_messages": 50},
+            "system_prompt": "You are a helpful assistant.",
+        }
+        return await DynaBot.from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_undo_to_start_retains_system_message(self):
+        bot = await self._make_system_bot()
+        ctx = _ctx("conv-sysprompt-undo")
+
+        await bot.chat("First", ctx)
+        result = await bot.undo_last_turn(ctx)
+
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        # System root survives; not reset to empty.
+        assert manager.state is not None
+        roles = [_role_of(m) for m in manager.messages]
+        assert roles == ["system"]
+        assert _user_message_count(manager) == 0  # zero user turns remain
+        # Real node switch (system root ""), so branching is preserved.
+        assert result.branching is True
 
 
 class TestRewindToCurrentTurnIsNoop:
@@ -496,3 +718,41 @@ class TestWizardUndo:
             f"got '{state_after_undo['current_stage']}'. "
             f"Wizard FSM state was not restored from the greeting node."
         )
+
+    @pytest.mark.asyncio
+    async def test_undo_to_start_does_not_resurrect_wizard_state(self):
+        """Undo back through the first turn must NOT resurrect wizard FSM state.
+
+        With no system prompt, the wizard's first *chat* (no greet) records the
+        turn-0 checkpoint on an empty tree (the ``None`` empty-anchor), and its
+        FSM state lands in ``manager.metadata["wizard"]`` — which, post-state,
+        aliases the seed bucket ``_initial_metadata``. If the ``None``-anchor
+        ``reset()`` kept that polluted seed, the next turn would rebuild
+        ``state.metadata`` from it and the wizard would resume its pre-undo
+        stage/data — the same stale-state resurrection this fix eliminates, on
+        the metadata channel. ``reset()`` restores the pristine pre-turn-0 seed.
+
+        White-box: ``_initial_metadata`` IS the defect channel here (the same
+        tree/checkpoint/seed divergence these undo tests target), so reading it
+        is the crisp deterministic assertion. Reproduce-first: on the un-fixed
+        reset the wizard key survives in ``_initial_metadata``.
+        """
+        bot = await _make_wizard_bot()
+        ctx = _ctx("conv-wizard-resurrect")
+
+        # First interaction is a chat (no greet), so the turn-0 checkpoint
+        # anchors on the still-empty tree — the ``None`` empty-anchor.
+        await bot.chat("My name is Alice", ctx)
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        assert manager is not None
+        assert "wizard" in manager.metadata  # sanity: turn 0 persisted FSM state
+
+        # Undo all the way back through the first turn.
+        result = await bot.rewind_to_turn(ctx, -1)
+        assert isinstance(result, UndoResult)
+
+        # The ``None``-anchor reset ran (state emptied) and the pristine seed was
+        # restored, so the wizard FSM state cannot survive to pollute the next
+        # turn's rebuilt ``state.metadata``.
+        assert manager.state is None
+        assert "wizard" not in manager._initial_metadata

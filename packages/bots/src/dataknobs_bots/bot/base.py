@@ -152,6 +152,13 @@ class _CheckpointLog:
     ``undo_last_turn``. ``dropped`` counts checkpoints trimmed off the *front*
     when ``max_undo_checkpoints`` is exceeded.
 
+    ``node_id`` is ``str | None``: a real dot-path node id (or the system-root
+    ``""``) for a turn recorded against a materialized tree, or the ``None``
+    empty-anchor sentinel for a turn recorded on a genuinely-empty tree (no
+    system prompt), signalling "before any message exists" — ``undo_last_turn``
+    resets the manager to empty for that anchor instead of switching to a node
+    the first message would have reoccupied.
+
     Co-locating the offset with its list keeps absolute turn numbering intact
     after a tail-cap: the checkpoint for absolute turn ``i`` lives at
     ``entries[i - dropped]`` (or has been dropped when ``i < dropped``), which
@@ -162,11 +169,11 @@ class _CheckpointLog:
     the pre-cap behavior, byte-for-byte.
     """
 
-    entries: list[tuple[str, int]] = field(default_factory=list)
+    entries: list[tuple[str | None, int]] = field(default_factory=list)
     dropped: int = 0
 
     def append(
-        self, checkpoint: tuple[str, int], max_size: int | None
+        self, checkpoint: tuple[str | None, int], max_size: int | None
     ) -> None:
         """Record a checkpoint, tail-capping the front to ``max_size`` entries.
 
@@ -1482,13 +1489,24 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Append this turn's undo target, tail-capping the front to
         # ``max_undo_checkpoints`` (``None`` = unbounded, no trim). The cap and
         # its dropped-offset are maintained together inside ``_CheckpointLog``.
+        #
+        # When the tree is genuinely empty (``state is None`` — no system
+        # prompt seeded), store the ``None`` empty-anchor sentinel rather than
+        # ``""``. The very first message *becomes* the root node ``""``, so
+        # ``""`` would be reoccupied by this turn's user message and an
+        # undo-to-``""`` would land back on it (leaking a phantom leading
+        # message). The sentinel records "before any message exists" so
+        # ``undo_last_turn`` resets to empty instead of switching to a
+        # reoccupied node. When ``state`` exists (system prompt present, or any
+        # later turn), store ``current_node_id`` exactly as before — the
+        # system-root ``""`` and every real node id are unchanged.
+        checkpoint_node: str | None = (
+            turn.manager.state.current_node_id
+            if turn.manager.state
+            else None
+        )
         self._turn_checkpoints[conv_id].append(
-            (
-                turn.manager.state.current_node_id
-                if turn.manager.state
-                else "",
-                mem_count,
-            ),
+            (checkpoint_node, mem_count),
             self._max_undo_checkpoints,
         )
 
@@ -3836,11 +3854,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         conv_id = context.conversation_id
         manager = self._conversation_managers.get(conv_id)
-        if manager is None or manager.state is None:
+        if manager is None:
             raise ValueError("No active conversation")
 
+        # An emptied conversation (``state is None`` — e.g. after undoing back
+        # through the first turn reset the manager) is still *active* (its
+        # manager is cached), it simply has nothing left to undo. Treat it as
+        # "Nothing to undo" rather than "No active conversation", preserving the
+        # distinction from a never-started / evicted conversation (manager
+        # absent). This also guarantees ``state`` is materialized below, since a
+        # non-empty checkpoint log implies at least one un-undone turn.
         log = self._turn_checkpoints.get(conv_id)
-        if log is None or not log.entries:
+        if manager.state is None or log is None or not log.entries:
             raise ValueError("Nothing to undo")
 
         # Relative undo: pop the newest retained checkpoint. The ``dropped``
@@ -3868,10 +3893,24 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     undone_user = content if isinstance(content, str) else str(content)
                 break
 
-        # Navigate back — next add_message() creates a sibling branch
-        await manager.switch_to_node(checkpoint_node_id)
+        # Navigate back to the checkpoint. A real node id switches to it, so
+        # the next add_message() creates a sibling branch preserving this one.
+        # The ``None`` empty-anchor sentinel means the undone turn was the very
+        # first on a genuinely-empty tree (no system prompt) — its user message
+        # *became* the root node ``""``, so there is no earlier node to switch
+        # to; reset the manager to its pre-message state instead, emptying the
+        # tree-path channel in lock-step with memory/banks. The turn-0 branch is
+        # discarded (acceptable only at the conversation-start boundary — see
+        # ConversationManager.reset), so this undo is non-branching.
+        branching = checkpoint_node_id is not None
+        if checkpoint_node_id is None:
+            await manager.reset()
+        else:
+            await manager.switch_to_node(checkpoint_node_id)
 
-        # Roll back memory — use stored message count for accuracy
+        # Roll back memory — use stored message count for accuracy.
+        # For the empty-anchor sentinel ``checkpoint_mem_count`` is 0 (recorded
+        # on the empty tree), so this pops memory back to empty unchanged.
         current_mem_count = 0
         if self.memory:
             try:
@@ -3899,7 +3938,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             undone_user_message=undone_user,
             undone_bot_response=undone_bot,
             remaining_turns=self._count_remaining_turns(manager),
-            branching=True,
+            branching=branching,
         )
 
     @staticmethod
@@ -3974,11 +4013,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # the target is the current state, so nothing is undone. Return a
         # well-formed no-op result rather than raising — but still require an
         # active conversation (mirroring ``undo_last_turn``) so a never-started
-        # or evicted conversation reports the clear "No active conversation"
-        # instead of the misleading "Nothing to undo".
+        # or evicted conversation (manager absent) reports the clear "No active
+        # conversation". An *emptied* conversation (manager cached but
+        # ``state is None`` after a turn-0 undo reset it) is still active and
+        # rewinds to its already-empty start as a zero-work no-op.
         if turns_to_undo == 0:
             manager = self._conversation_managers.get(conv_id)
-            if manager is None or manager.state is None:
+            if manager is None:
                 raise ValueError("No active conversation")
             return UndoResult(
                 undone_user_message="",
@@ -3995,7 +4036,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         return result
 
     def _restore_wizard_from_node(
-        self, manager: ConversationManager, node_id: str
+        self, manager: ConversationManager, node_id: str | None
     ) -> None:
         """Reinstate strategy state from a checkpoint node's metadata.
 
@@ -4007,6 +4048,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         itself is strategy-agnostic.
         """
         if self.reasoning_strategy is None:
+            return
+        # A ``None`` node id is the empty-anchor sentinel (undo back through the
+        # first turn): there is no checkpoint node to restore strategy state
+        # from, and the manager has already been reset to empty. Nothing to do.
+        if node_id is None:
             return
         if manager.state is None:
             return
@@ -4023,7 +4069,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             manager, node_data.metadata
         )
 
-    def _undo_banks_to_checkpoint(self, checkpoint_node_id: str) -> None:
+    def _undo_banks_to_checkpoint(
+        self, checkpoint_node_id: str | None
+    ) -> None:
         """Forward checkpoint-revert to the reasoning strategy.
 
         Strategies that hold node-keyed state (e.g. wizard memory banks)
