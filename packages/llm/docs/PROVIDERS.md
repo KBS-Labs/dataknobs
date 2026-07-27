@@ -725,6 +725,11 @@ verbatim (Bedrock runs Claude), so both route through a single shared helper
 OpenAI and Ollama already report the canonical vocabulary directly, so
 `finish_reason` reads identically across every provider.
 
+> For how truncation handling, model constraints, and history bounds fit
+> together when building a long-running tool bot, see the LLM Best Practices
+> guide's [Productionizing a Tool-Using Bot](BEST_PRACTICES.md#productionizing-a-tool-using-bot)
+> checklist.
+
 ## Mid-conversation system-message policy (Anthropic)
 
 Anthropic's Messages API has no inline `system` role — a system prompt is a

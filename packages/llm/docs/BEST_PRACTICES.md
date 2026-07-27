@@ -18,6 +18,7 @@
 8. [Error Handling](#error-handling)
 9. [Testing](#testing)
 10. [Production Deployment](#production-deployment)
+    - [Productionizing a Tool-Using Bot](#productionizing-a-tool-using-bot)
 11. [Provider Lifecycle](#provider-lifecycle)
 12. [Response Analysis Hooks](#response-analysis-hooks)
 
@@ -587,7 +588,7 @@ manager = ConversationManager(
 )
 ```
 
-When the limit is exceeded, `RateLimitError` is raised with a `retry_after` attribute indicating when to retry. See the [Rate Limiting guide](../../packages/common/ratelimit.md) for the underlying `InMemoryRateLimiter` API.
+When the limit is exceeded, `RateLimitError` is raised with a `retry_after` attribute indicating when to retry. See the [Rate Limiting guide](../../common/ratelimit.md) for the underlying `InMemoryRateLimiter` API.
 
 **Example - Token counting**:
 ```python
@@ -1168,6 +1169,121 @@ class ConversationService:
         logger.info("Shutdown complete")
 ```
 
+### Productionizing a Tool-Using Bot
+
+A bot that calls tools in a loop crosses more provider-boundary edge cases than a
+plain chat bot: mid-conversation system messages, provider-specific request-shape
+rules, response truncation, growing conversation history, and orphaned
+tool-call/tool-result pairs. DataKnobs handles most of these **on by default** —
+this checklist is what you already get for free, plus the two knobs worth opting
+into for a long tool loop.
+
+#### What you get for free (on by default)
+
+On the default Anthropic + ReAct path these protections are active with zero
+configuration — do not re-implement or over-configure them:
+
+| Protection | On-by-default behavior |
+|---|---|
+| **Mid-conversation system messages** | Folded inline for Anthropic (the default `system_message_policy` is `"inline"`), keeping the request structurally valid. See [Mid-conversation system-message policy](providers.md#mid-conversation-system-message-policy-anthropic). |
+| **Rejected sampling params** | A sampling parameter the model does not accept is dropped with a logged warning rather than sent (no `400`). |
+| **Over-ceiling `max_tokens`** | Clamped down to the model's resolved output ceiling instead of being sent and rejected or silently truncated. |
+| **Output / input ceilings** | Resolved live for the Claude family (Models API, TTL-cached) with a bundled fallback — no hard-coded token limits to maintain. See [Model constraints](providers.md#model-constraints-request-shape-rules). |
+| **Tool-loop bounds** | Wall-clock-bounded by `tool_loop_timeout` (default `120.0` s) and iteration-capped by `max_tool_iterations` (default `5`), both on `DynaBotConfig`. |
+| **Truncated tool call** | A tool call the provider truncated at the token budget (`LLMResponse.truncated`) is safely abandoned and the turn synthesized — never a hard failure. |
+| **Vendor API errors** | Translated to typed `dataknobs` exceptions (including `ContextLengthExceededError`) at a single choke point in the base provider, so you catch `dataknobs_llm.exceptions` types, not raw SDK errors. |
+| **Termination reason** | Written to the `reasoning_termination` conversation metadata on every ReAct turn, independent of `store_trace`. See [ReAct Reasoning](../../bots/guides/configuration.md#react-reasoning). |
+| **Orphaned `tool_use` pairing** | Repaired in the shared DynaBot turn-finalize, so an unmatched `tool_use`/`tool_result` pair never reaches the provider as a `400`. This runs for **every** tool strategy (see the cross-strategy note below). |
+
+#### Opt in for a long tool loop
+
+Two protections are **off by default** — their defaults are byte-identical to
+prior behavior — and live on the ReAct reasoning config. A bot that runs long
+tool loops should consider both.
+
+**`history_compaction` — strongly recommended for long loops.** Without it, a
+tool loop that outgrows the model's input window fails the turn. Thanks to
+vendor-error translation that failure is now a clean typed
+`ContextLengthExceededError` rather than a raw SDK error — but it is still a turn
+failure, not a recovery. `history_compaction` is what turns the failure into a
+recovery: it bounds the history the current tool loop accumulates.
+
+```yaml
+reasoning:
+  strategy: react
+  history_compaction:
+    enabled: true
+    keep_recent_iterations: 3   # retain the 3 most-recent tool iterations verbatim
+    budget_fraction: 0.75       # proactively compact at 75% of the resolved input ceiling
+    # strategy: window          # default; "summarize" folds old iterations via an LLM call
+```
+
+It has two legs: a **proactive** leg that compacts before a completion once the
+estimated history exceeds `budget_fraction` of the resolved input ceiling, and a
+**reactive** backstop that catches a `ContextLengthExceededError`, compacts once,
+and retries. The reactive backstop exists because the proactive estimate is a
+character-ratio heuristic that can under-count — do not rely on the proactive leg
+alone. See [ReAct Reasoning](../../bots/guides/configuration.md#react-reasoning)
+for the full field reference.
+
+**`truncation_retry_max_tokens` — optional.** The safe abandon-and-synthesize
+behavior above is automatic; this knob only helps when the *truncated call was
+the work* — e.g. a large structured tool payload you want to complete rather than
+abandon. When set, a truncated tool-call iteration is retried **once** at this
+`max_tokens` before falling back to the terminal path (structurally single-shot —
+no retry loop). Set it comfortably above `max_tokens`: a provider with a known
+output ceiling (the Claude family) clamps an oversized value, and a provider
+without one passes it through, so a generous value is safe either way.
+
+#### Cross-strategy coverage
+
+Be precise about what applies to every tool strategy versus what is ReAct-only:
+
+- **Every tool strategy** gets orphaned-`tool_use`/`tool_result` pairing repair,
+  because it runs in the shared DynaBot turn-finalize — a custom or non-ReAct tool
+  bot gets the same `400`-avoidance.
+- **ReAct only:** `history_compaction`, `truncation_retry_max_tokens`, and the
+  `reasoning_termination` metadata. A bot running a custom/non-ReAct tool strategy
+  does **not** get these automatically.
+
+#### Provider caveat
+
+HuggingFace's text-generation inference path exposes no token-budget stop reason
+(`finish_reason` is always `'stop'`), so `LLMResponse.truncated` is always `False`
+for HuggingFace-backed bots. The truncation protections above
+(abandon-and-synthesize, `truncation_retry_max_tokens`) are therefore inert for
+HuggingFace — plan history bounds around `history_compaction` instead.
+
+#### Recommended production config
+
+A minimal, annotated starting point for an Anthropic tool-using bot, placing each
+knob at its correct level (top-level `DynaBotConfig` vs nested `reasoning:`):
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-5-sonnet     # output/input ceilings resolve live; over-ceiling max_tokens is clamped
+  max_tokens: 4096
+
+max_tool_iterations: 8       # DynaBotConfig top level (default 5)
+tool_loop_timeout: 180.0     # tool-loop wall-clock budget, seconds (default 120)
+tool_timeout: 30.0           # per-tool timeout, seconds (default 30)
+
+reasoning:
+  strategy: react
+  max_iterations: 8
+  history_compaction:        # strongly recommended for long tool loops
+    enabled: true
+    keep_recent_iterations: 3
+    budget_fraction: 0.75
+  truncation_retry_max_tokens: 8192   # optional: complete (not just abandon) a truncated tool payload
+```
+
+This is a *recommended set*, not a full schema — the complete field references
+live in the bots [Configuration guide](../../bots/guides/configuration.md#react-reasoning)
+and the [Providers guide](providers.md). `ContextLengthExceededError` is importable
+from `dataknobs_llm.exceptions`.
+
 ---
 
 ## Provider Lifecycle
@@ -1401,6 +1517,7 @@ class MyProvider(AsyncLLMProvider):
 - Monitor token usage
 - Secure credentials
 - Graceful shutdown
+- Productionizing a tool-using bot: on-by-default protections + opt into `history_compaction` for long tool loops
 
 **Provider Lifecycle**:
 - Use `async with` for automatic init/close
