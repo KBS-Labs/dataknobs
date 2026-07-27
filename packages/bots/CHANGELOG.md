@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DynaBot.clear_conversation` now reclaims a conversation's undo
+  checkpoints, not just its cached manager.** The per-conversation
+  `_turn_checkpoints` entry was never pruned — `clear_conversation` dropped the
+  cached `ConversationManager` but left the checkpoint list behind, so a
+  long-running process that cleared conversations still accumulated checkpoint
+  state without bound. Both cached structures are now reclaimed together through
+  a single teardown helper (`_drop_conversation_cache`), making it structurally
+  impossible for the two lifetimes to drift apart again.
+
 - **`DynaBot` now bounds the terminal synthesis of a phased reasoning turn**
   (ReAct) by the wall-clock budget left unspent by `tool_loop_timeout`.
   Previously `tool_loop_timeout` bounded only the tool *loop*; the synthesis

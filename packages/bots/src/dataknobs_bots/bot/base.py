@@ -2982,6 +2982,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         return await self.conversation_storage.load_conversation(conversation_id)
 
+    def _drop_conversation_cache(self, conversation_id: str) -> None:
+        """Evict a conversation's cached manager AND its checkpoints together.
+
+        The two per-conversation caches (``_conversation_managers`` and
+        ``_turn_checkpoints``) share a single lifetime. This is the sole
+        teardown choke point for that pair — every code path that reclaims a
+        conversation's in-memory state routes through here, so the two
+        structures can never drift apart (dropping one while leaking the
+        other). Both pops are unconditional and no-op when absent.
+        """
+        self._conversation_managers.pop(conversation_id, None)
+        self._turn_checkpoints.pop(conversation_id, None)
+
     async def clear_conversation(self, conversation_id: str) -> bool:
         """Clear a conversation's history.
 
@@ -3022,9 +3035,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             - get_conversation(): Retrieve conversation before clearing
             - chat(): Will create new conversation after clearing
         """
-        # Remove from cache if present
-        if conversation_id in self._conversation_managers:
-            del self._conversation_managers[conversation_id]
+        # Drop both cached structures together (single teardown choke point).
+        self._drop_conversation_cache(conversation_id)
 
         # Delete from storage
         return await self.conversation_storage.delete_conversation(conversation_id)
