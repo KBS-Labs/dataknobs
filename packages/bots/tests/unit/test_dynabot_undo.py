@@ -718,3 +718,41 @@ class TestWizardUndo:
             f"got '{state_after_undo['current_stage']}'. "
             f"Wizard FSM state was not restored from the greeting node."
         )
+
+    @pytest.mark.asyncio
+    async def test_undo_to_start_does_not_resurrect_wizard_state(self):
+        """Undo back through the first turn must NOT resurrect wizard FSM state.
+
+        With no system prompt, the wizard's first *chat* (no greet) records the
+        turn-0 checkpoint on an empty tree (the ``None`` empty-anchor), and its
+        FSM state lands in ``manager.metadata["wizard"]`` — which, post-state,
+        aliases the seed bucket ``_initial_metadata``. If the ``None``-anchor
+        ``reset()`` kept that polluted seed, the next turn would rebuild
+        ``state.metadata`` from it and the wizard would resume its pre-undo
+        stage/data — the same stale-state resurrection this fix eliminates, on
+        the metadata channel. ``reset()`` restores the pristine pre-turn-0 seed.
+
+        White-box: ``_initial_metadata`` IS the defect channel here (the same
+        tree/checkpoint/seed divergence these undo tests target), so reading it
+        is the crisp deterministic assertion. Reproduce-first: on the un-fixed
+        reset the wizard key survives in ``_initial_metadata``.
+        """
+        bot = await _make_wizard_bot()
+        ctx = _ctx("conv-wizard-resurrect")
+
+        # First interaction is a chat (no greet), so the turn-0 checkpoint
+        # anchors on the still-empty tree — the ``None`` empty-anchor.
+        await bot.chat("My name is Alice", ctx)
+        manager = bot._conversation_managers.get(ctx.conversation_id)
+        assert manager is not None
+        assert "wizard" in manager.metadata  # sanity: turn 0 persisted FSM state
+
+        # Undo all the way back through the first turn.
+        result = await bot.rewind_to_turn(ctx, -1)
+        assert isinstance(result, UndoResult)
+
+        # The ``None``-anchor reset ran (state emptied) and the pristine seed was
+        # restored, so the wizard FSM state cannot survive to pollute the next
+        # turn's rebuilt ``state.metadata``.
+        assert manager.state is None
+        assert "wizard" not in manager._initial_metadata

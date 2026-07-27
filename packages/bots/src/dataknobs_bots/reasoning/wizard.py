@@ -1087,7 +1087,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         if record_data:
             try:
-                bank.add(record_data, source_stage=stage.get("name", ""))
+                # Stamp the current conversation node so this record is
+                # revertable by node-based undo. Without provenance the record
+                # defaults to the root anchor ("") — an ancestor of every
+                # checkpoint — so a later-turn undo would never revert it.
+                source_node_id = (
+                    manager.state.current_node_id if manager.state else ""
+                )
+                bank.add(
+                    record_data,
+                    source_stage=stage.get("name", ""),
+                    source_node_id=source_node_id,
+                )
                 logger.debug(
                     "Added record to bank '%s' (count=%d)",
                     bank_name,

@@ -937,3 +937,62 @@ class TestConversationManagerReset:
         assert manager.current_node_id is None
         assert manager.state is None
 
+    @pytest.mark.asyncio
+    async def test_reset_drops_transient_post_turn_metadata(
+        self, test_components
+    ):
+        """Reset drops per-turn metadata written after materialization.
+
+        Post-state, ``state.metadata`` IS ``_initial_metadata`` (aliased by
+        reference in ``add_message``), so a direct ``manager.metadata[...] =``
+        write during a turn — e.g. a reasoning strategy stashing per-turn
+        state — mutates the seed bucket. Undoing back through the first turn
+        must NOT resurrect that transient state on the next turn; ``reset()``
+        restores the pristine pre-turn-0 seed. (This is the root cause of the
+        wizard-FSM-state-resurrection defect.)
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            metadata={"tenant": "acme"},
+        )
+        await manager.add_message(role="user", content="First")
+        # Transient per-turn write (pollutes the aliased seed bucket).
+        manager.metadata["wizard"] = {"stage": "collect", "data": {"x": 1}}
+
+        await manager.reset()
+        await manager.add_message(role="user", content="Fresh")
+
+        # Genuine seed survives; transient per-turn key does not resurrect.
+        assert manager.metadata.get("tenant") == "acme"
+        assert "wizard" not in manager.metadata
+
+    @pytest.mark.asyncio
+    async def test_reset_preserves_pre_message_seed_writes(
+        self, test_components
+    ):
+        """Seed writes made BEFORE the first message survive reset.
+
+        The pristine seed is snapshotted at first materialization, not at
+        construction, so a pre-message ``seed_metadata`` write (part of the
+        conversation's pre-turn-0 seed) is preserved across reset while
+        post-turn transient writes are dropped.
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            metadata={"tenant": "acme"},
+        )
+        manager.seed_metadata("locale", "en-US")  # pre-message seed write
+        await manager.add_message(role="user", content="First")
+        manager.metadata["transient"] = 1  # post-turn transient write
+
+        await manager.reset()
+        await manager.add_message(role="user", content="Fresh")
+
+        assert manager.metadata.get("tenant") == "acme"
+        assert manager.metadata.get("locale") == "en-US"
+        assert "transient" not in manager.metadata
+

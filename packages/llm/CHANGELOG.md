@@ -15,10 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through it. `reset()` is the "before turn 0" counterpart: it drops the message
   tree, clears `state`, and deletes the persisted copy from storage — while
   preserving the conversation's identity (its id, including an auto-generated
-  one captured from live state, plus seed metadata), so the next `add_message`
-  rebuilds a clean single-node tree under the same id. A cross-process `resume`
-  in the empty gap sees a fresh (not-found) conversation rather than resurrecting
-  the dropped tree. Note the whole tree is dropped — unlike `switch_to_node`,
+  one captured from live state, plus the pristine pre-turn-0 seed metadata), so
+  the next `add_message` rebuilds a clean single-node tree under the same id.
+  Because a materialized `state.metadata` aliases the seed bucket, per-turn
+  writes made through the metadata property during the dropped turn would
+  otherwise persist in the seed; `reset()` restores the seed as it stood
+  entering turn 0, so transient per-turn state cannot resurrect on the rebuild.
+  A cross-process `resume` in the empty gap sees a fresh (not-found) conversation
+  rather than resurrecting the dropped tree. Note the whole tree is dropped — unlike `switch_to_node`,
   the rolled-back branch is not preserved; use it only at the
   conversation-start boundary, where nothing legitimately precedes the dropped
   content.

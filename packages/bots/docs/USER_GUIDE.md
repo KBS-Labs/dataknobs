@@ -578,8 +578,10 @@ result = await bot.rewind_to_turn(context, -1)
 Undoing or rewinding all the way back through the **first** turn
 (`rewind_to_turn(context, -1)`, or `undo_last_turn` on a single-turn
 conversation) resets the conversation to genuinely empty: the conversation tree,
-memory, and memory banks are all cleared in lock-step, and the next `chat()`
-starts a fresh single-turn conversation reusing the same `conversation_id`.
+memory, memory banks, and any per-turn reasoning-strategy state (e.g. a wizard's
+current stage and collected data) are all cleared in lock-step, and the next
+`chat()` starts a fresh single-turn conversation reusing the same
+`conversation_id`.
 
 Unlike a later-turn undo — which preserves the undone turn as a sibling branch
 you can return to — the first turn's branch is **discarded**, because nothing

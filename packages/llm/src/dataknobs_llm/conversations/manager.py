@@ -248,6 +248,13 @@ class ConversationManager:
         self.storage = storage
         self.state = state
         self._initial_metadata = metadata or {}
+        # Pristine copy of the seed bucket as it stood entering turn 0 (the
+        # construction seed plus any pre-message ``seed_metadata`` writes),
+        # snapshotted at first materialization. ``reset()`` restores it so a
+        # roll-back-to-empty drops per-turn transient writes (which pollute the
+        # aliased seed bucket) without losing the genuine seed. ``None`` until
+        # the first message materializes state.
+        self._pre_turn_seed: Dict[str, Any] | None = None
         self.middleware = middleware or []
         self.cache_rag_results = cache_rag_results
         self.reuse_rag_on_branch = reuse_rag_on_branch
@@ -558,6 +565,13 @@ class ConversationManager:
         # Initialize state if this is the first message
         if self.state is None:
             conversation_id = self._conversation_id or str(uuid.uuid4())
+            # Snapshot the pristine seed as it stands entering turn 0 — before
+            # the state alias lets per-turn writes mutate _initial_metadata — so
+            # reset() can restore it and drop transient pollution. Captured
+            # here (not at construction) so pre-message seed_metadata writes are
+            # included. Re-materialization after a reset re-captures the
+            # already-clean seed, so it stays idempotent.
+            self._pre_turn_seed = dict(self._initial_metadata)
             root_node = ConversationNode(
                 message=message,
                 node_id="",
@@ -1671,11 +1685,18 @@ class ConversationManager:
 
         Drops the message tree and clears :attr:`state` so the next
         :meth:`add_message` rebuilds a fresh root — reusing this manager's
-        ``conversation_id`` and seed metadata (``_initial_metadata``), so the
-        rebuilt conversation keeps its identity. Also deletes the persisted
-        state from storage, so a cross-process :meth:`resume` before the next
-        message treats the conversation as fresh (not-yet-materialized) rather
-        than resurrecting the dropped tree.
+        ``conversation_id`` and the **pristine** seed metadata (as it stood
+        entering turn 0), so the rebuilt conversation keeps its identity. Also
+        deletes the persisted state from storage, so a cross-process
+        :meth:`resume` before the next message treats the conversation as fresh
+        (not-yet-materialized) rather than resurrecting the dropped tree.
+
+        Per-turn transient writes made through the metadata property during the
+        undone turn (e.g. a reasoning strategy stashing FSM state under
+        ``metadata["wizard"]``) mutate the aliased seed bucket; restoring the
+        pre-turn-0 snapshot drops them, so they cannot resurrect on the next
+        turn. Genuine seed keys (and any pre-message ``seed_metadata`` writes)
+        are preserved.
 
         This is the "before turn 0" counterpart to :meth:`switch_to_node`:
         switching moves to an existing node, but the very first message
@@ -1702,6 +1723,12 @@ class ConversationManager:
         conversation_id = self.conversation_id
         self._conversation_id = conversation_id
         self.state = None
+        # Restore the pristine pre-turn-0 seed, discarding per-turn transient
+        # writes that polluted the aliased seed bucket during the undone turn.
+        # (None when reset runs before any materialization — nothing to restore,
+        # _initial_metadata is already the untouched construction seed.)
+        if self._pre_turn_seed is not None:
+            self._initial_metadata = dict(self._pre_turn_seed)
         # _save_state() no-ops on a None state, so it cannot clear storage;
         # delete explicitly so a later resume sees "not found" (fresh) rather
         # than the dropped tree.

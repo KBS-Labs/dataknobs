@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wizard collection-mode records are now revertable by undo.** Records added
+  in a collection stage were stored without conversation-tree provenance, so
+  they defaulted to the root anchor — an ancestor of every checkpoint — and a
+  later-turn undo silently left them in place. Collection records now stamp the
+  current node, so undoing a collection turn reverts the records added in it
+  (and undoing back to the conversation start clears them entirely).
 - **Undoing or rewinding back through the first turn no longer leaves a phantom
   leading user message.** With no system prompt, the first user message
   *becomes* the conversation tree's root node, so the turn-0 undo checkpoint —
@@ -101,10 +107,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while memory rolled back correctly. The next turn then sent two consecutive
   user messages — rejected as a 400 by strict providers (Anthropic) and silent
   context corruption elsewhere. A start-boundary undo now anchors on an empty
-  sentinel and resets the conversation to genuinely empty (tree, memory, and
-  memory banks cleared in lock-step, via the new `ConversationManager.reset()`
-  in `dataknobs-llm`), reusing the same `conversation_id` on the next `chat()`.
-  Two follow-on symptoms are fixed by the same change: `UndoResult.remaining_turns`
+  sentinel and resets the conversation to genuinely empty (tree, memory, memory
+  banks, and per-turn reasoning-strategy state cleared in lock-step, via the new
+  `ConversationManager.reset()` in `dataknobs-llm`), reusing the same
+  `conversation_id` on the next `chat()`. Strategy state persisted through the
+  conversation-metadata channel (e.g. a wizard's FSM stage/data under
+  `manager.metadata["wizard"]`) no longer resurrects on the next turn — `reset()`
+  restores the pristine pre-turn-0 seed — and the bank clear is total, removing
+  even records stamped at the root node. Two follow-on symptoms are fixed by the
+  same change: `UndoResult.remaining_turns`
   no longer reports `1` for an emptied conversation (it counted the phantom), and
   the memory-vs-tree message counts stay consistent through the start boundary.
   The undone first turn's branch is **discarded** (nothing precedes it to branch
