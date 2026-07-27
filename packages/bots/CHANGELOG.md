@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bounded conversation-manager cache (`max_cached_conversations`).** DynaBot's
+  in-memory `ConversationManager` cache is now an access-ordered LRU that can be
+  bounded via the new `DynaBotConfig.max_cached_conversations` field. The
+  default is `None` (unbounded — byte-for-byte the prior single-user / embedded
+  behavior); a positive value caps the cache, evicting the least-recently-used
+  conversation once the bound is exceeded so a long-lived multi-conversation
+  server cannot accumulate per-conversation state without limit. Eviction
+  co-drops the evicted conversation's undo checkpoints through the same single
+  teardown choke point as `clear_conversation`, and the in-flight conversation
+  of an active turn is pinned so it is never evicted out from under its own turn
+  (if every cached conversation is in-flight, the bound is exceeded transiently
+  rather than evicting a live turn). Any read of a cached conversation marks it
+  most-recently-used. Built on the new `dataknobs_common.BoundedLRUCache`
+  primitive. A `0` or negative bound is rejected at config validation.
 - **Structured ReAct termination reason.** Every ReAct turn now surfaces *why*
   it ended as always-on `reasoning_termination` conversation metadata
   (`{"strategy": "react", "reason": <value>, "iterations_used": <int>}`),

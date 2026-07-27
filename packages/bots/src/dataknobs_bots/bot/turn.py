@@ -55,6 +55,17 @@ class TurnState:
 
     # --- Pipeline state (set during execution) ---
     manager: Any = None  # ConversationManager, set by _prepare_turn
+    # True once this turn has pinned its conversation in the bounded manager
+    # cache (set by ``_prepare_turn`` right after ``_get_or_create_conversation``
+    # takes the pin).  The pin is released exactly once, in the turn driver's
+    # ``finally`` via ``_call_finally_turn_middleware``, and ONLY when this flag
+    # is set — so a turn that reached the ``finally`` without ever pinning (the
+    # greet no-strategy early-exit, or an exception in ``_prepare_turn`` before
+    # the pin point) does not decrement a pin it never took.  Pins are a global
+    # per-key refcount; guarding the release per-turn is what makes the
+    # "concurrent turns on the same id each hold their own pin" contract true
+    # rather than relying on refcount underflow being harmless.
+    pinned_conversation: bool = False
     response: LLMResponse | None = None  # set after generation (chat/greet)
     response_content: str = ""  # extracted text content
     stream_chunks: list[str] = field(default_factory=list)  # stream path only

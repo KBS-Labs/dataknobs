@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
+from dataknobs_common.bounded_cache import BoundedLRUCache
 from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -396,6 +397,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._max_tool_iterations = self.config.max_tool_iterations
         self._tool_timeout = self.config.tool_timeout
         self._tool_loop_timeout = self.config.tool_loop_timeout
+        self._max_cached_conversations = self.config.max_cached_conversations
         self._finalize_timeout_message = self.config.tool_loop_timeout_message
         # Resolve the dotted-path context_transform now (cheap, sync). The
         # pre-built shape overrides this with a directly-supplied callable.
@@ -413,7 +415,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._prompt_envelope = PromptEnvelope(
             PromptEnvelopeStyle(self.config.prompt_envelope)
         )
-        self._conversation_managers: dict[str, ConversationManager] = {}
+        # Access-ordered LRU cache of live conversation managers. ``max_size``
+        # is ``None`` by default (unbounded — today's single-user behavior).
+        # When a positive bound is configured, evicting a conversation
+        # co-drops its undo checkpoints through the single teardown choke
+        # point (``_on_conversation_evicted`` -> ``_drop_conversation_cache``),
+        # and the in-flight conversation of an active turn is pinned so it is
+        # never evicted out from under its own turn.
+        self._conversation_managers: BoundedLRUCache[
+            str, ConversationManager
+        ] = BoundedLRUCache(
+            max_size=self._max_cached_conversations,
+            on_evict=self._on_conversation_evicted,
+        )
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
         # Lifetime ownership of the cascade-closed subsystems. Set True by
@@ -1384,6 +1398,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         if turn.is_greet:
             turn.manager = await self._get_or_create_conversation(turn.context)
+            # The pin is now held for this turn — mark it so the driver's
+            # ``finally`` releases exactly this turn's pin (see below).
+            turn.pinned_conversation = True
             # Bridge plugin_data to LLM middleware
             if turn.manager.state is not None:
                 turn.manager.state.turn_data = turn.plugin_data
@@ -1396,6 +1413,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         # Get or create conversation manager
         turn.manager = await self._get_or_create_conversation(turn.context)
+        # The pin is now held for this turn — mark it so the driver's
+        # ``finally`` releases exactly this turn's pin (see below).
+        turn.pinned_conversation = True
 
         # Record tree position before the turn for undo support.
         # Store (node_id, memory_count) — node_id for tree navigation,
@@ -2269,17 +2289,32 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         Args:
             turn: Turn state at the end of the pipeline.
         """
-        for mw in self.middleware:
-            try:
-                await mw.finally_turn(turn)
-            except Exception as exc:
-                logger.exception(
-                    "Middleware %s.finally_turn raised",
-                    type(mw).__name__,
-                )
-                await self._call_on_hook_error_middleware(
-                    "finally_turn", exc, turn.context
-                )
+        try:
+            for mw in self.middleware:
+                try:
+                    await mw.finally_turn(turn)
+                except Exception as exc:
+                    logger.exception(
+                        "Middleware %s.finally_turn raised",
+                        type(mw).__name__,
+                    )
+                    await self._call_on_hook_error_middleware(
+                        "finally_turn", exc, turn.context
+                    )
+        finally:
+            # Release the in-flight pin taken in _get_or_create_conversation.
+            # This is the one method every turn driver calls inside its
+            # ``finally``, so the release runs on every path — success, error,
+            # and early stream-abandon. Guard it on the per-turn flag: pins are
+            # a global per-key refcount, so a turn that reached here WITHOUT
+            # pinning (the greet no-strategy early-exit, or an exception in
+            # _prepare_turn before the pin point) must NOT decrement a pin it
+            # never took — doing so would drop a *concurrent* same-id turn's
+            # pin and let its live conversation be evicted mid-turn. Releasing
+            # only this turn's own pin is what makes the refcounted
+            # "concurrent turns each hold their own" contract actually hold.
+            if turn.pinned_conversation:
+                self._conversation_managers.unpin(turn.context.conversation_id)
 
     async def _call_on_tool_executed_middleware(
         self, execution: ToolExecution, context: BotContext
@@ -2995,6 +3030,22 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._conversation_managers.pop(conversation_id, None)
         self._turn_checkpoints.pop(conversation_id, None)
 
+    def _on_conversation_evicted(
+        self, conversation_id: str, _manager: ConversationManager
+    ) -> None:
+        """LRU-eviction hook — route the drop through the single choke point.
+
+        Fired by the bounded manager cache when it evicts the LRU conversation
+        to honor ``max_cached_conversations``. The cache has already removed
+        the manager entry itself; routing through ``_drop_conversation_cache``
+        co-drops the conversation's checkpoints so the two structures cannot
+        drift apart on the eviction path any more than on the explicit-clear
+        path. The redundant manager ``pop`` inside the helper is a harmless
+        no-op here (the entry is already gone) and does not re-fire eviction —
+        ``BoundedLRUCache.pop`` neither evicts nor invokes ``on_evict``.
+        """
+        self._drop_conversation_cache(conversation_id)
+
     async def clear_conversation(self, conversation_id: str) -> bool:
         """Clear a conversation's history.
 
@@ -3269,9 +3320,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         conv_id = context.conversation_id
 
-        # Check cache
+        # Check cache. Reading via ``[]`` touches the entry most-recently-used
+        # (so an active conversation stays warm), and pinning it marks the
+        # conversation in-flight for the duration of this turn — the pin is
+        # released in ``_call_finally_turn_middleware``, gated on the turn's
+        # ``pinned_conversation`` flag so exactly this turn's pin is dropped.
+        # Pins are refcounted, so concurrent turns on the same id each hold
+        # their own and one finishing never unpins another.
         if conv_id in self._conversation_managers:
-            return self._conversation_managers[conv_id]
+            manager = self._conversation_managers[conv_id]
+            self._conversation_managers.pin(conv_id)
+            return manager
 
         # Try to resume existing conversation
         try:
@@ -3314,8 +3373,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     include_rag=bool(self.system_prompt_rag_configs),
                 )
 
-        # Cache manager
+        # Cache manager. The insert makes it most-recently-used, so a bounded
+        # cache never evicts the conversation it just created; pinning marks it
+        # in-flight for this turn (released in ``_call_finally_turn_middleware``).
         self._conversation_managers[conv_id] = manager
+        self._conversation_managers.pin(conv_id)
         return manager
 
     async def _build_message_with_context(
