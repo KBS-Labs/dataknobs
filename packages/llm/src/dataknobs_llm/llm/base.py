@@ -63,8 +63,8 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, ClassVar, Coroutine, Dict, List, NoReturn, TYPE_CHECKING, TypeVar,
-    Union, AsyncIterator, Iterator, Callable, Protocol
+    Any, ClassVar, Coroutine, Dict, List, NamedTuple, NoReturn, TYPE_CHECKING,
+    TypeVar, Union, AsyncIterator, Iterator, Callable, Protocol
 )
 
 if TYPE_CHECKING:
@@ -947,6 +947,25 @@ def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> 
     )
 
 
+class _ShapedRequest(NamedTuple):
+    """The output of :meth:`LLMProvider._shape_request_params`.
+
+    Three pieces a provider's build method needs to finish a request, with
+    constraints resolved exactly once:
+
+    - ``config``: the runtime config after folding shaped per-call kwargs and
+      applying the canonical-space drop/clamp — feed this to ``adapt_config``.
+    - ``wire_extra``: per-call kwargs that are *not* shaped fields — merge these
+      straight into the adapted wire dict (each provider chooses where).
+    - ``constraints``: the resolved constraints, threaded back so the caller's
+      ``_apply_param_remaps`` reuses them (no second resolver build).
+    """
+
+    config: LLMConfig
+    wire_extra: Dict[str, Any]
+    constraints: ModelConstraints
+
+
 class LLMProvider(ABC):
     """Base LLM provider interface."""
 
@@ -1490,6 +1509,64 @@ class LLMProvider(ABC):
             if source in wire:
                 wire[dest] = wire.pop(source)
         return wire
+
+    def _shape_request_params(
+        self, config: LLMConfig, extra: Mapping[str, Any] | None = None
+    ) -> _ShapedRequest:
+        """Resolve constraints once and shape the canonical request front-half.
+
+        Shared request-shaping *orchestration* choke point for **every** provider,
+        complementary to the two shaping *primitives* it composes
+        (:meth:`_apply_request_constraints` in canonical config space,
+        :meth:`_apply_param_remaps` at the wire — the caller applies that one after
+        its vendor-specific adapt). Resolves :class:`ModelConstraints` once
+        (:meth:`get_constraints`), then:
+
+        - **Folds** each per-call ``extra`` kwarg that names a *shaped* config field
+          — one the family drops (``rejected_params``), clamps (``max_tokens``), or
+          remaps to a different wire key (``param_remaps``) — into the config
+          **before** shaping, so it goes through the same drop/clamp/remap as
+          ``config_overrides`` instead of being appended raw afterward. That closes
+          the double-key / drop-bypass footgun. Every other kwarg is returned in
+          ``wire_extra`` for the caller to merge straight onto the wire.
+        - **Shapes** the (folded) config through :meth:`_apply_request_constraints`.
+
+        Returns the shaped config, the wire-only ``extra`` remainder, and the
+        resolved constraints (:class:`_ShapedRequest`). The caller supplies the
+        vendor-specific wire assembly and the final
+        ``_apply_param_remaps(wire, result.constraints.param_remaps)``.
+
+        A provider with no per-call kwargs passes ``extra=None`` and receives an
+        empty ``wire_extra`` — the front-half is identical, only the split is
+        skipped.
+
+        Args:
+            config: Runtime config (with any ``config_overrides`` applied).
+            extra: Per-call ``**kwargs`` to split into shaped-field folds and
+                wire-only passthroughs; ``None`` (or empty) skips the split.
+
+        Returns:
+            A :class:`_ShapedRequest` of the shaped config, the wire-only kwarg
+            remainder, and the resolved constraints.
+        """
+        constraints = self.get_constraints(config)
+        wire_extra: Dict[str, Any] = {}
+        if extra:
+            shaped_fields = (
+                set(constraints.rejected_params)
+                | set(constraints.param_remaps)
+                | {"max_tokens"}
+            )
+            field_extra: Dict[str, Any] = {}
+            for key, value in extra.items():
+                if key in config.__dataclass_fields__ and key in shaped_fields:
+                    field_extra[key] = value
+                else:
+                    wire_extra[key] = value
+            if field_extra:
+                config = config.clone(**field_extra)
+        shaped_config = self._apply_request_constraints(config, constraints)
+        return _ShapedRequest(shaped_config, wire_extra, constraints)
 
     def _check_ready(self) -> None:
         """Raise if provider is not ready for requests.
