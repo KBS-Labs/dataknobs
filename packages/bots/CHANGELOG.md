@@ -72,6 +72,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compaction). `SummaryMemory` now composes the shared `dataknobs_llm`
   summarization seam (behaviour unchanged).
 
+### Changed
+
+- **Unified DynaBot's buffered and streaming tool-execution loops onto one
+  shared core** (`_run_monolithic_tool_loop` + a per-mode delivery seam in
+  `bot/tool_loop.py`). The `chat()` and `stream_chat()` non-phased paths
+  previously carried two hand-written copies of the same
+  cap / wall-clock-timeout / execute / budget / re-call / cap-warning
+  lifecycle, so a loop-control change had to be made in both and could drift.
+  The lifecycle now lives in one place; each mode supplies only the axes on
+  which it genuinely differs (pending source, usage accounting, the
+  clear-before-budget-gate step, and buffered `complete` vs streaming
+  `stream_complete` re-invocation). Behavior is unchanged — including the two
+  deliberate per-mode asymmetries (streaming clears pending before the budget
+  gate so a budget-break flags no orphan; the buffered re-call is deadlined
+  while the streaming re-stream is bounded only by the pre-stream budget gate).
+  Internal refactor: no public API, config, or behavioral change.
+
 ### Fixed
 
 - **`DynaBot.rewind_to_turn` to the turn a conversation already sits at is now a
