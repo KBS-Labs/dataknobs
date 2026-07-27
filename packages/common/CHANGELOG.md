@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.6.2 - 2026-07-27
+
 ### Added
 
 - `BoundedLRUCache[K, V]` in `dataknobs_common.bounded_cache` (exported from

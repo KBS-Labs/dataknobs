@@ -5,6 +5,77 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-27
+
+### dataknobs-common [1.6.2]
+
+#### Added
+- BoundedLRUCache primitive for bounding a per-key in-memory cache (pin/unpin, on_evict hook)
+- is_ollama_model_usable canary + requires_ollama_usable_model pytest marker
+
+#### Fixed
+- reclaim pins on BoundedLRUCache manual removal
+
+### dataknobs-llm [0.6.8]
+
+#### Added
+- unified model-metadata substrate (model_profile) with per-provider ModelConstraints
+- LiveApiSource — generic live-vendor-API model-metadata source, with an injectable match= seam
+- ConfigOverrideSource gains an injectable match= matcher
+- OpenAI, Bedrock, Ollama, and HuggingFace model-metadata bindings
+- provider pricing/cost accessors + model_limits tooling --provider flag
+- LLMConfig.model_profile_overrides loose-mapping field
+- Claude 5 family (Opus 5 and siblings) model support
+- ConversationManager.reset() — roll a conversation back to its empty pre-message state
+- token-budget truncation signal (LLMResponse.truncated) surfaced cross-provider
+- distinct ContextLengthExceededError on context-window overflow
+- in-loop conversation history compaction + shared summarization seam
+- configurable mid-conversation system-message policy for Anthropic
+- shared message-sequence utility + normalize_claude_stop_reason() helper
+- EchoProvider.set_response_delay for scripted latency
+
+#### Changed
+- finish_reason is now the canonical cross-provider vocabulary (stop / length / …)
+- vendor API errors now raise dataknobs_common.exceptions types across all providers, incl. mid-stream
+- Anthropic live Models-API ceiling cache is now per-provider-instance
+- Anthropic mid-conversation role="system" messages default to inline
+
+#### Fixed
+- clamp max_tokens to the model's output ceiling; reject over-ceiling requests
+- shape OpenAI/Bedrock requests to the model family's rules (param drop/clamp/remap)
+- validate_model no longer rejects current models; replace stale whitelists
+- honor model_profile_overrides pricing/available overrides
+- Claude 5 temperature-rejection list completeness
+- TokenCounter.estimate_tokens / estimate_messages_tokens tolerate None
+- keep tool_result blocks first when inlining mid-conversation system messages
+
+### dataknobs-bots [0.9.2]
+
+#### Added
+- bounded conversation-manager cache (max_cached_conversations)
+- bounded per-conversation undo history (max_undo_checkpoints)
+- structured ReAct termination reason
+- opt-in in-loop history compaction for the ReAct strategy
+- DynaBotConfig.tool_loop_timeout_message user-facing text
+- ReActReasoningConfig.truncation_retry_max_tokens opt-in adaptive-budget retry
+
+#### Changed
+- unify buffered and streaming tool-execution loops onto one core
+
+#### Fixed
+- wizard collection-mode records are now revertable by undo
+- fully revert strategy/bank/tree state when undoing back through the first turn
+- distinguish an emptied conversation on undo/rewind
+- rewind_to_turn to the current turn is now a no-op
+- clear_conversation reclaims a conversation's undo checkpoints
+- bound the terminal synthesis of a phased reasoning turn by the remaining budget
+- treat a truncated tool call as terminal, not executed; pair orphan tool_use at finalize
+
+### dataknobs-fsm [0.3.2]
+
+#### Security
+- bump pymdown-extensions floor to >=11.0.0 (docs dev dependency; CVE-2026-61632)
+
 ## Release - 2026-07-20
 
 ### dataknobs-config [0.4.3]
