@@ -193,6 +193,111 @@ class TestRewindToTurn:
             await bot.rewind_to_turn(ctx, 5)
 
 
+class TestRewindToCurrentTurnIsNoop:
+    """Rewinding to the current/newest turn is a legal no-op, not an error.
+
+    ``rewind_to_turn`` to the turn the conversation already sits at computes
+    zero undo work (``turns_to_undo == 0``).  Previously the trailing
+    ``if result is None`` raised a misleading ``"Nothing to undo"`` for this
+    case — and, worse, gave that same wrong message for a never-started
+    conversation.  The proper behavior: a zero-work rewind of an *active*
+    conversation returns a well-formed no-op ``UndoResult`` (nothing undone,
+    no new branch, all turns retained), while a conversation with no active
+    manager still reports the clear ``"No active conversation"``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rewind_to_current_turn_returns_noop_result(self):
+        bot = await _make_bot()
+        ctx = _ctx()
+
+        await bot.chat("First", ctx)
+        await bot.chat("Second", ctx)
+        await bot.chat("Third", ctx)
+
+        conv_id = ctx.conversation_id
+        entries_before = list(bot._turn_checkpoints[conv_id].entries)
+        mem_before = await bot.memory.get_context("test")
+
+        # Rewind to turn 2 — the newest turn, i.e. where we already are.
+        result = await bot.rewind_to_turn(ctx, 2)
+
+        # A well-formed no-op: nothing undone, no new branch, all turns remain.
+        assert isinstance(result, UndoResult)
+        assert result.undone_user_message == ""
+        assert result.undone_bot_response == ""
+        assert result.branching is False
+        assert result.remaining_turns == 3
+
+        # And nothing actually changed — no checkpoint popped, memory intact.
+        assert bot._turn_checkpoints[conv_id].entries == entries_before
+        assert len(await bot.memory.get_context("test")) == len(mem_before)
+
+    @pytest.mark.asyncio
+    async def test_rewind_to_current_turn_noop_under_cap(self):
+        # Bounded undo history: rewinding to the newest turn is still a no-op,
+        # and it must not disturb the retained entries or the dropped offset.
+        # remaining_turns reflects the true conversation length (5), not the
+        # retained-checkpoint count (3).
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {"type": "buffer", "max_messages": 50},
+            "max_undo_checkpoints": 3,
+        }
+        bot = await DynaBot.from_config(config)
+        ctx = _ctx("conv-cap-noop")
+
+        for _ in range(5):
+            await bot.chat("hello", ctx)
+
+        log = bot._turn_checkpoints[ctx.conversation_id]
+        assert log.dropped == 2 and len(log.entries) == 3  # cap active
+
+        # Newest turn is 4 (total == 5). Rewind to it: zero work.
+        result = await bot.rewind_to_turn(ctx, 4)
+        assert result.undone_user_message == ""
+        assert result.branching is False
+        assert result.remaining_turns == 5
+
+        # The tail-cap state is untouched by the no-op.
+        assert log.dropped == 2
+        assert len(log.entries) == 3
+
+    @pytest.mark.asyncio
+    async def test_rewind_zero_work_on_active_but_emptied_conversation(self):
+        # After undoing the only turn, the conversation is still active
+        # (manager + state present) but holds zero checkpoints. A rewind to
+        # the start is then a zero-work no-op, not "Nothing to undo".
+        bot = await _make_bot()
+        ctx = _ctx("conv-emptied")
+
+        await bot.chat("Only", ctx)
+        await bot.undo_last_turn(ctx)
+        assert bot._turn_checkpoints[ctx.conversation_id].entries == []
+
+        # total == 0 but the manager is still active -> a no-op result, not a
+        # raise. (remaining_turns is left to undo's own tree-path accounting;
+        # the contract under test here is "no-op, no spurious rollback".)
+        result = await bot.rewind_to_turn(ctx, -1)
+        assert isinstance(result, UndoResult)
+        assert result.undone_user_message == ""
+        assert result.undone_bot_response == ""
+        assert result.branching is False
+        assert bot._turn_checkpoints[ctx.conversation_id].entries == []
+
+    @pytest.mark.asyncio
+    async def test_rewind_never_started_conversation_reports_no_active(self):
+        # A zero-work target on a conversation with no active manager is NOT a
+        # silent no-op — it reports the clear "No active conversation"
+        # (previously the misleading "Nothing to undo").
+        bot = await _make_bot()
+        ctx = _ctx("conv-never-started")
+
+        with pytest.raises(ValueError, match="No active conversation"):
+            await bot.rewind_to_turn(ctx, -1)
+
+
 # =====================================================================
 # Checkpoint recording
 # =====================================================================
