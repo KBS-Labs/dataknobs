@@ -122,6 +122,18 @@ class TestIsAncestorOrEqual:
     def test_both_empty(self):
         assert _BankCore.is_ancestor_or_equal("", "") is True
 
+    def test_none_checkpoint_has_no_ancestors(self):
+        """A ``None`` checkpoint is the "before any message" empty anchor.
+
+        Nothing precedes the empty pre-tree state, so no node is an
+        ancestor-or-equal of ``None`` — every record is post-checkpoint and
+        gets removed (total revert to empty). Before the fix this raised
+        ``AttributeError`` (``None.startswith``).
+        """
+        assert _BankCore.is_ancestor_or_equal("0.0.0", None) is False
+        assert _BankCore.is_ancestor_or_equal("0", None) is False
+        assert _BankCore.is_ancestor_or_equal("", None) is False
+
 
 # =====================================================================
 # MemoryBank.add() with source_node_id
@@ -269,6 +281,23 @@ class TestMemoryBankUndoToCheckpoint:
         assert bank.count() == 1
         assert bank.all()[0].data["name"] == "flour"
 
+    def test_none_checkpoint_removes_all_recorded_nodes(self):
+        """Undoing back through the first turn (``None`` anchor) empties the bank.
+
+        Records stamped at real turn-0 nodes ("0", "0.0", …) are all
+        post-checkpoint relative to the empty "before any message" anchor, so
+        every one is removed — the bank reverts to empty in lock-step with the
+        conversation reset. Before the fix this raised ``AttributeError``.
+        """
+        bank = _make_bank()
+        bank.add({"name": "flour"}, source_node_id="0")
+        bank.add({"name": "sugar"}, source_node_id="0.0")
+        bank.add({"name": "butter"}, source_node_id="0.0.0")
+
+        removed = bank.undo_to_checkpoint(None)
+        assert removed == 3
+        assert bank.count() == 0
+
 
 # =====================================================================
 # AsyncMemoryBank.add() with source_node_id
@@ -329,6 +358,18 @@ class TestAsyncMemoryBankUndoToCheckpoint:
         records = await bank.all()
         names = {r.data["name"] for r in records}
         assert names == {"flour", "sugar"}
+
+    @pytest.mark.asyncio
+    async def test_none_checkpoint_removes_all_recorded_nodes(self):
+        """``None`` anchor (undo through the first turn) empties the async bank."""
+        bank = await _make_async_bank()
+        await bank.add({"name": "flour"}, source_node_id="0")
+        await bank.add({"name": "sugar"}, source_node_id="0.0")
+        await bank.add({"name": "butter"}, source_node_id="0.0.0")
+
+        removed = await bank.undo_to_checkpoint(None)
+        assert removed == 3
+        assert await bank.count() == 0
 
     @pytest.mark.asyncio
     async def test_does_not_revert_modifications(self):

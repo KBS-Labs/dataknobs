@@ -798,3 +798,142 @@ class TestMessagesMetadataPreservation:
         user_msgs = [m for m in msgs if m["role"] == "user"]
         assert user_msgs[0]["metadata"]["raw_content"] == "original"
 
+
+class TestConversationManagerReset:
+    """``reset()`` returns a conversation to its genuinely-empty pre-message state.
+
+    The first message *becomes* the root node, so there is no earlier node to
+    ``switch_to_node`` to when rolling all the way back through it. ``reset()``
+    is the "before turn 0" counterpart: it drops the tree, clears ``state``,
+    and deletes the persisted copy — while preserving the conversation's
+    identity (id + seed metadata) so the next ``add_message`` rebuilds a clean
+    single-node tree under the same id.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reset_empties_messages_and_current_node(
+        self, test_components
+    ):
+        """After reset: no messages, no current node, no materialized state."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="First")
+        assert manager.messages  # sanity: tree is populated pre-reset
+
+        await manager.reset()
+
+        assert manager.messages == []
+        assert manager.current_node_id is None
+        assert manager.state is None
+
+    @pytest.mark.asyncio
+    async def test_reset_preserves_auto_generated_id_on_rebuild(
+        self, test_components
+    ):
+        """A conversation whose id was auto-generated keeps it across reset.
+
+        The id is minted at first materialization and never written back to
+        ``_conversation_id``; ``reset()`` must capture it from live state so the
+        post-reset rebuild reuses the same identity (not a fresh UUID).
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="First")
+        original_id = manager.conversation_id
+        assert original_id is not None
+
+        await manager.reset()
+        assert manager.conversation_id == original_id  # survives the empty gap
+
+        # Rebuild: first message becomes root "" again, same id.
+        await manager.add_message(role="user", content="Fresh")
+        assert manager.conversation_id == original_id
+        assert manager.current_node_id == ""
+        contents = [m["content"] for m in manager.messages]
+        assert contents == ["Fresh"]  # no phantom "First"
+
+    @pytest.mark.asyncio
+    async def test_reset_preserves_explicit_id_on_rebuild(
+        self, test_components
+    ):
+        """An explicitly-supplied conversation id also survives reset."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="conv-explicit",
+        )
+        await manager.add_message(role="user", content="First")
+        assert manager.conversation_id == "conv-explicit"
+
+        await manager.reset()
+        await manager.add_message(role="user", content="Fresh")
+
+        assert manager.conversation_id == "conv-explicit"
+
+    @pytest.mark.asyncio
+    async def test_reset_preserves_seed_metadata_on_rebuild(
+        self, test_components
+    ):
+        """Seed metadata is reapplied to the rebuilt root after reset."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            metadata={"tenant": "acme"},
+        )
+        await manager.add_message(role="user", content="First")
+
+        await manager.reset()
+        await manager.add_message(role="user", content="Fresh")
+
+        assert manager.metadata.get("tenant") == "acme"
+
+    @pytest.mark.asyncio
+    async def test_resume_after_reset_is_fresh(self, test_components):
+        """A cross-process resume after reset sees a fresh (not-found) conversation.
+
+        ``_save_state`` no-ops on a ``None`` state, so it cannot clear storage;
+        ``reset()`` deletes the persisted copy explicitly. Without the delete, a
+        resume here would resurrect the dropped tree.
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="First")
+        await manager.complete()  # persists the state
+        conversation_id = manager.conversation_id
+
+        await manager.reset()
+
+        with pytest.raises(ValueError, match="not found"):
+            await ConversationManager.resume(
+                conversation_id=conversation_id,
+                llm=test_components["llm"],
+                prompt_builder=test_components["builder"],
+                storage=test_components["storage"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_reset_before_any_message_is_noop(self, test_components):
+        """Reset on a never-materialized manager is a safe no-op."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        await manager.reset()  # must not raise
+
+        assert manager.messages == []
+        assert manager.current_node_id is None
+        assert manager.state is None
+

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ConversationManager.reset()` — roll a conversation back to its empty
+  pre-message state.** The first message *becomes* the tree's root node, so
+  there is no earlier node to `switch_to_node` to when undoing all the way back
+  through it. `reset()` is the "before turn 0" counterpart: it drops the message
+  tree, clears `state`, and deletes the persisted copy from storage — while
+  preserving the conversation's identity (its id, including an auto-generated
+  one captured from live state, plus seed metadata), so the next `add_message`
+  rebuilds a clean single-node tree under the same id. A cross-process `resume`
+  in the empty gap sees a fresh (not-found) conversation rather than resurrecting
+  the dropped tree. Note the whole tree is dropped — unlike `switch_to_node`,
+  the rolled-back branch is not preserved; use it only at the
+  conversation-start boundary, where nothing legitimately precedes the dropped
+  content.
 - **HuggingFace model-metadata binding (heuristic-primary, override-rich).**
   `HuggingFaceProvider` now resolves capabilities through the model-metadata
   substrate and lights up config-`model_profile_overrides` for **every** facet —

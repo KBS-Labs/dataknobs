@@ -535,7 +535,9 @@ factual_response = await bot.chat(
 
 DynaBot supports undoing turns and rewinding conversations to earlier points.
 Undo navigates the conversation tree to a checkpoint recorded before the turn,
-creating a new branch. The original path is preserved.
+creating a new branch. The original path is preserved — except when undoing or
+rewinding back through the very first turn, which clears the conversation to
+empty (see [Rewinding to the start](#rewinding-to-the-start) below).
 
 #### Undo the Last Turn
 
@@ -570,6 +572,22 @@ result = await bot.rewind_to_turn(context, 0)
 # Rewind to start (removes all turns)
 result = await bot.rewind_to_turn(context, -1)
 ```
+
+##### Rewinding to the start
+
+Undoing or rewinding all the way back through the **first** turn
+(`rewind_to_turn(context, -1)`, or `undo_last_turn` on a single-turn
+conversation) resets the conversation to genuinely empty: the conversation tree,
+memory, and memory banks are all cleared in lock-step, and the next `chat()`
+starts a fresh single-turn conversation reusing the same `conversation_id`.
+
+Unlike a later-turn undo — which preserves the undone turn as a sibling branch
+you can return to — the first turn's branch is **discarded**, because nothing
+precedes it to branch from. A start-boundary undo therefore reports
+`branching=False` and `remaining_turns=0`. After it, the conversation is empty
+but still active: a further `undo_last_turn` reports `"Nothing to undo"` (not
+`"No active conversation"`, which is reserved for a conversation that was never
+started or was evicted), and a `rewind_to_turn(context, -1)` is a clean no-op.
 
 Rewinding to the turn the conversation already sits at is a **clean no-op**:
 it returns a well-formed `UndoResult` with empty `undone_*` fields,

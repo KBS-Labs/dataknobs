@@ -1666,6 +1666,48 @@ class ConversationManager:
         """
         await self._save_state()
 
+    async def reset(self) -> None:
+        """Return the conversation to its genuinely-empty pre-message state.
+
+        Drops the message tree and clears :attr:`state` so the next
+        :meth:`add_message` rebuilds a fresh root — reusing this manager's
+        ``conversation_id`` and seed metadata (``_initial_metadata``), so the
+        rebuilt conversation keeps its identity. Also deletes the persisted
+        state from storage, so a cross-process :meth:`resume` before the next
+        message treats the conversation as fresh (not-yet-materialized) rather
+        than resurrecting the dropped tree.
+
+        This is the "before turn 0" counterpart to :meth:`switch_to_node`:
+        switching moves to an existing node, but the very first message
+        *becomes* the root node, so there is no earlier node to switch to when
+        undoing back through it. Callers that must roll a conversation all the
+        way back to empty use this instead.
+
+        Note:
+            The whole tree is dropped — the rolled-back branch is **not**
+            preserved (unlike :meth:`switch_to_node`, which keeps sibling
+            branches). This is acceptable only at the conversation-start
+            boundary, where nothing legitimately precedes the dropped content.
+
+        Example:
+            >>> await manager.reset()
+            >>> manager.messages
+            []
+            >>> manager.current_node_id is None
+            True
+        """
+        # Capture the id from live state (it may have been auto-generated at
+        # first materialization and never written back to _conversation_id) so
+        # the post-reset rebuild reuses the same identity.
+        conversation_id = self.conversation_id
+        self._conversation_id = conversation_id
+        self.state = None
+        # _save_state() no-ops on a None state, so it cannot clear storage;
+        # delete explicitly so a later resume sees "not found" (fresh) rather
+        # than the dropped tree.
+        if conversation_id is not None:
+            await self.storage.delete_conversation(conversation_id)
+
     @property
     def conversation_id(self) -> str | None:
         """Get conversation ID."""

@@ -1222,7 +1222,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         wizard_meta["history"] = fsm_state.get("history", [])
         manager.metadata["wizard"] = wizard_meta
 
-    def undo_to_checkpoint(self, checkpoint_node_id: str) -> None:
+    def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> None:
         """Revert wizard memory banks to the checkpoint.
 
         Iterates the wizard's ``MemoryBank`` instances and forwards
