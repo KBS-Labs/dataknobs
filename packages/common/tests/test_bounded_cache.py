@@ -133,9 +133,13 @@ class TestOnEvictHook:
         )
         cache["a"] = 1
         cache["b"] = 2
+        cache.pin("a")
         cache.clear()
         assert evicted == []
         assert len(cache) == 0
+        # ``clear`` reclaims pins too — a pin must not survive the entry it
+        # protected and guard a later value reinserted on the same key.
+        assert not cache.is_pinned("a")
 
 
 class TestPinning:
@@ -228,6 +232,39 @@ class TestPinning:
         cache.unpin("a")
         cache.unpin("a")
         assert not cache.is_pinned("a")
+
+    def test_pop_reclaims_pin_so_it_cannot_outlive_the_entry(self):
+        # A stale pin surviving a pop would permanently protect a *different*
+        # value later reinserted on the same key and defeat the size bound.
+        evicted: list[str] = []
+        cache: BoundedLRUCache[str, int] = BoundedLRUCache(
+            max_size=1, on_evict=lambda k, v: evicted.append(k)
+        )
+        cache["a"] = 1
+        cache.pin("a")
+        assert cache.pop("a") == 1  # teardown reclaims the pin too
+        assert not cache.is_pinned("a")
+
+        # Reinserting "a" gets a fresh, unpinned entry — a later write can
+        # evict it, so the bound is honored (no permanent overflow).
+        cache["a"] = 2
+        cache["b"] = 3  # "a" is LRU and unpinned -> evicted
+        assert "a" not in cache
+        assert "b" in cache
+        assert len(cache) == 1
+        assert evicted == ["a"]
+
+    def test_delete_reclaims_pin_so_it_cannot_outlive_the_entry(self):
+        cache: BoundedLRUCache[str, int] = BoundedLRUCache(max_size=1)
+        cache["a"] = 1
+        cache.pin("a")
+        del cache["a"]  # manual removal reclaims the pin
+        assert not cache.is_pinned("a")
+
+        cache["a"] = 2
+        cache["b"] = 3  # "a" unpinned again -> evictable
+        assert "a" not in cache
+        assert len(cache) == 1
 
 
 class TestMappingSurface:

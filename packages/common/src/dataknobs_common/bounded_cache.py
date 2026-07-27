@@ -22,7 +22,9 @@ in-flight operation is never evicted out from under itself.
 * **Eviction hook.** ``on_evict(key, value)`` fires exactly once per
   *automatic* eviction, with the evicted pair. Manual removal
   (``pop`` / ``del``) does **not** fire it — the caller is already doing
-  the removal and can co-drop satellite state itself.
+  the removal and can co-drop satellite state itself. The hook must **not**
+  mutate the cache (insert/evict re-entrantly); it is a co-drop notifier,
+  not a place to grow the cache being drained.
 * **Refcounted pinning.** ``pin(key)`` / ``unpin(key)`` protect an entry
   from eviction. Pins are counted so concurrent operations on the same
   key each hold their own pin and one finishing does not unpin the other.
@@ -31,7 +33,9 @@ in-flight operation is never evicted out from under itself.
   inserted. If every eligible entry is pinned (or is the just-inserted
   MRU entry), the cache is transiently allowed to exceed ``max_size``
   rather than evict an in-flight entry — the bound is a target and
-  in-flight correctness wins.
+  in-flight correctness wins. Removing an entry (``pop`` / ``del`` /
+  ``clear``) reclaims its pin bookkeeping too, so a pin can never outlive
+  the entry it protected and silently guard a later value reusing the key.
 
 **Concurrency.** Like the per-conversation dicts it replaces, the cache is
 lock-free and assumes a single-threaded event-loop caller: all mutation
@@ -160,17 +164,21 @@ class BoundedLRUCache(Generic[K, V]):
 
         Mirrors ``dict.pop``: raises ``KeyError`` when ``key`` is absent
         and no ``default`` was supplied. Manual removal is the caller's own
-        teardown, so the eviction hook deliberately does not run.
+        teardown, so the eviction hook deliberately does not run; the key's
+        pin bookkeeping is reclaimed so a stale pin can't outlive the entry.
         """
         if key in self._data:
+            self._pins.pop(key, None)
             return self._data.pop(key)
         if default is _MISSING:
             raise KeyError(key)
         return default
 
     def __delitem__(self, key: K) -> None:
-        # Manual removal — does not fire ``on_evict``.
+        # Manual removal — does not fire ``on_evict``; reclaims any pin so
+        # it can't outlive the entry and protect a later value on this key.
         del self._data[key]
+        self._pins.pop(key, None)
 
     def clear(self) -> None:
         """Drop all entries and pins without firing ``on_evict``."""
