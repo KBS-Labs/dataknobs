@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar
 
+from dataknobs_bots.bot.turn import ToolExecution
 from dataknobs_common import Capability, CapabilityMixin, close_if_owned
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -21,16 +22,21 @@ from dataknobs_llm.exceptions import (
 )
 from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.llm.message_sequence import (
-    pair_orphan_tool_calls,
     tool_call_signature,
 )
 from dataknobs_llm.tools import ToolExecutionContext
 
-from dataknobs_bots.bot.turn import ToolExecution
-
 from .base import ProcessResult, ReasoningStrategy, StrategyCapabilities, TurnHandle
 from .compaction import CompactionStrategy, build_compaction_strategy
 from .react_config import HistoryCompactionConfig, ReActReasoningConfig
+
+# The orphan-``tool_use`` pairing adapter is shared with ``DynaBot._finalize_turn``
+# (the universal Layer-A persistence chokepoint).  ReAct is the Layer-B caller:
+# it pairs *before* re-sending history to its mid-turn synthesis completion.
+# Aliased under the historical private name so ReAct's call sites are unchanged.
+from .tool_pairing import (
+    pair_orphan_tool_calls_on_manager as _pair_orphan_tool_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,32 +78,6 @@ class ReActTerminationReason(str, Enum):
 #: and optionally compose ``also_publish_to(bus, topic_prefix="react:")`` for
 #: cross-replica EventBus fan-out.
 REACT_TERMINATION_TOPIC = "react:turn:end"
-
-
-async def _pair_orphan_tool_calls(manager: Any) -> None:
-    """Append synthetic ``tool_result``s for any dangling ``tool_use``.
-
-    Thin ``ConversationManager`` adapter over the pure
-    :func:`pair_orphan_tool_calls` core.  Invoked on the synthesis branch of
-    every ReAct finalize path (i.e. when the loop ended abnormally —
-    duplicate break, max iterations, or a DynaBot-level tool-loop timeout —
-    rather than returning a stored final answer): reads history via the public
-    manager API, runs the pure core, and appends whatever tool results it
-    yields so the subsequent ``complete()``/``stream_complete()`` request is
-    structurally valid.
-
-    Args:
-        manager: Conversation manager whose history is about to be re-sent to
-            a synthesis completion call.
-    """
-    history = await manager.get_history()
-    for result in pair_orphan_tool_calls(history):
-        await manager.add_message(
-            role="tool",
-            content=result.content,
-            name=result.name,
-            tool_call_id=result.tool_call_id,
-        )
 
 
 def _is_truncated_tool_call(response: Any) -> bool:

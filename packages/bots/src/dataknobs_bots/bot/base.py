@@ -1605,6 +1605,22 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         Args:
             turn: Completed turn state with response content populated.
         """
+        # Layer A — universal orphan-tool_use pairing.  Every turn type and
+        # both delivery modes funnel through here, so this single guarded call
+        # guarantees no turn persists a dangling assistant ``tool_use`` (a hard
+        # 400 on Anthropic when the next turn replays the history).  It covers
+        # every monolithic-loop break route (cap / wall-clock timeout / budget)
+        # at one site — no per-loop, per-break-path patching.  Idempotent: the
+        # pure core no-ops on an already-paired history (happy-path, wizard,
+        # and ReAct — which already pairs before its in-turn synthesis, Layer
+        # B).  Skipped entirely for no-tools bots via the registry guard.
+        # Lazy import matches the existing ``..reasoning`` deferral pattern
+        # (avoids the bot ↔ reasoning circular import).
+        if self.tool_registry and turn.manager is not None:
+            from ..reasoning.tool_pairing import pair_orphan_tool_calls_on_manager
+
+            await pair_orphan_tool_calls_on_manager(turn.manager)
+
         # Update memory with assistant response
         if self.memory and turn.response_content:
             await self.memory.add_message(turn.response_content, role="assistant")
