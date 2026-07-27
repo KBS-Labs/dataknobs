@@ -34,6 +34,7 @@ from ..memory.base import Memory
 from ..middleware.base import Middleware
 from .config import DynaBotConfig
 from .context import BotContext
+from .tool_loop import _BufferedDelivery, _StreamingDelivery, _ToolLoopDelivery
 from .turn import ToolExecution, TurnMode, TurnState
 
 if TYPE_CHECKING:
@@ -1981,6 +1982,61 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         return max(self._remaining_loop_budget(loop_start), _MIN_FINALIZE_BUDGET)
 
+    async def _run_monolithic_tool_loop(
+        self,
+        turn: TurnState,
+        delivery: _ToolLoopDelivery,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Shared cap / timeout / execute / budget / re-call / cap-warning core.
+
+        Drives the one tool-execution lifecycle both non-phased delivery modes
+        share; the ``delivery`` owns the axes on which they differ (see
+        ``bot/tool_loop.py``).  The buffered caller drives this to exhaustion
+        (it yields nothing — the ``complete`` result lands on the delivery);
+        the streaming caller yields each re-stream chunk through.
+
+        This core does **not** finalize: the caller owns the finalize
+        chokepoint (buffered inline, streaming ``finally``-gated), so per-mode
+        finalize placement is unchanged.
+        """
+        extra = {
+            "conversation_id": getattr(turn.manager, "conversation_id", None),
+        }
+        loop_start = time.monotonic()
+        for _iteration in range(self._max_tool_iterations):
+            # Condition order is normalized; both original per-mode orders were
+            # side-effect-free boolean tests, so the result is identical.
+            if not self.tool_registry or not delivery.has_pending():
+                break
+            if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                logger.warning(
+                    delivery.MSG_TIMEOUT, self._tool_loop_timeout, extra=extra
+                )
+                break
+            await self._execute_tools(turn, delivery.pending_calls())
+            delivery.accumulate_usage(turn)
+            # Streaming clears pending here (before the budget gate) so a
+            # budget-break flags no orphan; buffered inherits a no-op.
+            delivery.clear_pending_after_execute()
+            remaining = self._remaining_loop_budget(loop_start)
+            if remaining <= 0:
+                logger.warning(
+                    delivery.MSG_BUDGET, self._tool_loop_timeout, extra=extra
+                )
+                break
+            chunks = await delivery.recall(turn, remaining)
+            if chunks is not None:
+                async for chunk in chunks:
+                    yield chunk
+            if delivery.broke:  # buffered re-call exceeded its per-call deadline
+                break
+        else:
+            # Loop completed without break — cap hit.
+            if self.tool_registry and delivery.has_pending():
+                logger.warning(
+                    delivery.MSG_CAP, self._max_tool_iterations, extra=extra
+                )
+
     def _llm_model_name(self) -> str:
         """Best-effort model identifier for a synthesized fallback response."""
         model = getattr(getattr(self.llm, "config", None), "model", None)
@@ -2488,81 +2544,26 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
                 # DynaBot-level tool execution loop.  Strategies that handle
                 # tool_calls internally (e.g. ReAct) return responses without
-                # tool_calls, so this loop is a no-op for them.
-                loop_start = time.monotonic()
-                for _iteration in range(self._max_tool_iterations):
-                    if (
-                        not self.tool_registry
-                        or not getattr(response, "tool_calls", None)
-                    ):
-                        break
-                    if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                        logger.warning(
-                            "Tool execution loop exceeded wall-clock timeout "
-                            "(%.1fs)",
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                    await self._execute_tools(turn, response.tool_calls)
-                    # Accumulate usage from intermediate LLM calls
-                    turn.accumulate_usage(response)
-                    # Enforce remaining loop budget on the LLM re-call
-                    remaining = self._remaining_loop_budget(loop_start)
-                    if remaining <= 0:
-                        logger.warning(
-                            "Tool loop budget exhausted before LLM re-call "
-                            "(%.1fs budget)",
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                    try:
-                        response = await asyncio.wait_for(
-                            turn.manager.complete(
-                                tools=list(self.tool_registry) or None,
-                                temperature=temperature or self.default_temperature,
-                                max_tokens=max_tokens or self.default_max_tokens,
-                                llm_config_overrides=llm_config_overrides,
-                            ),
-                            timeout=remaining,
-                        )
-                    except (TimeoutError, asyncio.TimeoutError):
-                        logger.warning(
-                            "LLM re-call exceeded remaining tool loop "
-                            "budget (%.1fs remaining of %.1fs)",
-                            remaining,
-                            self._tool_loop_timeout,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
-                        break
-                else:
-                    # Loop completed without break — cap hit
-                    if self.tool_registry and getattr(
-                        response, "tool_calls", None
-                    ):
-                        logger.warning(
-                            "Tool execution loop reached max iterations (%d) "
-                            "with pending tool_calls",
-                            self._max_tool_iterations,
-                            extra={
-                                "conversation_id": getattr(
-                                    turn.manager, "conversation_id", None
-                                ),
-                            },
-                        )
+                # tool_calls, so this loop is a no-op for them.  The shared
+                # core (``_run_monolithic_tool_loop``) owns the cap / timeout /
+                # execute / budget / re-call / cap-warning lifecycle; the
+                # buffered delivery owns the ``complete``-per-re-call axis and
+                # drives the core to exhaustion (it yields nothing).
+                buffered = _BufferedDelivery(
+                    response,
+                    recall_kwargs={
+                        "tools": list(self.tool_registry) or None,
+                        "temperature": temperature or self.default_temperature,
+                        "max_tokens": max_tokens or self.default_max_tokens,
+                        "llm_config_overrides": llm_config_overrides,
+                    },
+                    turn_timeout=self._tool_loop_timeout,
+                )
+                async for _chunk in self._run_monolithic_tool_loop(
+                    turn, buffered
+                ):
+                    pass  # buffered mode yields nothing
+                response = buffered.response
 
             turn.response = response
             # Terminating response still carrying tool_calls == the loop broke
@@ -2950,77 +2951,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
             # DynaBot-level tool execution loop for streaming.
             # Execute pending tool_calls, then re-stream until no
-            # more tool_calls or max iterations reached.
-            loop_start = time.monotonic()
-            for _iteration in range(self._max_tool_iterations):
-                if not pending_tool_calls or not self.tool_registry:
-                    break
-                if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                    logger.warning(
-                        "Streaming tool execution loop exceeded "
-                        "wall-clock timeout (%.1fs)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-                await self._execute_tools(turn, pending_tool_calls)
-                # Accumulate usage from intermediate streaming rounds
-                turn.accumulate_usage_from_stream()
-                pending_tool_calls = None
-
-                # Check remaining budget before starting LLM re-stream
-                remaining = self._remaining_loop_budget(loop_start)
-                if remaining <= 0:
-                    logger.warning(
-                        "Streaming tool loop budget exhausted before "
-                        "LLM re-stream (%.1fs budget)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-
-                async for chunk in turn.manager.stream_complete(
-                    tools=list(self.tool_registry) or None,
-                    temperature=temperature or self.default_temperature,
-                    max_tokens=max_tokens or self.default_max_tokens,
-                    llm_config_overrides=llm_config_overrides,
-                ):
-                    turn.stream_chunks.append(chunk.delta)
-                    if chunk.is_final or chunk.usage:
-                        turn.populate_from_final_stream_chunk(
-                            chunk, self.llm
-                        )
-                    if chunk.tool_calls and self.tool_registry:
-                        pending_tool_calls = chunk.tool_calls
-                        yield LLMStreamResponse(
-                            delta=chunk.delta,
-                            is_final=False,
-                            usage=chunk.usage,
-                            model=chunk.model,
-                        )
-                    else:
-                        yield chunk
-            else:
-                # Loop completed without break — cap hit
-                if pending_tool_calls and self.tool_registry:
-                    logger.warning(
-                        "Streaming tool execution loop reached max "
-                        "iterations (%d) with pending tool_calls",
-                        self._max_tool_iterations,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
+            # more tool_calls or max iterations reached.  The shared core
+            # (``_run_monolithic_tool_loop``) owns the cap / timeout /
+            # execute / budget / cap-warning lifecycle; the streaming delivery
+            # owns the re-stream axis and its chunks are yielded through.
+            streaming = _StreamingDelivery(
+                pending_tool_calls,
+                provider=self.llm,
+                has_tools=bool(self.tool_registry),
+                recall_kwargs={
+                    "tools": list(self.tool_registry) or None,
+                    "temperature": temperature or self.default_temperature,
+                    "max_tokens": max_tokens or self.default_max_tokens,
+                    "llm_config_overrides": llm_config_overrides,
+                },
+            )
+            async for chunk in self._run_monolithic_tool_loop(turn, streaming):
+                yield chunk
+            # Write pending back for the finally-gate orphan check below.
+            pending_tool_calls = streaming.pending
 
             stream_fully_consumed = True
 
