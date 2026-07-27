@@ -425,10 +425,11 @@ class TestCompactionUndoInteroperation:
             text_response("turn two done"),
             text_response("branched follow-up"),  # the post-undo turn
         ]
+        tool = _EchoTool()
         async with await BotTestHarness.create(
             bot_config=bot_config,
             main_responses=main_responses,
-            tools=[_EchoTool()],
+            tools=[tool],
         ) as harness:
             bot = harness.bot
             ctx = harness.context
@@ -441,7 +442,15 @@ class TestCompactionUndoInteroperation:
             history = await manager.get_history()
 
             # Confirm compaction actually fired on the tool turn: fewer tool
-            # observations survive than the 5 iterations driven.
+            # observations survive than the iterations driven. Pin that the
+            # loop genuinely ran all 5 iterations first, so a shortfall in
+            # ``tool_msgs`` is unambiguously attributable to compaction rather
+            # than to an early-terminating or reshaped loop (which would let
+            # ``len(tool_msgs) < 5`` pass with no compaction at all).
+            assert len(tool.calls) == 5, (
+                "the tool loop did not run 5 iterations -> the < 5 check "
+                "below would no longer prove compaction fired"
+            )
             tool_msgs = [m for m in history if m.role == "tool"]
             assert len(tool_msgs) < 5, (
                 "compaction did not fire -> the guard would be vacuous"
