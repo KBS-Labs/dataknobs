@@ -13,8 +13,11 @@ This module is the single thin adapter that binds that pure core to a
 synthetic ``tool_result`` messages it yields.  It is shared by every consumer
 that must guarantee a well-formed history before it is persisted or re-sent —
 both a strategy that re-completes mid-turn (ReAct's Layer B, *before* its
-synthesis call) and the universal turn-finalize chokepoint
-(``DynaBot._finalize_turn``'s Layer A, so *no* turn type persists an orphan).
+synthesis call) and the turn-finalize chokepoint (``DynaBot._finalize_turn``'s
+Layer A).  Layer A is gated on ``TurnState.tool_loop_left_pending_call`` so it
+runs only for the monolithic-loop break/cap routes that can leave an orphan;
+phased strategies pair their own orphan via Layer B and so never rely on it
+(see that field's CONTRACT note before adding a new orphan-producing path).
 Keeping it in one place is deliberate: re-typing the six lines into each caller
 is the duplicated orchestration the shared-behavior-extraction mandate rejects.
 """

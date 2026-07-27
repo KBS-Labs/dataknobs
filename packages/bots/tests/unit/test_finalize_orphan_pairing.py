@@ -285,10 +285,7 @@ class TestGroundedPassThrough:
         ) as harness:
             result = await harness.chat("Tell me something")
 
-            manager = harness.bot._conversation_managers[
-                harness.context.conversation_id
-            ]
-            history = await manager.get_history()
+            history = await harness.get_history()
 
         assert result.response == "Grounded answer"
         assert not _has_synthetic_pairing(history)
@@ -482,15 +479,10 @@ class TestWizardUnaffected:
         ) as harness:
             await harness.chat("My name is Alice")
 
-            # Read the persisted history the next turn would replay.  The
-            # cached manager's public ``get_history()`` returns the exact
-            # ``list[LLMMessage]`` — a legitimate persisted-state read for a
-            # state-invariant assertion (no public ``list[LLMMessage]``
-            # history accessor exists on the bot).
-            manager = harness.bot._conversation_managers[
-                harness.context.conversation_id
-            ]
-            history = await manager.get_history()
+            # Read the persisted history the next turn would replay — the
+            # exact ``list[LLMMessage]`` — via the harness's public accessor
+            # for a state-invariant assertion.
+            history = await harness.get_history()
 
         assert harness.wizard_stage == "done"
         assert not _has_synthetic_pairing(history)
