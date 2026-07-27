@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than evicting a live turn). Any read of a cached conversation marks it
   most-recently-used. Built on the new `dataknobs_common.BoundedLRUCache`
   primitive. A `0` or negative bound is rejected at config validation.
+- **Bounded per-conversation undo history (`max_undo_checkpoints`).** A
+  companion `DynaBotConfig.max_undo_checkpoints` field independently bounds the
+  undo checkpoints retained per conversation. The default is `None` (unbounded
+  — every turn's checkpoint is kept for the life of the conversation, exactly
+  as before); a positive value tail-retains only the most recent N checkpoints,
+  trimming the oldest from the front so a single very long conversation cannot
+  grow its undo history without limit. `undo_last_turn` (relative) is
+  unaffected; `rewind_to_turn` to a turn whose checkpoint has been trimmed
+  raises a clear "beyond the retained undo window" error rather than silently
+  landing on the wrong node. A `0` or negative bound is rejected at config
+  validation.
 - **Structured ReAct termination reason.** Every ReAct turn now surfaces *why*
   it ended as always-on `reasoning_termination` conversation metadata
   (`{"strategy": "react", "reason": <value>, "iterations_used": <int>}`),
