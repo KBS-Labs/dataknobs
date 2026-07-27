@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `BoundedLRUCache[K, V]` in `dataknobs_common.bounded_cache` (exported from
+  the top-level `dataknobs_common` namespace): a small, access-ordered LRU
+  cache for bounding a per-key in-memory cache in a long-running process.
+  `max_size: int | None` sets the bound (`None`, the default, never evicts —
+  a pure opt-out preserving unbounded behavior); every read (`cache[key]` /
+  `cache.get(key)`) and write marks the entry most-recently-used, so eviction
+  always targets genuinely cold entries. An optional `on_evict(key, value)`
+  hook fires exactly once per *automatic* eviction (never on manual `pop` /
+  `del` / `clear`) so a caller can co-drop satellite state keyed by the same
+  key. Refcounted `pin(key)` / `unpin(key)` protect an entry from eviction;
+  eviction never targets the most-recently-used entry, so a write never
+  evicts the entry it just inserted, and when every eligible entry is pinned
+  the cache is transiently allowed to exceed `max_size` rather than evict an
+  in-flight entry. Lock-free — assumes a single-threaded event-loop caller
+  (all mutation, and thus eviction, happens synchronously between awaits).
 - `is_ollama_model_usable(model_name, *, host, port, prompt, num_predict,
   timeout)` and the `requires_ollama_usable_model(model_name, *, host, port)`
   pytest marker in `dataknobs_common.testing`: a stronger Ollama readiness
