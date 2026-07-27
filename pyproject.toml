@@ -39,7 +39,7 @@ dev = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.5.0",
     "markdown>=3.8.1",  # GHSA-5wmx-573v-2qwq (XSS, CVSS 7.5) fixed in 3.8.1 — transitive via mkdocs-material; its own constraint `markdown~=3.2` permits the vulnerable version, so explicit floor required
-    "pymdown-extensions>=10.21.3",  # GHSA-62q4-447f-wv8h (CVSS 4.3) fixed in 10.21.3; also sweeps GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1) — transitive via mkdocs-material; explicit floor required for same reason
+    "pymdown-extensions>=11.0.0",  # GHSA-9xwg-3r6f-jcx2 / CVE-2026-61632 (path traversal in the b64 image-inlining extension, CVSS 5.3) fixed in 11.0.0; extends the prior >=10.21.3 floor (GHSA-62q4-447f-wv8h, CVSS 4.3) and sweeps GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1) — transitive via mkdocs-material, whose own constraint permits the vulnerable version, so an explicit floor is required
     "mkdocstrings[python]>=0.24.0",
     "mkdocs-monorepo-plugin>=1.0.5",
     "mkdocs-awesome-pages-plugin>=2.9.0",
@@ -268,6 +268,7 @@ ignore = [
     "PLR0911", # Too many return statements (configured at 6)
     "PLR0912", # Too many branches (configured at 12)
     "PLR0913", # Too many arguments to function call
+    "PLR0917", # Too many positional arguments (same family as PLR0913; project accepts many-parameter constructors/builders)
     "PLR0915", # Too many statements (configured at 50)
     "PLR2004", # Magic value used in comparison
     "PLR5501", # Use elif instead of else-if - style preference

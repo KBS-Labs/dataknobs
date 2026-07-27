@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 
 
 # Type aliases for hook callbacks
-StageCallback = Callable[[str, dict[str, Any]], Union[None, Awaitable[None]]]
-CompleteCallback = Callable[[dict[str, Any]], Union[None, Awaitable[None]]]
+StageCallback = Callable[[str, dict[str, Any]], Union[Awaitable[None], None]]
+CompleteCallback = Callable[[dict[str, Any]], Union[Awaitable[None], None]]
 ErrorCallback = Callable[
-    [str, dict[str, Any], Exception], Union[None, Awaitable[None]]
+    [str, dict[str, Any], Exception], Union[Awaitable[None], None]
 ]
 
 # Re-export so existing consumers can ``from dataknobs_bots.reasoning.wizard_hooks
