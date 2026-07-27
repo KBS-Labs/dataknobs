@@ -1728,6 +1728,11 @@ reasoning:
     strategy: window      # "window" (default) or "summarize"
 ```
 
+> Building a long-running tool bot? See the LLM Best Practices guide's
+> [Productionizing a Tool-Using Bot](../../llm/guides/best-practices.md#productionizing-a-tool-using-bot)
+> checklist for which provider-boundary protections you get for free and when to
+> opt into `history_compaction` and `truncation_retry_max_tokens`.
+
 **Configuration Options:**
 - `max_iterations` (int): Maximum reasoning loops (default: 5)
 - `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
@@ -3826,6 +3831,11 @@ reasoning:
   max_iterations: 5
   verbose: false
   store_trace: false
+  history_compaction:               # Recommended for long tool loops
+    enabled: true
+    keep_recent_iterations: 3
+    budget_fraction: 0.75
+  truncation_retry_max_tokens: 8192  # Optional: complete (not just abandon) a truncated tool payload
 
 # Tools
 tool_definitions:
