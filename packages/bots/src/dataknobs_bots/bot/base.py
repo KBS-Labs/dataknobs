@@ -1398,6 +1398,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         if turn.is_greet:
             turn.manager = await self._get_or_create_conversation(turn.context)
+            # The pin is now held for this turn — mark it so the driver's
+            # ``finally`` releases exactly this turn's pin (see below).
+            turn.pinned_conversation = True
             # Bridge plugin_data to LLM middleware
             if turn.manager.state is not None:
                 turn.manager.state.turn_data = turn.plugin_data
@@ -1410,6 +1413,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         # Get or create conversation manager
         turn.manager = await self._get_or_create_conversation(turn.context)
+        # The pin is now held for this turn — mark it so the driver's
+        # ``finally`` releases exactly this turn's pin (see below).
+        turn.pinned_conversation = True
 
         # Record tree position before the turn for undo support.
         # Store (node_id, memory_count) — node_id for tree navigation,
@@ -2298,12 +2304,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         finally:
             # Release the in-flight pin taken in _get_or_create_conversation.
             # This is the one method every turn driver calls inside its
-            # ``finally``, so the unpin runs on every path — success, error,
-            # and early stream-abandon. ``unpin`` is idempotent, so a turn
-            # that raised before pinning (e.g. the greet no-strategy
-            # early-exit, which never calls _get_or_create_conversation)
-            # unpins a no-op.
-            self._conversation_managers.unpin(turn.context.conversation_id)
+            # ``finally``, so the release runs on every path — success, error,
+            # and early stream-abandon. Guard it on the per-turn flag: pins are
+            # a global per-key refcount, so a turn that reached here WITHOUT
+            # pinning (the greet no-strategy early-exit, or an exception in
+            # _prepare_turn before the pin point) must NOT decrement a pin it
+            # never took — doing so would drop a *concurrent* same-id turn's
+            # pin and let its live conversation be evicted mid-turn. Releasing
+            # only this turn's own pin is what makes the refcounted
+            # "concurrent turns each hold their own" contract actually hold.
+            if turn.pinned_conversation:
+                self._conversation_managers.unpin(turn.context.conversation_id)
 
     async def _call_on_tool_executed_middleware(
         self, execution: ToolExecution, context: BotContext
@@ -3312,8 +3323,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Check cache. Reading via ``[]`` touches the entry most-recently-used
         # (so an active conversation stays warm), and pinning it marks the
         # conversation in-flight for the duration of this turn — the pin is
-        # released in ``_call_finally_turn_middleware``. Pins are refcounted,
-        # so concurrent turns on the same id each hold their own.
+        # released in ``_call_finally_turn_middleware``, gated on the turn's
+        # ``pinned_conversation`` flag so exactly this turn's pin is dropped.
+        # Pins are refcounted, so concurrent turns on the same id each hold
+        # their own and one finishing never unpins another.
         if conv_id in self._conversation_managers:
             manager = self._conversation_managers[conv_id]
             self._conversation_managers.pin(conv_id)

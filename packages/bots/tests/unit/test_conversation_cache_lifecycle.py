@@ -197,6 +197,76 @@ class TestBoundedManagerCache:
             await asyncio.wait_for(task_a, timeout=5.0)
             assert "conv-a" in bot._conversation_managers
 
+    @pytest.mark.asyncio
+    async def test_over_unpin_from_same_id_turn_spares_the_pinned_turn(self):
+        # Reproduce-first for the pin/unpin refcount asymmetry: a SECOND turn
+        # on the same conversation id whose ``_prepare_turn`` raises BEFORE it
+        # pins (here an ``on_turn_start`` that raises) still reaches the turn
+        # driver's ``finally``. Pins are a global per-key refcount, so an
+        # unconditional release there would decrement the pin the FIRST (still
+        # in-flight) turn holds — dropping conv-x to zero and letting its live
+        # conversation be evicted mid-turn. The per-turn ``pinned_conversation``
+        # flag releases only the releasing turn's OWN pin, so the failing turn
+        # (which never pinned) leaves the in-flight turn's pin intact.
+        #
+        # Without the per-turn guard this test fails twice over: the
+        # ``is_pinned`` assertion trips immediately, and conv-x is then evicted
+        # by conv-y's insert under the size-1 bound.
+        reached_gate = asyncio.Event()
+        release_gate = asyncio.Event()
+
+        class _GateAndRaise(Middleware):
+            """Gate the keep-alive turn; fail the raise-before-pin turn early.
+
+            ``on_turn_start`` runs in ``_prepare_turn`` *before* the pin, so
+            raising there models a turn that reaches the driver ``finally``
+            without ever pinning. ``after_turn`` runs after the pin is taken,
+            so gating there keeps the first turn in-flight and pinned.
+            """
+
+            async def on_turn_start(self, turn):
+                if turn.message == "raise-before-pin":
+                    raise RuntimeError("boom before pin")
+                return None
+
+            async def after_turn(self, turn):
+                if turn.message == "keep-alive":
+                    reached_gate.set()
+                    await release_gate.wait()
+
+        bot_config = {**_BOT_CONFIG, "max_cached_conversations": 1}
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=["reply-a", "reply-y"],
+            middleware=[_GateAndRaise()],
+        ) as harness:
+            bot = harness.bot
+            ctx_x = BotContext(conversation_id="conv-x", client_id="test")
+
+            # Turn A pins conv-x and suspends mid-turn (after_turn gate).
+            task_a = asyncio.create_task(bot.chat("keep-alive", ctx_x))
+            await asyncio.wait_for(reached_gate.wait(), timeout=5.0)
+            assert bot._conversation_managers.is_pinned("conv-x")
+
+            # Turn B on the SAME id fails before it can pin; its ``finally``
+            # must not release the pin turn A still holds.
+            with pytest.raises(RuntimeError, match="boom before pin"):
+                await bot.chat("raise-before-pin", ctx_x)
+            assert bot._conversation_managers.is_pinned("conv-x")  # A's pin held
+
+            # Consequence: a new conversation inserted under the size-1 bound
+            # must not evict the still-pinned, in-flight conv-x (nor co-drop
+            # its checkpoints) — the bound is exceeded transiently instead.
+            ctx_y = BotContext(conversation_id="conv-y", client_id="test")
+            await bot.chat("normal-y", ctx_y)
+            assert "conv-x" in bot._conversation_managers  # pinned -> survived
+            assert "conv-x" in bot._turn_checkpoints  # checkpoints intact
+
+            # Release conv-x; it completes its own turn intact.
+            release_gate.set()
+            await asyncio.wait_for(task_a, timeout=5.0)
+            assert "conv-x" in bot._conversation_managers
+
 
 class TestDefaultUnboundedNoRegression:
     """With neither bound set, both caches grow unbounded exactly as before."""
