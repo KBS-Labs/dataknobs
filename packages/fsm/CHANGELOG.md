@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `pymdown-extensions` requirement (docs dev
+  dependency) from `>=10.21.3` to `>=11.0.0` to exclude
+  GHSA-9xwg-3r6f-jcx2 / CVE-2026-61632 (path traversal in the b64
+  image-inlining extension, CVSS 5.3), flagged at the floor resolve by
+  the `dependency-update` workflow. The floor preserves the prior
+  sweep of GHSA-62q4-447f-wv8h (CVSS 4.3, 10.21.3) and
+  GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1). `pymdown-extensions` is a
+  transitive dependency of `mkdocs-material` whose own constraint
+  permits the vulnerable version, so an explicit floor is required;
+  the identical floor in the workspace-root docs dev dependencies was
+  bumped in lockstep.
+
 ## v0.3.1 - 2026-07-20
 
 ## v0.3.0 - 2026-07-15
