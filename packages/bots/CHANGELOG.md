@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long-running process that cleared conversations still accumulated checkpoint
   state without bound. Both cached structures are now reclaimed together through
   a single teardown helper (`_drop_conversation_cache`), making it structurally
-  impossible for the two lifetimes to drift apart again.
+  impossible for the two to drift apart at teardown again.
 
 - **`DynaBot` now bounds the terminal synthesis of a phased reasoning turn**
   (ReAct) by the wall-clock budget left unspent by `tool_loop_timeout`.
