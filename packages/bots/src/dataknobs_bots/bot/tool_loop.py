@@ -36,7 +36,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_llm import LLMStreamResponse
 
@@ -66,6 +66,29 @@ class _ToolLoopDelivery(ABC):
     #: Buffered sets this ``True`` when its re-call exceeds the per-call
     #: deadline, signalling the core to break; streaming never sets it.
     broke: bool = False
+
+    #: The per-mode warning strings every concrete delivery must supply.
+    _REQUIRED_MESSAGES: ClassVar[tuple[str, ...]] = (
+        "MSG_TIMEOUT",
+        "MSG_BUDGET",
+        "MSG_CAP",
+    )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # Fail at subclass-*definition* time — not only at the first
+        # ``logger.warning`` that reaches for a message — if a concrete
+        # delivery omits one of the mandatory warning-string constants.
+        super().__init_subclass__(**kwargs)
+        missing = [
+            name
+            for name in _ToolLoopDelivery._REQUIRED_MESSAGES
+            if not isinstance(getattr(cls, name, None), str)
+        ]
+        if missing:
+            raise TypeError(
+                f"{cls.__name__} must define class-level message strings: "
+                f"{', '.join(missing)}"
+            )
 
     @abstractmethod
     def has_pending(self) -> bool:
