@@ -15,12 +15,16 @@ for a test that verifies internal resource-lifecycle behavior.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from dataknobs_bots.bot.context import BotContext
 from dataknobs_bots.middleware import Middleware
 from dataknobs_bots.testing import BotTestHarness
+from dataknobs_llm.conversations.storage import get_node_by_id
+from dataknobs_llm.testing import text_response, tool_call_response
+from dataknobs_llm.tools.base import Tool
 
 _BOT_CONFIG = {
     "llm": {"provider": "echo", "model": "test"},
@@ -346,6 +350,133 @@ class TestCheckpointCap:
             # A retained turn still rewinds through the offset without error.
             result = await bot.rewind_to_turn(ctx, 2)
             assert result is not None
+
+
+class _EchoTool(Tool):
+    """Minimal tool: records its calls, echoes its input back.
+
+    Drives a multi-iteration ReAct loop so in-loop history compaction has a
+    body to compact.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="echo", description="Echoes the input back")
+        self.calls: list[dict[str, Any]] = []
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        }
+
+    async def execute(self, **kwargs: Any) -> Any:
+        kwargs.pop("_context", None)
+        self.calls.append(kwargs)
+        return {"echoed": kwargs.get("text", "")}
+
+
+class TestCompactionUndoInteroperation:
+    """In-loop history compaction must never dangle an undo checkpoint.
+
+    A turn's undo checkpoint is the ``current_node_id`` recorded *before* that
+    turn's user message is added — i.e. the prior turn's terminal node. ReAct
+    in-loop compaction (``compact_history``) anchors at the *last user message*
+    and only compacts the body after it (this turn's tool-loop iterations),
+    retaining the entire head verbatim, and is non-destructive (dropped nodes
+    stay in the tree as an abandoned branch). So a checkpoint anchored in the
+    retained head can never be pruned by a later turn's compaction.
+
+    This is a regression *guard*: it passes today and after. If a future
+    compaction variant became destructive or moved its anchor past a
+    checkpoint node, ``switch_to_node`` would raise "Node not found" and
+    ``undo_last_turn`` here would fail — that is the guard firing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_undo_resolves_checkpoint_after_compacting_tool_turn(self):
+        bot_config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 8,
+                # A low absolute budget forces the loop to compact. The
+                # ``window`` strategy needs no extra LLM calls, so the main
+                # scripted queue is consumed only by the turn itself.
+                "history_compaction": {
+                    "enabled": True,
+                    "history_token_budget": 30,
+                    "keep_recent_iterations": 1,
+                    "strategy": "window",
+                },
+            },
+        }
+        # Turn 1: a plain text answer (no tools) -> ends at a non-root node
+        # that becomes turn 2's checkpoint anchor. Turn 2: a 5-iteration tool
+        # loop whose body compaction trims.
+        main_responses = [
+            text_response("turn one done"),
+            *(
+                tool_call_response("echo", {"text": f"step {i}"})
+                for i in range(5)
+            ),
+            text_response("turn two done"),
+            text_response("branched follow-up"),  # the post-undo turn
+        ]
+        tool = _EchoTool()
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=main_responses,
+            tools=[tool],
+        ) as harness:
+            bot = harness.bot
+            ctx = harness.context
+            conv_id = ctx.conversation_id
+
+            await harness.chat("first message")  # turn 0
+            await harness.chat("do the multi-step task")  # turn 1 (compacts)
+
+            manager = bot.get_conversation_manager(conv_id)
+            history = await manager.get_history()
+
+            # Confirm compaction actually fired on the tool turn: fewer tool
+            # observations survive than the iterations driven. Pin that the
+            # loop genuinely ran all 5 iterations first, so a shortfall in
+            # ``tool_msgs`` is unambiguously attributable to compaction rather
+            # than to an early-terminating or reshaped loop (which would let
+            # ``len(tool_msgs) < 5`` pass with no compaction at all).
+            assert len(tool.calls) == 5, (
+                "the tool loop did not run 5 iterations -> the < 5 check "
+                "below would no longer prove compaction fired"
+            )
+            tool_msgs = [m for m in history if m.role == "tool"]
+            assert len(tool_msgs) < 5, (
+                "compaction did not fire -> the guard would be vacuous"
+            )
+
+            # The checkpoint recorded for turn 1 is turn 0's terminal node,
+            # which lives in the retained head of turn 1's compaction. It must
+            # still resolve in the tree (non-destructive compaction).
+            log = bot._turn_checkpoints[conv_id]
+            checkpoint_node_id = log.entries[-1][0]
+            # A real intermediate node (turn 0's terminal), not the trivially
+            # always-resolvable root — the guard exercises a node compaction
+            # could plausibly have touched.
+            assert checkpoint_node_id != ""
+            assert (
+                get_node_by_id(manager.state.message_tree, checkpoint_node_id)
+                is not None
+            ), "compaction dangled the undo checkpoint node"
+
+            # End to end: undo navigates to that checkpoint node without
+            # raising "Node not found" -> the anchor is resolvable post-compaction.
+            result = await bot.undo_last_turn(ctx)
+            assert result is not None
+            # The tree is intact enough to branch a fresh turn from the checkpoint.
+            follow_up = await harness.chat("alternative follow-up")
+            assert follow_up is not None
 
 
 class TestDefaultUnboundedNoRegression:

@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DynaBot.rewind_to_turn` to the turn a conversation already sits at is now a
+  clean no-op** instead of raising a misleading "Nothing to undo". Rewinding to
+  the current turn computes zero undo work, and the trailing empty-result guard
+  had turned that legal no-op — and a never-started conversation — into an
+  error. It now returns a well-formed `UndoResult` (empty `undone_*` fields,
+  `branching=False`, correct `remaining_turns`) for an active conversation, and
+  raises the accurate "No active conversation" when there is no manager
+  (mirroring `undo_last_turn`). `undo_last_turn`'s own "Nothing to undo" (an
+  empty relative undo) is unchanged.
+
 - **`DynaBot.clear_conversation` now reclaims a conversation's undo
   checkpoints, not just its cached manager.** The per-conversation
   `_turn_checkpoints` entry was never pruned — `clear_conversation` dropped the

@@ -3946,18 +3946,27 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Revert banks via backend-managed checkpointing
         self._undo_banks_to_checkpoint(checkpoint_node_id)
 
-        # Count remaining turns
-        remaining_messages = manager.messages
-        user_count = sum(
-            1 for m in remaining_messages
-            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "user"
-        )
-
         return UndoResult(
             undone_user_message=undone_user,
             undone_bot_response=undone_bot,
-            remaining_turns=user_count,
+            remaining_turns=self._count_remaining_turns(manager),
             branching=True,
+        )
+
+    @staticmethod
+    def _count_remaining_turns(manager: ConversationManager) -> int:
+        """Count the user messages on the manager's active path.
+
+        Equivalent to the number of turns remaining after an undo/rewind.
+        Shared by ``undo_last_turn`` (after a rollback) and ``rewind_to_turn``
+        (for a zero-work no-op, where no rollback ran) so both report the
+        remaining-turn count the same way.
+        """
+        return sum(
+            1
+            for m in manager.messages
+            if (m.get("role") if isinstance(m, dict)
+                else getattr(m, "role", "")) == "user"
         )
 
     async def rewind_to_turn(
@@ -4011,12 +4020,29 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             )
 
         turns_to_undo = total - target_count
-        result = None
-        for _ in range(turns_to_undo):
-            result = await self.undo_last_turn(context)
 
-        if result is None:
-            raise ValueError("Nothing to undo")
+        # Rewinding to the turn the conversation already sits at is zero work:
+        # the target is the current state, so nothing is undone. Return a
+        # well-formed no-op result rather than raising — but still require an
+        # active conversation (mirroring ``undo_last_turn``) so a never-started
+        # or evicted conversation reports the clear "No active conversation"
+        # instead of the misleading "Nothing to undo".
+        if turns_to_undo == 0:
+            manager = self._conversation_managers.get(conv_id)
+            if manager is None or manager.state is None:
+                raise ValueError("No active conversation")
+            return UndoResult(
+                undone_user_message="",
+                undone_bot_response="",
+                remaining_turns=self._count_remaining_turns(manager),
+                branching=False,
+            )
+
+        # At least one turn to undo. Run the first outside the loop so the
+        # returned ``UndoResult`` is always well-typed (never ``None``).
+        result = await self.undo_last_turn(context)
+        for _ in range(turns_to_undo - 1):
+            result = await self.undo_last_turn(context)
         return result
 
     def _restore_wizard_from_node(

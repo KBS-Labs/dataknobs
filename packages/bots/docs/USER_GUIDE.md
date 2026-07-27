@@ -571,6 +571,21 @@ result = await bot.rewind_to_turn(context, 0)
 result = await bot.rewind_to_turn(context, -1)
 ```
 
+Rewinding to the turn the conversation already sits at is a **clean no-op**:
+it returns a well-formed `UndoResult` with empty `undone_*` fields,
+`branching=False`, and the correct `remaining_turns` — it does not raise.
+Rewinding past the valid range still raises `ValueError` ("Invalid turn N:
+conversation has M turns"), and rewinding on a conversation that was never
+started raises "No active conversation".
+
+> **Bounding undo history.** By default every turn's checkpoint is retained
+> for the life of the conversation. On a long-running server you can cap this
+> with `max_undo_checkpoints` (see [Bounding Per-Conversation
+> State](configuration.md#bounding-per-conversation-state)). When a cap is set,
+> `undo_last_turn` is unaffected, but `rewind_to_turn` to a turn whose
+> checkpoint has been trimmed raises a clear "beyond the retained undo window"
+> error instead of landing on the wrong node.
+
 #### UndoResult
 
 Both methods return an `UndoResult` dataclass:
