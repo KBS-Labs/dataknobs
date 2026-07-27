@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-27T19:12:27Z",
+  "timestamp": "2026-07-27T19:47:26Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.32 (Homebrew 2026-07-23 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/monolithic-tool-loop-unification",
-  "git_commit": "940e3cc05658f95afda60ae63b85601f3859fc71",
+  "git_branch": "sbk/first-turn-undo-checkpoint-anchor-W1",
+  "git_commit": "8dd6819e8b9c6c37d485239c64bb88a3cc175914",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
