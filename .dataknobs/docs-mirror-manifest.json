@@ -116,6 +116,10 @@
         {
           "package": "TRANSACTIONS.md",
           "site": "transactions.md"
+        },
+        {
+          "package": "USER_STATE.md",
+          "site": "user-state.md"
         }
       ],
       "transclude": [
