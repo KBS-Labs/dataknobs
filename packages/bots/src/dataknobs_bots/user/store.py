@@ -1,0 +1,749 @@
+"""Per-user cross-session state coordinator.
+
+:class:`UserStateStore` and :class:`AsyncUserStateStore` coordinate a user's
+state across sessions. They scope an injected
+:class:`~dataknobs_data.SyncDatabase` / :class:`~dataknobs_data.AsyncDatabase`
+by ``(namespace, tenant, user_id, section)`` over two section shapes:
+
+- **document** sections — one record per user, addressed by a deterministic
+  id derived from the scope tuple (opacity-safe: the opaque ``user_id`` is only
+  ever a hash input or a filter value, never split into a delimited key);
+- **collection** sections — many records per user, addressed by
+  backend-generated ids and read by filter.
+
+Writes are optimistic-concurrency aware (``expected_version`` compare-and-set),
+tenant-scoped when a :class:`~dataknobs_common.tenancy.BoundTenantContext` is
+injected, and emit a metadata-only delta event through an in-process
+:class:`~dataknobs_common.callbacks.CallbackRegistry` (optionally fanned out to
+an :class:`~dataknobs_common.events.EventBus`).
+
+The sync and async variants share a set of pure helpers (id derivation, scope
+stamping, read-filter composition, snapshot visibility) so their behaviour
+cannot drift; each variant owns only its ``await`` / non-``await`` I/O. The
+coordinator ships **zero** domain sections — the consumer declares every
+section (see :class:`~dataknobs_bots.user.config.UserStateStoreConfig`).
+
+Example:
+    ```python
+    store = await AsyncUserStateStore.from_config(
+        {
+            "backend": "memory",
+            "namespace": "acme",
+            "sections": [
+                {"name": "preferences", "kind": "document"},
+                {"name": "alerts", "kind": "collection"},
+            ],
+        }
+    )
+    try:
+        await store.put_document("user-42", "preferences", {"theme": "dark"})
+        await store.add_record("user-42", "alerts", {"text": "welcome"})
+        view = await store.snapshot("user-42")
+    finally:
+        await store.close()
+    ```
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Mapping
+from dataclasses import replace
+from datetime import datetime, timezone
+from typing import Any, ClassVar
+
+from dataknobs_bots.user.config import (
+    SectionKind,
+    Sensitivity,
+    UserStateSectionSpec,
+    UserStateStoreConfig,
+)
+from dataknobs_common.callbacks import CallbackRegistry
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+)
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_common.tenancy import SingleTenantContext, TenantContext
+from dataknobs_data import (
+    Filter,
+    Operator,
+    Query,
+    Record,
+    async_database_factory,
+    database_factory,
+)
+
+#: Topic fired on the callback registry (and any composed EventBus) after a
+#: successful write. Payloads are metadata-only — a section's values are never
+#: emitted, so a SENSITIVE section's contents cannot leak into an observer.
+SECTION_WRITTEN_TOPIC = "user_state:section_written"
+
+#: Coordinator-owned fields stamped onto every record. Stripped from the
+#: whole-user :meth:`snapshot` view so a consumer sees only its own payload,
+#: and skipped by opacity-safe scope comparison.
+_RESERVED_FIELDS: frozenset[str] = frozenset(
+    {"user_id", "section", "tenant_id", "_section_version", "_written_at"}
+)
+
+
+# --------------------------------------------------------------------- #
+# Pure helpers — the shared, synchronous core both variants call.
+# --------------------------------------------------------------------- #
+
+
+def _document_id(
+    namespace: str, tenant_id: str | None, user_id: str, section: str
+) -> str:
+    """Derive a deterministic document id from the scope tuple.
+
+    Each component is length-prefixed before hashing so no two distinct
+    tuples collide (a raw-separator concatenation would collide when a
+    component contains the separator). The opaque ``user_id`` is only ever a
+    hash *input* here — it is never split on a delimiter — so an id
+    containing ``/`` or ``://`` is structurally safe.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    for component in (namespace, tenant_id or "", user_id, section):
+        encoded = component.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _scope_fields(
+    user_id: str, section: str, tenant_id: str | None, section_version: int
+) -> dict[str, Any]:
+    """Return the coordinator-owned scope fields stamped onto a record.
+
+    Pure: the wall-clock ``_written_at`` stamp is added by the write methods
+    at the I/O boundary, not here, so this stays deterministic and testable.
+    ``tenant_id`` is stamped only when tenant-bound (single-tenant records
+    carry no ``tenant_id`` field, matching the read filter).
+    """
+    fields: dict[str, Any] = {
+        "user_id": user_id,
+        "section": section,
+        "_section_version": section_version,
+    }
+    if tenant_id is not None:
+        fields["tenant_id"] = tenant_id
+    return fields
+
+
+def _read_filter(
+    query: Query | None, user_id: str, section: str, tenant_id: str | None
+) -> Query:
+    """AND-compose the scope filters into a caller's query.
+
+    ``user_id`` and ``section`` are coordinator-owned: any caller-supplied
+    filter on those fields is dropped and replaced, so a caller cannot broaden
+    scope to another user. ``tenant_id`` is **explicit-filter-wins** — a
+    caller passing an explicit ``tenant_id`` filter reads across tenants (the
+    admin escape hatch, mirroring ``RAGKnowledgeBase._resolve_read_filter``);
+    otherwise the bound tenant is AND-composed. Returns a fresh
+    :class:`~dataknobs_data.Query` (the caller's is never mutated), preserving
+    its sort / limit / offset / projection.
+    """
+    base = query if query is not None else Query()
+    caller_filters = [
+        f for f in base.filters if f.field not in ("user_id", "section")
+    ]
+    caller_has_tenant = any(f.field == "tenant_id" for f in caller_filters)
+    scoped = [
+        Filter("user_id", Operator.EQ, user_id),
+        Filter("section", Operator.EQ, section),
+    ]
+    if tenant_id is not None and not caller_has_tenant:
+        scoped.append(Filter("tenant_id", Operator.EQ, tenant_id))
+    return replace(base, filters=scoped + caller_filters)
+
+
+def _verify_scope(
+    record: Record, user_id: str, section: str, tenant_id: str | None
+) -> None:
+    """Raise if ``record`` does not belong to the given scope.
+
+    Guards collection mutation-by-id: a record id from another user's scope
+    cannot be updated (which would re-stamp it into the caller's scope) or
+    deleted through the coordinator. Document sections need no such check —
+    their id is derived from the scope tuple, so an id mismatch simply reads
+    a different record.
+    """
+    if (
+        record.get_value("user_id") != user_id
+        or record.get_value("section") != section
+        or record.get_value("tenant_id") != tenant_id
+    ):
+        raise ValueError(
+            "Target record does not belong to the given user/section scope."
+        )
+
+
+def _visible_sections(
+    specs: tuple[UserStateSectionSpec, ...], include_sensitive: bool
+) -> list[UserStateSectionSpec]:
+    """Select the sections a :meth:`snapshot` surfaces.
+
+    ``SENSITIVE`` sections are omitted from the default view; pass
+    ``include_sensitive=True`` to include them.
+    """
+    if include_sensitive:
+        return list(specs)
+    return [s for s in specs if s.sensitivity != Sensitivity.SENSITIVE]
+
+
+def _public_data(record: Record) -> dict[str, Any]:
+    """Return a record's payload with the coordinator-owned fields stripped."""
+    return {k: v for k, v in record.data.items() if k not in _RESERVED_FIELDS}
+
+
+def _utc_now_iso() -> str:
+    """Current UTC timestamp as an ISO-8601 string (the ``_written_at`` stamp)."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+# --------------------------------------------------------------------- #
+# Shared non-I/O logic (mixed in LAST so StructuredConfigConsumer stays first).
+# --------------------------------------------------------------------- #
+
+
+class _UserStateStoreCommon:
+    """Shared setup / validation / record-building for both variants.
+
+    Mixed in after ``StructuredConfigConsumer`` and ``CapabilityMixin`` so the
+    consumer mixin remains the first base (its ``__init__`` is the entry
+    point). Holds only synchronous, transport-agnostic logic; the sync and
+    async stores own their I/O and their database build.
+    """
+
+    # Attributes established by :meth:`_bind_common` (declared for typing).
+    config: UserStateStoreConfig
+    components: Mapping[str, Any]
+    _db: Any
+    _owns_db: bool
+    _tenant: TenantContext
+    _sections: dict[str, UserStateSectionSpec]
+    _callbacks: CallbackRegistry
+
+    def _bind_common(self) -> None:
+        """Bind the tenant, section map, callbacks, and any injected db.
+
+        Called from each variant's ``_setup``. An injected ``db`` / ``tenant``
+        / ``event_bus`` collaborator (passed through the components channel)
+        is bound here; the async variant builds its own db later in
+        ``_ainit`` when none was injected, the sync variant in its ``_setup``.
+        """
+        self._owns_db = False
+        self._db = self.components.get("db")
+        tenant = self.components.get("tenant")
+        self._tenant = (
+            tenant
+            if tenant is not None
+            else SingleTenantContext(domain_id=self.config.namespace)
+        )
+        self._sections = {s.name: s for s in self.config.sections}
+        self._callbacks = CallbackRegistry()
+        event_bus = self.components.get("event_bus")
+        if event_bus is not None:
+            self._callbacks.also_publish_to(event_bus)
+
+    def _require_kind(
+        self, section: str, kind: SectionKind
+    ) -> UserStateSectionSpec:
+        """Return the spec for ``section``, or raise if unknown / wrong kind."""
+        spec = self._sections.get(section)
+        if spec is None:
+            raise ConfigurationError(
+                f"Unknown user-state section: {section!r}. Declared "
+                f"sections: {sorted(self._sections)}.",
+                context={"section": section, "known": sorted(self._sections)},
+            )
+        if spec.kind != kind:
+            raise ValueError(
+                f"Section {section!r} is a {spec.kind.value} section, "
+                f"not a {kind.value} section."
+            )
+        return spec
+
+    def _doc_id(self, user_id: str, section: str) -> str:
+        return _document_id(
+            self.config.namespace, self._tenant.tenant_id, user_id, section
+        )
+
+    def _build_record(
+        self,
+        data: Mapping[str, Any],
+        user_id: str,
+        section: str,
+        spec: UserStateSectionSpec,
+        *,
+        storage_id: str | None = None,
+    ) -> Record:
+        """Compose a record: caller payload + owned scope fields + stamps.
+
+        Owned identity wins — the scope fields are applied *after* the caller
+        payload, so a caller-supplied ``user_id`` / ``section`` / ``tenant_id``
+        in ``data`` cannot override the coordinator's.
+        """
+        payload = dict(data)
+        payload.update(
+            _scope_fields(
+                user_id, section, self._tenant.tenant_id, spec.version
+            )
+        )
+        payload["_written_at"] = _utc_now_iso()
+        return Record(payload, storage_id=storage_id)
+
+    def _written_payload(
+        self, user_id: str, section: str, spec: UserStateSectionSpec, op: str
+    ) -> dict[str, Any]:
+        """Build the metadata-only delta-event payload (never section values)."""
+        return {
+            "namespace": self.config.namespace,
+            "tenant_id": self._tenant.tenant_id,
+            "user_id": user_id,
+            "section": section,
+            "kind": spec.kind.value,
+            "op": op,
+        }
+
+
+# --------------------------------------------------------------------- #
+# Async variant.
+# --------------------------------------------------------------------- #
+
+
+class AsyncUserStateStore(
+    StructuredConfigConsumer[UserStateStoreConfig],
+    CapabilityMixin,
+    _UserStateStoreCommon,
+):
+    """Async coordinator for per-user cross-session state.
+
+    Build from config (``await AsyncUserStateStore.from_config({...})`` — builds
+    the backing database when none is injected) or from a pre-built database
+    (``AsyncUserStateStore.from_components(db=…)``). An injected database is
+    caller-owned and left open by :meth:`close`; a config-built one is owned
+    and closed.
+    """
+
+    CONFIG_CLS: ClassVar[type[UserStateStoreConfig]] = UserStateStoreConfig
+
+    # Structural advertisement: the class HAS the conditional-write
+    # (``expected_version``) and tenant-scoping code paths. Whether a given
+    # instance is currently tenant-scoping is the binding check
+    # ``store._tenant.tenant_id is not None``.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {Capability.CONDITIONAL_WRITE, Capability.TENANT_SCOPED_STATE}
+    )
+
+    def _setup(self) -> None:
+        self._bind_common()
+
+    @classmethod
+    async def from_config(  # type: ignore[override]
+        cls, config: Any, **components: Any
+    ) -> AsyncUserStateStore:
+        """Create the coordinator from configuration (async build).
+
+        Accepts a config dict or a typed :class:`UserStateStoreConfig`. Builds
+        the backing database from ``config.backend`` unless a ``db``
+        collaborator is injected. Routes through :meth:`from_config_async`.
+        """
+        return await cls.from_config_async(config, **components)
+
+    async def _ainit(
+        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+    ) -> None:
+        if self._prebuilt:
+            return
+        # ``db`` / ``event_bus`` / ``tenant`` were already bound from the
+        # components channel in ``_bind_common``; the only async-only work is
+        # building a database when none was injected.
+        if self._db is None:
+            self._db = async_database_factory.create(backend=self.config.backend)
+            self._owns_db = True
+
+    def _adopt_components(
+        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+    ) -> None:
+        if db is None:
+            raise TypeError(
+                "AsyncUserStateStore.from_components requires a `db` "
+                "collaborator."
+            )
+        self._db = db
+        self._owns_db = False
+
+    # ----- document sections ----- #
+
+    async def get_document(self, user_id: str, section: str) -> Record | None:
+        """Read a document section's single record for ``user_id`` (or None)."""
+        self._require_kind(section, SectionKind.DOCUMENT)
+        return await self._db.read(self._doc_id(user_id, section))
+
+    async def document_version(
+        self, user_id: str, section: str
+    ) -> str | None:
+        """Return the compare-and-set token for a document (or None if absent).
+
+        Pass the returned token as ``expected_version`` to :meth:`put_document`
+        for a conditional write.
+        """
+        self._require_kind(section, SectionKind.DOCUMENT)
+        return await self._db.get_version(self._doc_id(user_id, section))
+
+    async def put_document(
+        self,
+        user_id: str,
+        section: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> str:
+        """Create or replace a document section's record for ``user_id``.
+
+        When ``expected_version`` is provided the write is a compare-and-set:
+        it proceeds only if the stored token still matches, else raises
+        :class:`~dataknobs_common.exceptions.ConcurrencyError`.
+        """
+        spec = self._require_kind(section, SectionKind.DOCUMENT)
+        doc_id = self._doc_id(user_id, section)
+        record = self._build_record(
+            data, user_id, section, spec, storage_id=doc_id
+        )
+        result_id = await self._db.upsert(
+            doc_id, record, expected_version=expected_version
+        )
+        await self._fire_written(user_id, section, spec, "put_document")
+        return result_id
+
+    # ----- collection sections ----- #
+
+    async def add_record(
+        self, user_id: str, section: str, data: Mapping[str, Any]
+    ) -> str:
+        """Append a record to a collection section for ``user_id``.
+
+        Returns the backend-generated record id.
+        """
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        record = self._build_record(data, user_id, section, spec)
+        record_id = await self._db.create(record)
+        await self._fire_written(user_id, section, spec, "add_record")
+        return record_id
+
+    async def query(
+        self, user_id: str, section: str, query: Query | None = None
+    ) -> list[Record]:
+        """Read a collection section's records for ``user_id``.
+
+        The optional ``query`` adds payload filters / sort / pagination; the
+        user + section (+ bound tenant) scope is AND-composed automatically.
+        """
+        self._require_kind(section, SectionKind.COLLECTION)
+        return await self._db.search(
+            _read_filter(query, user_id, section, self._tenant.tenant_id)
+        )
+
+    async def record_version(self, record_id: str) -> str | None:
+        """Return the compare-and-set token for a collection record."""
+        return await self._db.get_version(record_id)
+
+    async def update_record(
+        self,
+        user_id: str,
+        section: str,
+        record_id: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> bool:
+        """Replace a collection record owned by ``user_id`` (scope-checked)."""
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        existing = await self._db.read(record_id)
+        if existing is None:
+            return False
+        _verify_scope(existing, user_id, section, self._tenant.tenant_id)
+        record = self._build_record(
+            data, user_id, section, spec, storage_id=record_id
+        )
+        updated = await self._db.update(
+            record_id, record, expected_version=expected_version
+        )
+        if updated:
+            await self._fire_written(user_id, section, spec, "update_record")
+        return updated
+
+    async def delete_record(
+        self,
+        user_id: str,
+        section: str,
+        record_id: str,
+        *,
+        expected_version: str | None = None,
+    ) -> bool:
+        """Delete a collection record owned by ``user_id`` (scope-checked)."""
+        self._require_kind(section, SectionKind.COLLECTION)
+        existing = await self._db.read(record_id)
+        if existing is None:
+            return False
+        _verify_scope(existing, user_id, section, self._tenant.tenant_id)
+        return await self._db.delete(
+            record_id, expected_version=expected_version
+        )
+
+    # ----- whole-user ----- #
+
+    async def snapshot(
+        self, user_id: str, *, include_sensitive: bool = False
+    ) -> dict[str, Any]:
+        """Return a whole-user view keyed by section name.
+
+        Document sections map to their payload dict (or ``None`` when unset);
+        collection sections map to a list of payload dicts. Coordinator-owned
+        fields are stripped. ``SENSITIVE`` sections are omitted unless
+        ``include_sensitive=True``.
+        """
+        view: dict[str, Any] = {}
+        for spec in _visible_sections(self.config.sections, include_sensitive):
+            if spec.kind == SectionKind.DOCUMENT:
+                record = await self.get_document(user_id, spec.name)
+                view[spec.name] = (
+                    _public_data(record) if record is not None else None
+                )
+            else:
+                records = await self.query(user_id, spec.name)
+                view[spec.name] = [_public_data(r) for r in records]
+        return view
+
+    async def clear(self, user_id: str) -> int:
+        """Delete every record for ``user_id`` across all sections.
+
+        The right-to-erasure primitive. Returns the number of records deleted.
+        """
+        deleted = 0
+        for spec in self.config.sections:
+            if spec.kind == SectionKind.DOCUMENT:
+                if await self._db.delete(self._doc_id(user_id, spec.name)):
+                    deleted += 1
+            else:
+                records = await self._db.search(
+                    _read_filter(
+                        None, user_id, spec.name, self._tenant.tenant_id
+                    )
+                )
+                for record in records:
+                    if record.storage_id and await self._db.delete(
+                        record.storage_id
+                    ):
+                        deleted += 1
+        return deleted
+
+    async def close(self) -> None:
+        """Release the backing database when this coordinator owns it."""
+        await close_if_owned(self._db, self._owns_db)
+
+    async def _fire_written(
+        self, user_id: str, section: str, spec: UserStateSectionSpec, op: str
+    ) -> None:
+        await self._callbacks.fire_async(
+            SECTION_WRITTEN_TOPIC,
+            self._written_payload(user_id, section, spec, op),
+        )
+
+
+# --------------------------------------------------------------------- #
+# Sync variant.
+# --------------------------------------------------------------------- #
+
+
+class UserStateStore(
+    StructuredConfigConsumer[UserStateStoreConfig],
+    CapabilityMixin,
+    _UserStateStoreCommon,
+):
+    """Synchronous coordinator for per-user cross-session state.
+
+    The sync mirror of :class:`AsyncUserStateStore`. Build from config
+    (``UserStateStore.from_config({...})`` — builds the backing database when
+    none is injected) or from a pre-built database
+    (``UserStateStore.from_components(db=…)``). Ownership / teardown semantics
+    match the async variant.
+    """
+
+    CONFIG_CLS: ClassVar[type[UserStateStoreConfig]] = UserStateStoreConfig
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {Capability.CONDITIONAL_WRITE, Capability.TENANT_SCOPED_STATE}
+    )
+
+    def _setup(self) -> None:
+        self._bind_common()
+        # Sync construction has no async hook, so the database (when not
+        # injected) is built here.
+        if self._db is None:
+            self._db = database_factory.create(backend=self.config.backend)
+            self._owns_db = True
+
+    def _adopt_components(
+        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+    ) -> None:
+        if db is None:
+            raise TypeError(
+                "UserStateStore.from_components requires a `db` collaborator."
+            )
+        self._db = db
+        self._owns_db = False
+
+    # ----- document sections ----- #
+
+    def get_document(self, user_id: str, section: str) -> Record | None:
+        """Read a document section's single record for ``user_id`` (or None)."""
+        self._require_kind(section, SectionKind.DOCUMENT)
+        return self._db.read(self._doc_id(user_id, section))
+
+    def document_version(self, user_id: str, section: str) -> str | None:
+        """Return the compare-and-set token for a document (or None if absent)."""
+        self._require_kind(section, SectionKind.DOCUMENT)
+        return self._db.get_version(self._doc_id(user_id, section))
+
+    def put_document(
+        self,
+        user_id: str,
+        section: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> str:
+        """Create or replace a document section's record for ``user_id``."""
+        spec = self._require_kind(section, SectionKind.DOCUMENT)
+        doc_id = self._doc_id(user_id, section)
+        record = self._build_record(
+            data, user_id, section, spec, storage_id=doc_id
+        )
+        result_id = self._db.upsert(
+            doc_id, record, expected_version=expected_version
+        )
+        self._fire_written(user_id, section, spec, "put_document")
+        return result_id
+
+    # ----- collection sections ----- #
+
+    def add_record(
+        self, user_id: str, section: str, data: Mapping[str, Any]
+    ) -> str:
+        """Append a record to a collection section for ``user_id``."""
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        record = self._build_record(data, user_id, section, spec)
+        record_id = self._db.create(record)
+        self._fire_written(user_id, section, spec, "add_record")
+        return record_id
+
+    def query(
+        self, user_id: str, section: str, query: Query | None = None
+    ) -> list[Record]:
+        """Read a collection section's records for ``user_id``."""
+        self._require_kind(section, SectionKind.COLLECTION)
+        return self._db.search(
+            _read_filter(query, user_id, section, self._tenant.tenant_id)
+        )
+
+    def record_version(self, record_id: str) -> str | None:
+        """Return the compare-and-set token for a collection record."""
+        return self._db.get_version(record_id)
+
+    def update_record(
+        self,
+        user_id: str,
+        section: str,
+        record_id: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> bool:
+        """Replace a collection record owned by ``user_id`` (scope-checked)."""
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        existing = self._db.read(record_id)
+        if existing is None:
+            return False
+        _verify_scope(existing, user_id, section, self._tenant.tenant_id)
+        record = self._build_record(
+            data, user_id, section, spec, storage_id=record_id
+        )
+        updated = self._db.update(
+            record_id, record, expected_version=expected_version
+        )
+        if updated:
+            self._fire_written(user_id, section, spec, "update_record")
+        return updated
+
+    def delete_record(
+        self,
+        user_id: str,
+        section: str,
+        record_id: str,
+        *,
+        expected_version: str | None = None,
+    ) -> bool:
+        """Delete a collection record owned by ``user_id`` (scope-checked)."""
+        self._require_kind(section, SectionKind.COLLECTION)
+        existing = self._db.read(record_id)
+        if existing is None:
+            return False
+        _verify_scope(existing, user_id, section, self._tenant.tenant_id)
+        return self._db.delete(record_id, expected_version=expected_version)
+
+    # ----- whole-user ----- #
+
+    def snapshot(
+        self, user_id: str, *, include_sensitive: bool = False
+    ) -> dict[str, Any]:
+        """Return a whole-user view keyed by section name (see async twin)."""
+        view: dict[str, Any] = {}
+        for spec in _visible_sections(self.config.sections, include_sensitive):
+            if spec.kind == SectionKind.DOCUMENT:
+                record = self.get_document(user_id, spec.name)
+                view[spec.name] = (
+                    _public_data(record) if record is not None else None
+                )
+            else:
+                records = self.query(user_id, spec.name)
+                view[spec.name] = [_public_data(r) for r in records]
+        return view
+
+    def clear(self, user_id: str) -> int:
+        """Delete every record for ``user_id`` across all sections."""
+        deleted = 0
+        for spec in self.config.sections:
+            if spec.kind == SectionKind.DOCUMENT:
+                if self._db.delete(self._doc_id(user_id, spec.name)):
+                    deleted += 1
+            else:
+                records = self._db.search(
+                    _read_filter(
+                        None, user_id, spec.name, self._tenant.tenant_id
+                    )
+                )
+                for record in records:
+                    if record.storage_id and self._db.delete(
+                        record.storage_id
+                    ):
+                        deleted += 1
+        return deleted
+
+    def close(self) -> None:
+        """Release the backing database when this coordinator owns it."""
+        close_if_owned_sync(self._db, self._owns_db)
+
+    def _fire_written(
+        self, user_id: str, section: str, spec: UserStateSectionSpec, op: str
+    ) -> None:
+        self._callbacks.fire(
+            SECTION_WRITTEN_TOPIC,
+            self._written_payload(user_id, section, spec, op),
+        )

@@ -222,6 +222,7 @@ nav:
         - packages/bots/guides/middleware.md
         - packages/bots/guides/bot-manager.md
         - packages/bots/guides/observability.md
+        - packages/bots/guides/user-state.md
         - packages/bots/guides/rag-ingestion.md
         - Knowledge Base Ingestion:
           - packages/bots/knowledge/ingestion-guide.md
