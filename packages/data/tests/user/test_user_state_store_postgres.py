@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 
-from dataknobs_bots.user import AsyncUserStateStore, UserStateStoreConfig
+from dataknobs_data.user import AsyncUserStateStore, UserStateStoreConfig
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.tenancy import BoundTenantContext
 from dataknobs_common.testing import requires_postgres

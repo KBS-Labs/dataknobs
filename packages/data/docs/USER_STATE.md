@@ -1,4 +1,4 @@
-# User State Guide
+# User State Coordinator
 
 `UserStateStore` and `AsyncUserStateStore` coordinate a user's state **across
 sessions**. They scope an injected database by `(namespace, tenant, user_id,
@@ -26,7 +26,7 @@ classification (`PUBLIC` / `INTERNAL` / `SENSITIVE`), an optional
 ## Configuration
 
 ```python
-from dataknobs_bots.user import (
+from dataknobs_data.user import (
     UserStateStoreConfig, UserStateSectionSpec, SectionKind, Sensitivity,
 )
 
@@ -61,7 +61,7 @@ reserved for governance enforcement.
 Build from config — the async variant builds its own backing database:
 
 ```python
-from dataknobs_bots.user import AsyncUserStateStore, UserStateStore
+from dataknobs_data.user import AsyncUserStateStore, UserStateStore
 
 store = await AsyncUserStateStore.from_config(config)   # async
 store = UserStateStore.from_config(config)              # sync
@@ -127,8 +127,8 @@ await store.put_document(
     "user-42", "preferences", {"theme": "light"}, expected_version=token,
 )
 
-# For collection records:
-token = await store.record_version(record_id)
+# For collection records (scope-checked — an out-of-scope id returns None):
+token = await store.record_version("user-42", "alerts", record_id)
 await store.update_record(
     "user-42", "alerts", record_id, {"text": "seen"}, expected_version=token,
 )
@@ -176,7 +176,9 @@ coordinator advertises `Capability.TENANT_SCOPED_STATE`.
 Every successful write fires a **metadata-only** event
 (`user_state:section_written`) on an in-process callback registry — section
 values are never emitted, so a `SENSITIVE` section's contents cannot leak into an
-observer. Inject an `event_bus` to fan the events out across replicas:
+observer. The payload does carry the `user_id` for routing, so treat the event
+stream with the same care as that identifier. Inject an `event_bus` to fan the
+events out across replicas:
 
 ```python
 from dataknobs_common.events import InMemoryEventBus
@@ -187,6 +189,12 @@ store = await AsyncUserStateStore.from_config(config, event_bus=bus)
 
 Fan-out is non-load-bearing observability: a failing subscriber is isolated and
 never aborts the write.
+
+`EventBus` fan-out is an **async-variant capability**: `EventBus.publish` is a
+coroutine, and the sync `fire` path cannot drive it safely from within a running
+loop. The sync `UserStateStore` therefore **rejects an injected `event_bus` at
+construction** — use `AsyncUserStateStore` for bus fan-out, or register sync
+callbacks on `store._callbacks` directly for in-process observation.
 
 ## Opacity-safe user ids
 
@@ -199,4 +207,17 @@ ever a hash input or a filter value, never split into a delimited key.
 
 The two variants are behavioral mirrors sharing the same pure scoping helpers.
 Every async method has a synchronous twin. Use the sync `UserStateStore` in
-synchronous contexts and `AsyncUserStateStore` under an event loop.
+synchronous contexts and `AsyncUserStateStore` under an event loop. The one
+capability that is async-only is `EventBus` fan-out (see [Delta
+events](#delta-events)); the sync store supports in-process callbacks but
+rejects an injected `event_bus`.
+
+## Record identity is coordinator-owned
+
+The coordinator owns each record's storage identity — document ids derive from
+the scope tuple, collection ids are backend-generated. A section payload may not
+carry a storage-identity key (`id`, `storage_id`, `_id`, `record_id`); one is
+rejected with a `ValueError`. This keeps identity under the coordinator's
+control and avoids a backend-dependent divergence (some backends key a
+collection `create` off a payload `id`, others mint a fresh id). Rename such a
+field (e.g. `alert_id`) in your payload.

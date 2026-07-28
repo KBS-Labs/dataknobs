@@ -7,26 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Added
-
-- **`UserStateStore` / `AsyncUserStateStore` — per-user cross-session state
-  coordinator.** A config-driven, backend-agnostic coordinator for a user's
-  state across sessions. It scopes an injected database by `(namespace, tenant,
-  user_id, section)` over user-defined `document` sections (one record per user,
-  addressed by a derived deterministic id) and `collection` sections (many
-  records per user, read by filter). Writes are optimistic-concurrency aware
-  (`expected_version` compare-and-set, advertising
-  `Capability.CONDITIONAL_WRITE`), tenant-scoped when a `BoundTenantContext` is
-  injected (`Capability.TENANT_SCOPED_STATE`, with explicit-filter-wins admin
-  reads), and emit metadata-only delta events through an in-process callback
-  registry that can fan out to an `EventBus`. `snapshot()` returns a whole-user
-  view (omitting `SENSITIVE` sections by default) and `clear()` erases a user's
-  state across all sections. The opaque `user_id` is only ever a hash input or a
-  filter value, never split into a delimited key, so ids containing `/` or `://`
-  are structurally safe. Sync and async variants share the same scoping helpers;
-  a config-built backing database is owned and closed, an injected one is
-  caller-owned and left open. See the User State guide.
-
 ## v0.9.2 - 2026-07-27
 
 ### Added

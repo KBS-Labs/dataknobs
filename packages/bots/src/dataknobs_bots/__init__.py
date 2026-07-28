@@ -68,14 +68,6 @@ from .reasoning.state_bridge import (
     SubsetBridge,
 )
 from .testing import BotTestHarness, CaptureReplay, TurnResult, WizardConfigBuilder, inject_providers
-from .user import (
-    AsyncUserStateStore,
-    SectionKind,
-    Sensitivity,
-    UserStateSectionSpec,
-    UserStateStore,
-    UserStateStoreConfig,
-)
 from .tools import (
     AddKBResourceTool,
     CheckKnowledgeSourceTool,
@@ -95,7 +87,6 @@ __version__ = "0.9.2"
 
 __all__ = [
     "AddKBResourceTool",
-    "AsyncUserStateStore",
     "BiDirectionalBridge",
     "BotContext",
     "BotManager",
@@ -140,8 +131,6 @@ __all__ = [
     "ReasoningStrategy",
     "RemoveKBResourceTool",
     "SaveConfigTool",
-    "SectionKind",
-    "Sensitivity",
     "SimpleReasoning",
     "StateBridge",
     "StrategyCapabilities",
@@ -155,9 +144,6 @@ __all__ = [
     "ToolEntry",
     "TurnHandle",
     "TurnResult",
-    "UserStateSectionSpec",
-    "UserStateStore",
-    "UserStateStoreConfig",
     "ValidationResult",
     "VectorMemory",
     "WizardConfigBuilder",

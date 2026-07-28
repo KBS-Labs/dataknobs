@@ -1,6 +1,6 @@
 """Typed configuration for the per-user cross-session state coordinator.
 
-The coordinator (:class:`~dataknobs_bots.user.store.UserStateStore` and its
+The coordinator (:class:`~dataknobs_data.user.store.UserStateStore` and its
 async sibling) stores per-user state in named *sections*. Each section is a
 :class:`UserStateSectionSpec` describing the section's storage shape
 (``document`` — one record per user — or ``collection`` — many), governance
@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfig
 
 
@@ -41,7 +42,7 @@ class SectionKind(str, Enum):
 class Sensitivity(str, Enum):
     """Governance classification of a section's contents.
 
-    Drives which sections a whole-user :meth:`~dataknobs_bots.user.store\
+    Drives which sections a whole-user :meth:`~dataknobs_data.user.store\
 .AsyncUserStateStore.snapshot` surfaces: ``SENSITIVE`` sections are omitted
     from the default snapshot view (opt in with ``include_sensitive=True``).
     ``PUBLIC`` / ``INTERNAL`` sections are always surfaced. Section payload
@@ -112,3 +113,29 @@ class UserStateStoreConfig(StructuredConfig):
     namespace: str = "user_state"
     sections: tuple[UserStateSectionSpec, ...] = ()
     enable_event_log: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate the declared sections at config-load time.
+
+        The section map the coordinator builds is keyed by ``name``, so a
+        duplicate or empty name silently collapses sections (last wins) and
+        surfaces later as a confusing wrong-kind / not-found runtime error far
+        from the config typo. Failing here — at construction, on both the
+        typed and ``from_dict`` paths — turns that data-integrity footgun into
+        an immediate, actionable error. An empty ``sections`` tuple is allowed
+        (an inert store); every *declared* section must be named and unique.
+        """
+        seen: set[str] = set()
+        for spec in self.sections:
+            if not spec.name:
+                raise ConfigurationError(
+                    "User-state section names must be non-empty.",
+                    context={"namespace": self.namespace},
+                )
+            if spec.name in seen:
+                raise ConfigurationError(
+                    f"Duplicate user-state section name: {spec.name!r}. "
+                    "Section names must be unique within a store.",
+                    context={"namespace": self.namespace, "name": spec.name},
+                )
+            seen.add(spec.name)

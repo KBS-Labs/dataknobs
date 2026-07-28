@@ -108,6 +108,7 @@ nav:
         - packages/data/async-pooling-quickstart.md
         - packages/data/async-pooling.md
         - packages/data/keyed-record-store.md
+        - packages/data/user-state.md
         - packages/data/transactions.md
         - packages/data/hybrid-search.md
         - packages/data/dedup.md
@@ -222,7 +223,6 @@ nav:
         - packages/bots/guides/middleware.md
         - packages/bots/guides/bot-manager.md
         - packages/bots/guides/observability.md
-        - packages/bots/guides/user-state.md
         - packages/bots/guides/rag-ingestion.md
         - Knowledge Base Ingestion:
           - packages/bots/knowledge/ingestion-guide.md

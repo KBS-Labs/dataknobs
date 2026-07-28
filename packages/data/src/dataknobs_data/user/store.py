@@ -21,7 +21,7 @@ The sync and async variants share a set of pure helpers (id derivation, scope
 stamping, read-filter composition, snapshot visibility) so their behaviour
 cannot drift; each variant owns only its ``await`` / non-``await`` I/O. The
 coordinator ships **zero** domain sections — the consumer declares every
-section (see :class:`~dataknobs_bots.user.config.UserStateStoreConfig`).
+section (see :class:`~dataknobs_data.user.config.UserStateStoreConfig`).
 
 Example:
     ```python
@@ -52,12 +52,6 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-from dataknobs_bots.user.config import (
-    SectionKind,
-    Sensitivity,
-    UserStateSectionSpec,
-    UserStateStoreConfig,
-)
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
     Capability,
@@ -68,18 +62,23 @@ from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_common.tenancy import SingleTenantContext, TenantContext
-from dataknobs_data import (
-    Filter,
-    Operator,
-    Query,
-    Record,
-    async_database_factory,
-    database_factory,
+from dataknobs_data.factory import async_database_factory, database_factory
+from dataknobs_data.query import Filter, Operator, Query
+from dataknobs_data.records import Record
+from dataknobs_data.user.config import (
+    SectionKind,
+    Sensitivity,
+    UserStateSectionSpec,
+    UserStateStoreConfig,
 )
 
 #: Topic fired on the callback registry (and any composed EventBus) after a
-#: successful write. Payloads are metadata-only — a section's values are never
-#: emitted, so a SENSITIVE section's contents cannot leak into an observer.
+#: successful write. Payloads are metadata-only — a section's *values* are
+#: never emitted, so a SENSITIVE section's contents cannot leak into an
+#: observer. The payload does carry the ``user_id`` (an opaque identifier) for
+#: routing/filtering — it is the only identity in the event; a consumer whose
+#: ``user_id`` is itself PII (an email, an OIDC subject) should treat the event
+#: stream with the same care as the identifier.
 SECTION_WRITTEN_TOPIC = "user_state:section_written"
 
 #: Coordinator-owned fields stamped onto every record. Stripped from the
@@ -87,6 +86,19 @@ SECTION_WRITTEN_TOPIC = "user_state:section_written"
 #: and skipped by opacity-safe scope comparison.
 _RESERVED_FIELDS: frozenset[str] = frozenset(
     {"user_id", "section", "tenant_id", "_section_version", "_written_at"}
+)
+
+#: Payload keys that would participate in backend storage-id resolution
+#: (:attr:`~dataknobs_data.Record.id` falls back to a ``id`` / ``record_id``
+#: data field, and ``storage_id`` / ``_id`` name the id attributes). The
+#: coordinator owns record identity — document ids derive from the scope tuple,
+#: collection ids are backend-generated — so a caller payload carrying one of
+#: these is rejected at the write boundary. This also closes a latent sync/async
+#: divergence: the sync memory backend keys a collection ``create`` off a
+#: payload ``id`` field while the async backend mints a fresh UUID, so the same
+#: payload would land under different ids across variants.
+_ID_KEYING_FIELDS: frozenset[str] = frozenset(
+    {"id", "storage_id", "_id", "record_id"}
 )
 
 
@@ -162,6 +174,23 @@ def _read_filter(
     return replace(base, filters=scoped + caller_filters)
 
 
+def _in_scope(
+    record: Record, user_id: str, section: str, tenant_id: str | None
+) -> bool:
+    """Return whether ``record`` belongs to the given ``(user, section, tenant)``.
+
+    The pure predicate behind both the raising :func:`_verify_scope` guard
+    (collection mutation-by-id) and the non-raising scope check in
+    :meth:`~AsyncUserStateStore.record_version` (which returns ``None`` for an
+    out-of-scope id rather than leaking its existence via an exception).
+    """
+    return (
+        record.get_value("user_id") == user_id
+        and record.get_value("section") == section
+        and record.get_value("tenant_id") == tenant_id
+    )
+
+
 def _verify_scope(
     record: Record, user_id: str, section: str, tenant_id: str | None
 ) -> None:
@@ -173,11 +202,7 @@ def _verify_scope(
     their id is derived from the scope tuple, so an id mismatch simply reads
     a different record.
     """
-    if (
-        record.get_value("user_id") != user_id
-        or record.get_value("section") != section
-        or record.get_value("tenant_id") != tenant_id
-    ):
+    if not _in_scope(record, user_id, section, tenant_id):
         raise ValueError(
             "Target record does not belong to the given user/section scope."
         )
@@ -220,6 +245,13 @@ class _UserStateStoreCommon:
     async stores own their I/O and their database build.
     """
 
+    # Whether this variant can safely fan a section-written event out to an
+    # async :class:`~dataknobs_common.events.EventBus`. Only the async store
+    # can — ``EventBus.publish`` is a coroutine, and the sync ``fire`` path
+    # cannot drive it from within a running loop (it would raise *after* the
+    # write already persisted). Overridden to ``True`` on the async variant.
+    _SUPPORTS_ASYNC_FANOUT: ClassVar[bool] = False
+
     # Attributes established by :meth:`_bind_common` (declared for typing).
     config: UserStateStoreConfig
     components: Mapping[str, Any]
@@ -236,6 +268,12 @@ class _UserStateStoreCommon:
         / ``event_bus`` collaborator (passed through the components channel)
         is bound here; the async variant builds its own db later in
         ``_ainit`` when none was injected, the sync variant in its ``_setup``.
+
+        An ``event_bus`` injected into the **sync** store is rejected here (at
+        construction) rather than silently doing a per-write ``asyncio.run`` or
+        raising *after* a write under a running loop — see
+        :attr:`_SUPPORTS_ASYNC_FANOUT`. The sync store still fully supports
+        in-process sync callbacks registered on :attr:`_callbacks`.
         """
         self._owns_db = False
         self._db = self.components.get("db")
@@ -249,6 +287,16 @@ class _UserStateStoreCommon:
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
+            if not self._SUPPORTS_ASYNC_FANOUT:
+                raise ConfigurationError(
+                    f"{type(self).__name__} (synchronous) cannot fan "
+                    "section-written events out to an EventBus: "
+                    "EventBus.publish is asynchronous and the sync fire path "
+                    "cannot drive it safely from within a running event loop. "
+                    "Use AsyncUserStateStore for bus fan-out, or register sync "
+                    "callbacks on the callback registry directly.",
+                    context={"store": type(self).__name__},
+                )
             self._callbacks.also_publish_to(event_bus)
 
     def _require_kind(
@@ -287,8 +335,21 @@ class _UserStateStoreCommon:
 
         Owned identity wins — the scope fields are applied *after* the caller
         payload, so a caller-supplied ``user_id`` / ``section`` / ``tenant_id``
-        in ``data`` cannot override the coordinator's.
+        in ``data`` cannot override the coordinator's. Storage-identity keys
+        (:data:`_ID_KEYING_FIELDS`) are rejected outright: the coordinator owns
+        record identity, and honouring a caller-supplied one would both break
+        that ownership and diverge sync vs async (the sync memory backend keys
+        a collection ``create`` off a payload ``id`` while the async one mints
+        a UUID).
         """
+        conflicting = _ID_KEYING_FIELDS.intersection(data)
+        if conflicting:
+            raise ValueError(
+                "User-state section payloads may not carry storage-identity "
+                f"keys {sorted(conflicting)}: the coordinator owns record "
+                "identity (document ids derive from the scope tuple; "
+                "collection ids are backend-generated). Rename the field(s)."
+            )
         payload = dict(data)
         payload.update(
             _scope_fields(
@@ -332,6 +393,10 @@ class AsyncUserStateStore(
     """
 
     CONFIG_CLS: ClassVar[type[UserStateStoreConfig]] = UserStateStoreConfig
+
+    # The async store drives fan-out through ``fire_async`` / awaited
+    # ``EventBus.publish``, so composing an EventBus is safe here.
+    _SUPPORTS_ASYNC_FANOUT: ClassVar[bool] = True
 
     # Structural advertisement: the class HAS the conditional-write
     # (``expected_version``) and tenant-scoping code paths. Whether a given
@@ -450,8 +515,23 @@ class AsyncUserStateStore(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
 
-    async def record_version(self, record_id: str) -> str | None:
-        """Return the compare-and-set token for a collection record."""
+    async def record_version(
+        self, user_id: str, section: str, record_id: str
+    ) -> str | None:
+        """Return the compare-and-set token for a collection record.
+
+        Scope-checked: a ``record_id`` that is absent, or belongs to another
+        user / section / tenant, returns ``None`` (indistinguishable from a
+        missing record) rather than leaking its existence or version. Pass the
+        returned token as ``expected_version`` to :meth:`update_record` /
+        :meth:`delete_record` for a conditional write.
+        """
+        self._require_kind(section, SectionKind.COLLECTION)
+        existing = await self._db.read(record_id)
+        if existing is None or not _in_scope(
+            existing, user_id, section, self._tenant.tenant_id
+        ):
+            return None
         return await self._db.get_version(record_id)
 
     async def update_record(
@@ -525,24 +605,31 @@ class AsyncUserStateStore(
         """Delete every record for ``user_id`` across all sections.
 
         The right-to-erasure primitive. Returns the number of records deleted.
+        Every id is collected first and removed through a single
+        :meth:`~dataknobs_data.AsyncDatabase.delete_batch`, so a backend that
+        implements atomic batch deletion erases the user in one operation; the
+        in-memory default deletes them sequentially.
         """
-        deleted = 0
+        ids = await self._clear_ids(user_id)
+        if not ids:
+            return 0
+        results = await self._db.delete_batch(ids)
+        return sum(1 for ok in results if ok)
+
+    async def _clear_ids(self, user_id: str) -> list[str]:
+        """Collect every storage id for ``user_id`` across all sections."""
+        ids: list[str] = []
         for spec in self.config.sections:
             if spec.kind == SectionKind.DOCUMENT:
-                if await self._db.delete(self._doc_id(user_id, spec.name)):
-                    deleted += 1
+                ids.append(self._doc_id(user_id, spec.name))
             else:
                 records = await self._db.search(
                     _read_filter(
                         None, user_id, spec.name, self._tenant.tenant_id
                     )
                 )
-                for record in records:
-                    if record.storage_id and await self._db.delete(
-                        record.storage_id
-                    ):
-                        deleted += 1
-        return deleted
+                ids.extend(r.storage_id for r in records if r.storage_id)
+        return ids
 
     async def close(self) -> None:
         """Release the backing database when this coordinator owns it."""
@@ -653,8 +740,20 @@ class UserStateStore(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
 
-    def record_version(self, record_id: str) -> str | None:
-        """Return the compare-and-set token for a collection record."""
+    def record_version(
+        self, user_id: str, section: str, record_id: str
+    ) -> str | None:
+        """Return the compare-and-set token for a collection record.
+
+        Scope-checked mirror of the async twin: an absent or out-of-scope
+        ``record_id`` returns ``None`` rather than leaking its existence.
+        """
+        self._require_kind(section, SectionKind.COLLECTION)
+        existing = self._db.read(record_id)
+        if existing is None or not _in_scope(
+            existing, user_id, section, self._tenant.tenant_id
+        ):
+            return None
         return self._db.get_version(record_id)
 
     def update_record(
@@ -717,24 +816,31 @@ class UserStateStore(
         return view
 
     def clear(self, user_id: str) -> int:
-        """Delete every record for ``user_id`` across all sections."""
-        deleted = 0
+        """Delete every record for ``user_id`` across all sections.
+
+        Sync mirror of the async twin: ids are collected first and removed
+        through a single :meth:`~dataknobs_data.SyncDatabase.delete_batch`.
+        """
+        ids = self._clear_ids(user_id)
+        if not ids:
+            return 0
+        results = self._db.delete_batch(ids)
+        return sum(1 for ok in results if ok)
+
+    def _clear_ids(self, user_id: str) -> list[str]:
+        """Collect every storage id for ``user_id`` across all sections."""
+        ids: list[str] = []
         for spec in self.config.sections:
             if spec.kind == SectionKind.DOCUMENT:
-                if self._db.delete(self._doc_id(user_id, spec.name)):
-                    deleted += 1
+                ids.append(self._doc_id(user_id, spec.name))
             else:
                 records = self._db.search(
                     _read_filter(
                         None, user_id, spec.name, self._tenant.tenant_id
                     )
                 )
-                for record in records:
-                    if record.storage_id and self._db.delete(
-                        record.storage_id
-                    ):
-                        deleted += 1
-        return deleted
+                ids.extend(r.storage_id for r in records if r.storage_id)
+        return ids
 
     def close(self) -> None:
         """Release the backing database when this coordinator owns it."""

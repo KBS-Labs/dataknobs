@@ -131,10 +131,27 @@ from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import ConflictPolicy, StreamConfig, StreamProcessor, StreamResult
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
+from .user import (
+    SECTION_WRITTEN_TOPIC,
+    AsyncUserStateStore,
+    SectionKind,
+    Sensitivity,
+    UserStateSectionSpec,
+    UserStateStore,
+    UserStateStoreConfig,
+)
 
 __version__ = "0.6.2"
 
 __all__ = [
+    # Per-user state coordinator
+    "AsyncUserStateStore",
+    "UserStateStore",
+    "UserStateStoreConfig",
+    "UserStateSectionSpec",
+    "SectionKind",
+    "Sensitivity",
+    "SECTION_WRITTEN_TOPIC",
     # Core classes
     "AsyncDatabase",
     "SyncDatabase",
