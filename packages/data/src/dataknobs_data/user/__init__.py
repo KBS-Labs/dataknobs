@@ -8,6 +8,13 @@ from .config import (
     UserStateSectionSpec,
     UserStateStoreConfig,
 )
+from .migration import (
+    SectionMigrator,
+    SectionUpgrader,
+    register_section_migrator,
+    resolve_chain,
+    section_migrators,
+)
 from .store import (
     SECTION_DELETED_TOPIC,
     SECTION_WRITTEN_TOPIC,
@@ -20,8 +27,13 @@ __all__ = [
     "SECTION_WRITTEN_TOPIC",
     "AsyncUserStateStore",
     "SectionKind",
+    "SectionMigrator",
+    "SectionUpgrader",
     "Sensitivity",
     "UserStateSectionSpec",
     "UserStateStore",
     "UserStateStoreConfig",
+    "register_section_migrator",
+    "resolve_chain",
+    "section_migrators",
 ]

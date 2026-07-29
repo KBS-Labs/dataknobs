@@ -92,8 +92,11 @@ class UserStateSectionSpec(StructuredConfig):
         sensitivity: :class:`Sensitivity` classification driving snapshot
             visibility (see :class:`Sensitivity`). Defaults to ``INTERNAL``.
         version: Section schema version stamped onto every written record
-            (``_section_version``). Reserved for lazy on-read migration;
-            not acted on in the base coordinator.
+            (``_section_version``). When a read surfaces a record stamped
+            behind this version, the section's registered migration chain
+            (see :mod:`dataknobs_data.user.migration`) upgrades it in memory
+            before returning it — and writes the upgrade back when the store
+            is configured with ``persist_migrations``. Defaults to ``1``.
         consent_scope: Optional named consent scope this section belongs to.
             A non-``None`` scope gates the section behind a consent grant
             (:meth:`~dataknobs_data.user.store.AsyncUserStateStore.grant_consent`).
@@ -157,6 +160,14 @@ class UserStateStoreConfig(StructuredConfig):
             Off by default — retention is otherwise enforced only by an
             explicit
             :meth:`~dataknobs_data.user.store.AsyncUserStateStore.prune`.
+        persist_migrations: When ``True``, a record upgraded on read by its
+            section's registered migration chain (see
+            :mod:`dataknobs_data.user.migration`) is written back to the store
+            with a compare-and-set guard, so the upgrade is applied once rather
+            than on every read. A concurrent write that advances the record
+            first wins the guard and the write-back is skipped (the in-memory
+            upgrade is still returned). Off by default — migration is otherwise
+            applied in memory on every read without touching the stored record.
     """
 
     backend: str = "memory"
@@ -165,6 +176,7 @@ class UserStateStoreConfig(StructuredConfig):
     enable_event_log: bool = False
     event_log_retention_days: int | None = None
     prune_on_query: bool = False
+    persist_migrations: bool = False
 
     def __post_init__(self) -> None:
         """Validate the declared sections at config-load time.

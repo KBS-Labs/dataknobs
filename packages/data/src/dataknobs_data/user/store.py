@@ -59,7 +59,11 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
-from dataknobs_common.exceptions import ConfigurationError, ConsentRequiredError
+from dataknobs_common.exceptions import (
+    ConcurrencyError,
+    ConfigurationError,
+    ConsentRequiredError,
+)
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_common.tenancy import SingleTenantContext, TenantContext
@@ -74,6 +78,7 @@ from dataknobs_data.user.config import (
     UserStateSectionSpec,
     UserStateStoreConfig,
 )
+from dataknobs_data.user.migration import SectionUpgrader, resolve_chain
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +285,62 @@ def _is_expired(
         return written < now - timedelta(days=retention_days)
     except (ValueError, TypeError):
         return False
+
+
+def _record_version(record: Record) -> int:
+    """Return a record's stamped section schema version (default ``1``).
+
+    A record written before section versioning — or by a v0 store — carries no
+    ``_section_version`` field (or a non-int one); it is treated as version 1,
+    the base version every ``UserStateSectionSpec`` starts at.
+    """
+    version = record.get_value("_section_version")
+    return version if isinstance(version, int) else 1
+
+
+def _needs_migration(record: Record, spec: UserStateSectionSpec) -> bool:
+    """Return whether ``record`` is stamped behind its section's version."""
+    return _record_version(record) < spec.version
+
+
+def _is_downgrade(record: Record, spec: UserStateSectionSpec) -> bool:
+    """Return whether ``record`` is stamped ahead of its section's version.
+
+    The rollback case: a replica running an older spec reads a record written
+    by a newer one. Read fail-open — the record passes through un-migrated.
+    """
+    return _record_version(record) > spec.version
+
+
+def _migrate_record(
+    record: Record,
+    spec: UserStateSectionSpec,
+    chain: list[SectionUpgrader],
+) -> Record:
+    """Apply the resolved upgrader chain to ``record`` (pure, no I/O, no clock).
+
+    Operates on the consumer payload only — the coordinator-owned scope stamps
+    (:data:`_RESERVED_FIELDS`) are stripped before upgrading and re-applied
+    afterward, so an upgrader never sees nor rewrites them. ``_section_version``
+    is re-stamped to the spec's current version; the original ``_written_at``
+    is **preserved** (a lazy read-migration must not reset the retention clock)
+    and the ``storage_id`` (record identity) is carried through unchanged.
+    """
+    payload: dict[str, Any] = _public_data(record)
+    for upgrade in chain:
+        payload = dict(upgrade(payload))
+    payload.update(
+        _scope_fields(
+            record.get_value("user_id"),
+            record.get_value("section"),
+            record.get_value("tenant_id"),
+            spec.version,
+        )
+    )
+    written_at = record.get_value("_written_at")
+    if written_at is not None:
+        payload["_written_at"] = written_at
+    return Record(payload, storage_id=record.storage_id)
 
 
 #: The single payload key the reserved consent document nests its grant map
@@ -749,6 +810,41 @@ class _UserStateStoreCommon:
             exc,
         )
 
+    def _migrate_on_read(
+        self, record: Record, spec: UserStateSectionSpec
+    ) -> tuple[Record, bool]:
+        """Resolve and apply on-read migration for one record (no I/O).
+
+        The shared, transport-agnostic core of lazy migration: chain lookup is
+        an in-memory registry access and application is pure, so both variants
+        call this and only the optional persist-on-read write-back is
+        per-variant I/O. Returns ``(record, needs_persist)``:
+
+        * at the current version → the record unchanged, ``needs_persist=False``;
+        * **behind** → the in-memory-upgraded record, ``needs_persist=True``
+          (a missing migrator / chain gap raises
+          :class:`~dataknobs_common.exceptions.ConfigurationError` here);
+        * **ahead** (a rollback) → the record unchanged, ``needs_persist=False``,
+          with a WARNING logged (read fail-open so a rolled-back replica can
+          still read records a newer one wrote — it simply cannot down-convert
+          them).
+        """
+        if _is_downgrade(record, spec):
+            logger.warning(
+                "user-state record in section %r is at version %s, newer than "
+                "the running section schema version %s; passing it through "
+                "un-migrated (read fail-open). A rolled-back deployment reads "
+                "records a newer one wrote but cannot down-convert them.",
+                spec.name,
+                _record_version(record),
+                spec.version,
+            )
+            return record, False
+        if not _needs_migration(record, spec):
+            return record, False
+        chain = resolve_chain(spec.name, _record_version(record), spec.version)
+        return _migrate_record(record, spec, chain), True
+
 
 # --------------------------------------------------------------------- #
 # Async variant.
@@ -918,11 +1014,17 @@ class AsyncUserStateStore(
 
         A section carrying a ``consent_scope`` raises
         :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
-        user has not granted that scope.
+        user has not granted that scope. A record stamped behind the section's
+        schema ``version`` is migrated on read (see
+        :mod:`dataknobs_data.user.migration`).
         """
         spec = self._require_kind(section, SectionKind.DOCUMENT)
         await self._require_consent(user_id, spec)
-        return await self._db.read(self._doc_id(user_id, section))
+        doc_id = self._doc_id(user_id, section)
+        record = await self._db.read(doc_id)
+        if record is None:
+            return None
+        return await self._migrate_read_record(record, spec, doc_id)
 
     async def document_version(
         self, user_id: str, section: str
@@ -1005,9 +1107,13 @@ class AsyncUserStateStore(
         # not worth trading for drift risk until a profile shows it matters.
         if self.config.prune_on_query and spec.retention_days is not None:
             await self.prune(user_id, section)
-        return await self._db.search(
+        records = await self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
+        return [
+            await self._migrate_read_record(r, spec, r.storage_id)
+            for r in records
+        ]
 
     async def query_events(
         self, user_id: str, query: Query | None = None
@@ -1333,6 +1439,46 @@ class AsyncUserStateStore(
             # append is logged and swallowed, never propagated.
             self._log_append_failure(op, user_id, exc)
 
+    async def _migrate_read_record(
+        self, record: Record, spec: UserStateSectionSpec, storage_id: str | None
+    ) -> Record:
+        """Apply on-read migration to a single read record (async I/O boundary).
+
+        Wraps the shared, pure :meth:`_migrate_on_read`; the only async work is
+        the optional persist-on-read write-back when the store is configured
+        with ``persist_migrations`` and the record was actually upgraded.
+        """
+        migrated, needs_persist = self._migrate_on_read(record, spec)
+        if needs_persist and self.config.persist_migrations and storage_id:
+            await self._persist_migration(storage_id, migrated)
+        return migrated
+
+    async def _persist_migration(
+        self, storage_id: str, migrated: Record
+    ) -> None:
+        """Write an on-read-migrated record back under a compare-and-set guard.
+
+        Best-effort: the guard reads the current version token and writes the
+        upgrade conditionally, so a concurrent writer that advanced the record
+        first wins — its :class:`~dataknobs_common.exceptions.ConcurrencyError`
+        is swallowed and the caller still receives the in-memory upgrade (the
+        record is simply re-migrated on the next read). Migrations are
+        deterministic, so two replicas persisting the same upgrade converge on
+        identical content. This write-back is a representation upgrade, not a
+        semantic write: it emits no delta event and appends no audit record.
+        """
+        try:
+            token = await self._db.get_version(storage_id)
+            await self._db.update(
+                storage_id, migrated, expected_version=token
+            )
+        except ConcurrencyError:
+            logger.debug(
+                "persist-on-read migration skipped for %s: a concurrent write "
+                "advanced the record; keeping the in-memory upgrade.",
+                storage_id,
+            )
+
 
 # --------------------------------------------------------------------- #
 # Sync variant.
@@ -1458,11 +1604,17 @@ class UserStateStore(
 
         A consent-scoped section raises
         :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
-        user has not granted that scope.
+        user has not granted that scope. A record stamped behind the section's
+        schema ``version`` is migrated on read (see
+        :mod:`dataknobs_data.user.migration`).
         """
         spec = self._require_kind(section, SectionKind.DOCUMENT)
         self._require_consent(user_id, spec)
-        return self._db.read(self._doc_id(user_id, section))
+        doc_id = self._doc_id(user_id, section)
+        record = self._db.read(doc_id)
+        if record is None:
+            return None
+        return self._migrate_read_record(record, spec, doc_id)
 
     def document_version(self, user_id: str, section: str) -> str | None:
         """Return the compare-and-set token for a document (or None if absent)."""
@@ -1528,9 +1680,12 @@ class UserStateStore(
         # micro-optimization to avoid sync/async drift.
         if self.config.prune_on_query and spec.retention_days is not None:
             self.prune(user_id, section)
-        return self._db.search(
+        records = self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
+        return [
+            self._migrate_read_record(r, spec, r.storage_id) for r in records
+        ]
 
     def query_events(
         self, user_id: str, query: Query | None = None
@@ -1825,3 +1980,36 @@ class UserStateStore(
             # Best-effort: the primary op already persisted; a failed audit
             # append is logged and swallowed, never propagated.
             self._log_append_failure(op, user_id, exc)
+
+    def _migrate_read_record(
+        self, record: Record, spec: UserStateSectionSpec, storage_id: str | None
+    ) -> Record:
+        """Apply on-read migration to a single read record (sync mirror).
+
+        See the async twin: wraps the shared, pure :meth:`_migrate_on_read`;
+        the only I/O is the optional persist-on-read write-back when
+        ``persist_migrations`` is set and the record was actually upgraded.
+        """
+        migrated, needs_persist = self._migrate_on_read(record, spec)
+        if needs_persist and self.config.persist_migrations and storage_id:
+            self._persist_migration(storage_id, migrated)
+        return migrated
+
+    def _persist_migration(self, storage_id: str, migrated: Record) -> None:
+        """Write an on-read-migrated record back under a CAS guard (sync mirror).
+
+        See the async twin: best-effort — a concurrent writer that advanced the
+        record first wins the compare-and-set, its
+        :class:`~dataknobs_common.exceptions.ConcurrencyError` is swallowed, and
+        the caller still receives the in-memory upgrade. Emits no delta event
+        and appends no audit record (a representation upgrade, not a write).
+        """
+        try:
+            token = self._db.get_version(storage_id)
+            self._db.update(storage_id, migrated, expected_version=token)
+        except ConcurrencyError:
+            logger.debug(
+                "persist-on-read migration skipped for %s: a concurrent write "
+                "advanced the record; keeping the in-memory upgrade.",
+                storage_id,
+            )

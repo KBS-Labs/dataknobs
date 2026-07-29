@@ -136,10 +136,13 @@ from .user import (
     SECTION_WRITTEN_TOPIC,
     AsyncUserStateStore,
     SectionKind,
+    SectionMigrator,
     Sensitivity,
     UserStateSectionSpec,
     UserStateStore,
     UserStateStoreConfig,
+    register_section_migrator,
+    section_migrators,
 )
 
 __version__ = "0.6.2"
@@ -151,9 +154,12 @@ __all__ = [
     "UserStateStoreConfig",
     "UserStateSectionSpec",
     "SectionKind",
+    "SectionMigrator",
     "Sensitivity",
     "SECTION_DELETED_TOPIC",
     "SECTION_WRITTEN_TOPIC",
+    "register_section_migrator",
+    "section_migrators",
     # Core classes
     "AsyncDatabase",
     "SyncDatabase",
