@@ -17,11 +17,14 @@ from typing import Any
 import pytest
 
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.records import Record
 from dataknobs_data.user import (
     AsyncUserStateStore,
     UserStateStore,
     UserStateStoreConfig,
 )
+from dataknobs_data.user.store import _is_expired
 
 # ``activity`` prunes at 30 days; ``notes`` has no window (never prunes);
 # ``prefs`` is a document (documents never expire).
@@ -214,3 +217,71 @@ def test_prune_method_parity() -> None:
     assert inspect.signature(AsyncUserStateStore.prune) == inspect.signature(
         UserStateStore.prune
     )
+
+
+# --------------------------------------------------------------------- #
+# A non-positive retention window is a load-time ConfigurationError.
+#
+# A mis-signed window (0 or negative) turns ``_is_expired`` into "everything
+# is expired" — ``written < now - timedelta(days=-30)`` == ``written < now +
+# 30 days`` — so the next prune deletes live data. Reject it at the boundary,
+# the same place a document+retention mistake is caught.
+# --------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad", [0, -1, -30])
+def test_non_positive_retention_days_rejected(bad: int) -> None:
+    with pytest.raises(ConfigurationError):
+        UserStateStoreConfig.from_dict(
+            {
+                "namespace": "acme",
+                "sections": [
+                    {
+                        "name": "activity",
+                        "kind": "collection",
+                        "retention_days": bad,
+                    }
+                ],
+            }
+        )
+
+
+# --------------------------------------------------------------------- #
+# Timezone-mismatch fail-safe: an aware stamp compared to a naive ``now``
+# (or vice-versa) is treated as not-expired, never raising TypeError.
+# ``_is_expired`` promises it "never deletes a record it cannot confidently
+# date" — a tz mismatch is exactly "cannot confidently compare".
+# --------------------------------------------------------------------- #
+
+
+def test_is_expired_tz_mismatch_is_not_expired() -> None:
+    aware = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    naive = datetime(2099, 1, 1)  # far future — WOULD expire if comparable
+
+    aware_stamp = Record({"_written_at": aware.isoformat()})
+    naive_stamp = Record({"_written_at": naive.isoformat()})
+
+    # Aware stamp vs a naive far-future clock: uncomparable -> not expired.
+    assert _is_expired(aware_stamp, 30, naive) is False
+    # Naive stamp vs an aware far-future clock: symmetric, also not expired.
+    assert _is_expired(naive_stamp, 30, aware) is False
+
+
+async def test_prune_tz_mismatch_does_not_crash_or_delete() -> None:
+    # Store A writes with the default tz-aware wall clock; store B prunes the
+    # same backend with a NAIVE far-future clock. Pre-fix this raised
+    # TypeError inside prune; the record must instead survive (return 0).
+    db = AsyncMemoryDatabase()
+    cfg = UserStateStoreConfig.from_dict(_config())
+    writer = AsyncUserStateStore.from_components(cfg, db=db)  # aware default
+    pruner = AsyncUserStateStore.from_components(
+        cfg, db=db, now=lambda: datetime(2099, 1, 1),  # naive far future
+    )
+    try:
+        await writer.add_record("u1", "activity", {"event": "keep"})
+        assert await pruner.prune("u1", "activity") == 0
+        rows = await pruner.query("u1", "activity")
+        assert {r.get_value("event") for r in rows} == {"keep"}
+    finally:
+        await writer.close()
+        await pruner.close()

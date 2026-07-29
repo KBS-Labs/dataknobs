@@ -241,6 +241,11 @@ removed = await store.prune("user-42")               # every windowed section
 - **Collection sections only.** A document section holds one evolving record per
   user and never expires; a `retention_days` on a document section is a
   `ConfigurationError` at config load.
+- **Positive windows only.** `retention_days` must be a positive number of days.
+  A zero or negative window is a `ConfigurationError` at config load — it would
+  mark live records as already expired and delete them on the next `prune`, so a
+  mis-signed window is caught at the boundary rather than silently destroying
+  data.
 - **Not consent-gated.** Pruning is data minimization, so — like `clear` — it is
   never blocked by a consent scope.
 
@@ -255,6 +260,13 @@ store = await AsyncUserStateStore.from_config(
     config, now=lambda: datetime.now(timezone.utc),
 )
 ```
+
+Prefer a **timezone-aware** clock (as above): `_written_at` stamps are recorded
+with whatever awareness the clock returns, and expiry compares the stamp against
+`now`. A record whose stamp cannot be confidently compared to `now` — a missing
+or unparseable stamp, or an aware/naive timezone mismatch between the stamp and
+the clock — is treated as *not* expired and left in place rather than crashing
+the prune. Keeping the clock consistently aware avoids that edge entirely.
 
 ## Tenant scoping
 
@@ -285,6 +297,14 @@ values are never emitted, so a `SENSITIVE` section's contents cannot leak into a
 observer. The payload does carry the `user_id` for routing, so treat the event
 stream with the same care as that identifier. Inject an `event_bus` to fan the
 events out across replicas:
+
+A "write" here is a create, update, or consent grant/revoke — the operations
+that record new or changed state. **Deletions are intentionally not evented:**
+`delete_record`, `clear` (erasure), and retention `prune` fire nothing. They are
+removals rather than state an observer needs to project, and emitting an event
+for one deletion path but not its siblings would make the stream inconsistent. A
+consumer that needs a deletion or erasure audit trail should record it at the
+call site rather than infer it from this stream.
 
 ```python
 from dataknobs_common.events import InMemoryEventBus

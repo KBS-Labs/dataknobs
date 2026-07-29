@@ -96,7 +96,10 @@ class UserStateSectionSpec(StructuredConfig):
             (or lazily on ``query`` when ``prune_on_query`` is set). A
             document section holds one evolving record per user and never
             expires, so a ``retention_days`` on a document section is
-            rejected at config-load time.
+            rejected at config-load time. When set it must be a **positive**
+            number of days; a zero or negative window is rejected at
+            config-load time (it would mark live records as already expired
+            and delete them on the next ``prune``).
     """
 
     name: str = ""
@@ -154,7 +157,10 @@ class UserStateStoreConfig(StructuredConfig):
         A ``retention_days`` window on a ``DOCUMENT`` section is also rejected:
         a document section holds one evolving record per user and never
         expires, so a retention window on it is a configuration mistake caught
-        here rather than silently ignored.
+        here rather than silently ignored. A non-positive ``retention_days``
+        (zero or negative) on any section is likewise rejected — such a window
+        would mark live records as already expired and delete them, so a
+        mis-signed window is caught here rather than silently destroying data.
         """
         seen: set[str] = set()
         for spec in self.sections:
@@ -172,6 +178,18 @@ class UserStateStoreConfig(StructuredConfig):
                     "carry retention_days: a document section holds one "
                     "evolving record per user and never expires. Retention "
                     "applies to collection sections.",
+                    context={"namespace": self.namespace, "name": spec.name},
+                )
+            if (
+                spec.retention_days is not None
+                and spec.retention_days < 1
+            ):
+                raise ConfigurationError(
+                    f"Section {spec.name!r} declares retention_days="
+                    f"{spec.retention_days}: a retention window must be a "
+                    "positive number of days. A zero or negative window "
+                    "would mark live records as already expired and delete "
+                    "them on the next prune.",
                     context={"namespace": self.namespace, "name": spec.name},
                 )
             if spec.name in RESERVED_SECTION_NAMES:

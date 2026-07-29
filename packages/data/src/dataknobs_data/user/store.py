@@ -233,9 +233,12 @@ def _is_expired(
     """Return whether ``record`` has aged past its ``retention_days`` window.
 
     Pure and fail-safe: an unbounded window (``retention_days is None``) never
-    expires, and a record whose ``_written_at`` stamp is missing or
-    unparseable is treated as *not* expired — the coordinator never deletes a
-    record it cannot confidently date. A record is expired when its
+    expires, and a record whose ``_written_at`` stamp is missing, unparseable,
+    or not comparable to ``now`` is treated as *not* expired — the coordinator
+    never deletes a record it cannot confidently date. That last case covers a
+    timezone mismatch: comparing an aware stamp against a naive ``now`` clock
+    (or vice versa) raises ``TypeError``, which is caught and treated as
+    not-expired rather than crashing the prune. A record is expired when its
     ``_written_at`` is strictly older than ``now - retention_days``.
     """
     if retention_days is None:
@@ -245,9 +248,9 @@ def _is_expired(
         return False
     try:
         written = datetime.fromisoformat(written_at)
-    except ValueError:
+        return written < now - timedelta(days=retention_days)
+    except (ValueError, TypeError):
         return False
-    return written < now - timedelta(days=retention_days)
 
 
 #: The single payload key the reserved consent document nests its grant map
@@ -830,6 +833,11 @@ class AsyncUserStateStore(
         """
         spec = self._require_kind(section, SectionKind.COLLECTION)
         await self._require_consent(user_id, spec)
+        # Deliberate two-pass: reuse the shared ``prune`` primitive (its own
+        # search + delete_batch) rather than inlining the expiry filter into
+        # the read below. The extra read is the price of keeping the retention
+        # logic in one place across the sync/async twins; it is unmeasured and
+        # not worth trading for drift risk until a profile shows it matters.
         if self.config.prune_on_query and spec.retention_days is not None:
             await self.prune(user_id, section)
         return await self._db.search(
@@ -847,6 +855,14 @@ class AsyncUserStateStore(
         library, not a daemon. Not consent-gated: pruning is data minimization,
         which must always be possible (mirroring :meth:`clear`). Returns the
         number of records deleted.
+
+        Like :meth:`clear`, this is a bulk primitive that collects ids with a
+        ``search`` and removes them with a single ``delete_batch`` — the batch
+        delete carries no ``expected_version``. A record refreshed (its
+        ``_written_at`` re-stamped) by a concurrent write between the search
+        and the batch delete is still deleted (last-write-loses). Run prune on
+        a maintenance cadence rather than interleaved with a user's live writes
+        if that window matters.
         """
         now = self._now()
         ids: list[str] = []
@@ -1190,6 +1206,10 @@ class UserStateStore(
         """
         spec = self._require_kind(section, SectionKind.COLLECTION)
         self._require_consent(user_id, spec)
+        # Deliberate two-pass — see the async twin: reuse the shared ``prune``
+        # primitive rather than inlining the expiry filter into the read, at
+        # the cost of one extra search. Kept simple over an unmeasured
+        # micro-optimization to avoid sync/async drift.
         if self.config.prune_on_query and spec.retention_days is not None:
             self.prune(user_id, section)
         return self._db.search(
@@ -1204,6 +1224,12 @@ class UserStateStore(
         section raises through :meth:`_require_kind`. Expiry is measured against
         the injected clock; not consent-gated (data minimization, like
         :meth:`clear`). Returns the number of records deleted.
+
+        Like :meth:`clear`, this is a bulk ``search`` + ``delete_batch`` with
+        no ``expected_version``: a record refreshed by a concurrent write
+        between the search and the batch delete is still deleted
+        (last-write-loses). Run prune on a maintenance cadence rather than
+        interleaved with a user's live writes if that window matters.
         """
         now = self._now()
         ids: list[str] = []

@@ -36,8 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an injectable `now` clock (a `Callable[[], datetime]`, defaulting to
   wall-clock UTC). A `retention_days` on a **document** section — which holds one
   evolving record per user and never expires — is rejected at config load with
-  `ConfigurationError`. Pruning is data minimization and, like `clear()`, is
-  never consent-gated.
+  `ConfigurationError`. A non-positive `retention_days` (zero or negative) is
+  likewise rejected at config load — such a window would mark live records as
+  already expired and delete them, so a mis-signed window is caught at the
+  boundary rather than silently destroying data. Retention expiry is fail-safe:
+  a record whose `_written_at` stamp is missing, unparseable, or not comparable
+  to `now` (an aware/naive timezone mismatch between the stamp and the injected
+  clock) is treated as not-expired and left in place rather than crashing the
+  prune. Pruning is data minimization and, like `clear()`, is never
+  consent-gated; deletions (`delete_record` / `clear` / `prune`) fire no
+  delta event.
 
 ### Changed
 
