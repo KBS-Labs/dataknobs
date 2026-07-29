@@ -201,8 +201,12 @@ await store.revoke_consent("user-42", "analytics_processing")  # block access
 
 Grants are stored in a reserved, coordinator-managed `consent` document section,
 so `consent` is a reserved section name — declaring your own section named
-`consent` is a `ConfigurationError`. The consent helpers are available only when
-at least one declared section carries a `consent_scope`.
+`consent` is a `ConfigurationError`. The reserved section is also unreachable
+through the content API: `get_document` / `put_document` / `query` / `add_record`
+(and the version accessors) on `"consent"` raise `ConfigurationError`, so a
+caller cannot forge a grant or clobber the ledger by writing it directly —
+grants flow only through `grant_consent` / `revoke_consent`. The consent helpers
+are available only when at least one declared section carries a `consent_scope`.
 
 ## Tenant scoping
 

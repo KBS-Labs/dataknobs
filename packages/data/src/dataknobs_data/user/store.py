@@ -232,25 +232,43 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: The single payload key the reserved consent document nests its grant map
+#: under. Grants are stored as ``{_GRANTS_KEY: {scope: {...}}}`` — one isolated
+#: namespace — rather than as top-level payload keys, so a ``consent_scope``
+#: whose name collides with a coordinator-owned field (:data:`_RESERVED_FIELDS`)
+#: is still storable and grantable (a top-level layout would let the reserved
+#: stamp shadow the grant, locking the section permanently and silently).
+_GRANTS_KEY: str = "grants"
+
+
+def _grants_of(consent_record: Record | None) -> dict[str, Any]:
+    """Return the grant map nested in a consent document (empty when absent).
+
+    The reserved consent document stores every grant under the single
+    :data:`_GRANTS_KEY` key, isolated from the coordinator's scope stamps, so
+    the grant namespace can never collide with a reserved field name.
+    """
+    if consent_record is None:
+        return {}
+    grants = consent_record.get_value(_GRANTS_KEY)
+    return dict(grants) if isinstance(grants, Mapping) else {}
+
+
 def _consent_satisfied(consent_record: Record | None, scope: str) -> bool:
     """Return whether ``scope`` is granted in the consent document.
 
     Fail-closed (the security rule): a missing consent document, a missing
     scope entry, or a non-``True`` ``granted`` flag all deny access.
     """
-    if consent_record is None:
-        return False
-    grant = _public_data(consent_record).get(scope)
+    grant = _grants_of(consent_record).get(scope)
     return isinstance(grant, Mapping) and grant.get("granted") is True
 
 
 def _granted_scopes(consent_record: Record | None) -> frozenset[str]:
     """Return the set of currently-granted scope names in a consent document."""
-    if consent_record is None:
-        return frozenset()
     return frozenset(
         scope
-        for scope, grant in _public_data(consent_record).items()
+        for scope, grant in _grants_of(consent_record).items()
         if isinstance(grant, Mapping) and grant.get("granted") is True
     )
 
@@ -368,7 +386,23 @@ class _UserStateStoreCommon:
     def _require_kind(
         self, section: str, kind: SectionKind
     ) -> UserStateSectionSpec:
-        """Return the spec for ``section``, or raise if unknown / wrong kind."""
+        """Return the spec for ``section``, or raise if unknown / wrong kind.
+
+        A coordinator-managed reserved section (the ``consent`` grant ledger)
+        is never a valid content-API target: it is reached only through the
+        consent helpers' private read/write path, so addressing it via
+        ``get_document`` / ``put_document`` / ``query`` / etc. is refused here
+        — the single chokepoint every public content method routes through.
+        Without this a caller could ``put_document(user, "consent", …)`` to
+        forge a grant or clobber the ledger.
+        """
+        if section in self._reserved_sections:
+            raise ConfigurationError(
+                f"Section {section!r} is reserved and coordinator-managed; "
+                "it cannot be read or written through the content API. Use "
+                "grant_consent / revoke_consent / has_consent.",
+                context={"section": section},
+            )
         spec = self._sections.get(section)
         if spec is None:
             raise ConfigurationError(
@@ -428,6 +462,30 @@ class _UserStateStoreCommon:
         return _document_id(
             self.config.namespace, self._tenant.tenant_id, user_id, section
         )
+
+    def _consent_record(
+        self, user_id: str, grants: Mapping[str, Any]
+    ) -> tuple[str, Record, UserStateSectionSpec]:
+        """Build the ``(doc_id, record, spec)`` for the reserved consent document.
+
+        The shared, transport-agnostic half of the consent write path: each
+        variant's :meth:`_write_consent` does only the ``await`` / non-``await``
+        upsert and the (metadata-only) delta-event fire. Nests the grant map
+        under :data:`_GRANTS_KEY` so the grant namespace stays isolated from the
+        coordinator's scope stamps. Raises via :meth:`_consent_spec` when no
+        section declares a ``consent_scope``. Returns the resolved spec so the
+        writer can fire the section-written event without a second lookup.
+        """
+        spec = self._consent_spec()
+        doc_id = self._doc_id(user_id, RESERVED_CONSENT_SECTION)
+        record = self._build_record(
+            {_GRANTS_KEY: dict(grants)},
+            user_id,
+            RESERVED_CONSENT_SECTION,
+            spec,
+            storage_id=doc_id,
+        )
+        return doc_id, record, spec
 
     def _build_record(
         self,
@@ -559,6 +617,25 @@ class AsyncUserStateStore(
             self._doc_id(user_id, RESERVED_CONSENT_SECTION)
         )
 
+    async def _write_consent(
+        self, user_id: str, grants: Mapping[str, Any], op: str
+    ) -> None:
+        """Persist the reserved consent document (the private write path).
+
+        Bypasses the public ``put_document`` — which now refuses the reserved
+        ``consent`` section — so grants can only be written through
+        :meth:`grant_consent` / :meth:`revoke_consent`, never forged or
+        clobbered through the content API. Still fires the same metadata-only
+        ``section_written`` delta event every other write fires (carrying
+        ``op`` — ``"grant_consent"`` / ``"revoke_consent"`` — and never the
+        scope name or grant status), so consent writes stay observable.
+        """
+        doc_id, record, spec = self._consent_record(user_id, grants)
+        await self._db.upsert(doc_id, record)
+        await self._fire_written(
+            user_id, RESERVED_CONSENT_SECTION, spec, op
+        )
+
     async def _require_consent(
         self, user_id: str, spec: UserStateSectionSpec
     ) -> None:
@@ -585,12 +662,11 @@ class AsyncUserStateStore(
     async def grant_consent(self, user_id: str, scope: str) -> None:
         """Grant ``scope`` for ``user_id``, unlocking every section tagged with it."""
         self._consent_spec()
-        current = await self._read_consent(user_id)
-        grants = _public_data(current) if current is not None else {}
-        await self.put_document(
+        grants = _grants_of(await self._read_consent(user_id))
+        await self._write_consent(
             user_id,
-            RESERVED_CONSENT_SECTION,
             _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+            "grant_consent",
         )
 
     async def revoke_consent(self, user_id: str, scope: str) -> None:
@@ -601,12 +677,11 @@ class AsyncUserStateStore(
         surfaces it again). Erasure remains the explicit :meth:`clear`.
         """
         self._consent_spec()
-        current = await self._read_consent(user_id)
-        grants = _public_data(current) if current is not None else {}
-        await self.put_document(
+        grants = _grants_of(await self._read_consent(user_id))
+        await self._write_consent(
             user_id,
-            RESERVED_CONSENT_SECTION,
             _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+            "revoke_consent",
         )
 
     async def has_consent(self, user_id: str, scope: str) -> bool:
@@ -889,6 +964,21 @@ class UserStateStore(
         """Read the reserved consent document for ``user_id`` (or None)."""
         return self._db.read(self._doc_id(user_id, RESERVED_CONSENT_SECTION))
 
+    def _write_consent(
+        self, user_id: str, grants: Mapping[str, Any], op: str
+    ) -> None:
+        """Persist the reserved consent document (sync mirror).
+
+        Bypasses the public ``put_document`` (which refuses the reserved
+        ``consent`` section) so grants are writable only through the consent
+        helpers — never forged or clobbered through the content API. Still fires
+        the same metadata-only ``section_written`` delta event every other write
+        fires (carrying ``op``, never the scope name or grant status).
+        """
+        doc_id, record, spec = self._consent_record(user_id, grants)
+        self._db.upsert(doc_id, record)
+        self._fire_written(user_id, RESERVED_CONSENT_SECTION, spec, op)
+
     def _require_consent(
         self, user_id: str, spec: UserStateSectionSpec
     ) -> None:
@@ -915,23 +1005,21 @@ class UserStateStore(
     def grant_consent(self, user_id: str, scope: str) -> None:
         """Grant ``scope`` for ``user_id``, unlocking every section tagged with it."""
         self._consent_spec()
-        current = self._read_consent(user_id)
-        grants = _public_data(current) if current is not None else {}
-        self.put_document(
+        grants = _grants_of(self._read_consent(user_id))
+        self._write_consent(
             user_id,
-            RESERVED_CONSENT_SECTION,
             _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+            "grant_consent",
         )
 
     def revoke_consent(self, user_id: str, scope: str) -> None:
         """Revoke ``scope`` for ``user_id`` (block future access; data untouched)."""
         self._consent_spec()
-        current = self._read_consent(user_id)
-        grants = _public_data(current) if current is not None else {}
-        self.put_document(
+        grants = _grants_of(self._read_consent(user_id))
+        self._write_consent(
             user_id,
-            RESERVED_CONSENT_SECTION,
             _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+            "revoke_consent",
         )
 
     def has_consent(self, user_id: str, scope: str) -> bool:

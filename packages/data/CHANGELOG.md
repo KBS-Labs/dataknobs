@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   section rather than raising. Grants are per `(user, scope)` — one grant unlocks
   every section sharing the scope — and are stored in a reserved,
   coordinator-managed `consent` document section, so `consent` is now a reserved
-  section name (declaring it raises `ConfigurationError`). Revocation is
-  block-only (the stored data is left in place for a later re-grant); erasure via
-  `clear()` is never consent-gated. Sections that declare no `consent_scope` are
-  unaffected.
+  section name (declaring it raises `ConfigurationError`). The reserved section
+  is unreachable through the content API (`get_document` / `put_document` /
+  `query` / `add_record` on `"consent"` raise `ConfigurationError`), so grants
+  cannot be forged or the ledger clobbered by writing it directly — they flow
+  only through `grant_consent` / `revoke_consent`. Revocation is block-only (the
+  stored data is left in place for a later re-grant); erasure via `clear()` is
+  never consent-gated. Sections that declare no `consent_scope` are unaffected.
 
 ### Changed
 
