@@ -115,6 +115,7 @@ from dataknobs_common.discriminator import (
 from dataknobs_common.exceptions import (
     ConcurrencyError,
     ConfigurationError,
+    ConsentRequiredError,
     DataknobsError,
     NotFoundError,
     OperationError,
@@ -270,6 +271,7 @@ __all__ = [
     "ConfigurationError",
     "ResourceError",
     "NotFoundError",
+    "ConsentRequiredError",
     "OperationError",
     "ConcurrencyError",
     "SerializationError",

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `ConsentRequiredError` in `dataknobs_common.exceptions` (exported from the
+  top-level `dataknobs_common` namespace): a fail-closed policy denial raised
+  when access is refused because a required consent scope was not granted. A
+  top-level `DataknobsError` sibling of `ValidationError` / `NotFoundError` (not
+  an `OperationError` — nothing failed; the operation was declined by policy).
+  Carries `scope` and optional `user_id` attributes.
+
 ## v1.6.2 - 2026-07-27
 
 ### Added

@@ -25,6 +25,18 @@ from typing import Any
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfig
 
+#: Name of the reserved document section the coordinator auto-manages to store
+#: per-user consent grants. Defined here (the lower module) so the store can
+#: import it without a circular dependency and the reserved-name guard below
+#: cannot drift from the store's usage.
+RESERVED_CONSENT_SECTION = "consent"
+
+#: Section names the coordinator reserves for its own auto-managed sections. A
+#: consumer that declares a section with one of these names collides with the
+#: reserved section (which shares the same name map), so it is rejected at
+#: config-load time rather than silently shadowed.
+RESERVED_SECTION_NAMES: frozenset[str] = frozenset({RESERVED_CONSENT_SECTION})
+
 
 class SectionKind(str, Enum):
     """Storage shape of a user-state section.
@@ -123,7 +135,9 @@ class UserStateStoreConfig(StructuredConfig):
         from the config typo. Failing here — at construction, on both the
         typed and ``from_dict`` paths — turns that data-integrity footgun into
         an immediate, actionable error. An empty ``sections`` tuple is allowed
-        (an inert store); every *declared* section must be named and unique.
+        (an inert store); every *declared* section must be named and unique,
+        and may not use a name reserved for a coordinator-managed section
+        (:data:`RESERVED_SECTION_NAMES`).
         """
         seen: set[str] = set()
         for spec in self.sections:
@@ -131,6 +145,13 @@ class UserStateStoreConfig(StructuredConfig):
                 raise ConfigurationError(
                     "User-state section names must be non-empty.",
                     context={"namespace": self.namespace},
+                )
+            if spec.name in RESERVED_SECTION_NAMES:
+                raise ConfigurationError(
+                    f"Section name {spec.name!r} is reserved for a "
+                    "coordinator-managed section and may not be declared. "
+                    f"Reserved names: {sorted(RESERVED_SECTION_NAMES)}.",
+                    context={"namespace": self.namespace, "name": spec.name},
                 )
             if spec.name in seen:
                 raise ConfigurationError(
