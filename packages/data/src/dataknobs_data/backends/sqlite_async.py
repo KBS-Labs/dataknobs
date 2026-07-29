@@ -445,7 +445,9 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         self._check_connection()
 
-        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+        query, params, ids = self.query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         own_tx = _tx is None
         if own_tx:

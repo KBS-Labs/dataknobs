@@ -10,7 +10,6 @@ import os
 import platform
 import tempfile
 import threading
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -594,17 +593,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
         ``ConcurrencyError``. A conditional upsert never inserts (an absent
         record's token is ``None``, which never matches).
         """
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                id = str(uuid.uuid4())  # type: ignore[unreachable]
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         async with self._lock:
             data = await self._load_data()
@@ -998,17 +989,9 @@ class SyncFileDatabase(  # type: ignore[misc]
         ``ConcurrencyError``. A conditional upsert never inserts (an absent
         record's token is ``None``, which never matches).
         """
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                id = str(uuid.uuid4())  # type: ignore[unreachable]
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         with self._lock:
             data = self._load_data()

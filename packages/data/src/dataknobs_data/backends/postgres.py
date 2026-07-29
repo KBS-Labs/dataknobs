@@ -494,18 +494,9 @@ class SyncPostgresDatabase(
         """
         self._check_connection()
 
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Conditional upsert: delegate to update()'s atomic xmin
         # compare-and-set. A True return is the update; a stale token raises
@@ -657,7 +648,9 @@ class SyncPostgresDatabase(
         query_builder = SQLQueryBuilder(
             self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
         )
-        query, params_list, ids = query_builder.build_batch_upsert_query(records)
+        query, params_list, ids = query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         params_dict = {}
         for i, param in enumerate(params_list):
@@ -1574,18 +1567,9 @@ class AsyncPostgresDatabase(
         """
         self._check_connection()
 
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         if expected_version is not None:
             # A conditional upsert never inserts. Delegate to update()'s atomic
@@ -1804,7 +1788,9 @@ class AsyncPostgresDatabase(
         query_builder = SQLQueryBuilder(
             self.table_name, self.schema_name, dialect="postgres"
         )
-        query, params, ids = query_builder.build_batch_upsert_query(records)
+        query, params, ids = query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         async with self._acquire(_tx) as conn:
             await conn.execute(query, *params)

@@ -482,7 +482,9 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         self._check_connection()
 
-        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+        query, params, ids = self.query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         cursor = self.conn.cursor()
         try:

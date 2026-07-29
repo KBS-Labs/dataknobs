@@ -661,7 +661,9 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self, records: list[Record], own_tx: bool = True
     ) -> list[str]:
         """Synchronous batch upsert implementation."""
-        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+        query, params, ids = self.query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         with self._lock:
             try:
@@ -1273,7 +1275,9 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             return []
 
         self._check_connection()
-        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+        query, params, ids = self.query_builder.build_batch_upsert_query(
+            records, id_factory=self._generate_id
+        )
 
         try:
             self.conn.begin()

@@ -755,12 +755,12 @@ class SQLQueryBuilder:
         return query, params, ids
 
     def build_batch_upsert_query(
-        self, records: list[Record]
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
     ) -> tuple[str, list[Any], list[str]]:
         """Build a batch INSERT ... ON CONFLICT DO UPDATE query.
 
         The batch analogue of ``build_batch_create_query`` with upsert
-        semantics: a caller-supplied ``record.id`` is honored (a uuid is minted
+        semantics: a caller-supplied ``record.id`` is honored (an id is minted
         only when absent) and an id already present is overwritten (never
         raised). All three SQL dialects (PostgreSQL, SQLite, DuckDB) support
         ``ON CONFLICT (id) DO UPDATE``.
@@ -772,6 +772,10 @@ class SQLQueryBuilder:
 
         Args:
             records: List of records to upsert
+            id_factory: The backend's ``_generate_id`` hook, used to mint an id
+                for a record that carries none — so a consumer overriding the
+                hook governs batch upsert mints too. Defaults to a random UUID4
+                when a direct caller supplies no factory.
 
         Returns:
             Tuple of (SQL query, parameters, ids in input order)
@@ -781,11 +785,13 @@ class SQLQueryBuilder:
 
         import uuid
 
+        mint = id_factory if id_factory is not None else (lambda: str(uuid.uuid4()))
+
         ids: list[str] = []
         # Ordered id -> (data_json, metadata_json), last occurrence wins.
         rows: dict[str, tuple[str, str | None]] = {}
         for record in records:
-            record_id = record.id or str(uuid.uuid4())
+            record_id = record.id or mint()
             ids.append(record_id)
             data_json = self._record_to_json(record)
             metadata_json = (
