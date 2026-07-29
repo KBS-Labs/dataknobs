@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -381,9 +382,15 @@ class RecordStorageMixin:
         their mint fallback through this hook. The default is a random UUID4. A
         caller-supplied ``record.id`` is always honored; this hook governs only
         the mint fallback.
-        """
-        import uuid
 
+        Scope — ``create`` / ``create_batch`` only: the ``upsert`` and
+        ``update`` mint fallbacks do **not** yet route through this hook (they
+        still mint a UUID4 inline). An override here therefore changes minted
+        ids on the create paths but not on ``upsert(Record(...))`` /
+        ``update`` — if you need a custom scheme on those paths today, stamp
+        ``record.storage_id`` explicitly before the write. Unifying the
+        upsert/update mint fallbacks through this hook is a tracked follow-up.
+        """
         return str(uuid.uuid4())
 
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
@@ -836,8 +843,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        import uuid
-
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)
@@ -1637,8 +1642,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        import uuid
-
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)

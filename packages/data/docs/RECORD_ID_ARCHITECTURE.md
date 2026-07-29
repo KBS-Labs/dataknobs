@@ -186,13 +186,15 @@ def _generate_id(self) -> str:
     return str(uuid.uuid4())
 ```
 
-Every mint fallback routes through this hook — the base helper above, the SQL
-create paths (which resolve `record.id or self._generate_id()` and pass the id
-into `build_create_query`, or an `id_factory=self._generate_id` into
-`build_batch_create_query`), and the Postgres / Elasticsearch create paths. It is the single extension point for a custom storage-id scheme:
-override it once and every `create()` / `create_batch()` path on that backend
-mints via your implementation, uniformly. A caller-supplied `record.id` is
-always honored — the hook governs only the mint fallback.
+Every `create` / `create_batch` mint fallback routes through this hook — the
+base helper above, the SQL create paths (which resolve
+`record.id or self._generate_id()` and pass the id into `build_create_query`, or
+an `id_factory=self._generate_id` into `build_batch_create_query`), and the
+Postgres / Elasticsearch create paths. It is the single extension point for a
+custom storage-id scheme: override it once and every `create()` /
+`create_batch()` path on that backend mints via your implementation, uniformly.
+A caller-supplied `record.id` is always honored — the hook governs only the mint
+fallback.
 
 ```python
 import ulid
@@ -202,6 +204,14 @@ class UlidSQLiteDatabase(SyncSQLiteDatabase):
     def _generate_id(self) -> str:
         return str(ulid.new())   # every minted id is a ULID, on every create path
 ```
+
+> **Scope — `create` / `create_batch` only.** The `upsert()` and `update()`
+> mint fallbacks do **not** yet route through this hook; when they mint (an
+> `upsert`/`update` of a record that carries no id), they still produce a random
+> UUID4 inline. An override therefore governs the create paths but not
+> `upsert(Record(...))` / `update`. If you need a custom scheme on those paths
+> today, set `record.storage_id` explicitly before the write. Unifying the
+> upsert/update mint fallbacks through `_generate_id()` is a tracked follow-up.
 
 ### Backend Usage Example
 
