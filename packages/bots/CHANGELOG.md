@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`AsyncMemoryBank` database lifecycle parity.** `AsyncMemoryBank` now
+  supports owned-vs-injected database teardown — an `owns_db` constructor flag
+  plus `close()` / `aclose()` methods routed through `close_if_owned`, matching
+  the sync `MemoryBank`. `from_dict` now accepts an optional `db` (with inferred
+  ownership) and no longer leaks the `AsyncMemoryDatabase` it builds when none is
+  supplied. A caller-supplied db is left open (caller-owned); a self-built db is
+  owned and closed. Purely additive — `owns_db` defaults to `False`.
+
 ## v0.9.2 - 2026-07-27
 
 ### Added

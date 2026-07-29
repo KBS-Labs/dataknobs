@@ -182,6 +182,140 @@ class TestMemoryBankDbOwnership:
 
 
 # =====================================================================
+# AsyncMemoryBank — async db ownership (sync parity)
+# =====================================================================
+
+
+class TestAsyncMemoryBankDbOwnership:
+    """``AsyncMemoryBank`` closes its db only when it owns it — the async
+    mirror of :class:`TestMemoryBankDbOwnership`.
+
+    Teardown-reaching tests are parametrized over ``close`` and ``aclose``
+    so both public teardown methods are proven to reach the owned db.
+    Uses the real ``CountingAsyncDB`` (an ``AsyncMemoryDatabase`` subclass),
+    not a mock.
+    """
+
+    @pytest.mark.asyncio
+    async def test_injected_db_not_closed(self) -> None:
+        """A caller-supplied db survives the bank's close() (default owns_db=False)."""
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        shared = CountingAsyncDB()
+        bank = AsyncMemoryBank(name="b", schema={}, db=shared)
+
+        await bank.close()
+
+        assert shared.close_count == 0, "injected db must not be closed"
+        # The shared db is still usable by another holder.
+        other = AsyncMemoryBank(name="b2", schema={}, db=shared)
+        await other.add({"x": 1})
+        assert await other.count() == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["close", "aclose"])
+    async def test_owned_db_is_closed(self, method: str) -> None:
+        """An owned db is closed by the bank's close()/aclose()."""
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        owned = CountingAsyncDB()
+        bank = AsyncMemoryBank(name="b", schema={}, db=owned, owns_db=True)
+
+        await getattr(bank, method)()
+
+        assert owned.close_count == 1, f"owned db must be closed via {method}()"
+
+    @pytest.mark.asyncio
+    async def test_from_dict_builds_owned_db(self) -> None:
+        """from_dict with db=None builds a fresh db the bank owns."""
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        bank = await AsyncMemoryBank.from_dict({"name": "b", "schema": {}})
+
+        assert isinstance(bank._db, AsyncMemoryDatabase)
+        assert bank._owns_db is True
+        await bank.close()  # does not raise
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["close", "aclose"])
+    async def test_from_dict_owned_self_built_db_is_closed(
+        self, method: str
+    ) -> None:
+        """The from_dict leak site: an owned db routed through from_dict is
+        torn down. Routes an instrumentable owned db through the new
+        ``from_dict`` db param so the close is observable.
+        """
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        owned = CountingAsyncDB()
+        bank = await AsyncMemoryBank.from_dict(
+            {"name": "b", "schema": {}}, db=owned, owns_db=True
+        )
+
+        await getattr(bank, method)()
+
+        assert owned.close_count == 1, "from_dict-owned db must be closed"
+
+    @pytest.mark.asyncio
+    async def test_from_dict_injected_db_not_owned(self) -> None:
+        """from_dict with an explicit db treats it as caller-owned."""
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        shared = CountingAsyncDB()
+        bank = await AsyncMemoryBank.from_dict(
+            {"name": "b", "schema": {}}, db=shared
+        )
+
+        await bank.close()
+
+        assert bank._owns_db is False
+        assert shared.close_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["close", "aclose"])
+    async def test_from_dict_built_db_owned_despite_explicit_owns_false(
+        self, method: str
+    ) -> None:
+        """An internally-built db is owned even if owns_db=False is passed.
+
+        The bank built the db itself, so the caller holds no reference to
+        close it; honoring an explicit owns_db=False would leak it. The
+        contradictory input warns and is forced to ownership.
+        """
+        import warnings
+
+        from dataknobs_bots.memory.bank import AsyncMemoryBank
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            bank = await AsyncMemoryBank.from_dict(
+                {"name": "b", "schema": {}}, owns_db=False
+            )
+
+        assert isinstance(bank._db, AsyncMemoryDatabase)
+        assert bank._owns_db is True
+        assert any(
+            issubclass(w.category, UserWarning)
+            and "owns_db=False is ignored" in str(w.message)
+            for w in caught
+        ), "contradictory owns_db=False with db=None should warn"
+        await getattr(bank, method)()  # does not raise
+
+    @pytest.mark.asyncio
+    async def test_protocol_conformance(self) -> None:
+        """The bank satisfies AsyncBankProtocol and exposes both teardowns."""
+        from dataknobs_bots.memory.bank import (
+            AsyncBankProtocol,
+            AsyncMemoryBank,
+        )
+
+        bank = AsyncMemoryBank(name="b", schema={}, db=CountingAsyncDB())
+
+        assert isinstance(bank, AsyncBankProtocol)
+        assert hasattr(bank, "close") and hasattr(bank, "aclose")
+
+
+# =====================================================================
 # VectorKnowledgeSource — injected KB is never owned
 # =====================================================================
 
