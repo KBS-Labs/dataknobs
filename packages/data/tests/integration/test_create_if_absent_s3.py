@@ -115,3 +115,21 @@ async def test_async_create_does_not_block_loop(async_db: AsyncS3Database) -> No
         await async_db.create(Record({"v": 1}, id="noblock-1"))
         with pytest.raises(DuplicateRecordError):
             await async_db.create(Record({"v": 2}, id="noblock-1"))
+
+
+def test_sync_create_honors_payload_id_field(sync_db: SyncS3Database) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    assert sync_db.create(Record({"id": "x", "v": 1})) == "x"
+    assert sync_db.read("x").get_value("v") == 1
+    with pytest.raises(DuplicateRecordError) as excinfo:
+        sync_db.create(Record({"id": "x", "v": 2}))
+    assert excinfo.value.id == "x"
+
+
+async def test_async_create_honors_payload_id_field(async_db: AsyncS3Database) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    assert await async_db.create(Record({"id": "x", "v": 1})) == "x"
+    assert (await async_db.read("x")).get_value("v") == 1
+    with pytest.raises(DuplicateRecordError) as excinfo:
+        await async_db.create(Record({"id": "x", "v": 2}))
+    assert excinfo.value.id == "x"

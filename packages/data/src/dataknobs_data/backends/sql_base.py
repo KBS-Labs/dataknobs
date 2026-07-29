@@ -350,7 +350,7 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        record_id = record_id or record.storage_id or str(uuid.uuid4())
+        record_id = record_id or record.id or str(uuid.uuid4())
         data = SQLRecordSerializer.record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
 

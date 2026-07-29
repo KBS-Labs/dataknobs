@@ -75,3 +75,21 @@ async def test_async_concurrent_create_exactly_one_wins(async_pg: AsyncPostgresD
     duplicates = [r for r in results if isinstance(r, DuplicateRecordError)]
     assert len(successes) == 1
     assert len(duplicates) == 1
+
+
+def test_sync_create_honors_payload_id_field(sync_pg: SyncPostgresDatabase) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    assert sync_pg.create(Record({"id": "x", "v": 1})) == "x"
+    assert sync_pg.read("x").get_value("v") == 1
+    with pytest.raises(DuplicateRecordError) as excinfo:
+        sync_pg.create(Record({"id": "x", "v": 2}))
+    assert excinfo.value.id == "x"
+
+
+async def test_async_create_honors_payload_id_field(async_pg: AsyncPostgresDatabase) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    assert await async_pg.create(Record({"id": "x", "v": 1})) == "x"
+    assert (await async_pg.read("x")).get_value("v") == 1
+    with pytest.raises(DuplicateRecordError) as excinfo:
+        await async_pg.create(Record({"id": "x", "v": 2}))
+    assert excinfo.value.id == "x"
