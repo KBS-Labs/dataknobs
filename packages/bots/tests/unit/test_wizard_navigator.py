@@ -135,7 +135,7 @@ def _build_navigator(
     async def _gen_response(*args: Any, **kwargs: Any) -> _FakeResponse:
         return _FakeResponse()
 
-    return WizardNavigator(
+    nav = WizardNavigator(
         fsm=fsm,
         subflows=subflows,
         hooks=hooks,
@@ -144,14 +144,22 @@ def _build_navigator(
         allow_amendments=allow_amendments,
         section_to_stage_mapping=section_to_stage_mapping or {},
         extractor=None,
-        banks={},
-        artifact=None,
-        catalog=None,
+        # Live getters resolve mutable holders attached below, so tests can
+        # reassign ``nav._banks`` / ``nav._artifact`` / ``nav._catalog`` and
+        # the navigator sees the change (mirrors the wizard's per-conversation
+        # getter wiring).
+        get_banks=lambda: nav._banks,
+        get_artifact=lambda: nav._artifact,
+        get_catalog=lambda: nav._catalog,
         execute_fsm_step=_fsm_step,
         run_post_transition_lifecycle=_post_lifecycle,
         generate_stage_response=_gen_response,
         prepend_messages_to_response=lambda r, m: None,
     )
+    nav._banks = {}
+    nav._artifact = None
+    nav._catalog = None
+    return nav
 
 
 def _make_state(

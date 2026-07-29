@@ -55,9 +55,15 @@ class WizardNavigator:
         allow_amendments: Whether post-completion edits are enabled.
         section_to_stage_mapping: Custom section→stage mappings for amendments.
         extractor: Schema extractor for amendment detection (may be None).
-        banks: Memory bank instances (cleared on restart).
-        artifact: ArtifactCorpus instance (cleared on restart, may be None).
-        catalog: Artifact catalog for auto-save before restart (may be None).
+        get_banks: Getter returning the active conversation's memory bank
+            instances (cleared on restart). A live getter — not a captured
+            reference — so navigation always resolves the current
+            conversation's banks (they are scoped per conversation on the
+            strategy and rebound wholesale on restore).
+        get_artifact: Getter returning the active conversation's ArtifactBank
+            (cleared on restart, may return None).
+        get_catalog: Getter returning the active conversation's artifact
+            catalog for auto-save before restart (may return None).
         execute_fsm_step: Callback to execute an FSM step with runtime
             context injection.  Signature:
             ``(state, *, user_message, trigger, llm) -> (from_stage, step_result)``
@@ -82,9 +88,9 @@ class WizardNavigator:
         allow_amendments: bool,
         section_to_stage_mapping: dict[str, str],
         extractor: Any | None,
-        banks: dict[str, Any],
-        artifact: Any | None,
-        catalog: Any | None,
+        get_banks: Callable[[], dict[str, Any]],
+        get_artifact: Callable[[], Any | None],
+        get_catalog: Callable[[], Any | None],
         execute_fsm_step: Callable[..., Awaitable[tuple[str, Any]]],
         run_post_transition_lifecycle: Callable[..., Awaitable[list[str]]],
         generate_stage_response: Callable[..., Awaitable[Any]],
@@ -98,9 +104,9 @@ class WizardNavigator:
         self._allow_amendments = allow_amendments
         self._section_to_stage_mapping = section_to_stage_mapping
         self._extractor = extractor
-        self._banks = banks
-        self._artifact = artifact
-        self._catalog = catalog
+        self._get_banks = get_banks
+        self._get_artifact = get_artifact
+        self._get_catalog = get_catalog
         self._execute_fsm_step = execute_fsm_step
         self._run_post_transition_lifecycle = run_post_transition_lifecycle
         self._generate_stage_response = generate_stage_response
@@ -369,14 +375,18 @@ class WizardNavigator:
         # Auto-save artifact to catalog before clearing.  This catches
         # the common case where the LLM calls restart_wizard (or the
         # auto-restart guard fires) without calling save_to_catalog first.
-        if self._catalog and self._artifact:
+        # Resolve banks/artifact/catalog live (per-conversation scoped on
+        # the strategy) rather than from a construction-time captured ref.
+        catalog = self._get_catalog()
+        artifact = self._get_artifact()
+        if catalog and artifact:
             try:
-                errors = self._artifact.validate()
+                errors = artifact.validate()
                 if not errors:
-                    self._catalog.save(self._artifact)
+                    catalog.save(artifact)
                     logger.info(
                         "Auto-saved artifact '%s' to catalog before restart",
-                        self._artifact.name,
+                        artifact.name,
                     )
                 else:
                     logger.debug(
@@ -421,12 +431,13 @@ class WizardNavigator:
         state.stage_entry_time = time.time()
 
         # Clear all memory banks on restart (clean slate)
-        for bank in self._banks.values():
+        for bank in self._get_banks().values():
             bank.clear()
-        if self._artifact:
-            self._artifact.clear_fields()
-            if self._artifact.is_finalized:
-                self._artifact.unfinalize()
+        artifact = self._get_artifact()
+        if artifact:
+            artifact.clear_fields()
+            if artifact.is_finalized:
+                artifact.unfinalize()
 
     async def detect_amendment(
         self,

@@ -646,6 +646,24 @@ class ReasoningStrategy(ABC):
                 first turn), which reverts node-keyed state to empty.
         """
 
+    def on_conversation_evicted(  # noqa: B027
+        self, conversation_id: str
+    ) -> None:
+        """Release any per-conversation resources for an evicted conversation.
+
+        Called by the bot when a conversation's in-memory state is reclaimed
+        (LRU eviction or explicit clear), via the bot's single
+        ``_drop_conversation_cache`` choke point. Default no-op — strategies
+        that hold per-conversation resources (e.g. wizard memory-bank database
+        connections) override this to close that conversation's resources.
+        Strategy-level :meth:`close` still handles bot shutdown for any
+        conversations still resident.
+
+        Args:
+            conversation_id: The conversation whose in-memory state the bot
+                has just reclaimed.
+        """
+
     async def close(self) -> None:  # noqa: B027
         """Release resources held by this strategy.
 

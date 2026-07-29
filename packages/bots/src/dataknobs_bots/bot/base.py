@@ -3050,9 +3050,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         conversation's in-memory state routes through here, so the two
         structures can never drift apart (dropping one while leaking the
         other). Both pops are unconditional and no-op when absent.
+
+        The reasoning strategy is also notified so it can release any
+        per-conversation resources it holds (e.g. a wizard's per-conversation
+        memory-bank database connections). Error-isolated per the close-
+        ownership convention: a failing strategy release must not break cache
+        eviction. The ``on_conversation_evicted`` hook defaults to a no-op on
+        ``ReasoningStrategy``, so non-wizard strategies need no wiring.
         """
         self._conversation_managers.pop(conversation_id, None)
         self._turn_checkpoints.pop(conversation_id, None)
+        strategy = self.reasoning_strategy
+        if strategy is not None:
+            try:
+                strategy.on_conversation_evicted(conversation_id)
+            except Exception:
+                logger.exception(
+                    "Error releasing per-conversation reasoning state for %s",
+                    conversation_id,
+                )
 
     def _on_conversation_evicted(
         self, conversation_id: str, _manager: ConversationManager

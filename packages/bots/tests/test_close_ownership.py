@@ -15,6 +15,7 @@ and ``MemoryVectorStore``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -972,10 +973,10 @@ class TestWizardCatalogCascade:
     ) -> None:
         """Closing the wizard cascade twice does not raise.
 
-        There is no ``_closed`` guard on the cascade — the second close
-        re-delegates to the section banks and the catalog — but the memory
-        backends tolerate a repeat close, so both owned dbs simply reach
-        ``close_count == 2`` without error.
+        ``close()`` clears the per-conversation bank-state map after tearing
+        down every resident conversation, so a second ``close()`` finds no
+        slots and is a clean idempotent no-op — each owned db is closed exactly
+        once (``close_count == 1``), not re-delegated.
         """
         import dataknobs_data
         from dataknobs_bots.reasoning.wizard import WizardReasoning
@@ -1018,8 +1019,8 @@ class TestWizardCatalogCascade:
         await strategy.close()
         await strategy.close()  # must not raise
 
-        assert all(db.close_count == 2 for db in created), (
-            "a second cascade close re-delegates to every owned db"
+        assert all(db.close_count == 1 for db in created), (
+            "close() clears the slot map, so a second close is a no-op"
         )
 
 
@@ -1213,5 +1214,309 @@ class TestWizardRestoreReleasesPriorBanks:
         # It is genuinely usable after restore (write + read round-trips).
         strategy._banks["beta"].add({"v": 1})
         assert strategy._banks["beta"].count() == 1
+
+        await strategy.close()
+
+
+# =====================================================================
+# WizardReasoning — per-conversation bank scoping (concurrency isolation)
+# =====================================================================
+
+
+def _sqlite_bank_wizard(
+    *, ephemeral_keys: list[str] | None = None
+) -> Any:
+    """Build a ``WizardReasoning`` with one persistent (sqlite) memory bank.
+
+    A non-memory backend routes ``_create_bank_db`` through the (patched-in
+    each test) ``database_factory.create``, so the section's owned db is an
+    observable ``CountingSyncDB``. Constructs the strategy directly — a
+    legitimate internal-lifecycle unit test per the DynaBot testing mandate's
+    exception.
+    """
+    from dataknobs_bots.reasoning.wizard import WizardReasoning
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+    settings: dict[str, Any] = {
+        "banks": {"ledger": {"backend": "sqlite", "schema": {}}}
+    }
+    if ephemeral_keys:
+        settings["ephemeral_keys"] = ephemeral_keys
+    loader = WizardConfigLoader()
+    fsm = loader.load_from_dict({
+        "name": "w",
+        "version": "1.0",
+        "settings": settings,
+        "stages": [
+            {
+                "name": "start",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "t",
+            },
+        ],
+    })
+    return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+
+def _patch_counting_factory(
+    monkeypatch: pytest.MonkeyPatch, created: list[CountingSyncDB]
+) -> None:
+    """Route ``database_factory.create`` to append a ``CountingSyncDB``."""
+    import dataknobs_data
+
+    def fake_create(**kwargs: Any) -> CountingSyncDB:
+        db = CountingSyncDB()
+        created.append(db)
+        return db
+
+    monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
+
+
+class TestWizardPerConversationScoping:
+    """``WizardReasoning`` scopes its live memory banks per conversation, so
+    concurrent conversations served by one strategy neither clobber nor tear
+    down each other's bank database connections.
+
+    Every test builds ONE strategy with a persistent (sqlite) bank and drives
+    two real ``ConversationManager`` instances (distinct conversation ids)
+    through it. RED at ``main`` @ ``70569b63`` (single shared ``self._banks``
+    slot), GREEN after per-conversation scoping.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_restore_does_not_close_other_conversations_bank(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The post-#526 worsened mode: restoring conversation A must not
+        close conversation B's live bank db connection.
+
+        With a single shared slot, A's restore-path ``_close_banks()`` closes
+        whatever bank is in the slot — B's, if B touched it last (post-#526
+        loud-closed-connection). Per-conversation scoping re-scopes that
+        teardown to A's slot only.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        # A: first turn (adopts the construction slot), persist so A restores.
+        state_a = strategy._get_wizard_state(mgr_a)
+        await strategy._save_wizard_state(mgr_a, state_a)
+
+        # B: first turn builds B's own bank. Capture B's live section db while
+        # B is the active conversation in this task.
+        state_b = strategy._get_wizard_state(mgr_b)
+        b_bank = strategy._banks["ledger"]
+        b_db = b_bank._db
+        await strategy._save_wizard_state(mgr_b, state_b)
+
+        # A restore → re-scoped _close_banks closes only A's bank.
+        strategy._get_wizard_state(mgr_a)
+
+        assert b_db.close_count == 0, (
+            "restoring conversation A must not close conversation B's bank db"
+        )
+        # B's bank is still open and usable.
+        b_bank.add({"v": 1})
+        assert b_bank.count() == 1
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_state_isolation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After A's restore, resolving B's banks (under B's key) still yields
+        B's own bank objects — not A's rebuilt ones.
+        """
+        from dataknobs_bots.reasoning.wizard import _active_conversation
+
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        state_a = strategy._get_wizard_state(mgr_a)
+        await strategy._save_wizard_state(mgr_a, state_a)
+        strategy._get_wizard_state(mgr_b)
+        b_bank = strategy._banks["ledger"]
+
+        # A restore rebinds A's slot; B's slot must be untouched.
+        strategy._get_wizard_state(mgr_a)
+
+        _active_conversation.set(mgr_b.conversation_id)
+        assert strategy._banks["ledger"] is b_bank, (
+            "B's banks must be isolated from A's restore"
+        )
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_fresh_conversation_gets_own_banks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh conversation builds its own banks rather than inheriting
+        the previous conversation's shared-slot banks.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        strategy._get_wizard_state(mgr_a)
+        a_bank = strategy._banks["ledger"]
+
+        strategy._get_wizard_state(mgr_b)
+        b_bank = strategy._banks["ledger"]
+
+        assert b_bank is not a_bank, (
+            "a fresh conversation must not inherit another's banks"
+        )
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_eviction_closes_only_the_evicted_conversation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``on_conversation_evicted`` closes only the evicted conversation's
+        owned bank db; a concurrent conversation's bank stays open.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        strategy._get_wizard_state(mgr_a)
+        a_db = strategy._banks["ledger"]._db
+        strategy._get_wizard_state(mgr_b)
+        b_bank = strategy._banks["ledger"]
+        b_db = b_bank._db
+
+        strategy.on_conversation_evicted(mgr_a.conversation_id)
+
+        assert a_db.close_count == 1, "evicted conversation's db must close"
+        assert b_db.close_count == 0, "other conversation's db must stay open"
+        b_bank.add({"v": 1})
+        assert b_bank.count() == 1
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_close_tears_down_all_resident_conversations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Strategy ``close()`` tears down every resident conversation's banks
+        — not merely the most recently accessed one — and clears the slot map.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        strategy._get_wizard_state(mgr_a)
+        a_db = strategy._banks["ledger"]._db
+        strategy._get_wizard_state(mgr_b)
+        b_db = strategy._banks["ledger"]._db
+
+        await strategy.close()
+
+        assert a_db.close_count == 1, "conversation A's db must be closed"
+        assert b_db.close_count == 1, "conversation B's db must be closed"
+        assert strategy._conv_state == {}, "slot map must be cleared on close"
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_task_cancellation_is_per_conversation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``close()`` cancels pending ephemeral asyncio tasks for EVERY
+        resident conversation, not just the last-accessed one.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard(ephemeral_keys=["_bg_task"])
+        assert "_bg_task" in strategy._ephemeral_keys
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        state_a = strategy._get_wizard_state(mgr_a)
+        task_a = asyncio.ensure_future(asyncio.sleep(3600))
+        state_a.data["_bg_task"] = task_a
+
+        state_b = strategy._get_wizard_state(mgr_b)
+        task_b = asyncio.ensure_future(asyncio.sleep(3600))
+        state_b.data["_bg_task"] = task_b
+
+        await strategy.close()
+
+        assert task_a.cancelled(), "conversation A's ephemeral task must cancel"
+        assert task_b.cancelled(), "conversation B's ephemeral task must cancel"
+
+    @pytest.mark.asyncio
+    async def test_single_conversation_uses_exactly_one_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Parity guard: a single conversation adopts the construction slot
+        (byte-identical single-conversation build) — no slot proliferation.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        # Construction built exactly one owned bank db.
+        assert len(created) == 1
+
+        mgr = await _real_conversation_manager()
+        # First turn adopts the construction slot — no second db built.
+        state = strategy._get_wizard_state(mgr)
+        assert len(created) == 1, "first turn must adopt, not rebuild"
+        assert len(strategy._conv_state) == 1, "exactly one conversation slot"
+
+        await strategy._save_wizard_state(mgr, state)
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_asyncio_task_locality(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two interleaved asyncio tasks — each running a turn for a different
+        conversation with an ``await`` between the active-key set and the bank
+        read — each resolve their OWN conversation's banks (ContextVar is
+        copied per task, so one task's active conversation cannot leak into
+        the other across the await).
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+
+        mgr_a = await _real_conversation_manager()
+        mgr_b = await _real_conversation_manager()
+
+        async def run_turn(manager: Any, hold: float) -> Any:
+            strategy._get_wizard_state(manager)  # sets the task-local key
+            await asyncio.sleep(hold)  # yield so the other task interleaves
+            return strategy._banks["ledger"]
+
+        bank_a, bank_b = await asyncio.gather(
+            run_turn(mgr_a, 0.02),
+            run_turn(mgr_b, 0.0),
+        )
+
+        assert bank_a is not bank_b, (
+            "each task must resolve its own conversation's banks across await"
+        )
 
         await strategy.close()
