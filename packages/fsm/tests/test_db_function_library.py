@@ -34,7 +34,7 @@ import pytest
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.testing import assert_no_blocking
-from dataknobs_data import AsyncDatabase, Record
+from dataknobs_data import AsyncDatabase, Query, Record
 from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.functions.base import ResourceError
@@ -140,6 +140,15 @@ async def _count_backend(backend: str, path: Path) -> int:
     db = await AsyncDatabase.from_backend(backend, {"type": backend, "path": str(path)})
     try:
         return await db.count()
+    finally:
+        await db.close()
+
+
+async def _records_backend(backend: str, path: Path) -> list[Record]:
+    """Read every persisted record via a fresh ``AsyncDatabase`` (any backend)."""
+    db = await AsyncDatabase.from_backend(backend, {"type": backend, "path": str(path)})
+    try:
+        return await db.search(Query())
     finally:
         await db.close()
 
@@ -262,6 +271,73 @@ async def test_bulk_insert_no_identity_creates_all(tmp_path: Path) -> None:
     finally:
         await adapter.aclose()
     assert await _count_file(tmp_path / "create.json") == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_insert_no_identity_mints_ids_ignoring_payload_id(
+    tmp_path: Path,
+) -> None:
+    """Without an identity, an incidental payload ``id``/``record_id`` field must
+    NOT become the storage key — ids are backend-assigned uniformly.
+
+    Reproduce-first: duckdb keys ``create`` off ``record.id`` (the payload
+    ``id`` field resolves through it), so before the mint fix the second
+    ``id="x"`` row raised ``DuplicateRecordError`` and this path was
+    backend-divergent (memory/postgres already keyed off the id; duckdb/sqlite
+    minted). After the fix every backend mints, so duplicate ``id`` values
+    coexist and the ``id``/``record_id`` stays as row data.
+    """
+    adapter = _duckdb_adapter(tmp_path, "mintids")
+    try:
+        res = await adapter.bulk_insert(
+            "t",
+            [
+                {"id": "x", "v": "a"},
+                {"id": "x", "v": "b"},
+                {"record_id": "y", "v": "c"},
+            ],
+        )
+        assert res["affected_rows"] == 3
+    finally:
+        await adapter.aclose()
+
+    path = tmp_path / "mintids.duckdb"
+    # All three rows persisted (no collision on the shared "x").
+    assert await _count_backend("duckdb", path) == 3
+    stored = await _records_backend("duckdb", path)
+    # The payload id/record_id was NOT promoted to the storage key.
+    assert all(r.storage_id not in ("x", "y") for r in stored)
+    # …and it survives untouched as row data.
+    data_ids = sorted(
+        r.get_value("id") or r.get_value("record_id") for r in stored
+    )
+    assert data_ids == ["x", "x", "y"]
+
+
+@pytest.mark.asyncio
+async def test_commit_batch_no_identity_mints_ids_ignoring_payload_id(
+    tmp_path: Path,
+) -> None:
+    """``commit_batch`` (the batch verb) mints ids the same as ``bulk_insert``.
+
+    Reproduce-first: the identity-less ``create_batch`` path keyed off
+    ``record.id`` on duckdb, so two rows sharing ``id="x"`` collided before the
+    mint fix. The single-row and batch paths must agree.
+    """
+    adapter = _duckdb_adapter(tmp_path, "mintbatch")
+    try:
+        res = await adapter.commit_batch(
+            [{"id": "x", "v": "a"}, {"id": "x", "v": "b"}]
+        )
+        assert res["affected_rows"] == 2
+    finally:
+        await adapter.aclose()
+
+    path = tmp_path / "mintbatch.duckdb"
+    assert await _count_backend("duckdb", path) == 2
+    stored = await _records_backend("duckdb", path)
+    assert all(r.storage_id != "x" for r in stored)
+    assert sorted(r.get_value("id") for r in stored) == ["x", "x"]
 
 
 def test_bulk_insert_dedup_without_identity_is_configuration_error() -> None:

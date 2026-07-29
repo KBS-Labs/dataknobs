@@ -127,9 +127,15 @@ def test_sync_create_honors_payload_id_field(sync_db: SyncS3Database) -> None:
 
 
 async def test_async_create_honors_payload_id_field(async_db: AsyncS3Database) -> None:
-    """A payload ``id`` data field is the storage key; a collision fails closed."""
-    assert await async_db.create(Record({"id": "x", "v": 1})) == "x"
-    assert (await async_db.read("x")).get_value("v") == 1
-    with pytest.raises(DuplicateRecordError) as excinfo:
-        await async_db.create(Record({"id": "x", "v": 2}))
+    """A payload ``id`` data field is the storage key; a collision fails closed.
+
+    Wrapped in :func:`assert_no_blocking` so the payload-id keying path is
+    proven to stay off the event loop (aioboto3) too, matching the dedicated
+    no-block test above.
+    """
+    with assert_no_blocking():
+        assert await async_db.create(Record({"id": "x", "v": 1})) == "x"
+        assert (await async_db.read("x")).get_value("v") == 1
+        with pytest.raises(DuplicateRecordError) as excinfo:
+            await async_db.create(Record({"id": "x", "v": 2}))
     assert excinfo.value.id == "x"

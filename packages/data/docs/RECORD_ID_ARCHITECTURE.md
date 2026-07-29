@@ -13,7 +13,8 @@ makes the storage key predictable across every backend.
 - **Purpose**: The key a record is stored and addressed under
 - **Source**: `record.id` when the caller supplies one (see the
   [Write-Keying Contract](#write-keying-contract)); a fresh UUID v4 is minted
-  only when the record carries no id at all
+  only when the record carries no id — a *falsy* id (`""`, or `0` before
+  stringification) counts as none and is minted
 - **Access**: Via `record.storage_id` property
 - **Mutability**: Set once for a stored record; immutable thereafter
 
@@ -49,6 +50,11 @@ A record with no resolvable id is minted a UUID:
 storage_id = await db.create(Record({"name": "Test"}))  # e.g. "uuid-456"
 ```
 
+A *falsy* id counts as "no id": the resolution is `record.id or <uuid>`, so an
+empty or zero id (`Record({"id": ""})`, or a `0` id before stringification) is
+treated as absent and a fresh UUID is minted rather than keying the record under
+the falsy value. Supply a non-empty id when you need the caller value honored.
+
 A second `create()` under the same id fails closed rather than overwriting:
 
 ```python
@@ -69,6 +75,25 @@ you supply becomes the storage key **and** is what `Filter("id", ...)` matches.
 If you want a business identifier that is *not* the storage key — a system UUID
 for the key, with the identifier as pure business data — store it under a field
 name **other than** `id` / `record_id` (see the recipe below).
+
+### Security: validate a caller-supplied id you do not trust
+
+Because `create()` honors `record.id` as the storage key on **every** backend, a
+caller-supplied `id` chooses the record's key — including the S3 object key
+(`{prefix}{id}.json`) and the file backend's JSON dict key. When the `id`
+originates from untrusted input (a request payload, an uploaded document),
+validate it at your boundary as you would any other external value (see the
+project's input-validation-at-boundaries rule).
+
+This is a **namespacing** concern, not an overwrite one: storage keys are flat,
+so an `id` like `"../x"` is a literal key segment rather than a path traversal;
+reads use the same key builder, so they stay symmetric; and the fail-closed
+`create()` (S3's `If-None-Match: *`) prevents clobbering an existing record.
+But an unvalidated `id` still lets caller input place a record outside your
+intended key namespace, so treat it as boundary input. To keep the storage key
+entirely under your control regardless of payload contents, set
+`record.storage_id` explicitly (or store the untrusted identifier under a
+non-`id` field name — see the recipe below).
 
 ## The ID Priority System
 
