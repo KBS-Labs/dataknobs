@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast
 
@@ -320,7 +319,7 @@ class SyncPostgresDatabase(
         """Create a new record."""
         self._check_connection()
         # Use record's ID if it has one, otherwise generate a new one
-        id = record.id if record.id else str(uuid.uuid4())
+        id = record.id if record.id else self._generate_id()
         row = self._record_to_row(record, id)
 
         sql = f"""
@@ -614,9 +613,12 @@ class SyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Use the shared batch create query builder (honors record.id; raises
-        # DuplicateRecordError up front on a within-batch duplicate id).
-        query, params_list, ids = query_builder.build_batch_create_query(records)
+        # Use the shared batch create query builder (honors record.id, mints via
+        # _generate_id; raises DuplicateRecordError up front on a within-batch
+        # duplicate id).
+        query, params_list, ids = query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         # Build params dict for psycopg2
         params_dict = {}
@@ -848,7 +850,7 @@ class SyncPostgresDatabase(
         ids = []
 
         for i, record in enumerate(records):
-            id = record.id if record.id else str(uuid.uuid4())
+            id = record.id if record.id else self._generate_id()
             ids.append(id)
             row = self._record_to_row(record, id)
             values.append(f"(%(id_{i})s, %(data_{i})s, %(metadata_{i})s)")
@@ -1365,7 +1367,7 @@ class AsyncPostgresDatabase(
 
         vector_inserts = await self._collect_vector_inserts(record)
 
-        id = record.id if record.id else str(uuid.uuid4())
+        id = record.id if record.id else self._generate_id()
         row = self._record_to_row(record, id)
 
         columns = ["id", "data", "metadata"]
@@ -1750,9 +1752,12 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch create query builder (honors record.id; raises
-        # DuplicateRecordError up front on a within-batch duplicate id).
-        query, params, ids = query_builder.build_batch_create_query(records)
+        # Use the shared batch create query builder (honors record.id, mints via
+        # _generate_id; raises DuplicateRecordError up front on a within-batch
+        # duplicate id).
+        query, params, ids = query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         # Execute the batch insert with RETURNING. Like create(), a colliding id
         # fails closed: the single INSERT is atomic, so the unique-violation
@@ -2335,11 +2340,13 @@ class AsyncPostgresDatabase(
         if not records:
             return []
 
-        # Prepare data for COPY; honor record.id (mint only when absent).
+        # Prepare data for COPY; honor record.id, mint via _generate_id only
+        # when absent (uniform with create() and the sync _write_batch).
         rows = []
         ids = []
         for record in records:
-            row_data = self._record_to_row(record, record.id)
+            record_id = record.id or self._generate_id()
+            row_data = self._record_to_row(record, record_id)
             ids.append(row_data["id"])
             rows.append((
                 row_data["id"],

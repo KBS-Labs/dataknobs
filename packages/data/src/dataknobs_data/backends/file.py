@@ -480,10 +480,6 @@ class AsyncFileDatabase(  # type: ignore[misc]
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
 
-    def _generate_id(self) -> str:
-        """Generate a unique ID for a record."""
-        return str(uuid.uuid4())
-
     async def _load_data(self) -> dict[str, Record]:
         """Load all data from file.
 
@@ -901,10 +897,6 @@ class SyncFileDatabase(  # type: ignore[misc]
         # Initialize vector support
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    def _generate_id(self) -> str:
-        """Generate a unique ID for a record."""
-        return str(uuid.uuid4())
 
     def _load_data(self) -> dict[str, Record]:
         """Load all data from file.

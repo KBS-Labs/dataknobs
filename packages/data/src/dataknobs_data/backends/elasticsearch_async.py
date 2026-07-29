@@ -235,7 +235,7 @@ class AsyncElasticsearchDatabase(
         if id:
             doc["id"] = id
         elif not doc.get("id"):
-            doc["id"] = str(uuid.uuid4())
+            doc["id"] = self._generate_id()
         return doc
 
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
@@ -258,7 +258,7 @@ class AsyncElasticsearchDatabase(
         # sync backend and every other backend. op_type="create" makes this an
         # atomic insert: a colliding id yields a 409 conflict instead of
         # silently overwriting the existing document.
-        record_id = record.id if record.id else str(uuid.uuid4())
+        record_id = record.id if record.id else self._generate_id()
         # Stamp the resolved id into the doc so a minted-id record stays
         # findable by ``Filter("id", ...)``.
         doc = self._record_to_doc(record, record_id)
@@ -357,7 +357,7 @@ class AsyncElasticsearchDatabase(
         operations: list[dict] = []
         seen: set[str] = set()
         for record in records:
-            record_id = record.id or str(uuid.uuid4())
+            record_id = record.id or self._generate_id()
             if record_id in seen:
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)

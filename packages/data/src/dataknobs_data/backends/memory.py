@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import uuid
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -72,10 +71,6 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         cfg = self.config
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    def _generate_id(self) -> str:
-        """Generate a unique ID for a record."""
-        return str(uuid.uuid4())
 
     def _next_version(self) -> int:
         """Return the next monotonic version value (call while holding the lock).
@@ -411,10 +406,6 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         cfg = self.config
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    def _generate_id(self) -> str:
-        """Generate a unique ID for a record."""
-        return str(uuid.uuid4())
 
     def _next_version(self) -> int:
         """Return the next monotonic version value (call while holding the lock).

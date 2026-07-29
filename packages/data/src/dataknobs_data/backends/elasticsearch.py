@@ -178,7 +178,7 @@ class SyncElasticsearchDatabase(
         if id:
             doc["id"] = id
         elif not doc.get("id"):
-            doc["id"] = str(uuid.uuid4())
+            doc["id"] = self._generate_id()
 
         return doc
 
@@ -200,8 +200,8 @@ class SyncElasticsearchDatabase(
 
     def create(self, record: Record) -> str:
         """Create a new record."""
-        # Use record's ID if it has one, otherwise generate a new one
-        id = record.id if record.id else str(uuid.uuid4())
+        # Use record's ID if it has one, otherwise mint via the shared hook
+        id = record.id if record.id else self._generate_id()
         doc = self._record_to_doc(record, id)
 
         # Index the document as an atomic insert. op_type="create" makes a
@@ -401,7 +401,7 @@ class SyncElasticsearchDatabase(
         seen: set[str] = set()
 
         for record in records:
-            record_id = record.id or str(uuid.uuid4())
+            record_id = record.id or self._generate_id()
             if record_id in seen:
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)

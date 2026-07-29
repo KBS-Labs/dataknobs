@@ -44,7 +44,9 @@ record = Record({"id": "user-123", "name": "Test"})
 storage_id = await db.create(record)   # "user-123" — the caller's id is honored
 ```
 
-A record with no resolvable id is minted a UUID:
+A record with no resolvable id is minted a UUID (by the overridable
+[`_generate_id()` hook](#minting-a-storage-id--the-_generate_id-hook) — override
+it for a custom id scheme):
 
 ```python
 storage_id = await db.create(Record({"name": "Test"}))  # e.g. "uuid-456"
@@ -145,18 +147,20 @@ the payload `id` field, ignoring any assigned storage id.
 The in-process and object-store backends resolve the write-keying rule through a
 single base helper; the SQL backends apply the identical rule in their query
 builders (`build_create_query` / `build_batch_create_query`). All express the
-same `record.id or uuid` resolution, so no backend re-derives the rule
-independently.
+same `record.id or self._generate_id()` resolution, so no backend re-derives the
+rule independently. The helpers live on `RecordStorageMixin`, a single class that
+both `SyncDatabase` and `AsyncDatabase` inherit, so the write-keying rule — and
+its mint hook — cannot drift between the sync and async trees.
 
 ```python
 def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
     """Resolve a record's storage id for a write, honoring a caller id.
 
-    The storage id is record.id (honor a caller-supplied id); a fresh uuid
-    is minted only when the record carries no id at all.
+    The storage id is record.id (honor a caller-supplied id); a fresh id
+    is minted via _generate_id() only when the record carries no id at all.
     """
     record_copy = record.copy(deep=True)
-    storage_id = record.id or str(uuid.uuid4())
+    storage_id = record.id or self._generate_id()
     record_copy.storage_id = storage_id
     return record_copy, storage_id
 
@@ -168,6 +172,35 @@ def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -
             record_copy.storage_id = storage_id
         return record_copy
     return None
+```
+
+### Minting a storage id — the `_generate_id()` hook
+
+When a record carries no caller id, the storage id is minted by a single
+overridable hook, `_generate_id()`, defined once on `RecordStorageMixin` and
+inherited by every backend:
+
+```python
+def _generate_id(self) -> str:
+    """Mint a fresh storage id for a record that carries no caller id."""
+    return str(uuid.uuid4())
+```
+
+Every mint fallback routes through this hook — the base helper above, the SQL
+create paths (which resolve `record.id or self._generate_id()` and pass the id
+into `build_create_query`, or an `id_factory=self._generate_id` into
+`build_batch_create_query`), and the Postgres / Elasticsearch create paths. It is the single extension point for a custom storage-id scheme:
+override it once and every `create()` / `create_batch()` path on that backend
+mints via your implementation, uniformly. A caller-supplied `record.id` is
+always honored — the hook governs only the mint fallback.
+
+```python
+import ulid
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+class UlidSQLiteDatabase(SyncSQLiteDatabase):
+    def _generate_id(self) -> str:
+        return str(ulid.new())   # every minted id is a ULID, on every create path
 ```
 
 ### Backend Usage Example

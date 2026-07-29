@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
@@ -345,7 +346,10 @@ class SQLQueryBuilder:
 
         Args:
             record: The record to insert
-            record_id: Optional ID (will generate if not provided)
+            record_id: The resolved storage id. Backends resolve the mint
+                through their ``_generate_id()`` hook and pass it here; the
+                inline ``record.id or str(uuid.uuid4())`` below is only a
+                defensive fallback for a direct caller that supplies neither.
 
         Returns:
             Tuple of (SQL query, parameters)
@@ -679,11 +683,13 @@ class SQLQueryBuilder:
 
         return query, params
 
-    def build_batch_create_query(self, records: list[Record]) -> tuple[str, list[Any], list[str]]:
+    def build_batch_create_query(
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
+    ) -> tuple[str, list[Any], list[str]]:
         """Build a batch INSERT query for multiple records.
 
         Generates an efficient multi-value INSERT statement. Like ``create()``,
-        a caller-supplied ``record.id`` is honored (a uuid is minted only when a
+        a caller-supplied ``record.id`` is honored (an id is minted only when a
         record has none); the id primary-key constraint makes a colliding id
         fail closed at the store (the executor translates the driver violation
         to ``DuplicateRecordError``). A duplicate id *within* the same batch —
@@ -693,6 +699,10 @@ class SQLQueryBuilder:
 
         Args:
             records: List of records to insert
+            id_factory: The backend's ``_generate_id`` hook, used to mint an id
+                for a record that carries none — so a consumer overriding the
+                hook governs batch mints too. Defaults to a random UUID4 when a
+                direct caller supplies no factory.
 
         Returns:
             Tuple of (SQL query, parameters, ids in input order)
@@ -705,6 +715,8 @@ class SQLQueryBuilder:
 
         import uuid
 
+        mint = id_factory if id_factory is not None else (lambda: str(uuid.uuid4()))
+
         # Honor record.id; mint only when absent. Detect within-batch duplicate
         # ids up front (a single INSERT cannot insert the same PK twice), failing
         # closed the same way create() does for a colliding id.
@@ -714,7 +726,7 @@ class SQLQueryBuilder:
         seen: set[str] = set()
 
         for i, record in enumerate(records):
-            record_id = record.id or str(uuid.uuid4())
+            record_id = record.id or mint()
             if record_id in seen:
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)
