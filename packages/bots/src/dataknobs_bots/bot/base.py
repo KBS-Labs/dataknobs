@@ -3948,7 +3948,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._restore_wizard_from_node(manager, checkpoint_node_id)
 
         # Revert banks via backend-managed checkpointing
-        self._undo_banks_to_checkpoint(checkpoint_node_id)
+        self._undo_banks_to_checkpoint(manager, checkpoint_node_id)
 
         return UndoResult(
             undone_user_message=undone_user,
@@ -4086,14 +4086,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         )
 
     def _undo_banks_to_checkpoint(
-        self, checkpoint_node_id: str | None
+        self, manager: ConversationManager, checkpoint_node_id: str | None
     ) -> None:
         """Forward checkpoint-revert to the reasoning strategy.
 
         Strategies that hold node-keyed state (e.g. wizard memory banks)
         override ``ReasoningStrategy.undo_to_checkpoint``. Others inherit
         the base no-op.
+
+        ``manager`` is forwarded so a strategy scoping state per conversation
+        can resolve which conversation is being undone — this hook runs even on
+        the undo paths where ``_restore_wizard_from_node`` early-returned
+        (empty anchor / missing node), so it must carry conversation identity
+        itself rather than relying on ``restore_from_checkpoint`` having run.
         """
         if self.reasoning_strategy is None:
             return
-        self.reasoning_strategy.undo_to_checkpoint(checkpoint_node_id)
+        self.reasoning_strategy.undo_to_checkpoint(manager, checkpoint_node_id)

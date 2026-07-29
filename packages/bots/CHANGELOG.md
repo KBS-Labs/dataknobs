@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-conversation resources can release them. Any reasoning strategy with
   per-conversation resources can adopt it.
 
+### Changed
+
+- **`ReasoningStrategy.undo_to_checkpoint` now takes the `ConversationManager`
+  as its first argument** — `undo_to_checkpoint(manager, checkpoint_node_id)`.
+  A strategy that scopes state per conversation needs the conversation identity
+  to revert the correct state, since the bot reaches this hook on undo paths
+  where `restore_from_checkpoint` does not run. Strategies overriding this hook
+  must add the `manager` parameter; the base implementation remains a no-op.
+
 ### Fixed
 
 - **`WizardReasoning` memory banks are now scoped per conversation.** The
@@ -34,9 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point (error-isolated so a failing release cannot break cache eviction).
   Strategy `close()` now tears down every resident conversation's banks (and
   cancels every conversation's pending ephemeral tasks), not merely the most
-  recently accessed one. Single-conversation and sequential-per-turn behavior
-  is unchanged — the first conversation adopts the construction-time banks,
-  building them exactly once.
+  recently accessed one. Undo and rewind — including undoing back through the
+  first turn — revert the banks of the conversation being undone rather than
+  whichever conversation was last active, even when the undo request runs in a
+  fresh task. Single-conversation and sequential-per-turn behavior is unchanged
+  — the first conversation adopts the construction-time banks, building them
+  exactly once.
 - **`AsyncMemoryBank` database lifecycle parity.** `AsyncMemoryBank` now
   supports owned-vs-injected database teardown — an `owns_db` constructor flag
   plus `close()` / `aclose()` methods routed through `close_if_owned`, matching

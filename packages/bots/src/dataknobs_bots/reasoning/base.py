@@ -630,7 +630,9 @@ class ReasoningStrategy(ABC):
         """
 
     def undo_to_checkpoint(  # noqa: B027
-        self, checkpoint_node_id: str | None
+        self,
+        manager: ReasoningManagerProtocol,
+        checkpoint_node_id: str | None,
     ) -> None:
         """Revert strategy-owned state to a checkpoint node.
 
@@ -638,9 +640,16 @@ class ReasoningStrategy(ABC):
         strategy can revert any state it tracks against conversation node
         IDs (e.g. memory banks keyed by checkpoint id).
 
+        ``manager`` is passed so a strategy that scopes state per conversation
+        can resolve *which* conversation is being undone — the bot reaches this
+        hook on paths where :meth:`restore_from_checkpoint` did not run (e.g.
+        the empty-anchor ``checkpoint_node_id is None`` case), so this method
+        cannot rely on a sibling hook having established conversation identity.
+
         Default: no-op (most strategies hold no node-keyed state).
 
         Args:
+            manager: The ConversationManager being undone.
             checkpoint_node_id: The node ID to revert to, or ``None`` for the
                 empty "before any message" anchor (undoing back through the
                 first turn), which reverts node-keyed state to empty.

@@ -1520,3 +1520,58 @@ class TestWizardPerConversationScoping:
         )
 
         await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_undo_reverts_active_conversation_banks_from_fresh_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Undo back through the first turn reverts THE UNDOING conversation's
+        banks even when the undo runs in a fresh request task.
+
+        A server runs each request in its own asyncio task: the chat that
+        populated the banks ran in one task, a later ``undo_last_turn`` runs in
+        another. The chat task's ``_active_conversation.set(<conv>)`` does NOT
+        leak into the undo task (context is copied per task), so the undo
+        starts at the default key. Undoing through the *first* turn is the
+        empty-anchor sentinel (``checkpoint_node_id`` = ``None``) — the path
+        where the bot skips ``restore_from_checkpoint`` entirely, so
+        ``undo_to_checkpoint`` is the only place the active key can be set.
+
+        RED before the manager-keyed fix (regression from per-conversation
+        scoping, issue #527): ``undo_to_checkpoint`` read the default slot and
+        left the conversation's real banks untouched, so the conversation
+        reused stale turn-1 records after an undo. GREEN: keying the revert off
+        ``manager`` reverts this conversation's slot regardless of entry key.
+        """
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard()
+        mgr = await _real_conversation_manager()
+
+        async def first_turn() -> None:
+            # Own task, mirroring a chat request: its active-key .set() stays
+            # local to this task and does not leak to the root test task.
+            state = strategy._get_wizard_state(mgr)
+            strategy._banks["ledger"].add({"v": "turn-1"})
+            await strategy._save_wizard_state(mgr, state)
+
+        await asyncio.ensure_future(first_turn())
+
+        # From the root task, reach the conversation's live bank directly by id
+        # (the slot dict is not ContextVar-scoped) to assert across the undo.
+        conv_bank = strategy._conv_state[mgr.conversation_id].banks["ledger"]
+        assert conv_bank.count() == 1
+
+        async def undo_first_turn() -> None:
+            # Fresh request task: default active-conversation key (the chat
+            # task's .set did not leak here). Empty-anchor undo → id None.
+            strategy.undo_to_checkpoint(mgr, None)
+
+        await asyncio.ensure_future(undo_first_turn())
+
+        assert conv_bank.count() == 0, (
+            "undo through the first turn must revert THIS conversation's banks "
+            "to empty, not operate on the default slot"
+        )
+
+        await strategy.close()

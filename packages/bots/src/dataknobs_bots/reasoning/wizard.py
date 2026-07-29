@@ -132,6 +132,20 @@ _INJECTED_FSM_SENTINEL = "<injected-fsm>"
 # previously defined here are still importable from this module.
 
 
+class _DefaultConvKey:
+    """Sentinel type for the construction-time / no-active-turn bank slot.
+
+    A distinct singleton *type* — not a magic string — so a real
+    ``conversation_id`` (untrusted input) can never collide with the reserved
+    default-slot key by happening to be named the same thing.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<no-conversation>"
+
+
 #: Reserved key for the construction-time / no-active-turn bank slot.
 #: A wizard builds its banks at construction (so non-turn readers — the
 #: ``advance()`` API, the ``_build_transform_context`` fallback, direct
@@ -139,17 +153,33 @@ _INJECTED_FSM_SENTINEL = "<injected-fsm>"
 #: The first real conversation *adopts* this pristine slot (re-keying it to
 #: that conversation's id) so the common single-conversation case builds its
 #: banks exactly once, byte-identical to the pre-per-conversation behavior.
-_DEFAULT_CONV_KEY = "__no_conversation__"
+_DEFAULT_CONV_KEY: _DefaultConvKey = _DefaultConvKey()
 
-#: Task-local id of the conversation the current turn is serving. ``asyncio``
+#: A per-conversation bank-slot key: a real ``conversation_id`` string, or the
+#: :data:`_DEFAULT_CONV_KEY` sentinel for the construction-time slot.
+_ConvKey = str | _DefaultConvKey
+
+#: Task-local key of the conversation the current turn is serving. ``asyncio``
 #: copies the context into each ``Task``, so two concurrently running turns
 #: (each in its own task) see their own value across ``await`` boundaries —
 #: the precise, minimal isolation for "which conversation is *this task*
-#: serving." Set at every turn entry (``_get_wizard_state`` / ``advance``);
+#: serving." Set at every turn / checkpoint entry (``_get_wizard_state`` /
+#: ``advance`` / ``restore_from_checkpoint`` / ``undo_to_checkpoint``);
 #: defaults to :data:`_DEFAULT_CONV_KEY` outside a turn.
-_active_conversation: contextvars.ContextVar[str] = contextvars.ContextVar(
+_active_conversation: contextvars.ContextVar[_ConvKey] = contextvars.ContextVar(
     "wizard_active_conversation", default=_DEFAULT_CONV_KEY
 )
+
+
+def _conversation_key(manager: Any) -> _ConvKey:
+    """Resolve a manager's conversation id to a bank-slot key.
+
+    Returns the manager's ``conversation_id`` when present, else the
+    :data:`_DEFAULT_CONV_KEY` sentinel (non-conversational / id-less callers
+    share the construction-time slot). Centralizes the idiom so every turn and
+    checkpoint entry point keys its banks identically.
+    """
+    return getattr(manager, "conversation_id", None) or _DEFAULT_CONV_KEY
 
 
 @dataclass
@@ -606,7 +636,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # construction the active key is :data:`_DEFAULT_CONV_KEY`, so the
         # builds below populate that pristine slot; the first real
         # conversation adopts it (byte-identical single-conversation build).
-        self._conv_state: dict[str, _ConvBankState] = {}
+        self._conv_state: dict[_ConvKey, _ConvBankState] = {}
         self._default_claimed: bool = False
 
         # Conversation-independent templates (same for every conversation).
@@ -1000,10 +1030,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Convenience entry that captures the conversation-independent artifact
         config (via :meth:`_setup_artifact_static`) and then builds the
         artifact instance into the active conversation's slot (via
-        :meth:`_build_artifact_instance`). Used at construction and by direct
-        callers; the per-conversation lazy-build path in
-        :meth:`_ensure_slot_built` calls :meth:`_build_artifact_instance`
-        alone (the static setup runs exactly once).
+        :meth:`_build_artifact_instance`).
+
+        Retained as a single-call convenience for direct/test callers only —
+        construction and the per-conversation lazy-build path
+        (:meth:`_ensure_slot_built`) call :meth:`_setup_artifact_static` and
+        :meth:`_build_artifact_instance` separately so the static setup runs
+        exactly once while the instance is (re)built per conversation.
 
         Args:
             artifact_config: Artifact configuration dict with ``name``,
@@ -1430,15 +1463,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Silent no-op when the node has no ``wizard_fsm_state`` (e.g.
         checkpoints predating wizard activation).
 
-        Sets the active-conversation key from ``manager`` so this and the
-        immediately-following :meth:`undo_to_checkpoint` (the bot's undo/rewind
-        flow calls both in the same task) resolve *this* conversation's
-        per-conversation memory banks, even when the undo request runs in a
-        fresh task that did not go through :meth:`_get_wizard_state`.
+        Writes only to ``manager.metadata`` (the next ``generate()`` /
+        ``_get_wizard_state`` reads it back and sets the active-conversation
+        key then), so this method touches no per-conversation bank state and
+        needs no active-conversation key of its own. :meth:`undo_to_checkpoint`
+        — the other half of the bot's undo/rewind flow — sets the key
+        independently from ``manager``, so bank reverting does not depend on
+        this method having run first (the flow skips restore on the
+        empty-anchor / missing-node early-return paths).
         """
-        _active_conversation.set(
-            getattr(manager, "conversation_id", None) or _DEFAULT_CONV_KEY
-        )
         fsm_state = node_metadata.get("wizard_fsm_state")
         if not fsm_state:
             return
@@ -1451,21 +1484,37 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         wizard_meta["history"] = fsm_state.get("history", [])
         manager.metadata["wizard"] = wizard_meta
 
-    def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> None:
-        """Revert wizard memory banks to the checkpoint.
+    def undo_to_checkpoint(
+        self,
+        manager: ReasoningManagerProtocol,
+        checkpoint_node_id: str | None,
+    ) -> None:
+        """Revert *this conversation's* wizard memory banks to the checkpoint.
 
-        Iterates the wizard's ``MemoryBank`` instances and forwards
-        the checkpoint id. Banks that don't expose
-        ``undo_to_checkpoint`` are silently skipped (defensive — every
-        ``MemoryBank`` does expose it today, but the existing bot-side
-        guard is retained to match the prior behaviour exactly).
+        Sets the active-conversation key from ``manager`` before resolving
+        banks, so it reverts the undoing conversation's slot regardless of the
+        task-local key on entry. This is load-bearing: the bot's undo/rewind
+        flow reaches this method on paths where :meth:`restore_from_checkpoint`
+        did NOT run (the empty-anchor ``checkpoint_node_id is None`` case —
+        undoing back through the first turn — and the missing/invalid-node
+        early returns), and each request runs in its own task whose key
+        defaults to :data:`_DEFAULT_CONV_KEY`. Keying off ``manager`` here
+        makes bank reverting self-sufficient rather than dependent on a sibling
+        hook having set the key first.
+
+        Iterates the conversation's ``MemoryBank`` instances and forwards the
+        checkpoint id. Banks that don't expose ``undo_to_checkpoint`` are
+        silently skipped (defensive — every ``MemoryBank`` does expose it
+        today, but the existing bot-side guard is retained to match the prior
+        behaviour exactly).
         """
+        _active_conversation.set(_conversation_key(manager))
         for bank in self._banks.values():
             if hasattr(bank, "undo_to_checkpoint"):
                 bank.undo_to_checkpoint(checkpoint_node_id)
 
     def _close_conversation_slot(
-        self, conversation_id: str, state: _ConvBankState
+        self, conversation_id: _ConvKey, state: _ConvBankState
     ) -> None:
         """Close one conversation's memory banks and artifact catalog.
 
@@ -3375,9 +3424,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Returns:
             WizardState instance
         """
-        _active_conversation.set(
-            getattr(manager, "conversation_id", None) or _DEFAULT_CONV_KEY
-        )
+        _active_conversation.set(_conversation_key(manager))
         self._ensure_slot_built()
         wizard_data = manager.metadata.get("wizard", {})
         if wizard_data.get("fsm_state"):
@@ -3721,9 +3768,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Per-call closure captures local llm and turn values so that
         # concurrent FSM steps each see their own context.
-        # Note: _artifact_registry, _review_executor, and _banks are
-        # accessed via self (not captured by value) — they are set once
-        # at construction and are stable during FSM execution.
+        # Note: _artifact_registry and _review_executor are accessed via self
+        # (not captured by value) — set once at construction, stable during FSM
+        # execution. _banks is read via self as well, but resolves the active
+        # conversation's slot through the task-local ``_active_conversation``
+        # key set at turn entry — so reading it via ``self`` (never a captured
+        # local) is what keeps concurrent turns' banks isolated.
         from ..artifacts.transforms import TransformContext
 
         def _scoped_factory(func_context: Any) -> Any:
