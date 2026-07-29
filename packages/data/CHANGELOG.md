@@ -44,8 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `now` (an aware/naive timezone mismatch between the stamp and the injected
   clock) is treated as not-expired and left in place rather than crashing the
   prune. Pruning is data minimization and, like `clear()`, is never
-  consent-gated; deletions (`delete_record` / `clear` / `prune`) fire no
-  delta event.
+  consent-gated.
+- **Deletion and erasure of per-user state now emit a metadata-only delta
+  event** (`user_state:section_deleted`), a sibling of the existing
+  `user_state:section_written` topic. `delete_record`, `prune`, and `clear` each
+  fire one `op`-discriminated event (`op` = `"delete_record"` / `"prune"` /
+  `"clear"`) when they actually remove data, so a consumer can build a deletion
+  or erasure audit trail from the event stream. The payload is metadata-only by
+  construction — deletes are by id, so no section value is ever emitted (a
+  `SENSITIVE` section is safe) — and a whole-user `clear` reports
+  `section = None`. Single deletes carry the `record_id`; bulk deletes carry a
+  `count`. Nothing fires when nothing was removed. The event rides the same
+  callback registry and optional `EventBus` fan-out as the write topic (the sync
+  store still rejects an injected `event_bus`; in-process callbacks fire on both
+  variants).
 
 ### Changed
 

@@ -132,6 +132,7 @@ from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import ConflictPolicy, StreamConfig, StreamProcessor, StreamResult
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 from .user import (
+    SECTION_DELETED_TOPIC,
     SECTION_WRITTEN_TOPIC,
     AsyncUserStateStore,
     SectionKind,
@@ -151,6 +152,7 @@ __all__ = [
     "UserStateSectionSpec",
     "SectionKind",
     "Sensitivity",
+    "SECTION_DELETED_TOPIC",
     "SECTION_WRITTEN_TOPIC",
     # Core classes
     "AsyncDatabase",
