@@ -47,6 +47,7 @@ Example:
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,8 @@ from dataknobs_data.user.config import (
     UserStateSectionSpec,
     UserStateStoreConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Topic fired on the callback registry (and any composed EventBus) after a
 #: successful write. Payloads are metadata-only — a section's *values* are
@@ -730,6 +733,22 @@ class _UserStateStoreCommon:
             payload, user_id, RESERVED_EVENTS_SECTION, self._events_spec()
         )
 
+    def _log_append_failure(self, op: str, user_id: str, exc: Exception) -> None:
+        """Log a swallowed audit-append failure (shared by both variants).
+
+        Keeps the log message and level identical across the sync/async
+        ``_append_event`` guards so the two cannot drift. Metadata-only: the
+        ``op`` and opaque ``user_id`` route the message; no section value or
+        record content is logged.
+        """
+        logger.warning(
+            "user-state event-log append failed (op=%s, user_id=%s); "
+            "primary operation already persisted — audit entry dropped: %s",
+            op,
+            user_id,
+            exc,
+        )
+
 
 # --------------------------------------------------------------------- #
 # Async variant.
@@ -1286,23 +1305,33 @@ class AsyncUserStateStore(
 
         A no-op unless ``enable_event_log`` is set. Best-effort after the
         primary write/delete has persisted (mirroring the non-load-bearing
-        ephemeral fire); the append is a second, independent ``create`` and is
-        never itself logged, so it cannot recurse. Whole-user erasure
-        (:meth:`clear`) intentionally does not call this — re-materialising a
-        record in the just-erased user's own log would defeat the erasure.
+        ephemeral fire): the append is a second, independent ``create``, so a
+        backend failure appending the audit entry is logged and swallowed
+        rather than propagated — the primary operation already persisted, and
+        raising here would spuriously fail (and, on retry, duplicate) it.
+        ``asyncio.CancelledError`` and other ``BaseException`` subclasses
+        propagate. The append is never itself logged, so it cannot recurse.
+        Whole-user erasure (:meth:`clear`) intentionally does not call this —
+        re-materialising a record in the just-erased user's own log would
+        defeat the erasure.
         """
         if not self._event_log_enabled():
             return
-        await self._db.create(
-            self._event_record(
-                user_id,
-                op,
-                op_section=op_section,
-                op_record_id=op_record_id,
-                op_count=op_count,
-                op_sections=op_sections,
+        try:
+            await self._db.create(
+                self._event_record(
+                    user_id,
+                    op,
+                    op_section=op_section,
+                    op_record_id=op_record_id,
+                    op_count=op_count,
+                    op_sections=op_sections,
+                )
             )
-        )
+        except Exception as exc:
+            # Best-effort: the primary op already persisted; a failed audit
+            # append is logged and swallowed, never propagated.
+            self._log_append_failure(op, user_id, exc)
 
 
 # --------------------------------------------------------------------- #
@@ -1772,19 +1801,27 @@ class UserStateStore(
         """Append one metadata-only record to the persisted ``events`` log.
 
         Sync mirror of the async twin: a no-op unless ``enable_event_log`` is
-        set; best-effort after the primary write/delete persists; never itself
-        logged (no recursion); not called from :meth:`clear` (erasure leaves no
+        set; best-effort after the primary write/delete persists (a backend
+        failure appending the audit entry is logged and swallowed, never
+        propagated, so the already-persisted primary op is not spuriously
+        failed/duplicated; ``BaseException`` propagates); never itself logged
+        (no recursion); not called from :meth:`clear` (erasure leaves no
         per-user trace).
         """
         if not self._event_log_enabled():
             return
-        self._db.create(
-            self._event_record(
-                user_id,
-                op,
-                op_section=op_section,
-                op_record_id=op_record_id,
-                op_count=op_count,
-                op_sections=op_sections,
+        try:
+            self._db.create(
+                self._event_record(
+                    user_id,
+                    op,
+                    op_section=op_section,
+                    op_record_id=op_record_id,
+                    op_count=op_count,
+                    op_sections=op_sections,
+                )
             )
-        )
+        except Exception as exc:
+            # Best-effort: the primary op already persisted; a failed audit
+            # append is logged and swallowed, never propagated.
+            self._log_append_failure(op, user_id, exc)

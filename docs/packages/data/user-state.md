@@ -398,7 +398,11 @@ The record's own `_written_at` scope stamp is the audit timestamp.
   ordinary section-less `prune` sweep; without it the log grows until `clear`.
 - **Best-effort, non-atomic.** The append is a second write after the primary one
   persists (mirroring the ephemeral fire); no cross-record transaction spans the
-  two.
+  two. A backend failure appending the audit entry is logged and swallowed, never
+  propagated — the primary operation already succeeded, so raising would
+  spuriously fail (and, on a retry, duplicate) it. The trade-off is that the log
+  may miss an entry for an operation that did persist; `clear`-scoped erasure and
+  the ephemeral delta event are unaffected.
 
 The log is tenant-scoped like every other section — `query_events` under a bound
 tenant returns only that tenant's records.

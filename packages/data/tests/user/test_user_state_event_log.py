@@ -18,6 +18,7 @@ behavioral case is written for both the async and sync variants.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -29,6 +30,7 @@ from dataknobs_data.backends.memory import (
     AsyncMemoryDatabase,
     SyncMemoryDatabase,
 )
+from dataknobs_data.records import Record
 from dataknobs_data.user import (
     SECTION_DELETED_TOPIC,
     AsyncUserStateStore,
@@ -597,3 +599,81 @@ def test_both_variants_have_event_log_surface() -> None:
         assert hasattr(AsyncUserStateStore, method)
         assert hasattr(UserStateStore, method)
     assert RESERVED_EVENTS_SECTION == "events"
+
+
+# --------------------------------------------------------------------- #
+# 12. Best-effort append: a failed audit write never fails the primary op.
+# --------------------------------------------------------------------- #
+#
+# Real backend subclasses (not mocks) whose ``create`` fails only for the
+# reserved ``events`` section — the audit append. Every other write (the
+# primary content record) goes through untouched, so the primary op persists
+# and only the secondary audit append hits the injected fault.
+
+
+class _EventsAppendFailsAsyncDB(AsyncMemoryDatabase):
+    async def create(self, record: Record) -> str:
+        if record.get_value("section") == RESERVED_EVENTS_SECTION:
+            raise RuntimeError("simulated audit-append backend failure")
+        return await super().create(record)
+
+
+class _EventsAppendFailsSyncDB(SyncMemoryDatabase):
+    def create(self, record: Record) -> str:
+        if record.get_value("section") == RESERVED_EVENTS_SECTION:
+            raise RuntimeError("simulated audit-append backend failure")
+        return super().create(record)
+
+
+async def test_append_failure_does_not_fail_primary_write_async(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cfg = UserStateStoreConfig.from_dict(_config())
+    store = AsyncUserStateStore.from_components(
+        cfg, db=_EventsAppendFailsAsyncDB()
+    )
+    try:
+        with caplog.at_level(
+            logging.WARNING, logger="dataknobs_data.user.store"
+        ):
+            # The audit append raises inside _append_event; the primary
+            # add_record must still return the persisted record's id.
+            rid = await store.add_record("u1", "alerts", {"text": "a"})
+
+        assert rid  # primary write persisted despite the audit fault
+        # And the primary record is durably readable.
+        records = await store.query("u1", "alerts")
+        assert [r.get_value("text") for r in records] == ["a"]
+        # The swallowed failure is logged (metadata only), not silently dropped.
+        assert any(
+            "event-log append failed" in r.message
+            and "add_record" in r.message
+            and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
+    finally:
+        await store.close()
+
+
+def test_append_failure_does_not_fail_primary_write_sync(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cfg = UserStateStoreConfig.from_dict(_config())
+    store = UserStateStore.from_components(cfg, db=_EventsAppendFailsSyncDB())
+    try:
+        with caplog.at_level(
+            logging.WARNING, logger="dataknobs_data.user.store"
+        ):
+            rid = store.add_record("u1", "alerts", {"text": "a"})
+
+        assert rid
+        records = store.query("u1", "alerts")
+        assert [r.get_value("text") for r in records] == ["a"]
+        assert any(
+            "event-log append failed" in r.message
+            and "add_record" in r.message
+            and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
+    finally:
+        store.close()
