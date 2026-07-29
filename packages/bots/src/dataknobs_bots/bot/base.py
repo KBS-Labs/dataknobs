@@ -743,10 +743,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 - knowledge_base: Optional knowledge base configuration
                 - reasoning: Optional reasoning strategy configuration
                 - middleware: Optional middleware configurations (ignored
-                  when the ``middleware`` kwarg is provided)
+                  only when the *replace* ``middleware`` kwarg is provided;
+                  the additive ``platform_middleware`` kwarg does NOT
+                  suppress this config block — it appends to it)
                 - conversation_middleware: Optional ConversationMiddleware
-                  configurations (ignored when the
-                  ``conversation_middleware`` kwarg is provided)
+                  configurations (ignored only when the *replace*
+                  ``conversation_middleware`` kwarg is provided; the additive
+                  ``platform_conversation_middleware`` kwarg does NOT suppress
+                  this config block — it appends to it)
                 - prompts: Optional prompts library (dict of name -> content)
                 - system_prompt: Optional system prompt configuration (see below)
                 - config_base_path: Optional base directory for resolving

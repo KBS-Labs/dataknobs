@@ -224,6 +224,38 @@ class TestPlatformMiddlewareBotTurn:
 
         assert sink == ["A"]
 
+    @pytest.mark.asyncio
+    async def test_platform_middleware_additive_on_stream_chat(self) -> None:
+        """The streaming path honors the additive channel too.
+
+        Middleware wiring lands on ``self.middleware`` at build time and both
+        the buffered (``chat``) and streaming (``stream_chat``) paths iterate
+        the same list, so parity holds by construction. This is the
+        belt-and-suspenders regression guard against a future path-specific
+        divergence — the appended platform probe's ``after_turn`` must fire on
+        ``stream_chat`` exactly as it does on ``chat``.
+        """
+        sink: list[str] = []
+        probe = RecordingMiddleware("P", sink)
+
+        bot = await DynaBot.from_config(
+            _base_config(
+                middleware=[
+                    {"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}
+                ]
+            ),
+            llm=_echo("ok"),
+            platform_middleware=[probe],
+        )
+        async with bot:
+            assert bot.middleware[-1] is probe
+            async for _ in bot.stream_chat("hi", _ctx()):
+                pass
+
+        # Config middleware fired first, then the appended platform probe —
+        # identical to the buffered path.
+        assert sink == ["A", "P"]
+
 
 # ---------------------------------------------------------------------------
 # LLM-call ``platform_conversation_middleware`` (additive + onion order)
