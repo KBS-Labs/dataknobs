@@ -5,6 +5,18 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-29 (2)
+
+### dataknobs-bots [0.9.4]
+
+#### Fixed
+- platform middleware injection
+
+### dataknobs-llm [0.6.9]
+
+#### Changed
+- maintenance release
+
 ## Release - 2026-07-29
 
 ### dataknobs-bots [0.9.2]
