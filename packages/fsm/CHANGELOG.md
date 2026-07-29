@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `DatabaseResource.bulk_insert` and `commit_batch` now mint an explicit storage
+  id for each record on their identity-less path, so an incidental `id` /
+  `record_id` field in an arbitrary input row is never promoted to the storage
+  key. This makes the documented "backend-assigned ids" behavior (the no-identity
+  path) uniform across every backend: previously a row carrying an `id` /
+  `record_id` field was keyed off that value on any backend that honors
+  `record.id` on `create` (and could raise `DuplicateRecordError` when two rows
+  shared the value), while other backends minted a fresh id for the same input.
+  The `id` / `record_id` field is preserved untouched as row data; configure a
+  `RecordIdentity` to key rows off their fields deliberately.
+
 ## v0.3.2 - 2026-07-27
 
 ### Security

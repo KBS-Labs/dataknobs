@@ -2,117 +2,166 @@
 
 ## Overview
 
-The DataKnobs Data Package implements a sophisticated ID management system that cleanly separates user-defined identifiers from system-assigned storage identifiers. This architecture ensures data integrity while maintaining flexibility for user applications.
+The DataKnobs Data Package cleanly separates a user-defined identifier from the
+system-assigned storage identifier, while giving the caller full control over
+which value keys a record. This architecture keeps data integrity intact and
+makes the storage key predictable across every backend.
 
 ## The Two-ID Concept
 
 ### 1. Storage ID (System ID)
-- **Purpose**: Unique identifier assigned by the storage backend
-- **Generation**: Automatically created when a record is stored
-- **Format**: Typically UUID v4 (backend-dependent)
+- **Purpose**: The key a record is stored and addressed under
+- **Source**: `record.id` when the caller supplies one (see the
+  [Write-Keying Contract](#write-keying-contract)); a fresh UUID v4 is minted
+  only when the record carries no id — a *falsy* id (`""`, or `0` before
+  stringification) counts as none and is minted
 - **Access**: Via `record.storage_id` property
-- **Mutability**: Set once by the database, immutable thereafter
+- **Mutability**: Set once for a stored record; immutable thereafter
 
 ### 2. User ID (Data Field)
 - **Purpose**: Application-specific identifier in the record's data
-- **Location**: Stored as a field named "id" in the record's data
+- **Location**: Stored as a field named `id` in the record's data
 - **Format**: Any user-defined format (string, integer, etc.)
 - **Access**: Via `record.get_user_id()` or `record.get_value("id")`
 - **Mutability**: Can be changed by the application
 
-## The ID Conflict Problem
+## Write-Keying Contract
 
-### Background
-Records can have an "id" field as part of their business data. This creates ambiguity:
-- When a record has `{"id": "user-123", "name": "Test"}`, what does `record.id` return?
-- When the database assigns storage ID "uuid-456", which ID is used for updates?
+`create()` and `create_batch()` — **sync and async, on every backend** — derive
+a record's storage id the same way:
 
-### Historical Issue
+> **The storage id is `record.id` (honor a caller-supplied id); a fresh UUID is
+> minted only when the record carries no id. A colliding id fails closed with
+> `DuplicateRecordError`. Use `upsert` to insert-or-overwrite.**
+
+`record.id` resolves through a 5-step priority (see
+[ID Priority Resolution](#id-priority-resolution)), so a business identifier
+placed in the record's `id` (or `record_id`) data field **becomes the storage
+key**:
+
 ```python
-# User creates a record with an ID field
-record = Record({"id": 1, "title": "Test"})
-print(record.id)  # Returns "1" (the field value)
-
-# Database stores it with a UUID
-record_id = await db.create(record)  # Returns "abc-123-def"
-
-# Later, trying to update fails
-await db.update(record.id, updated_record)  # Tries to update "1", not "abc-123-def"!
+record = Record({"id": "user-123", "name": "Test"})
+storage_id = await db.create(record)   # "user-123" — the caller's id is honored
 ```
 
-## The Solution: ID Priority System
+A record with no resolvable id is minted a UUID:
+
+```python
+storage_id = await db.create(Record({"name": "Test"}))  # e.g. "uuid-456"
+```
+
+A *falsy* id counts as "no id": the resolution is `record.id or <uuid>`, so an
+empty or zero id (`Record({"id": ""})`, or a `0` id before stringification) is
+treated as absent and a fresh UUID is minted rather than keying the record under
+the falsy value. Supply a non-empty id when you need the caller value honored.
+
+A second `create()` under the same id fails closed rather than overwriting:
+
+```python
+await db.create(Record({"id": "user-123", "name": "Test"}))
+await db.create(Record({"id": "user-123", "name": "Other"}))  # DuplicateRecordError
+await db.upsert(Record({"id": "user-123", "name": "Other"}))  # overwrites instead
+```
+
+This is the same contract for the single-record and batch forms, so a record
+keys identically whether written through `create()` or `create_batch()`.
+
+### Read + write coherence
+
+Because `Filter("id", ...)` is **reserved to the storage key** on every backend
+(see [Searching by a User-Defined Identifier](#searching-by-a-user-defined-identifier)),
+honoring a caller-supplied `id` on write keeps read and write coherent: the id
+you supply becomes the storage key **and** is what `Filter("id", ...)` matches.
+If you want a business identifier that is *not* the storage key — a system UUID
+for the key, with the identifier as pure business data — store it under a field
+name **other than** `id` / `record_id` (see the recipe below).
+
+### Security: validate a caller-supplied id you do not trust
+
+Because `create()` honors `record.id` as the storage key on **every** backend, a
+caller-supplied `id` chooses the record's key — including the S3 object key
+(`{prefix}{id}.json`) and the file backend's JSON dict key. When the `id`
+originates from untrusted input (a request payload, an uploaded document),
+validate it at your boundary as you would any other external value (see the
+project's input-validation-at-boundaries rule).
+
+This is a **namespacing** concern, not an overwrite one: storage keys are flat,
+so an `id` like `"../x"` is a literal key segment rather than a path traversal;
+reads use the same key builder, so they stay symmetric; and the fail-closed
+`create()` (S3's `If-None-Match: *`) prevents clobbering an existing record.
+But an unvalidated `id` still lets caller input place a record outside your
+intended key namespace, so treat it as boundary input. To keep the storage key
+entirely under your control regardless of payload contents, set
+`record.storage_id` explicitly (or store the untrusted identifier under a
+non-`id` field name — see the recipe below).
+
+## The ID Priority System
 
 ### Record Class Properties
 
 ```python
 class Record:
     _storage_id: str | None  # System-assigned storage ID
-    fields: dict             # User data (may include "id" field)
-    
+    fields: dict             # User data (may include an "id" field)
+
     @property
     def storage_id(self) -> str | None:
-        """Get the storage system ID."""
+        """Get the storage system ID (None until stored / assigned)."""
         return self._storage_id
-    
+
     @property
     def id(self) -> str | None:
-        """Get the record ID with smart priority:
-        1. Storage ID (if set)
-        2. User-defined 'id' field
-        3. None
-        """
-        if self._storage_id is not None:
-            return self._storage_id
-        return self.get_value("id")
-    
+        """Get the record ID via the 5-step priority (see below)."""
+        ...
+
     def get_user_id(self) -> str | None:
-        """Explicitly get the user-defined ID field."""
+        """Explicitly get the user-defined 'id' data field (never the storage id)."""
         return self.get_value("id")
-    
+
     def has_storage_id(self) -> bool:
-        """Check if storage ID is assigned."""
+        """Check if a storage ID has been assigned."""
         return self._storage_id is not None
 ```
 
-### Priority Resolution
+### ID Priority Resolution
 
-The `record.id` property uses intelligent priority:
+`record.id` returns the first of:
 
-1. **After storage**: Returns storage_id (database operations)
-2. **Before storage**: Returns user's "id" field (if present)
-3. **No ID**: Returns None
+1. `storage_id` (database-assigned, once stored)
+2. the legacy `_id` (set from a caller `id=`/`storage_id=` kwarg, or promoted
+   from a payload id at construction)
+3. a payload `id` data field
+4. a metadata `id`
+5. a payload `record_id` data field
 
-This ensures backwards compatibility while preventing ID conflicts.
+…or `None` when none is present. Steps 3–5 are why a business identifier in the
+data becomes the storage key on write. `record.get_user_id()` returns **only**
+the payload `id` field, ignoring any assigned storage id.
 
 ## Implementation in Backends
 
 ### Centralized Helper Methods
 
-All database backends inherit these helper methods from the base `Database` class:
+The in-process and object-store backends resolve the write-keying rule through a
+single base helper; the SQL backends apply the identical rule in their query
+builders (`build_create_query` / `build_batch_create_query`). All express the
+same `record.id or uuid` resolution, so no backend re-derives the rule
+independently.
 
 ```python
 def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
-    """Prepare a record for storage by ensuring it has a storage_id.
-    
-    Returns:
-        Tuple of (prepared_record_copy, storage_id)
+    """Resolve a record's storage id for a write, honoring a caller id.
+
+    The storage id is record.id (honor a caller-supplied id); a fresh uuid
+    is minted only when the record carries no id at all.
     """
     record_copy = record.copy(deep=True)
-    
-    if not record_copy.has_storage_id():
-        storage_id = str(uuid.uuid4())
-        record_copy.storage_id = storage_id
-    else:
-        storage_id = record_copy.storage_id
-        
+    storage_id = record.id or str(uuid.uuid4())
+    record_copy.storage_id = storage_id
     return record_copy, storage_id
 
 def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
-    """Prepare a record retrieved from storage by ensuring storage_id is set.
-    
-    Returns:
-        Record with storage_id set, or None
-    """
+    """Prepare a record retrieved from storage by ensuring storage_id is set."""
     if record:
         record_copy = record.copy(deep=True)
         if not record_copy.has_storage_id():
@@ -126,17 +175,19 @@ def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -
 ```python
 # In any backend's create method
 async def create(self, record: Record) -> str:
-    # Use centralized method to prepare record
+    # Resolve the storage id (honors record.id; mints only when absent)
     record_copy, storage_id = self._prepare_record_for_storage(record)
-    
-    # Store the record with its storage ID
+
+    # Store the record under its storage id, failing closed on a collision
+    if storage_id in self._storage:
+        raise DuplicateRecordError(storage_id)
     self._storage[storage_id] = record_copy
     return storage_id
 
 # In any backend's read method
 async def read(self, id: str) -> Record | None:
     record = self._storage.get(id)
-    # Use centralized method to ensure storage_id is set
+    # Ensure the returned record carries its storage_id
     return self._prepare_record_from_storage(record, id)
 ```
 
@@ -145,28 +196,35 @@ async def read(self, id: str) -> Record | None:
 ### Creating Records
 
 ```python
-# User creates record with their own ID
+# Caller supplies an id in the data — it becomes the storage key
 record = Record({"id": "user-123", "name": "Test"})
-print(record.id)  # "user-123" (user field)
-print(record.storage_id)  # None
+print(record.id)          # "user-123" (resolved from the data field)
+print(record.storage_id)  # None (not yet stored)
 
-# Store in database
 storage_id = await db.create(record)
-print(storage_id)  # "uuid-generated-456"
+print(storage_id)         # "user-123" — the caller's id is honored
 
-# Read it back
-retrieved = await db.read(storage_id)
-print(retrieved.id)  # "uuid-generated-456" (storage_id takes priority)
-print(retrieved.get_user_id())  # "user-123" (user field still accessible)
-print(retrieved.storage_id)  # "uuid-generated-456"
+# Read it back by that key
+retrieved = await db.read("user-123")
+print(retrieved.id)            # "user-123"
+print(retrieved.get_user_id()) # "user-123" (the data field is still present)
+print(retrieved.storage_id)    # "user-123"
+```
+
+To let the backend mint the key and keep a business identifier as pure data,
+store the identifier under a non-reserved field name:
+
+```python
+record = Record({"user_id": "user-123", "name": "Test"})
+storage_id = await db.create(record)  # a minted UUID; "user_id" stays business data
 ```
 
 ### Updating Records
 
 ```python
-# After retrieval, use record.id for updates (it returns storage_id)
-retrieved.fields["name"].value = "Updated"
-success = await db.update(retrieved.id, retrieved)  # Uses storage_id correctly
+# record.id returns the storage id once stored, so it updates the right row
+retrieved.set_value("name", "Updated")
+await db.update(retrieved.id, retrieved)
 ```
 
 ### Searching by a User-Defined Identifier
@@ -176,10 +234,11 @@ success = await db.update(retrieved.id, retrieved)  # Uses storage_id correctly
 `data["id"]` (see [The Two-ID Concept](#the-two-id-concept)) is reachable through
 the Record API (`record.get_user_id()` / `record.get_value("id")`) but is
 **shadowed** for querying: `Filter("id", ...)` matches the storage key instead,
-so the query silently returns no rows.
+so a query against a *different* business value under a data `id` field silently
+returns no rows.
 
-To make a user-defined identifier **queryable**, store it under a field name
-**other than `id`** and filter that field directly:
+To make a user-defined identifier **queryable independently of the storage key**,
+store it under a field name **other than `id`** and filter that field directly:
 
 ```python
 # Find records by a user-defined identifier — store it under a non-reserved name.
@@ -191,53 +250,56 @@ query = Query(filters=[Filter("user_id", Operator.EQ, "user-123")])
 results = await db.search(query)   # matches the data field "user_id"
 ```
 
-If you actually want to filter on the storage key, `Filter("id", ...)` is
-exactly that. See the query reference for the reserved-name contract and the
-secondary-identifier recipe.
+If you want to filter on the storage key, `Filter("id", ...)` is exactly that —
+and because the storage key honors a caller-supplied `id`, filtering
+`Filter("id", "user-123")` finds the record created from
+`Record({"id": "user-123", ...})`. See the query reference for the reserved-name
+contract and the secondary-identifier recipe.
 
 ## Benefits
 
-1. **No ID Conflicts**: System and user IDs are clearly separated
-2. **Backwards Compatible**: Existing code using `record.id` continues to work
-3. **Consistent Behavior**: All backends use the same ID management logic
-4. **Explicit Access**: Methods like `get_user_id()` provide unambiguous access
-5. **Database Integrity**: Storage operations always use the correct system ID
+1. **Predictable keying**: a caller-supplied id is the storage key on every
+   backend and both write methods; a UUID is minted only when none is supplied
+2. **Fail-closed writes**: a colliding id raises `DuplicateRecordError` rather
+   than silently overwriting; `upsert` is the explicit insert-or-overwrite path
+3. **Read + write coherence**: the honored id is both the storage key and what
+   `Filter("id", ...)` matches
+4. **Backwards compatible reads**: `record.id` continues to return the right id
+   before and after storage
+5. **Explicit access**: `get_user_id()` gives unambiguous access to the data
+   field regardless of the storage key
 
 ## Migration Guide
 
-### For Existing Applications
+### Behavior to be aware of
 
-Most existing code requires no changes:
-- `record.id` continues to work, with smarter behavior
-- Database operations remain unchanged
-- `Filter("id", ...)` resolves to the storage key on every backend (see
-  [Searching by a User-Defined Identifier](#searching-by-a-user-defined-identifier));
-  to query a business identifier, store it under a non-`id` field name
+- `create()` **honors a caller-supplied `record.id`** as the storage key
+  (minting only when absent), matching `create_batch()`. A record whose data
+  carries an `id` (or `record_id`) field is keyed under that value, and a
+  colliding id fails closed with `DuplicateRecordError`.
+- If you relied on `create()` minting a fresh UUID while a payload `id` field
+  stayed pure business data, either store that identifier under a non-`id`
+  field name (recommended — it is also queryable, see above) or set
+  `record.storage_id` explicitly to the key you want.
+- Use `upsert` where you previously depended on a second write overwriting the
+  first (streaming/batched writes: `StreamConfig(on_conflict=ConflictPolicy.UPSERT)`).
 
-### For New Applications
+### Best practices for new applications
 
-Best practices:
-1. Use `record.storage_id` when you explicitly need the database ID
-2. Use `record.get_user_id()` when you need the user-defined ID
-3. Use `record.id` for database operations (it intelligently returns the right ID)
-4. Check `record.has_storage_id()` to know if a record has been stored
+1. Put the value you want as the storage key in `record.id` (via the data `id`
+   field, or `record.storage_id = ...`).
+2. Keep a queryable business identifier under a non-`id` field name.
+3. Use `record.get_user_id()` when you need the user-defined `id` data field.
+4. Use `record.id` for database operations (it returns the storage id once stored).
+5. Check `record.has_storage_id()` to know whether a record has been stored.
 
 ## Technical Details
 
 ### Property Setter Handling
 
-The Record class overrides `__setattr__` to properly handle property setters:
-
-```python
-def __setattr__(self, name: str, value: Any) -> None:
-    # Handle properties with setters specially
-    if name in ("id", "storage_id"):
-        # Use the property setter
-        object.__setattr__(self, name, value)
-    # ... handle other attributes
-```
-
-This ensures that `record.storage_id = "value"` correctly invokes the property setter rather than creating a field.
+The Record class routes `record.id = ...` / `record.storage_id = ...` through
+their property setters (rather than creating a data field), so assigning a
+storage id never leaks into the record's business data.
 
 ### Database Utility Functions
 
@@ -245,14 +307,14 @@ The `database_utils` module provides:
 
 ```python
 def ensure_record_id(record: Record, record_id: str) -> Record:
-    """Ensure a record has its storage ID set."""
+    """Ensure a record carries its storage ID (used when returning read results)."""
     if not record.has_storage_id() or record.storage_id != record_id:
         record = record.copy(deep=True)
         record.storage_id = record_id
     return record
 ```
 
-This is used internally by backends when processing search results.
+This is used internally by backends when returning records from a read/search.
 
 ## See Also
 

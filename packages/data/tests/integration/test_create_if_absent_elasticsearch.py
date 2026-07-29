@@ -51,3 +51,31 @@ async def test_async_duplicate_create_raises(elasticsearch_test_index) -> None:
         assert got.get_value("v") == "winner"
     finally:
         await db.close()
+
+
+def test_sync_create_honors_payload_id_field(elasticsearch_test_index) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    db.connect()
+    try:
+        assert db.create(Record({"id": "x", "v": 1})) == "x"
+        assert db.read("x").get_value("v") == 1
+        with pytest.raises(DuplicateRecordError) as excinfo:
+            db.create(Record({"id": "x", "v": 2}))
+        assert excinfo.value.id == "x"
+    finally:
+        db.close()
+
+
+async def test_async_create_honors_payload_id_field(elasticsearch_test_index) -> None:
+    """A payload ``id`` data field is the storage key; a collision fails closed."""
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        assert await db.create(Record({"id": "x", "v": 1})) == "x"
+        assert (await db.read("x")).get_value("v") == 1
+        with pytest.raises(DuplicateRecordError) as excinfo:
+            await db.create(Record({"id": "x", "v": 2}))
+        assert excinfo.value.id == "x"
+    finally:
+        await db.close()

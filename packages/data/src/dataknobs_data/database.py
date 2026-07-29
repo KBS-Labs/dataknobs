@@ -499,25 +499,28 @@ class AsyncDatabase(CapabilityMixin, ABC):
         return ensure_record_id(record, record_id)
 
     def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
-        """Prepare a record for storage by ensuring it has a storage_id.
-        
+        """Resolve a record's storage id for a write, honoring a caller id.
+
+        The storage id is ``record.id`` (the 5-step resolution: storage id →
+        legacy id → payload ``id`` field → metadata ``id`` → payload
+        ``record_id`` field); a fresh uuid is minted only when the record
+        carries no id at all. This is the same rule the SQL query builders
+        apply (``build_create_query`` / ``build_batch_create_query``), so a
+        caller-supplied id keys a record identically on every backend and
+        method. A colliding id fails closed at the backend's insert (the
+        atomic-insert contract); ``upsert`` overwrites.
+
         Args:
             record: The record to prepare
-            
+
         Returns:
             Tuple of (prepared_record_copy, storage_id)
         """
         import uuid
-        # Make a copy to avoid modifying the original
+        # Copy so the caller's record is never mutated by the id assignment.
         record_copy = record.copy(deep=True)
-
-        # Generate storage ID if not present
-        if not record_copy.has_storage_id():
-            storage_id = str(uuid.uuid4())
-            record_copy.storage_id = storage_id
-        else:
-            storage_id = record_copy.storage_id
-
+        storage_id = record.id or str(uuid.uuid4())
+        record_copy.storage_id = storage_id
         return record_copy, storage_id
 
     def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
@@ -1315,25 +1318,28 @@ class SyncDatabase(CapabilityMixin, ABC):
         return ensure_record_id(record, record_id)
 
     def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
-        """Prepare a record for storage by ensuring it has a storage_id.
-        
+        """Resolve a record's storage id for a write, honoring a caller id.
+
+        The storage id is ``record.id`` (the 5-step resolution: storage id →
+        legacy id → payload ``id`` field → metadata ``id`` → payload
+        ``record_id`` field); a fresh uuid is minted only when the record
+        carries no id at all. This is the same rule the SQL query builders
+        apply (``build_create_query`` / ``build_batch_create_query``), so a
+        caller-supplied id keys a record identically on every backend and
+        method. A colliding id fails closed at the backend's insert (the
+        atomic-insert contract); ``upsert`` overwrites.
+
         Args:
             record: The record to prepare
-            
+
         Returns:
             Tuple of (prepared_record_copy, storage_id)
         """
         import uuid
-        # Make a copy to avoid modifying the original
+        # Copy so the caller's record is never mutated by the id assignment.
         record_copy = record.copy(deep=True)
-
-        # Generate storage ID if not present
-        if not record_copy.has_storage_id():
-            storage_id = str(uuid.uuid4())
-            record_copy.storage_id = storage_id
-        else:
-            storage_id = record_copy.storage_id
-
+        storage_id = record.id or str(uuid.uuid4())
+        record_copy.storage_id = storage_id
         return record_copy, storage_id
 
     def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:

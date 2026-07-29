@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: `create()` resolves the storage id uniformly with
+  `create_batch()` across all backends.** A caller-supplied `record.id` is
+  honored as the storage key (a fresh UUID is minted only when the record
+  carries no id), and a colliding id fails closed with `DuplicateRecordError`.
+  Previously the SQLite (async) and DuckDB (sync + async) `create()` paths
+  minted a fresh UUID and ignored a payload `id` / `record_id` data field,
+  diverging from their own `create_batch()` and from the other backends. A
+  record whose data carries an `id` (or `record_id`) field is now keyed under
+  that value on every backend and both write methods. If you relied on `create()`
+  minting a fresh id while a payload `id` field stayed pure business data, store
+  that identifier under a non-`id` field name (recommended — it is also
+  queryable) or set `record.storage_id` explicitly; use `upsert` for
+  insert-or-overwrite. See the Record ID Architecture guide.
+
 ### Added
 
 - **`UserStateStore` / `AsyncUserStateStore` — per-user cross-session state

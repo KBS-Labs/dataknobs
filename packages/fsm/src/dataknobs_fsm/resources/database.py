@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, List
 
@@ -545,6 +546,24 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             affected += 1
         return {"affected_rows": affected}
 
+    @staticmethod
+    def _minted_record(payload: Dict[str, Any]) -> Record:
+        """Build a record with an explicit minted storage id for an id-less write.
+
+        The identity-less bulk paths document "backend-assigned ids", but
+        ``create``/``create_batch`` honor ``record.id`` — which resolves from a
+        payload ``id``/``record_id`` data field. On backends that key ``create``
+        off ``record.id`` (sqlite-async, duckdb, and — after the create-id
+        convergence — every backend), an incidental ``id`` field in an arbitrary
+        row would otherwise become the storage key and collide with
+        ``DuplicateRecordError``. Stamping a fresh ``storage_id`` (priority 1 in
+        the id resolution) keeps the id backend-assigned uniformly across every
+        backend while leaving the ``id`` field intact as row data.
+        """
+        record = Record(payload)
+        record.storage_id = str(uuid.uuid4())
+        return record
+
     async def bulk_insert(
         self,
         table: str,
@@ -592,7 +611,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
                     # on_duplicate == "update": fall through and overwrite.
                 await db.upsert(record_id, Record(payload))
             else:
-                await db.create(Record(payload))
+                await db.create(self._minted_record(payload))
             affected += 1
         return {"affected_rows": affected}
 
@@ -655,7 +674,14 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             )
 
         if identity is None:
-            ids = await db.create_batch([Record(dict(row)) for row in records])
+            # Backend-assigned ids: mint an explicit storage id per record so an
+            # incidental ``id``/``record_id`` field is not promoted to the
+            # storage key (create_batch honors record.id), matching the
+            # single-row bulk_insert path and keeping this contract uniform
+            # across every backend.
+            ids = await db.create_batch(
+                [self._minted_record(dict(row)) for row in records]
+            )
             return {"affected_rows": len(ids)}
 
         # Idempotent batch upsert under the derived ids, via the ``upsert_batch``
