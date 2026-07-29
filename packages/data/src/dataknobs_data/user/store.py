@@ -82,6 +82,31 @@ from dataknobs_data.user.config import (
 #: stream with the same care as the identifier.
 SECTION_WRITTEN_TOPIC = "user_state:section_written"
 
+#: Topic fired on the callback registry (and any composed EventBus) after a
+#: deletion or erasure that actually removed data. Like the write topic,
+#: payloads are metadata-only — and here that is structural, not merely
+#: disciplined: every delete path removes records *by id* and never reads a
+#: record's payload, so no section *value* is ever available to emit (a
+#: SENSITIVE section is safe by construction). One event fires per delete-method
+#: call, discriminated by an ``op`` field naming the method:
+#:
+#: * ``"delete_record"`` — a single scoped collection record was removed
+#:   (payload carries ``record_id`` and ``count == 1``).
+#: * ``"prune"`` — a retention sweep removed expired records from a section
+#:   (or all windowed sections when called without one); ``count`` is the number
+#:   removed.
+#: * ``"clear"`` — the whole-user right-to-erasure primitive removed every
+#:   record across all sections; ``count`` is the total removed.
+#:
+#: ``section`` is the section name for ``delete_record`` and section-scoped
+#: ``prune``; it is ``None`` to signal a whole-user / multi-section operation
+#: (``clear``, or ``prune`` called without a section). A consumer keys erasure
+#: handling off ``op == "clear"`` rather than off ``section``. No event fires
+#: when nothing was removed (a no-op delete, an empty prune, a clear of an
+#: empty user). The ``user_id`` carries the same identifier-care caveat as the
+#: write topic.
+SECTION_DELETED_TOPIC = "user_state:section_deleted"
+
 #: Coordinator-owned fields stamped onto every record. Stripped from the
 #: whole-user :meth:`snapshot` view so a consumer sees only its own payload,
 #: and skipped by opacity-safe scope comparison.
@@ -347,11 +372,12 @@ class _UserStateStoreCommon:
     async stores own their I/O and their database build.
     """
 
-    # Whether this variant can safely fan a section-written event out to an
-    # async :class:`~dataknobs_common.events.EventBus`. Only the async store
-    # can — ``EventBus.publish`` is a coroutine, and the sync ``fire`` path
-    # cannot drive it from within a running loop (it would raise *after* the
-    # write already persisted). Overridden to ``True`` on the async variant.
+    # Whether this variant can safely fan a delta event (section-written or
+    # section-deleted) out to an async
+    # :class:`~dataknobs_common.events.EventBus`. Only the async store can —
+    # ``EventBus.publish`` is a coroutine, and the sync ``fire`` path cannot
+    # drive it from within a running loop (it would raise *after* the write or
+    # delete already persisted). Overridden to ``True`` on the async variant.
     _SUPPORTS_ASYNC_FANOUT: ClassVar[bool] = False
 
     # Attributes established by :meth:`_bind_common` (declared for typing).
@@ -406,11 +432,12 @@ class _UserStateStoreCommon:
             if not self._SUPPORTS_ASYNC_FANOUT:
                 raise ConfigurationError(
                     f"{type(self).__name__} (synchronous) cannot fan "
-                    "section-written events out to an EventBus: "
-                    "EventBus.publish is asynchronous and the sync fire path "
-                    "cannot drive it safely from within a running event loop. "
-                    "Use AsyncUserStateStore for bus fan-out, or register sync "
-                    "callbacks on the callback registry directly.",
+                    "delta events (section-written / section-deleted) out to "
+                    "an EventBus: EventBus.publish is asynchronous and the "
+                    "sync fire path cannot drive it safely from within a "
+                    "running event loop. Use AsyncUserStateStore for bus "
+                    "fan-out, or register sync callbacks on the callback "
+                    "registry directly.",
                     context={"store": type(self).__name__},
                 )
             self._callbacks.also_publish_to(event_bus)
@@ -577,18 +604,61 @@ class _UserStateStoreCommon:
         payload["_written_at"] = self._now().isoformat()
         return Record(payload, storage_id=storage_id)
 
-    def _written_payload(
-        self, user_id: str, section: str, spec: UserStateSectionSpec, op: str
+    def _base_event_payload(
+        self, user_id: str, section: str | None, op: str
     ) -> dict[str, Any]:
-        """Build the metadata-only delta-event payload (never section values)."""
+        """Shared metadata-only base for every delta event (write and delete).
+
+        Extracting the four fields both streams share keeps the write and
+        delete payloads from drifting. ``section`` is ``None`` for a
+        whole-user / multi-section operation (see :data:`SECTION_DELETED_TOPIC`).
+        """
         return {
             "namespace": self.config.namespace,
             "tenant_id": self._tenant.tenant_id,
             "user_id": user_id,
             "section": section,
-            "kind": spec.kind.value,
             "op": op,
         }
+
+    def _written_payload(
+        self, user_id: str, section: str, spec: UserStateSectionSpec, op: str
+    ) -> dict[str, Any]:
+        """Build the metadata-only write delta-event payload (never values)."""
+        payload = self._base_event_payload(user_id, section, op)
+        payload["kind"] = spec.kind.value
+        return payload
+
+    def _deleted_payload(
+        self,
+        user_id: str,
+        *,
+        section: str | None,
+        op: str,
+        count: int,
+        record_id: str | None = None,
+        sections: Mapping[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Build the metadata-only delete delta-event payload.
+
+        No ``kind``: ``clear`` and section-less ``prune`` span both kinds, and
+        ``op`` + ``section`` already carry the routing a consumer needs. Deletes
+        are by id, so no section value is ever available to leak.
+
+        ``sections`` carries the per-section deleted counts for a *section-less*
+        ``prune`` (``section is None``), which sweeps several windowed
+        collections in one call — ``count`` is the total, ``sections`` the
+        ``{name: deleted}`` split so an erasure-audit consumer can attribute the
+        deletions without a per-section prune. It is omitted for a single-section
+        prune (``section`` already names the target) and for every other op.
+        """
+        payload = self._base_event_payload(user_id, section, op)
+        payload["count"] = count
+        if record_id is not None:
+            payload["record_id"] = record_id
+        if sections is not None:
+            payload["sections"] = dict(sections)
+        return payload
 
 
 # --------------------------------------------------------------------- #
@@ -856,30 +926,53 @@ class AsyncUserStateStore(
         which must always be possible (mirroring :meth:`clear`). Returns the
         number of records deleted.
 
-        Like :meth:`clear`, this is a bulk primitive that collects ids with a
-        ``search`` and removes them with a single ``delete_batch`` — the batch
-        delete carries no ``expected_version``. A record refreshed (its
-        ``_written_at`` re-stamped) by a concurrent write between the search
-        and the batch delete is still deleted (last-write-loses). Run prune on
-        a maintenance cadence rather than interleaved with a user's live writes
-        if that window matters.
+        Fires one metadata-only ``prune`` delta event when anything was removed.
+        A section-less pass searches each windowed collection but removes every
+        expired id in a single pooled ``delete_batch``, tagging each id with its
+        section so the event's ``count`` is the total and its ``sections`` field
+        carries the ``{name: deleted}`` split for erasure-audit attribution; a
+        single-section pass names the target in ``section`` and omits
+        ``sections``.
+
+        Like :meth:`clear`, the pooled ``delete_batch`` carries no
+        ``expected_version`` — a record refreshed (its ``_written_at``
+        re-stamped) by a concurrent write between the search and the batch
+        delete is still deleted (last-write-loses). Run prune on a maintenance
+        cadence rather than interleaved with a user's live writes if that window
+        matters.
         """
         now = self._now()
+        # Collect expired ids across every windowed section, tagging each with
+        # its owning section so a single pooled delete_batch still yields the
+        # per-section split — delete_batch returns results position-aligned with
+        # the ids it was given, so zip(owners, results) attributes each removal.
         ids: list[str] = []
+        owners: list[str] = []
         for spec in self._sections_to_prune(section):
             records = await self._db.search(
                 _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
             )
-            ids.extend(
-                r.storage_id
-                for r in records
-                if r.storage_id
-                and _is_expired(r, spec.retention_days, now)
-            )
+            for r in records:
+                if r.storage_id and _is_expired(r, spec.retention_days, now):
+                    ids.append(r.storage_id)
+                    owners.append(spec.name)
         if not ids:
             return 0
         results = await self._db.delete_batch(ids)
-        return sum(1 for ok in results if ok)
+        per_section: dict[str, int] = {}
+        for owner, ok in zip(owners, results):
+            if ok:
+                per_section[owner] = per_section.get(owner, 0) + 1
+        total = sum(per_section.values())
+        if total:
+            await self._fire_deleted(
+                user_id,
+                section=section,
+                op="prune",
+                count=total,
+                sections=per_section if section is None else None,
+            )
+        return total
 
     async def record_version(
         self, user_id: str, section: str, record_id: str
@@ -940,9 +1033,18 @@ class AsyncUserStateStore(
         if existing is None:
             return False
         _verify_scope(existing, user_id, section, self._tenant.tenant_id)
-        return await self._db.delete(
+        deleted = await self._db.delete(
             record_id, expected_version=expected_version
         )
+        if deleted:
+            await self._fire_deleted(
+                user_id,
+                section=section,
+                op="delete_record",
+                count=1,
+                record_id=record_id,
+            )
+        return deleted
 
     # ----- whole-user ----- #
 
@@ -989,7 +1091,12 @@ class AsyncUserStateStore(
         if not ids:
             return 0
         results = await self._db.delete_batch(ids)
-        return sum(1 for ok in results if ok)
+        deleted = sum(1 for ok in results if ok)
+        if deleted:
+            await self._fire_deleted(
+                user_id, section=None, op="clear", count=deleted
+            )
+        return deleted
 
     async def _clear_ids(self, user_id: str) -> list[str]:
         """Collect every storage id for ``user_id`` across all sections.
@@ -1021,6 +1128,28 @@ class AsyncUserStateStore(
         await self._callbacks.fire_async(
             SECTION_WRITTEN_TOPIC,
             self._written_payload(user_id, section, spec, op),
+        )
+
+    async def _fire_deleted(
+        self,
+        user_id: str,
+        *,
+        section: str | None,
+        op: str,
+        count: int,
+        record_id: str | None = None,
+        sections: Mapping[str, int] | None = None,
+    ) -> None:
+        await self._callbacks.fire_async(
+            SECTION_DELETED_TOPIC,
+            self._deleted_payload(
+                user_id,
+                section=section,
+                op=op,
+                count=count,
+                record_id=record_id,
+                sections=sections,
+            ),
         )
 
 
@@ -1225,28 +1354,52 @@ class UserStateStore(
         the injected clock; not consent-gated (data minimization, like
         :meth:`clear`). Returns the number of records deleted.
 
-        Like :meth:`clear`, this is a bulk ``search`` + ``delete_batch`` with
-        no ``expected_version``: a record refreshed by a concurrent write
-        between the search and the batch delete is still deleted
-        (last-write-loses). Run prune on a maintenance cadence rather than
-        interleaved with a user's live writes if that window matters.
+        Fires one metadata-only ``prune`` delta event when anything was removed.
+        A section-less pass searches each windowed collection but removes every
+        expired id in a single pooled ``delete_batch``, tagging each id with its
+        section so the event's ``count`` is the total and its ``sections`` field
+        carries the ``{name: deleted}`` split for erasure-audit attribution; a
+        single-section pass names the target in ``section`` and omits
+        ``sections``.
+
+        Like :meth:`clear`, the pooled ``delete_batch`` carries no
+        ``expected_version``: a record refreshed by a concurrent write between
+        the search and the batch delete is still deleted (last-write-loses). Run
+        prune on a maintenance cadence rather than interleaved with a user's live
+        writes if that window matters.
         """
         now = self._now()
+        # Collect expired ids across every windowed section, tagging each with
+        # its owning section so a single pooled delete_batch still yields the
+        # per-section split — delete_batch returns results position-aligned with
+        # the ids it was given, so zip(owners, results) attributes each removal.
         ids: list[str] = []
+        owners: list[str] = []
         for spec in self._sections_to_prune(section):
             records = self._db.search(
                 _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
             )
-            ids.extend(
-                r.storage_id
-                for r in records
-                if r.storage_id
-                and _is_expired(r, spec.retention_days, now)
-            )
+            for r in records:
+                if r.storage_id and _is_expired(r, spec.retention_days, now):
+                    ids.append(r.storage_id)
+                    owners.append(spec.name)
         if not ids:
             return 0
         results = self._db.delete_batch(ids)
-        return sum(1 for ok in results if ok)
+        per_section: dict[str, int] = {}
+        for owner, ok in zip(owners, results):
+            if ok:
+                per_section[owner] = per_section.get(owner, 0) + 1
+        total = sum(per_section.values())
+        if total:
+            self._fire_deleted(
+                user_id,
+                section=section,
+                op="prune",
+                count=total,
+                sections=per_section if section is None else None,
+            )
+        return total
 
     def record_version(
         self, user_id: str, section: str, record_id: str
@@ -1304,7 +1457,16 @@ class UserStateStore(
         if existing is None:
             return False
         _verify_scope(existing, user_id, section, self._tenant.tenant_id)
-        return self._db.delete(record_id, expected_version=expected_version)
+        deleted = self._db.delete(record_id, expected_version=expected_version)
+        if deleted:
+            self._fire_deleted(
+                user_id,
+                section=section,
+                op="delete_record",
+                count=1,
+                record_id=record_id,
+            )
+        return deleted
 
     # ----- whole-user ----- #
 
@@ -1341,7 +1503,12 @@ class UserStateStore(
         if not ids:
             return 0
         results = self._db.delete_batch(ids)
-        return sum(1 for ok in results if ok)
+        deleted = sum(1 for ok in results if ok)
+        if deleted:
+            self._fire_deleted(
+                user_id, section=None, op="clear", count=deleted
+            )
+        return deleted
 
     def _clear_ids(self, user_id: str) -> list[str]:
         """Collect every storage id for ``user_id`` across all sections.
@@ -1372,4 +1539,26 @@ class UserStateStore(
         self._callbacks.fire(
             SECTION_WRITTEN_TOPIC,
             self._written_payload(user_id, section, spec, op),
+        )
+
+    def _fire_deleted(
+        self,
+        user_id: str,
+        *,
+        section: str | None,
+        op: str,
+        count: int,
+        record_id: str | None = None,
+        sections: Mapping[str, int] | None = None,
+    ) -> None:
+        self._callbacks.fire(
+            SECTION_DELETED_TOPIC,
+            self._deleted_payload(
+                user_id,
+                section=section,
+                op=op,
+                count=count,
+                record_id=record_id,
+                sections=sections,
+            ),
         )

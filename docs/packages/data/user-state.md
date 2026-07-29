@@ -299,12 +299,30 @@ stream with the same care as that identifier. Inject an `event_bus` to fan the
 events out across replicas:
 
 A "write" here is a create, update, or consent grant/revoke — the operations
-that record new or changed state. **Deletions are intentionally not evented:**
-`delete_record`, `clear` (erasure), and retention `prune` fire nothing. They are
-removals rather than state an observer needs to project, and emitting an event
-for one deletion path but not its siblings would make the stream inconsistent. A
-consumer that needs a deletion or erasure audit trail should record it at the
-call site rather than infer it from this stream.
+that record new or changed state.
+
+Deletions and erasure fire a **sibling** metadata-only event
+(`user_state:section_deleted`) on the same registry, so a consumer can build a
+deletion or erasure audit trail from the event stream. One event fires per
+delete-method call, discriminated by an `op` field naming the method:
+
+| `op` | fired by | payload |
+|---|---|---|
+| `"delete_record"` | a single scoped collection delete | `record_id`, `count == 1`, the `section` name |
+| `"prune"` | a retention sweep (explicit or lazy `prune_on_query`) | `count` (records removed), the `section` name — or `None` for a section-less `prune`, which also carries a `sections` map |
+| `"clear"` | the whole-user right-to-erasure primitive | `count` (total removed), `section == None` |
+
+The delete payload is metadata-only *by construction*: every delete path removes
+records by id and never reads a record's payload, so no section value is ever
+available to emit — a `SENSITIVE` section is safe. `section == None` is the
+signal for a whole-user / multi-section operation, so a consumer keys erasure
+handling off `op == "clear"` rather than off `section`. A **section-less**
+`prune` (`prune(user_id)`) can age out several windowed collections in one call;
+its event adds a `sections` field — a `{section_name: removed_count}` map — so an
+erasure-audit consumer gets the per-section split while `count` stays the total.
+A single-section `prune` names its target in `section` and omits `sections`. An
+event fires **only when data was actually removed** — a no-op delete, an empty
+prune, and a clear of an empty user emit nothing.
 
 ```python
 from dataknobs_common.events import InMemoryEventBus
@@ -313,8 +331,9 @@ bus = InMemoryEventBus(); await bus.connect()
 store = await AsyncUserStateStore.from_config(config, event_bus=bus)
 ```
 
-Fan-out is non-load-bearing observability: a failing subscriber is isolated and
-never aborts the write.
+Both topics ride the same registry and fan-out. Fan-out is non-load-bearing
+observability: a failing subscriber is isolated and never aborts the write or
+delete.
 
 `EventBus` fan-out is an **async-variant capability**: `EventBus.publish` is a
 coroutine, and the sync `fire` path cannot drive it safely from within a running

@@ -9,12 +9,14 @@ from .config import (
     UserStateStoreConfig,
 )
 from .store import (
+    SECTION_DELETED_TOPIC,
     SECTION_WRITTEN_TOPIC,
     AsyncUserStateStore,
     UserStateStore,
 )
 
 __all__ = [
+    "SECTION_DELETED_TOPIC",
     "SECTION_WRITTEN_TOPIC",
     "AsyncUserStateStore",
     "SectionKind",
