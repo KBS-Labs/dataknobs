@@ -54,7 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction — deletes are by id, so no section value is ever emitted (a
   `SENSITIVE` section is safe) — and a whole-user `clear` reports
   `section = None`. Single deletes carry the `record_id`; bulk deletes carry a
-  `count`. Nothing fires when nothing was removed. The event rides the same
+  `count`. A section-less `prune(user_id)` (which ages out several windowed
+  collections at once) additionally carries a `sections` map — the
+  `{section_name: removed_count}` split — so an erasure-audit consumer can
+  attribute the deletions while `count` stays the total. Nothing fires when
+  nothing was removed. The event rides the same
   callback registry and optional `EventBus` fan-out as the write topic (the sync
   store still rejects an injected `event_bus`; in-process callbacks fire on both
   variants).
