@@ -166,10 +166,10 @@ class BufferedTransaction:
         reduces to a single batch call); a change of kind starts a new run.
 
         Both upsert staging forms normalize to a ``Record`` here: the explicit-id
-        ``upsert(id, record)`` form stamps the id onto the record's
-        ``storage_id`` (which ``upsert_batch`` honors, taking priority over any
-        ``id`` field); the ``upsert(record)`` / staged ``upsert_batch`` form
-        already carries (or mints) its own id.
+        ``upsert(id, record)`` form stamps the id onto a **copy**'s ``storage_id``
+        (which ``upsert_batch`` honors, taking priority over any ``id`` field) so
+        the caller's record is never mutated; the ``upsert(record)`` / staged
+        ``upsert_batch`` form already carries (or mints) its own id.
         """
         runs: list[tuple[str, list[Any]]] = []
         ops = self._ops
@@ -183,8 +183,12 @@ class BufferedTransaction:
                 while j < n and ops[j][0] == "upsert":
                     id_or_record, record = ops[j][1]
                     if record is not None:
-                        record.storage_id = id_or_record
-                        records.append(record)
+                        # Copy so the caller's record is never mutated; the
+                        # explicit id wins as the copy's storage_id (matching
+                        # AsyncDatabase.upsert's no-caller-mutation invariant).
+                        prepared = record.copy(deep=True)
+                        prepared.storage_id = id_or_record
+                        records.append(prepared)
                     else:
                         records.append(id_or_record)
                     j += 1

@@ -192,6 +192,52 @@ def test_sync_upsert_falsy_id_mints_matching_create_and_batch(sync_db: object) -
     assert batch_ids[0].startswith(_PREFIX)
 
 
+def test_sync_upsert_record_form_does_not_mutate_caller(sync_db: object) -> None:
+    """``upsert(record)`` resolves the id on a copy; the caller's record is untouched.
+
+    Reproduce-first: before the copy-first fix, ``_resolve_upsert_id`` stamped the
+    minted id onto the caller's record in place, so ``rec.storage_id`` changed. The
+    resolved id is available as ``upsert()``'s return value.
+    """
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = sync_db.upsert(rec)
+    assert new_id  # a fresh id was minted and returned
+    assert rec.storage_id == before  # caller record NOT stamped
+    assert sync_db.read(new_id).get_value("v") == 1
+
+
+def test_sync_upsert_id_form_does_not_mutate_caller(sync_db: object) -> None:
+    """``upsert(id, record)`` keys under the explicit id without stamping the caller.
+
+    Reproduce-first: before the fix, the base method stamped ``id`` onto the
+    caller's record (``record.storage_id = id``); after the fix it stamps a copy.
+    """
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = sync_db.upsert("explicit", rec)
+    assert new_id == "explicit"
+    assert rec.storage_id == before  # caller record NOT stamped to "explicit"
+    assert sync_db.read("explicit").get_value("v") == 1
+
+
+def test_sync_write_methods_do_not_mutate_caller_record(sync_db: object) -> None:
+    """Invariant lock: batch/create write methods never mutate the caller's record.
+
+    Green both before and after the fix (create/create_batch/upsert_batch are
+    already copy-first); pins that single ``upsert`` now matches these siblings.
+    """
+    for write in (
+        lambda r: sync_db.create(r),
+        lambda r: sync_db.create_batch([r]),
+        lambda r: sync_db.upsert_batch([r]),
+    ):
+        rec = Record({"v": 1})
+        before = rec.storage_id
+        write(rec)
+        assert rec.storage_id == before
+
+
 # ---------------------------------------------------------------------------
 # Async backends
 # ---------------------------------------------------------------------------
@@ -268,3 +314,43 @@ async def test_async_upsert_falsy_id_mints_matching_create_and_batch(
     assert create_id.startswith(_PREFIX)
     batch_ids = await async_db.upsert_batch([Record({"v": 3}, id="")])
     assert batch_ids[0].startswith(_PREFIX)
+
+
+async def test_async_upsert_record_form_does_not_mutate_caller(async_db: object) -> None:
+    """``upsert(record)`` resolves the id on a copy; the caller's record is untouched."""
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = await async_db.upsert(rec)
+    assert new_id  # a fresh id was minted and returned
+    assert rec.storage_id == before  # caller record NOT stamped
+    got = await async_db.read(new_id)
+    assert got.get_value("v") == 1
+
+
+async def test_async_upsert_id_form_does_not_mutate_caller(async_db: object) -> None:
+    """``upsert(id, record)`` keys under the explicit id without stamping the caller."""
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = await async_db.upsert("explicit", rec)
+    assert new_id == "explicit"
+    assert rec.storage_id == before  # caller record NOT stamped to "explicit"
+    got = await async_db.read("explicit")
+    assert got.get_value("v") == 1
+
+
+async def test_async_write_methods_do_not_mutate_caller_record(async_db: object) -> None:
+    """Invariant lock: batch/create write methods never mutate the caller's record."""
+    rec_c = Record({"v": 1})
+    before_c = rec_c.storage_id
+    await async_db.create(rec_c)
+    assert rec_c.storage_id == before_c
+
+    rec_cb = Record({"v": 2})
+    before_cb = rec_cb.storage_id
+    await async_db.create_batch([rec_cb])
+    assert rec_cb.storage_id == before_cb
+
+    rec_ub = Record({"v": 3})
+    before_ub = rec_ub.storage_id
+    await async_db.upsert_batch([rec_ub])
+    assert rec_ub.storage_id == before_ub

@@ -177,6 +177,17 @@ def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -
     return None
 ```
 
+> **Invariant — no write method mutates the caller's record.** Every write
+> method resolves the storage id on a **copy** and stores that copy, so the
+> record object the caller passed in is never stamped or otherwise modified.
+> `create` / `create_batch` / `upsert_batch` resolve through
+> `_prepare_record_for_storage` (copy-first above); single `upsert` /
+> `upsert(id, record)` resolve through the copy-first `_resolve_upsert_id`; and
+> the buffered-transaction upsert-staging path likewise copies before stamping
+> an explicit id. The resolved/minted storage id is always the write method's
+> **return value** — read it from there (`new_id = db.upsert(record)`), not by
+> inspecting `record.storage_id` after the call.
+
 ### Minting a storage id — the `_generate_id()` hook
 
 When a record carries no caller id, the storage id is minted by a single

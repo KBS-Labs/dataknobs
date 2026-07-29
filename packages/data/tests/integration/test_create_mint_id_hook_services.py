@@ -10,6 +10,9 @@ Elasticsearch — so a consumer overriding the hook governs their create *and*
 upsert paths too. (S3's ``create()`` / single ``upsert()`` route through the
 base helper, so they are already covered by the in-process file/memory tests.)
 
+These backends also cover the copy-first invariant on real services: neither
+``upsert(record)`` nor ``upsert(id, record)`` mutates the caller's record.
+
 Real services, no mocks: per-backend sentinel subclasses override
 ``_generate_id`` to a recognizable prefix. Postgres requires a running server
 (``@requires_postgres``); Elasticsearch requires ``TEST_ELASTICSEARCH=true`` and
@@ -162,6 +165,42 @@ async def test_async_pg_upsert_batch_mints_via_hook(
 
 
 @requires_postgres
+def test_sync_pg_upsert_does_not_mutate_caller(sync_pg: _SentinelSyncPostgres) -> None:
+    """Neither ``upsert`` call form stamps the caller's record (copy-first)."""
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = sync_pg.upsert(rec)
+    assert new_id and rec.storage_id == before
+    assert sync_pg.read(new_id).get_value("v") == 1
+
+    rec2 = Record({"v": 2})  # no id
+    before2 = rec2.storage_id
+    assert sync_pg.upsert("explicit", rec2) == "explicit"
+    assert rec2.storage_id == before2  # caller record NOT stamped to "explicit"
+    assert sync_pg.read("explicit").get_value("v") == 2
+
+
+@requires_postgres
+async def test_async_pg_upsert_does_not_mutate_caller(
+    async_pg: _SentinelAsyncPostgres,
+) -> None:
+    """Neither ``upsert`` call form stamps the caller's record (copy-first)."""
+    rec = Record({"v": 1})  # no id
+    before = rec.storage_id
+    new_id = await async_pg.upsert(rec)
+    assert new_id and rec.storage_id == before
+    got = await async_pg.read(new_id)
+    assert got.get_value("v") == 1
+
+    rec2 = Record({"v": 2})  # no id
+    before2 = rec2.storage_id
+    assert await async_pg.upsert("explicit", rec2) == "explicit"
+    assert rec2.storage_id == before2  # caller record NOT stamped to "explicit"
+    got2 = await async_pg.read("explicit")
+    assert got2.get_value("v") == 2
+
+
+@requires_postgres
 def test_sync_pg_stream_write_insert_mints_via_hook(sync_pg: _SentinelSyncPostgres) -> None:
     """The streaming INSERT fast-path (``_write_batch``) mints via the hook too."""
     result = sync_pg.stream_write(iter([Record({"v": i}) for i in range(3)]))
@@ -301,5 +340,49 @@ async def test_async_es_upsert_batch_mints_via_hook(elasticsearch_test_index) ->
         assert len(ids) == 3
         assert all(rid.startswith(_PREFIX) for rid in ids)
         assert len(set(ids)) == 3
+    finally:
+        await db.close()
+
+
+@_requires_es
+def test_sync_es_upsert_does_not_mutate_caller(elasticsearch_test_index) -> None:
+    """Neither ``upsert`` call form stamps the caller's record (copy-first)."""
+    db = _SentinelSyncElasticsearch(elasticsearch_test_index)
+    db.connect()
+    try:
+        rec = Record({"v": 1})  # no id
+        before = rec.storage_id
+        new_id = db.upsert(rec)
+        assert new_id and rec.storage_id == before
+        assert db.read(new_id).get_value("v") == 1
+
+        rec2 = Record({"v": 2})  # no id
+        before2 = rec2.storage_id
+        assert db.upsert("explicit", rec2) == "explicit"
+        assert rec2.storage_id == before2  # caller record NOT stamped
+        assert db.read("explicit").get_value("v") == 2
+    finally:
+        db.close()
+
+
+@_requires_es
+async def test_async_es_upsert_does_not_mutate_caller(elasticsearch_test_index) -> None:
+    """Neither ``upsert`` call form stamps the caller's record (copy-first)."""
+    db = _SentinelAsyncElasticsearch(elasticsearch_test_index)
+    await db.connect()
+    try:
+        rec = Record({"v": 1})  # no id
+        before = rec.storage_id
+        new_id = await db.upsert(rec)
+        assert new_id and rec.storage_id == before
+        got = await db.read(new_id)
+        assert got.get_value("v") == 1
+
+        rec2 = Record({"v": 2})  # no id
+        before2 = rec2.storage_id
+        assert await db.upsert("explicit", rec2) == "explicit"
+        assert rec2.storage_id == before2  # caller record NOT stamped
+        got2 = await db.read("explicit")
+        assert got2.get_value("v") == 2
     finally:
         await db.close()
