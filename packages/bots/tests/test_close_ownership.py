@@ -798,6 +798,37 @@ class TestArtifactBankCatalogClose:
         # Still usable by its owner after the catalog's close().
         assert catalog.count() == 0
 
+    def test_close_twice_is_safe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Closing an owned catalog twice does not raise.
+
+        There is no ``_closed`` guard and ``_owns_db`` is not flipped after
+        close, so a second ``close()`` re-invokes the owned db's ``close()``;
+        the memory backend tolerates repetition, so the second call is
+        harmless. Mirrors ``ArtifactBank.test_close_twice_is_safe``.
+        """
+        import dataknobs_data
+        from dataknobs_bots.memory.catalog import ArtifactBankCatalog
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        catalog = ArtifactBankCatalog.from_config({"backend": "memory"})
+
+        catalog.close()
+        catalog.close()  # must not raise
+
+        assert created[0].close_count == 2
+
 
 # =====================================================================
 # WizardReasoning — artifact-catalog close cascade
@@ -868,3 +899,319 @@ class TestWizardCatalogCascade:
         assert all(db.close_count == 1 for db in created), (
             "wizard close() must reach every owned db (section + catalog)"
         )
+
+    @pytest.mark.asyncio
+    async def test_wizard_close_isolates_failing_section_still_closes_catalog(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A section db whose close() raises must not orphan the catalog db.
+
+        M1: the wizard close-cascade closes the section banks, then the
+        catalog. Without per-step error isolation, a section bank that
+        raises on close propagates out of the banks loop and the
+        ``catalog.close()`` beneath it never runs — leaking exactly the
+        owned db connection the cascade exists to release. The failing
+        section is isolated (logged) so the catalog is still closed.
+        """
+        import dataknobs_data
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        catalog_dbs: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> SyncMemoryDatabase:
+            # The section routes through the factory with a ``table`` kwarg
+            # (set by ``_create_bank_db``); the catalog's from_config does
+            # not. So the section db raises on close and the catalog db is
+            # an observable CountingSyncDB.
+            if "table" in kwargs:
+                return RaisingSyncDB()
+            db = CountingSyncDB()
+            catalog_dbs.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict({
+            "name": "w",
+            "version": "1.0",
+            "settings": {},
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        })
+        strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        strategy._init_artifact({
+            "name": "recipe",
+            "fields": {"recipe_name": {"required": True}},
+            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+            "catalog": {"backend": "memory"},
+        })
+
+        assert len(catalog_dbs) == 1, "one catalog db created"
+
+        # Must not raise despite the section bank's close() failing.
+        await strategy.close()
+
+        assert catalog_dbs[0].close_count == 1, (
+            "catalog db must still be closed after a section close() raises"
+        )
+
+    @pytest.mark.asyncio
+    async def test_wizard_close_twice_is_safe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Closing the wizard cascade twice does not raise.
+
+        There is no ``_closed`` guard on the cascade — the second close
+        re-delegates to the section banks and the catalog — but the memory
+        backends tolerate a repeat close, so both owned dbs simply reach
+        ``close_count == 2`` without error.
+        """
+        import dataknobs_data
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict({
+            "name": "w",
+            "version": "1.0",
+            "settings": {},
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        })
+        strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        strategy._init_artifact({
+            "name": "recipe",
+            "fields": {"recipe_name": {"required": True}},
+            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+            "catalog": {"backend": "memory"},
+        })
+
+        await strategy.close()
+        await strategy.close()  # must not raise
+
+        assert all(db.close_count == 2 for db in created), (
+            "a second cascade close re-delegates to every owned db"
+        )
+
+
+# =====================================================================
+# WizardReasoning restore — release prior-turn banks (no cross-turn leak)
+# =====================================================================
+
+
+async def _real_conversation_manager() -> Any:
+    """Build a real ``ConversationManager`` for driving save→restore.
+
+    Mirrors the wizard-test conftest fixture inline (this module lives
+    outside ``tests/unit/`` and cannot use that fixture). Real constructs
+    only — ``EchoProvider``, ``ConfigPromptLibrary``, in-memory storage.
+    """
+    from dataknobs_llm.conversations import ConversationManager
+    from dataknobs_llm.llm import LLMConfig
+    from dataknobs_llm.llm.providers.echo import EchoProvider
+    from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
+
+    provider = EchoProvider(
+        LLMConfig(
+            provider="echo", model="echo-test", options={"echo_prefix": ""}
+        )
+    )
+    library = ConfigPromptLibrary({
+        "system": {"assistant": {"template": "You are a helpful assistant."}},
+    })
+    builder = AsyncPromptBuilder(library=library)
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+    return await ConversationManager.create(
+        llm=provider,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="assistant",
+    )
+
+
+class TestWizardRestoreReleasesPriorBanks:
+    """``WizardReasoning`` restore closes the prior turn's owned bank dbs
+    before rebuilding them, so a persistent-backend wizard does not orphan a
+    connection on every turn.
+
+    The strategy object outlives a single turn (``self._banks`` /
+    ``self._artifact`` are strategy-level, not per-conversation), so every
+    ``_get_wizard_state`` restore rebuilds them. A non-memory section/bank
+    backend opens a real connection each rebuild; without release-before-
+    rebuild the prior connection is orphaned. Constructs ``WizardReasoning``
+    directly (a legitimate internal-lifecycle unit test per the DynaBot
+    testing mandate's exception) and drives a real save→restore.
+    """
+
+    @pytest.mark.asyncio
+    async def test_restore_closes_prior_artifact_section_db(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A save→restore cycle closes the init-built section db before the
+        artifact rebuild opens a fresh one.
+        """
+        import dataknobs_data
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict({
+            "name": "w",
+            "version": "1.0",
+            "settings": {},
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        })
+        strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+        # A non-memory section routes _create_bank_db through the patched
+        # factory and opens a (fake) connection the section owns.
+        strategy._init_artifact({
+            "name": "recipe",
+            "fields": {"recipe_name": {"required": True}},
+            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+        })
+
+        assert len(created) == 1, "init built one owned section db"
+        init_section_db = created[0]
+        assert init_section_db.close_count == 0
+
+        manager = await _real_conversation_manager()
+        # First access: fresh state (no persisted fsm_state) — banks untouched.
+        state = strategy._get_wizard_state(manager)
+        assert len(created) == 1
+        # Persist banks + artifact + fsm_state to the manager's metadata.
+        await strategy._save_wizard_state(manager, state)
+
+        # Second access: restore branch rebuilds the artifact, opening a new
+        # section connection. The prior (init) section db must be closed first.
+        strategy._get_wizard_state(manager)
+
+        assert init_section_db.close_count == 1, (
+            "restore must close the prior turn's section db before rebuilding"
+        )
+        # The rebuild really did open a fresh connection (the leak window is
+        # real — the old db was not merely reused in place).
+        assert len(created) >= 2, "restore rebuilt the section with a new db"
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_restore_rebuilds_config_added_bank_open_not_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bank added to config after the last save is rebuilt fresh and
+        OPEN on restore — not left referencing a just-closed connection.
+
+        The restore releases the prior turn's banks, then rebuilds. A bank the
+        persisted snapshot omits (config drift: added to the wizard config
+        after that save) must be self-healed into a fresh open bank; without
+        the fix it stayed in ``self._banks`` still referencing the connection
+        the release had just closed (closed-but-referenced → use-after-close).
+        """
+        import dataknobs_data
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict({
+            "name": "w",
+            "version": "1.0",
+            "settings": {
+                "banks": {
+                    "alpha": {"backend": "sqlite", "schema": {}},
+                    "beta": {"backend": "sqlite", "schema": {}},
+                }
+            },
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        })
+        strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+        assert set(strategy._banks) == {"alpha", "beta"}
+
+        manager = await _real_conversation_manager()
+        state = strategy._get_wizard_state(manager)
+        await strategy._save_wizard_state(manager, state)
+
+        # Simulate config drift: 'beta' was added to the wizard config after
+        # this conversation's last save, so the persisted snapshot omits it.
+        del manager.metadata["wizard"]["banks"]["beta"]
+
+        strategy._get_wizard_state(manager)  # restore
+
+        # 'beta' must be present and OPEN — rebuilt fresh, not left referencing
+        # the connection the restore's release just closed.
+        assert "beta" in strategy._banks, (
+            "config-added bank must survive restore"
+        )
+        assert strategy._banks["beta"]._db.close_count == 0, (
+            "config-added bank must be rebuilt with a fresh open db, not left "
+            "referencing the closed connection"
+        )
+        # It is genuinely usable after restore (write + read round-trips).
+        strategy._banks["beta"].add({"v": 1})
+        assert strategy._banks["beta"].count() == 1
+
+        await strategy.close()

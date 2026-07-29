@@ -23,8 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it owns it, isolating one section's failure from the rest);
   `ArtifactBankCatalog` gains an optional keyword-only `owns_db` (default
   `False`) and closes a `from_config`-built db while leaving a caller-injected
-  db open. `WizardReasoning.close()` now closes the artifact catalog it creates.
-  Purely additive.
+  db open. `WizardReasoning.close()` now closes the artifact catalog it creates,
+  and its teardown cascade is error-isolated per step (extractor, each section
+  bank, catalog) so one subsystem's failing `close()` can no longer orphan the
+  owned db connections the later steps release — matching `DynaBot.close()`'s
+  per-subsystem isolation. `WizardReasoning` also releases the prior turn's
+  memory banks before a restore rebuilds them: the strategy outlives a single
+  turn, so a persistent (non-memory) bank/section backend previously opened a
+  fresh connection on every restore and orphaned the last turn's — now closed
+  first via the shared bank-teardown path. The restore also no longer double-
+  builds an artifact wizard's section banks (it rebuilt them once for the
+  standalone-banks path and again for the artifact, discarding the first set),
+  and a bank added to the wizard config after a conversation was last saved is
+  now rebuilt fresh and open on restore (previously it could be left
+  referencing a just-closed connection, or its restored siblings' data wiped by
+  a wholesale re-init). Purely additive.
 
 ## v0.9.2 - 2026-07-27
 

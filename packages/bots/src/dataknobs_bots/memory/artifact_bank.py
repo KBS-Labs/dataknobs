@@ -413,9 +413,11 @@ class ArtifactBank:
         its db only when it owns it (``owns_db``); a section handed a db by
         a caller leaves it open, so a backing store shared across sections
         survives one artifact's close. Safe to call more than once: there is
-        no dedup layer (each call delegates to the sections again), but a
-        backend's ``close()`` tolerates repetition, so a second close is
-        harmless.
+        no dedup layer (each call delegates to every section again), and a
+        section whose ``close()`` raises — including a backend that does not
+        tolerate a repeat close — is caught by the per-section
+        ``try``/``except`` below, so a second close is harmless regardless of
+        backend re-close semantics.
 
         The artifact never owns a db directly; it owns *sections*, and each
         section carries its own ``owns_db``, so ``close()`` is unconditional
