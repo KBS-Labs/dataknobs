@@ -47,9 +47,9 @@ Example:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 
 from dataknobs_common.callbacks import CallbackRegistry
@@ -227,9 +227,27 @@ def _public_data(record: Record) -> dict[str, Any]:
     return {k: v for k, v in record.data.items() if k not in _RESERVED_FIELDS}
 
 
-def _utc_now_iso() -> str:
-    """Current UTC timestamp as an ISO-8601 string (the ``_written_at`` stamp)."""
-    return datetime.now(timezone.utc).isoformat()
+def _is_expired(
+    record: Record, retention_days: int | None, now: datetime
+) -> bool:
+    """Return whether ``record`` has aged past its ``retention_days`` window.
+
+    Pure and fail-safe: an unbounded window (``retention_days is None``) never
+    expires, and a record whose ``_written_at`` stamp is missing or
+    unparseable is treated as *not* expired — the coordinator never deletes a
+    record it cannot confidently date. A record is expired when its
+    ``_written_at`` is strictly older than ``now - retention_days``.
+    """
+    if retention_days is None:
+        return False
+    written_at = record.get_value("_written_at")
+    if not isinstance(written_at, str):
+        return False
+    try:
+        written = datetime.fromisoformat(written_at)
+    except ValueError:
+        return False
+    return written < now - timedelta(days=retention_days)
 
 
 #: The single payload key the reserved consent document nests its grant map
@@ -342,6 +360,7 @@ class _UserStateStoreCommon:
     _sections: dict[str, UserStateSectionSpec]
     _reserved_sections: set[str]
     _callbacks: CallbackRegistry
+    _now: Callable[[], datetime]
 
     def _bind_common(self) -> None:
         """Bind the tenant, section map, callbacks, and any injected db.
@@ -368,6 +387,16 @@ class _UserStateStoreCommon:
         self._sections = {s.name: s for s in self.config.sections}
         self._reserved_sections = set()
         self._register_reserved_sections()
+        # The clock is an injected collaborator (a ``Callable`` is not config
+        # data — it round-trips a frozen config by identity only), defaulting
+        # to wall-clock UTC. It stamps ``_written_at`` and drives retention
+        # expiry, so a test can advance a fake clock instead of sleeping.
+        injected_now = self.components.get("now")
+        self._now = (
+            injected_now
+            if injected_now is not None
+            else (lambda: datetime.now(timezone.utc))
+        )
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
@@ -458,6 +487,27 @@ class _UserStateStoreCommon:
             )
         return spec
 
+    def _sections_to_prune(
+        self, section: str | None
+    ) -> list[UserStateSectionSpec]:
+        """Resolve which collection sections a :meth:`prune` pass considers.
+
+        With ``section=None`` every collection section carrying a
+        ``retention_days`` window is pruned (document sections never expire and
+        unwindowed collections are skipped). With an explicit ``section`` the
+        spec is resolved through :meth:`_require_kind`, so a document section,
+        an unknown section, or the reserved consent section raises rather than
+        silently pruning nothing.
+        """
+        if section is not None:
+            return [self._require_kind(section, SectionKind.COLLECTION)]
+        return [
+            spec
+            for spec in self._sections.values()
+            if spec.kind == SectionKind.COLLECTION
+            and spec.retention_days is not None
+        ]
+
     def _doc_id(self, user_id: str, section: str) -> str:
         return _document_id(
             self.config.namespace, self._tenant.tenant_id, user_id, section
@@ -521,7 +571,7 @@ class _UserStateStoreCommon:
                 user_id, section, self._tenant.tenant_id, spec.version
             )
         )
-        payload["_written_at"] = _utc_now_iso()
+        payload["_written_at"] = self._now().isoformat()
         return Record(payload, storage_id=storage_id)
 
     def _written_payload(
@@ -587,19 +637,29 @@ class AsyncUserStateStore(
         return await cls.from_config_async(config, **components)
 
     async def _ainit(
-        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+        self,
+        *,
+        db: Any = None,
+        event_bus: Any = None,
+        tenant: Any = None,
+        now: Any = None,
     ) -> None:
         if self._prebuilt:
             return
-        # ``db`` / ``event_bus`` / ``tenant`` were already bound from the
-        # components channel in ``_bind_common``; the only async-only work is
-        # building a database when none was injected.
+        # ``db`` / ``event_bus`` / ``tenant`` / ``now`` were already bound from
+        # the components channel in ``_bind_common``; the only async-only work
+        # is building a database when none was injected.
         if self._db is None:
             self._db = async_database_factory.create(backend=self.config.backend)
             self._owns_db = True
 
     def _adopt_components(
-        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+        self,
+        *,
+        db: Any = None,
+        event_bus: Any = None,
+        tenant: Any = None,
+        now: Any = None,
     ) -> None:
         if db is None:
             raise TypeError(
@@ -665,7 +725,7 @@ class AsyncUserStateStore(
         grants = _grants_of(await self._read_consent(user_id))
         await self._write_consent(
             user_id,
-            _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+            _grant_map(grants, scope, granted=True, now=self._now().isoformat()),
             "grant_consent",
         )
 
@@ -680,7 +740,7 @@ class AsyncUserStateStore(
         grants = _grants_of(await self._read_consent(user_id))
         await self._write_consent(
             user_id,
-            _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+            _grant_map(grants, scope, granted=False, now=self._now().isoformat()),
             "revoke_consent",
         )
 
@@ -764,13 +824,46 @@ class AsyncUserStateStore(
         user + section (+ bound tenant) scope is AND-composed automatically. A
         section carrying a ``consent_scope`` raises
         :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
-        user has not granted that scope.
+        user has not granted that scope. When the store is configured with
+        ``prune_on_query`` and the section carries a ``retention_days`` window,
+        the user's expired records in the section are pruned before the read.
         """
         spec = self._require_kind(section, SectionKind.COLLECTION)
         await self._require_consent(user_id, spec)
+        if self.config.prune_on_query and spec.retention_days is not None:
+            await self.prune(user_id, section)
         return await self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
+
+    async def prune(self, user_id: str, section: str | None = None) -> int:
+        """Delete ``user_id``'s records past their section's retention window.
+
+        With ``section=None`` every collection section carrying a
+        ``retention_days`` window is pruned; with an explicit ``section`` only
+        that one is (a document / unknown / reserved section raises through
+        :meth:`_require_kind`). Expiry is measured against the injected clock,
+        so a caller schedules pruning on its own cadence — the coordinator is a
+        library, not a daemon. Not consent-gated: pruning is data minimization,
+        which must always be possible (mirroring :meth:`clear`). Returns the
+        number of records deleted.
+        """
+        now = self._now()
+        ids: list[str] = []
+        for spec in self._sections_to_prune(section):
+            records = await self._db.search(
+                _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
+            )
+            ids.extend(
+                r.storage_id
+                for r in records
+                if r.storage_id
+                and _is_expired(r, spec.retention_days, now)
+            )
+        if not ids:
+            return 0
+        results = await self._db.delete_batch(ids)
+        return sum(1 for ok in results if ok)
 
     async def record_version(
         self, user_id: str, section: str, record_id: str
@@ -949,7 +1042,12 @@ class UserStateStore(
             self._owns_db = True
 
     def _adopt_components(
-        self, *, db: Any = None, event_bus: Any = None, tenant: Any = None
+        self,
+        *,
+        db: Any = None,
+        event_bus: Any = None,
+        tenant: Any = None,
+        now: Any = None,
     ) -> None:
         if db is None:
             raise TypeError(
@@ -1008,7 +1106,7 @@ class UserStateStore(
         grants = _grants_of(self._read_consent(user_id))
         self._write_consent(
             user_id,
-            _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+            _grant_map(grants, scope, granted=True, now=self._now().isoformat()),
             "grant_consent",
         )
 
@@ -1018,7 +1116,7 @@ class UserStateStore(
         grants = _grants_of(self._read_consent(user_id))
         self._write_consent(
             user_id,
-            _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+            _grant_map(grants, scope, granted=False, now=self._now().isoformat()),
             "revoke_consent",
         )
 
@@ -1086,13 +1184,43 @@ class UserStateStore(
 
         A consent-scoped section raises
         :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
-        user has not granted that scope.
+        user has not granted that scope. When the store is configured with
+        ``prune_on_query`` and the section carries a ``retention_days`` window,
+        the user's expired records in the section are pruned before the read.
         """
         spec = self._require_kind(section, SectionKind.COLLECTION)
         self._require_consent(user_id, spec)
+        if self.config.prune_on_query and spec.retention_days is not None:
+            self.prune(user_id, section)
         return self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
+
+    def prune(self, user_id: str, section: str | None = None) -> int:
+        """Delete ``user_id``'s records past their section's retention window.
+
+        Sync mirror of the async twin: with ``section=None`` every windowed
+        collection section is pruned; an explicit document / unknown / reserved
+        section raises through :meth:`_require_kind`. Expiry is measured against
+        the injected clock; not consent-gated (data minimization, like
+        :meth:`clear`). Returns the number of records deleted.
+        """
+        now = self._now()
+        ids: list[str] = []
+        for spec in self._sections_to_prune(section):
+            records = self._db.search(
+                _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
+            )
+            ids.extend(
+                r.storage_id
+                for r in records
+                if r.storage_id
+                and _is_expired(r, spec.retention_days, now)
+            )
+        if not ids:
+            return 0
+        results = self._db.delete_batch(ids)
+        return sum(1 for ok in results if ok)
 
     def record_version(
         self, user_id: str, section: str, record_id: str

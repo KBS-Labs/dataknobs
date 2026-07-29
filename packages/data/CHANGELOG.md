@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only through `grant_consent` / `revoke_consent`. Revocation is block-only (the
   stored data is left in place for a later re-grant); erasure via `clear()` is
   never consent-gated. Sections that declare no `consent_scope` are unaffected.
+- **Retention pruning for per-user state sections.** A **collection** section
+  declaring a `retention_days` window ages out records whose `_written_at` stamp
+  is older than the window. `UserStateStore` / `AsyncUserStateStore` gain
+  `prune(user_id, section=None)` (deletes the expired records and returns the
+  count — with `section=None`, across every windowed collection section) that a
+  consumer schedules on its own cadence. A new `prune_on_query` config flag
+  additionally prunes a windowed section's expired records for the queried user
+  before a `query` returns (off by default). Retention time is measured against
+  an injectable `now` clock (a `Callable[[], datetime]`, defaulting to
+  wall-clock UTC). A `retention_days` on a **document** section — which holds one
+  evolving record per user and never expires — is rejected at config load with
+  `ConfigurationError`. Pruning is data minimization and, like `clear()`, is
+  never consent-gated.
 
 ### Changed
 

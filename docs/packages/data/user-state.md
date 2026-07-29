@@ -49,14 +49,18 @@ config = {
 | `namespace` | `"user_state"` | Logical namespace isolating this coordinator's records; feeds the derived document id and the default single-tenant context. |
 | `sections` | `()` | The declared sections (`UserStateSectionSpec` list). |
 | `enable_event_log` | `False` | Reserved flag for a persisted audit section (inert in the base coordinator). |
+| `prune_on_query` | `False` | When set, `query` prunes a windowed collection section's expired records for the queried user before returning (see [Lifecycle: retention pruning](#lifecycle-retention-pruning)). |
 
 `UserStateSectionSpec` fields: `name`, `kind` (`SectionKind`), `schema`,
 `sensitivity` (`Sensitivity`, default `INTERNAL`), `version` (default `1`),
 `consent_scope`, `retention_days`. A non-`None` `consent_scope` gates the
 section behind a consent grant (see [Governance: consent-gated
-access](#governance-consent-gated-access)). `retention_days` and `version` are
-stamped/carried but not enforced by the base coordinator; they are reserved for
-retention pruning and schema migration.
+access](#governance-consent-gated-access)). A `retention_days` window ages out
+records in a **collection** section (see [Lifecycle: retention
+pruning](#lifecycle-retention-pruning)) — it is rejected on a document section,
+which holds one evolving record per user and never expires. `version` is
+stamped onto every record but not enforced by the base coordinator; it is
+reserved for schema migration.
 
 ## Constructing
 
@@ -207,6 +211,50 @@ through the content API: `get_document` / `put_document` / `query` / `add_record
 caller cannot forge a grant or clobber the ledger by writing it directly —
 grants flow only through `grant_consent` / `revoke_consent`. The consent helpers
 are available only when at least one declared section carries a `consent_scope`.
+
+## Lifecycle: retention pruning
+
+A **collection** section can declare a `retention_days` window. Records whose
+`_written_at` stamp is older than the window are removed by `prune`:
+
+```python
+config = {
+    "namespace": "acme",
+    "sections": [
+        {"name": "activity", "kind": "collection", "retention_days": 30},
+    ],
+}
+store = await AsyncUserStateStore.from_config(config)
+
+removed = await store.prune("user-42", "activity")   # count deleted
+removed = await store.prune("user-42")               # every windowed section
+```
+
+- **Explicit by default — the consumer schedules it.** DataKnobs is a library,
+  not a daemon: `prune(user_id, section=None)` runs when you call it (a
+  background job, a login hook, a cron). With `section=None` every collection
+  section carrying a `retention_days` window is pruned; naming a document,
+  unknown, or reserved section raises.
+- **Opt-in lazy pruning.** Set `prune_on_query: true` and a `query` of a
+  windowed section first prunes that user's expired records in it, so a read
+  never returns aged-out data. Off by default (a read has no write side effect).
+- **Collection sections only.** A document section holds one evolving record per
+  user and never expires; a `retention_days` on a document section is a
+  `ConfigurationError` at config load.
+- **Not consent-gated.** Pruning is data minimization, so — like `clear` — it is
+  never blocked by a consent scope.
+
+Time is measured against an injected clock. By default the coordinator uses
+wall-clock UTC; inject a `now` collaborator (a `Callable[[], datetime]`) to make
+retention deterministic in tests or drive it from an external clock:
+
+```python
+from datetime import datetime, timezone
+
+store = await AsyncUserStateStore.from_config(
+    config, now=lambda: datetime.now(timezone.utc),
+)
+```
 
 ## Tenant scoping
 

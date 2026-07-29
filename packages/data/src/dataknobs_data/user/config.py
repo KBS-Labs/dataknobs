@@ -87,11 +87,16 @@ class UserStateSectionSpec(StructuredConfig):
             (``_section_version``). Reserved for lazy on-read migration;
             not acted on in the base coordinator.
         consent_scope: Optional named consent scope this section belongs to.
-            Reserved for consent-gated access enforcement; not acted on in
-            the base coordinator.
-        retention_days: Optional retention window (collection sections).
-            Reserved for retention pruning; not acted on in the base
-            coordinator.
+            A non-``None`` scope gates the section behind a consent grant
+            (:meth:`~dataknobs_data.user.store.AsyncUserStateStore.grant_consent`).
+        retention_days: Optional retention window, in days, for a
+            **collection** section: records whose ``_written_at`` stamp is
+            older than the window are removed by
+            :meth:`~dataknobs_data.user.store.AsyncUserStateStore.prune`
+            (or lazily on ``query`` when ``prune_on_query`` is set). A
+            document section holds one evolving record per user and never
+            expires, so a ``retention_days`` on a document section is
+            rejected at config-load time.
     """
 
     name: str = ""
@@ -119,12 +124,19 @@ class UserStateStoreConfig(StructuredConfig):
         enable_event_log: Reserved flag for a persisted append-only audit
             section. Inert in the base coordinator (delta events are emitted
             through the in-process callback registry regardless).
+        prune_on_query: When ``True``, a ``query`` of a collection section
+            carrying a ``retention_days`` window first prunes that section's
+            expired records for the queried user (lazy retention enforcement).
+            Off by default — retention is otherwise enforced only by an
+            explicit
+            :meth:`~dataknobs_data.user.store.AsyncUserStateStore.prune`.
     """
 
     backend: str = "memory"
     namespace: str = "user_state"
     sections: tuple[UserStateSectionSpec, ...] = ()
     enable_event_log: bool = False
+    prune_on_query: bool = False
 
     def __post_init__(self) -> None:
         """Validate the declared sections at config-load time.
@@ -138,6 +150,11 @@ class UserStateStoreConfig(StructuredConfig):
         (an inert store); every *declared* section must be named and unique,
         and may not use a name reserved for a coordinator-managed section
         (:data:`RESERVED_SECTION_NAMES`).
+
+        A ``retention_days`` window on a ``DOCUMENT`` section is also rejected:
+        a document section holds one evolving record per user and never
+        expires, so a retention window on it is a configuration mistake caught
+        here rather than silently ignored.
         """
         seen: set[str] = set()
         for spec in self.sections:
@@ -145,6 +162,17 @@ class UserStateStoreConfig(StructuredConfig):
                 raise ConfigurationError(
                     "User-state section names must be non-empty.",
                     context={"namespace": self.namespace},
+                )
+            if (
+                spec.retention_days is not None
+                and spec.kind == SectionKind.DOCUMENT
+            ):
+                raise ConfigurationError(
+                    f"Section {spec.name!r} is a document section and cannot "
+                    "carry retention_days: a document section holds one "
+                    "evolving record per user and never expires. Retention "
+                    "applies to collection sections.",
+                    context={"namespace": self.namespace, "name": spec.name},
                 )
             if spec.name in RESERVED_SECTION_NAMES:
                 raise ConfigurationError(
