@@ -401,3 +401,36 @@ class ArtifactBank:
             sections=sections,
             section_configs=section_configs,
         )
+
+    # -----------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close every section bank, releasing any db each section owns.
+
+        Delegates to ``MemoryBank.close()`` per section — a section closes
+        its db only when it owns it (``owns_db``); a section handed a db by
+        a caller leaves it open, so a backing store shared across sections
+        survives one artifact's close. Safe to call more than once: there is
+        no dedup layer (each call delegates to every section again), and a
+        section whose ``close()`` raises — including a backend that does not
+        tolerate a repeat close — is caught by the per-section
+        ``try``/``except`` below, so a second close is harmless regardless of
+        backend re-close semantics.
+
+        The artifact never owns a db directly; it owns *sections*, and each
+        section carries its own ``owns_db``, so ``close()`` is unconditional
+        delegation. Teardown of one section is isolated — a section whose
+        ``close()`` raises does not prevent the rest from closing.
+        """
+        for name, bank in self._sections.items():
+            try:
+                bank.close()
+            except Exception:
+                logger.warning(
+                    "Failed to close section '%s' of artifact '%s'",
+                    name,
+                    self._name,
+                    exc_info=True,
+                )

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_data import Record, SyncDatabase
 
 from .artifact_bank import ArtifactBank
@@ -52,10 +53,17 @@ class ArtifactBankCatalog:
         db: SyncDatabase,
         artifact_config: dict[str, Any] | None = None,
         entry_name_field: str | None = None,
+        *,
+        owns_db: bool = False,
     ) -> None:
         self._db = db
         self._artifact_config = artifact_config
         self._entry_name_field = entry_name_field
+        # A db supplied by the caller (``owns_db=False``, the default for
+        # direct construction) is left open by ``close()`` so a db shared
+        # with other holders survives. A db this catalog built for itself
+        # (``from_config``, which also ``connect()``s it) is torn down.
+        self._owns_db = owns_db
 
     # -----------------------------------------------------------------
     # Entry name resolution
@@ -294,4 +302,19 @@ class ArtifactBankCatalog:
             db=db,
             artifact_config=artifact_config,
             entry_name_field=entry_name_field,
+            # The factory built and connected this db, so the catalog owns it.
+            owns_db=True,
         )
+
+    # -----------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the backing db if this catalog owns it.
+
+        A db built by ``from_config`` (which also ``connect()``s it) is
+        owned and torn down here; a db injected via the constructor is
+        left open for its owner.
+        """
+        close_if_owned_sync(self._db, self._owns_db)

@@ -737,37 +737,41 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         db.connect()
         return db, "external"
 
+    def _build_bank(self, name: str, cfg: dict[str, Any]) -> Any:
+        """Construct one ``MemoryBank`` from its config, opening its owned db.
+
+        The per-bank construction shared by :meth:`_init_banks` and
+        :meth:`_restore_banks`' missing-bank self-heal, so both build a bank
+        the same way. The db is created by this wizard for the bank's
+        exclusive use, so the bank owns it and closes it on ``close()``.
+        """
+        from ..memory.bank import MemoryBank
+
+        # Support both flat keys (duplicate_strategy, match_fields) and
+        # nested duplicate_detection.{strategy, match_fields}.
+        dup_cfg = cfg.get("duplicate_detection", {})
+        dup_strategy = (
+            cfg.get("duplicate_strategy") or dup_cfg.get("strategy", "allow")
+        )
+        match_fields = cfg.get("match_fields") or dup_cfg.get("match_fields")
+        db, storage_mode = self._create_bank_db(name, cfg)
+        return MemoryBank(
+            name=name,
+            schema=cfg.get("schema", {}),
+            db=db,
+            max_records=cfg.get("max_records"),
+            duplicate_strategy=dup_strategy,
+            match_fields=match_fields,
+            storage_mode=storage_mode,
+            owns_db=True,
+        )
+
     def _init_banks(self) -> None:
         """Create ``MemoryBank`` instances from wizard ``banks`` config."""
         if not self._bank_configs:
             return
-        from ..memory.bank import MemoryBank
-
         for name, cfg in self._bank_configs.items():
-            # Support both flat keys (duplicate_strategy, match_fields)
-            # and nested duplicate_detection.{strategy, match_fields}.
-            dup_cfg = cfg.get("duplicate_detection", {})
-            dup_strategy = (
-                cfg.get("duplicate_strategy")
-                or dup_cfg.get("strategy", "allow")
-            )
-            match_fields = (
-                cfg.get("match_fields")
-                or dup_cfg.get("match_fields")
-            )
-            db, storage_mode = self._create_bank_db(name, cfg)
-            self._banks[name] = MemoryBank(
-                name=name,
-                schema=cfg.get("schema", {}),
-                db=db,
-                max_records=cfg.get("max_records"),
-                duplicate_strategy=dup_strategy,
-                match_fields=match_fields,
-                storage_mode=storage_mode,
-                # The db was created by this wizard for the bank's exclusive
-                # use, so the bank owns it and closes it on close().
-                owns_db=True,
-            )
+            self._banks[name] = self._build_bank(name, cfg)
         logger.debug("Initialised %d memory banks: %s",
                       len(self._banks), list(self._banks))
 
@@ -794,17 +798,37 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 )
             else:
                 self._banks[name] = MemoryBank.from_dict(bank_dict)
-        # Ensure any newly-configured banks that weren't persisted yet
-        # are also initialised.
-        for name in self._bank_configs:
+        # Build any configured bank absent from the persisted snapshot — a
+        # bank added to the wizard config after this conversation was last
+        # saved. Only the missing banks are built (not a wholesale
+        # _init_banks(), which would overwrite the siblings just restored
+        # above and lose their data), each fresh with its own owned db.
+        for name, cfg in self._bank_configs.items():
             if name not in self._banks:
-                self._init_banks()
-                break
+                self._banks[name] = self._build_bank(name, cfg)
         if banks_data:
             logger.debug(
                 "Restored %d memory banks from persisted data",
                 len(banks_data),
             )
+
+    def _close_banks(self) -> None:
+        """Close every current memory bank, error-isolated per bank.
+
+        Releases each bank's owned db (a caller-injected db is left open by
+        the bank's own ``owns_db`` gate). Shared by :meth:`close` and by the
+        restore path: the strategy object outlives a single turn, and a
+        persistent (non-memory) section/bank backend opens a real connection,
+        so rebuilding the banks on a later turn without first closing the
+        prior set would orphan that connection every turn. Does not clear
+        ``self._banks`` — the caller either replaces it wholesale (restore)
+        or is tearing the strategy down (:meth:`close`).
+        """
+        for name, bank in self._banks.items():
+            try:
+                bank.close()
+            except Exception:
+                logger.exception("Error closing memory bank '%s'", name)
 
     def _make_bank_accessor(self) -> Any:
         """Return a callable ``bank(name) -> MemoryBank | EmptyBankProxy``."""
@@ -1275,10 +1299,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if cancelled:
                 logger.debug("Cancelled %d ephemeral task(s)", cancelled)
 
+        # Each teardown step below is error-isolated so one failing
+        # subsystem cannot orphan the resources the later steps release —
+        # matching DynaBot.close()'s per-subsystem isolation convention. A
+        # section bank whose close() raised would otherwise propagate out of
+        # the banks loop and skip the catalog close beneath it, leaking the
+        # owned db connection the cascade exists to release.
+
         # Close extractor's LLM provider
         if self._extractor is not None and hasattr(self._extractor, "close"):
-            await self._extractor.close()
-            logger.debug("Closed WizardReasoning extractor")
+            try:
+                await self._extractor.close()
+                logger.debug("Closed WizardReasoning extractor")
+            except Exception:
+                logger.exception("Error closing WizardReasoning extractor")
 
         # Close memory bank database connections. The banks are always
         # built by this wizard (``_init_banks`` / ``_restore_banks`` /
@@ -1287,13 +1321,29 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # only when it owns it (``owns_db``): wizard-built banks own the
         # per-bank db this wizard created for them, while a db a bank was
         # handed by a caller is left open — so a backing store shared
-        # across banks survives one bank's close.
-        for _name, bank in self._banks.items():
-            bank.close()
+        # across banks survives one bank's close. One bank's failure is
+        # isolated so the rest — and the catalog below — still close. The
+        # same helper releases the prior turn's banks before a restore
+        # rebuilds them, so this teardown logic lives in one place.
+        self._close_banks()
         if self._banks:
             logger.debug(
                 "Closed %d memory bank database(s)", len(self._banks)
             )
+
+        # Close the artifact catalog if one was created. The catalog was
+        # built by this wizard (``_init_artifact`` →
+        # ``ArtifactBankCatalog.from_config``, which connects a db), so the
+        # wizard owns it. The catalog closes its db only when it owns it.
+        # The section dbs are already released by the banks loop above
+        # (``self._banks`` *are* the artifact's sections), so only the
+        # catalog remains.
+        if self._catalog is not None and hasattr(self._catalog, "close"):
+            try:
+                self._catalog.close()
+                logger.debug("Closed artifact catalog")
+            except Exception:
+                logger.exception("Error closing artifact catalog")
 
     def _partition_data(
         self, data: dict[str, Any]
@@ -3124,10 +3174,23 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # Restore FSM state (and subflow FSM if applicable)
             self._restore_fsm_state(state)
 
-            # Restore MemoryBank instances from persisted data
-            self._restore_banks(wizard_data.get("banks", {}))
+            # Release the prior turn's banks before rebuilding them. The
+            # strategy object outlives a single turn, so self._banks /
+            # self._artifact still hold the last turn's banks; a persistent
+            # (non-memory) backend opened a real connection for each, and
+            # rebuilding below without closing them first would orphan those
+            # connections on every restore.
+            self._close_banks()
 
-            # Restore ArtifactBank from persisted data
+            # Rebuild banks from persisted data. A wizard is either
+            # artifact-based or plain-banks — never both (``_init_artifact``
+            # rejects the combination) — so restore exactly one: the artifact
+            # (whose sections ARE the banks) or the standalone banks. This
+            # also drops the redundant double-build the prior
+            # always-restore-then-maybe-artifact shape performed for an
+            # artifact wizard — it built the section banks in _restore_banks
+            # (opening a connection per non-memory section) only to discard
+            # them the moment the artifact rebuilt.
             artifact_data = wizard_data.get("artifact")
             if artifact_data and self._artifact is not None:
                 from ..memory.artifact_bank import ArtifactBank
@@ -3136,6 +3199,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     artifact_data, db_factory=self._create_bank_db
                 )
                 self._banks = dict(self._artifact.sections)
+            else:
+                # Drop the closed banks before repopulating: _restore_banks
+                # rebuilds each persisted bank and self-heals any configured
+                # bank the snapshot omits, so starting from an empty dict
+                # ensures a bank absent from a stale snapshot is rebuilt fresh
+                # rather than left referencing the connection just closed.
+                self._banks = {}
+                self._restore_banks(wizard_data.get("banks", {}))
 
             self._last_wizard_state = state
             return state
