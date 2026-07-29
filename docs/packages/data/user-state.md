@@ -52,9 +52,11 @@ config = {
 
 `UserStateSectionSpec` fields: `name`, `kind` (`SectionKind`), `schema`,
 `sensitivity` (`Sensitivity`, default `INTERNAL`), `version` (default `1`),
-`consent_scope`, `retention_days`. `consent_scope`, `retention_days`, and
-`version` are stamped/carried but not enforced by the base coordinator; they are
-reserved for governance enforcement.
+`consent_scope`, `retention_days`. A non-`None` `consent_scope` gates the
+section behind a consent grant (see [Governance: consent-gated
+access](#governance-consent-gated-access)). `retention_days` and `version` are
+stamped/carried but not enforced by the base coordinator; they are reserved for
+retention pruning and schema migration.
 
 ## Constructing
 
@@ -149,6 +151,58 @@ payload dict (or `None`), collection sections to a list of payload dicts.
 Coordinator-owned fields are stripped. `SENSITIVE` sections are **omitted** by
 default; pass `include_sensitive=True` to include them. `clear` deletes every
 record for the user across all sections and returns the count deleted.
+
+## Governance: consent-gated access
+
+A section can be placed behind a **consent scope**. Declare a `consent_scope` on
+the section and the coordinator refuses reads and writes to it until the user
+grants that scope:
+
+```python
+config = {
+    "namespace": "acme",
+    "sections": [
+        {"name": "preferences", "kind": "document"},
+        {"name": "analytics", "kind": "collection",
+         "consent_scope": "analytics_processing"},
+    ],
+}
+store = await AsyncUserStateStore.from_config(config)
+
+# Ungranted access is refused (fail-closed):
+await store.add_record("user-42", "analytics", {"event": "click"})
+# -> dataknobs_common.exceptions.ConsentRequiredError
+
+# Grant the scope, then the section is accessible:
+await store.grant_consent("user-42", "analytics_processing")
+await store.add_record("user-42", "analytics", {"event": "click"})   # ok
+```
+
+- **Scope, not section, granularity.** A `consent_scope` is a named scope shared
+  across sections; one `grant_consent(user, scope)` unlocks every section tagged
+  with it.
+- **Fail-closed.** A missing consent document, a missing scope grant, or a
+  revoked scope all refuse access, raising
+  `dataknobs_common.exceptions.ConsentRequiredError` on a direct `get_document`
+  / `query` / write.
+- **`snapshot` omits rather than raises.** An ungranted consent-scoped section is
+  simply absent from `snapshot()` output (like a `SENSITIVE` section), so a
+  whole-user view never fails on a partially-consented user.
+- **Revocation is block-only.** `revoke_consent(user, scope)` refuses future
+  access but leaves the stored data in place; a later `grant_consent` surfaces
+  it again. Erasure remains the explicit `clear(user)`.
+- **Erasure is never gated.** `clear(user)` removes consent-scoped data even
+  while the scope is revoked — data minimization must always be possible.
+
+```python
+await store.has_consent("user-42", "analytics_processing")     # bool
+await store.revoke_consent("user-42", "analytics_processing")  # block access
+```
+
+Grants are stored in a reserved, coordinator-managed `consent` document section,
+so `consent` is a reserved section name — declaring your own section named
+`consent` is a `ConfigurationError`. The consent helpers are available only when
+at least one declared section carries a `consent_scope`.
 
 ## Tenant scoping
 

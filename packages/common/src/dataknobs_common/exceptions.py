@@ -189,6 +189,60 @@ class NotFoundError(DataknobsError):
     pass
 
 
+class ConsentRequiredError(DataknobsError):
+    """Raised when access to a consent-gated resource is refused.
+
+    A fail-closed *policy denial*, not an operation failure: the caller has
+    not granted the consent scope a resource requires, so the read or write is
+    refused before it runs. A top-level sibling of :class:`ValidationError` /
+    :class:`NotFoundError` (not an :class:`OperationError` — nothing failed;
+    the operation was declined by policy).
+
+    Attributes:
+        scope: The consent scope that was required but not granted.
+        user_id: The user the access was attempted for (optional; may be an
+            opaque identifier — handle with the same care as the id itself).
+
+    Example:
+        ```python
+        raise ConsentRequiredError(
+            "Consent scope 'analytics' not granted",
+            scope="analytics",
+        )
+        ```
+    """
+
+    def __init__(
+        self,
+        message: str = "Consent required",
+        scope: str | None = None,
+        user_id: str | None = None,
+        context: Dict[str, Any] | None = None,
+        details: Dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize the consent-required error.
+
+        Args:
+            message: Error message.
+            scope: The consent scope that was required but not granted.
+            user_id: Optional user identifier the access was attempted for.
+            context: Optional context dictionary (merged with ``scope`` /
+                ``user_id``).
+            details: Optional details dictionary (takes precedence per the
+                base contract).
+        """
+        merged: Dict[str, Any] = {}
+        if scope is not None:
+            merged["scope"] = scope
+        if user_id is not None:
+            merged["user_id"] = user_id
+        if context:
+            merged.update(context)
+        super().__init__(message, context=merged, details=details)
+        self.scope = scope
+        self.user_id = user_id
+
+
 class OperationError(DataknobsError):
     """Raised when an operation fails.
 
@@ -319,6 +373,7 @@ __all__ = [
     "ConfigurationError",
     "ResourceError",
     "NotFoundError",
+    "ConsentRequiredError",
     "OperationError",
     "ConcurrencyError",
     "SerializationError",

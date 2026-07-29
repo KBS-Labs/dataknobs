@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Consent-gated access for per-user state sections.** A section declaring a
+  `consent_scope` now refuses reads and writes until the user grants that scope.
+  `UserStateStore` / `AsyncUserStateStore` gain `grant_consent` /
+  `revoke_consent` / `has_consent`; a direct `get_document` / `query` / write to
+  an ungranted consent-scoped section raises
+  `dataknobs_common.exceptions.ConsentRequiredError`, and `snapshot()` omits the
+  section rather than raising. Grants are per `(user, scope)` — one grant unlocks
+  every section sharing the scope — and are stored in a reserved,
+  coordinator-managed `consent` document section, so `consent` is now a reserved
+  section name (declaring it raises `ConfigurationError`). Revocation is
+  block-only (the stored data is left in place for a later re-grant); erasure via
+  `clear()` is never consent-gated. Sections that declare no `consent_scope` are
+  unaffected.
+
 ### Changed
 
 - **BREAKING: `create()` resolves the storage id uniformly with

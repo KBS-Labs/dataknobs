@@ -58,7 +58,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ConsentRequiredError
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_common.tenancy import SingleTenantContext, TenantContext
@@ -66,6 +66,7 @@ from dataknobs_data.factory import async_database_factory, database_factory
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
 from dataknobs_data.user.config import (
+    RESERVED_CONSENT_SECTION,
     SectionKind,
     Sensitivity,
     UserStateSectionSpec,
@@ -231,6 +232,68 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _consent_satisfied(consent_record: Record | None, scope: str) -> bool:
+    """Return whether ``scope`` is granted in the consent document.
+
+    Fail-closed (the security rule): a missing consent document, a missing
+    scope entry, or a non-``True`` ``granted`` flag all deny access.
+    """
+    if consent_record is None:
+        return False
+    grant = _public_data(consent_record).get(scope)
+    return isinstance(grant, Mapping) and grant.get("granted") is True
+
+
+def _granted_scopes(consent_record: Record | None) -> frozenset[str]:
+    """Return the set of currently-granted scope names in a consent document."""
+    if consent_record is None:
+        return frozenset()
+    return frozenset(
+        scope
+        for scope, grant in _public_data(consent_record).items()
+        if isinstance(grant, Mapping) and grant.get("granted") is True
+    )
+
+
+def _grant_map(
+    grants: Mapping[str, Any], scope: str, *, granted: bool, now: str
+) -> dict[str, Any]:
+    """Return a new grants map with ``scope`` set granted / revoked at ``now``.
+
+    Pure: the caller reads the current grants, this composes the next map, the
+    caller writes it back. A grant records ``granted_at``; a revoke records
+    ``revoked_at`` and only flips the flag (block-only — the section's stored
+    data is untouched, so a later re-grant surfaces it again).
+    """
+    updated = dict(grants)
+    if granted:
+        updated[scope] = {"granted": True, "granted_at": now}
+    else:
+        updated[scope] = {"granted": False, "revoked_at": now}
+    return updated
+
+
+def _snapshot_sections(
+    specs: tuple[UserStateSectionSpec, ...],
+    granted_scopes: frozenset[str],
+    include_sensitive: bool,
+) -> list[UserStateSectionSpec]:
+    """Select the sections a :meth:`snapshot` surfaces.
+
+    Composes the sensitivity filter (:func:`_visible_sections`) with the
+    consent filter: a section carrying a ``consent_scope`` the user has not
+    granted is omitted. The snapshot is the already-filtered surface, so it
+    *omits* an ungranted section (mirroring the ``SENSITIVE`` omission) rather
+    than raising the way a direct :meth:`get_document` / :meth:`query` does.
+    """
+    visible = _visible_sections(specs, include_sensitive)
+    return [
+        s
+        for s in visible
+        if s.consent_scope is None or s.consent_scope in granted_scopes
+    ]
+
+
 # --------------------------------------------------------------------- #
 # Shared non-I/O logic (mixed in LAST so StructuredConfigConsumer stays first).
 # --------------------------------------------------------------------- #
@@ -259,6 +322,7 @@ class _UserStateStoreCommon:
     _owns_db: bool
     _tenant: TenantContext
     _sections: dict[str, UserStateSectionSpec]
+    _reserved_sections: set[str]
     _callbacks: CallbackRegistry
 
     def _bind_common(self) -> None:
@@ -284,6 +348,8 @@ class _UserStateStoreCommon:
             else SingleTenantContext(domain_id=self.config.namespace)
         )
         self._sections = {s.name: s for s in self.config.sections}
+        self._reserved_sections = set()
+        self._register_reserved_sections()
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
@@ -314,6 +380,47 @@ class _UserStateStoreCommon:
             raise ValueError(
                 f"Section {section!r} is a {spec.kind.value} section, "
                 f"not a {kind.value} section."
+            )
+        return spec
+
+    def _register_reserved_sections(self) -> None:
+        """Register coordinator-managed sections not declared by the consumer.
+
+        The reserved ``consent`` document section is registered whenever at
+        least one declared section carries a ``consent_scope`` (no
+        consent-scoped sections → not registered → zero overhead). It joins
+        ``self._sections`` so the consent helpers and :meth:`clear` see it, and
+        ``self._reserved_sections`` so it is distinguishable from a consumer
+        section; it never surfaces in :meth:`snapshot` (which iterates only
+        ``config.sections``). The frozen config is left untouched — the
+        reserved entry is a runtime-only addition.
+        """
+        if any(s.consent_scope is not None for s in self.config.sections):
+            self._sections[RESERVED_CONSENT_SECTION] = UserStateSectionSpec(
+                name=RESERVED_CONSENT_SECTION,
+                kind=SectionKind.DOCUMENT,
+                sensitivity=Sensitivity.INTERNAL,
+            )
+            self._reserved_sections.add(RESERVED_CONSENT_SECTION)
+
+    def _consent_enabled(self) -> bool:
+        """Whether a reserved ``consent`` section is registered for this store."""
+        return RESERVED_CONSENT_SECTION in self._sections
+
+    def _consent_spec(self) -> UserStateSectionSpec:
+        """Return the reserved consent spec, or raise if consent is unavailable.
+
+        Consent management is only meaningful when at least one declared
+        section carries a ``consent_scope``; calling a consent helper otherwise
+        is a configuration error, surfaced here with an actionable message
+        rather than a confusing ``unknown section`` deep in a write.
+        """
+        spec = self._sections.get(RESERVED_CONSENT_SECTION)
+        if spec is None:
+            raise ConfigurationError(
+                "Consent management is unavailable: no declared section "
+                "carries a consent_scope, so there is nothing to gate.",
+                context={"namespace": self.config.namespace},
             )
         return spec
 
@@ -444,11 +551,80 @@ class AsyncUserStateStore(
         self._db = db
         self._owns_db = False
 
+    # ----- consent ----- #
+
+    async def _read_consent(self, user_id: str) -> Record | None:
+        """Read the reserved consent document for ``user_id`` (or None)."""
+        return await self._db.read(
+            self._doc_id(user_id, RESERVED_CONSENT_SECTION)
+        )
+
+    async def _require_consent(
+        self, user_id: str, spec: UserStateSectionSpec
+    ) -> None:
+        """Refuse access to a consent-scoped section that is not granted.
+
+        A no-op for a section with no ``consent_scope`` (including the reserved
+        consent section itself, so reading / writing the consent document is
+        never gated — no recursion). Otherwise reads the consent document and
+        raises :class:`~dataknobs_common.exceptions.ConsentRequiredError` when
+        the scope is not granted (fail-closed).
+        """
+        if spec.consent_scope is None:
+            return
+        if not _consent_satisfied(
+            await self._read_consent(user_id), spec.consent_scope
+        ):
+            raise ConsentRequiredError(
+                f"Access to section {spec.name!r} requires consent scope "
+                f"{spec.consent_scope!r}, which has not been granted.",
+                scope=spec.consent_scope,
+                user_id=user_id,
+            )
+
+    async def grant_consent(self, user_id: str, scope: str) -> None:
+        """Grant ``scope`` for ``user_id``, unlocking every section tagged with it."""
+        self._consent_spec()
+        current = await self._read_consent(user_id)
+        grants = _public_data(current) if current is not None else {}
+        await self.put_document(
+            user_id,
+            RESERVED_CONSENT_SECTION,
+            _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+        )
+
+    async def revoke_consent(self, user_id: str, scope: str) -> None:
+        """Revoke ``scope`` for ``user_id``.
+
+        Block-only: future access to sections tagged with ``scope`` is refused,
+        but their stored data is left in place (a later :meth:`grant_consent`
+        surfaces it again). Erasure remains the explicit :meth:`clear`.
+        """
+        self._consent_spec()
+        current = await self._read_consent(user_id)
+        grants = _public_data(current) if current is not None else {}
+        await self.put_document(
+            user_id,
+            RESERVED_CONSENT_SECTION,
+            _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+        )
+
+    async def has_consent(self, user_id: str, scope: str) -> bool:
+        """Return whether ``user_id`` has granted ``scope``."""
+        self._consent_spec()
+        return _consent_satisfied(await self._read_consent(user_id), scope)
+
     # ----- document sections ----- #
 
     async def get_document(self, user_id: str, section: str) -> Record | None:
-        """Read a document section's single record for ``user_id`` (or None)."""
-        self._require_kind(section, SectionKind.DOCUMENT)
+        """Read a document section's single record for ``user_id`` (or None).
+
+        A section carrying a ``consent_scope`` raises
+        :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
+        user has not granted that scope.
+        """
+        spec = self._require_kind(section, SectionKind.DOCUMENT)
+        await self._require_consent(user_id, spec)
         return await self._db.read(self._doc_id(user_id, section))
 
     async def document_version(
@@ -477,6 +653,7 @@ class AsyncUserStateStore(
         :class:`~dataknobs_common.exceptions.ConcurrencyError`.
         """
         spec = self._require_kind(section, SectionKind.DOCUMENT)
+        await self._require_consent(user_id, spec)
         doc_id = self._doc_id(user_id, section)
         record = self._build_record(
             data, user_id, section, spec, storage_id=doc_id
@@ -497,6 +674,7 @@ class AsyncUserStateStore(
         Returns the backend-generated record id.
         """
         spec = self._require_kind(section, SectionKind.COLLECTION)
+        await self._require_consent(user_id, spec)
         record = self._build_record(data, user_id, section, spec)
         record_id = await self._db.create(record)
         await self._fire_written(user_id, section, spec, "add_record")
@@ -508,9 +686,13 @@ class AsyncUserStateStore(
         """Read a collection section's records for ``user_id``.
 
         The optional ``query`` adds payload filters / sort / pagination; the
-        user + section (+ bound tenant) scope is AND-composed automatically.
+        user + section (+ bound tenant) scope is AND-composed automatically. A
+        section carrying a ``consent_scope`` raises
+        :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
+        user has not granted that scope.
         """
-        self._require_kind(section, SectionKind.COLLECTION)
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        await self._require_consent(user_id, spec)
         return await self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
@@ -545,6 +727,7 @@ class AsyncUserStateStore(
     ) -> bool:
         """Replace a collection record owned by ``user_id`` (scope-checked)."""
         spec = self._require_kind(section, SectionKind.COLLECTION)
+        await self._require_consent(user_id, spec)
         existing = await self._db.read(record_id)
         if existing is None:
             return False
@@ -587,10 +770,18 @@ class AsyncUserStateStore(
         Document sections map to their payload dict (or ``None`` when unset);
         collection sections map to a list of payload dicts. Coordinator-owned
         fields are stripped. ``SENSITIVE`` sections are omitted unless
-        ``include_sensitive=True``.
+        ``include_sensitive=True``; a consent-scoped section the user has not
+        granted is likewise omitted (the snapshot omits rather than raises).
         """
+        granted = (
+            _granted_scopes(await self._read_consent(user_id))
+            if self._consent_enabled()
+            else frozenset()
+        )
         view: dict[str, Any] = {}
-        for spec in _visible_sections(self.config.sections, include_sensitive):
+        for spec in _snapshot_sections(
+            self.config.sections, granted, include_sensitive
+        ):
             if spec.kind == SectionKind.DOCUMENT:
                 record = await self.get_document(user_id, spec.name)
                 view[spec.name] = (
@@ -617,9 +808,14 @@ class AsyncUserStateStore(
         return sum(1 for ok in results if ok)
 
     async def _clear_ids(self, user_id: str) -> list[str]:
-        """Collect every storage id for ``user_id`` across all sections."""
+        """Collect every storage id for ``user_id`` across all sections.
+
+        Iterates ``self._sections`` (declared **and** reserved) so erasure
+        removes coordinator-managed state — the consent document included —
+        not just the consumer's declared sections.
+        """
         ids: list[str] = []
-        for spec in self.config.sections:
+        for spec in self._sections.values():
             if spec.kind == SectionKind.DOCUMENT:
                 ids.append(self._doc_id(user_id, spec.name))
             else:
@@ -687,11 +883,73 @@ class UserStateStore(
         self._db = db
         self._owns_db = False
 
+    # ----- consent ----- #
+
+    def _read_consent(self, user_id: str) -> Record | None:
+        """Read the reserved consent document for ``user_id`` (or None)."""
+        return self._db.read(self._doc_id(user_id, RESERVED_CONSENT_SECTION))
+
+    def _require_consent(
+        self, user_id: str, spec: UserStateSectionSpec
+    ) -> None:
+        """Refuse access to a consent-scoped section that is not granted.
+
+        Sync mirror of the async twin: a no-op for a section with no
+        ``consent_scope`` (including the reserved consent section — no
+        recursion); otherwise reads the consent document and raises
+        :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
+        scope is not granted (fail-closed).
+        """
+        if spec.consent_scope is None:
+            return
+        if not _consent_satisfied(
+            self._read_consent(user_id), spec.consent_scope
+        ):
+            raise ConsentRequiredError(
+                f"Access to section {spec.name!r} requires consent scope "
+                f"{spec.consent_scope!r}, which has not been granted.",
+                scope=spec.consent_scope,
+                user_id=user_id,
+            )
+
+    def grant_consent(self, user_id: str, scope: str) -> None:
+        """Grant ``scope`` for ``user_id``, unlocking every section tagged with it."""
+        self._consent_spec()
+        current = self._read_consent(user_id)
+        grants = _public_data(current) if current is not None else {}
+        self.put_document(
+            user_id,
+            RESERVED_CONSENT_SECTION,
+            _grant_map(grants, scope, granted=True, now=_utc_now_iso()),
+        )
+
+    def revoke_consent(self, user_id: str, scope: str) -> None:
+        """Revoke ``scope`` for ``user_id`` (block future access; data untouched)."""
+        self._consent_spec()
+        current = self._read_consent(user_id)
+        grants = _public_data(current) if current is not None else {}
+        self.put_document(
+            user_id,
+            RESERVED_CONSENT_SECTION,
+            _grant_map(grants, scope, granted=False, now=_utc_now_iso()),
+        )
+
+    def has_consent(self, user_id: str, scope: str) -> bool:
+        """Return whether ``user_id`` has granted ``scope``."""
+        self._consent_spec()
+        return _consent_satisfied(self._read_consent(user_id), scope)
+
     # ----- document sections ----- #
 
     def get_document(self, user_id: str, section: str) -> Record | None:
-        """Read a document section's single record for ``user_id`` (or None)."""
-        self._require_kind(section, SectionKind.DOCUMENT)
+        """Read a document section's single record for ``user_id`` (or None).
+
+        A consent-scoped section raises
+        :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
+        user has not granted that scope.
+        """
+        spec = self._require_kind(section, SectionKind.DOCUMENT)
+        self._require_consent(user_id, spec)
         return self._db.read(self._doc_id(user_id, section))
 
     def document_version(self, user_id: str, section: str) -> str | None:
@@ -709,6 +967,7 @@ class UserStateStore(
     ) -> str:
         """Create or replace a document section's record for ``user_id``."""
         spec = self._require_kind(section, SectionKind.DOCUMENT)
+        self._require_consent(user_id, spec)
         doc_id = self._doc_id(user_id, section)
         record = self._build_record(
             data, user_id, section, spec, storage_id=doc_id
@@ -726,6 +985,7 @@ class UserStateStore(
     ) -> str:
         """Append a record to a collection section for ``user_id``."""
         spec = self._require_kind(section, SectionKind.COLLECTION)
+        self._require_consent(user_id, spec)
         record = self._build_record(data, user_id, section, spec)
         record_id = self._db.create(record)
         self._fire_written(user_id, section, spec, "add_record")
@@ -734,8 +994,14 @@ class UserStateStore(
     def query(
         self, user_id: str, section: str, query: Query | None = None
     ) -> list[Record]:
-        """Read a collection section's records for ``user_id``."""
-        self._require_kind(section, SectionKind.COLLECTION)
+        """Read a collection section's records for ``user_id``.
+
+        A consent-scoped section raises
+        :class:`~dataknobs_common.exceptions.ConsentRequiredError` when the
+        user has not granted that scope.
+        """
+        spec = self._require_kind(section, SectionKind.COLLECTION)
+        self._require_consent(user_id, spec)
         return self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
@@ -767,6 +1033,7 @@ class UserStateStore(
     ) -> bool:
         """Replace a collection record owned by ``user_id`` (scope-checked)."""
         spec = self._require_kind(section, SectionKind.COLLECTION)
+        self._require_consent(user_id, spec)
         existing = self._db.read(record_id)
         if existing is None:
             return False
@@ -803,8 +1070,15 @@ class UserStateStore(
         self, user_id: str, *, include_sensitive: bool = False
     ) -> dict[str, Any]:
         """Return a whole-user view keyed by section name (see async twin)."""
+        granted = (
+            _granted_scopes(self._read_consent(user_id))
+            if self._consent_enabled()
+            else frozenset()
+        )
         view: dict[str, Any] = {}
-        for spec in _visible_sections(self.config.sections, include_sensitive):
+        for spec in _snapshot_sections(
+            self.config.sections, granted, include_sensitive
+        ):
             if spec.kind == SectionKind.DOCUMENT:
                 record = self.get_document(user_id, spec.name)
                 view[spec.name] = (
@@ -828,9 +1102,13 @@ class UserStateStore(
         return sum(1 for ok in results if ok)
 
     def _clear_ids(self, user_id: str) -> list[str]:
-        """Collect every storage id for ``user_id`` across all sections."""
+        """Collect every storage id for ``user_id`` across all sections.
+
+        Iterates ``self._sections`` (declared **and** reserved) so erasure
+        removes coordinator-managed state — the consent document included.
+        """
         ids: list[str] = []
-        for spec in self.config.sections:
+        for spec in self._sections.values():
             if spec.kind == SectionKind.DOCUMENT:
                 ids.append(self._doc_id(user_id, spec.name))
             else:
