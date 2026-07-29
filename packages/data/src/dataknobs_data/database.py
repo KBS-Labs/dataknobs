@@ -377,19 +377,18 @@ class RecordStorageMixin:
 
         The single overridable id-mint extension point. Override to supply a
         custom storage-id scheme (ULID, Snowflake, monotonic/deterministic,
-        tenant-prefixed, ...) uniformly across every ``create`` /
-        ``create_batch`` path — this helper and the SQL query builders all route
-        their mint fallback through this hook. The default is a random UUID4. A
-        caller-supplied ``record.id`` is always honored; this hook governs only
-        the mint fallback.
+        tenant-prefixed, ...) uniformly across every write-keying path that
+        mints — ``create`` / ``create_batch`` (via
+        :meth:`_prepare_record_for_storage` and the SQL query builders) and
+        ``upsert`` / ``upsert_batch`` (via :meth:`_resolve_upsert_id` and the
+        SQL upsert builder). The default is a random UUID4. A caller-supplied
+        ``record.id`` is always honored; this hook governs only the mint
+        fallback.
 
-        Scope — ``create`` / ``create_batch`` only: the ``upsert`` and
-        ``update`` mint fallbacks do **not** yet route through this hook (they
-        still mint a UUID4 inline). An override here therefore changes minted
-        ids on the create paths but not on ``upsert(Record(...))`` /
-        ``update`` — if you need a custom scheme on those paths today, stamp
-        ``record.storage_id`` explicitly before the write. Unifying the
-        upsert/update mint fallbacks through this hook is a tracked follow-up.
+        Scope — ``create`` and ``upsert`` paths mint through this hook;
+        ``update`` / ``update_batch`` never mint (every ``update`` takes an
+        explicit id). A falsy (empty-string) record id is treated as absent and
+        minted on both create and upsert, so the two agree on that edge.
         """
         return str(uuid.uuid4())
 
@@ -420,6 +419,45 @@ class RecordStorageMixin:
         storage_id = record.id or self._generate_id()
         record_copy.storage_id = storage_id
         return record_copy, storage_id
+
+    def _resolve_upsert_id(
+        self, id_or_record: str | Record, record: Record | None
+    ) -> tuple[str, Record]:
+        """Resolve ``(id, record)`` for ``upsert(id, record)`` / ``upsert(record)``.
+
+        The single-upsert analogue of :meth:`_prepare_record_for_storage`'s
+        id-resolution: an explicit ``upsert(id, record)`` id is authoritative;
+        an ``upsert(record)`` call honors a truthy ``record.id`` and mints a
+        fresh id via the overridable :meth:`_generate_id` hook only when the
+        record carries none — the same ``record.id or self._generate_id()`` rule
+        create applies, so a consumer overriding the hook governs minted ids on
+        single upsert too. The resolved id is stamped onto the record for the
+        record-only call form.
+
+        A falsy (empty-string) record id is treated as absent and minted, so
+        ``upsert(Record(id=""))`` keys under a fresh id rather than under ``""``
+        — matching ``upsert_batch`` and ``create``.
+
+        Args:
+            id_or_record: An explicit storage id, or the record to upsert.
+            record: The record when ``id_or_record`` is an explicit id;
+                ``None`` for the record-only call form.
+
+        Returns:
+            Tuple of ``(storage_id, record)``.
+
+        Raises:
+            ValueError: ``id_or_record`` is an explicit id but ``record`` is
+                ``None``.
+        """
+        if isinstance(id_or_record, str):
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+            return id_or_record, record
+        record = id_or_record
+        resolved = record.id or self._generate_id()
+        record.storage_id = resolved
+        return resolved, record
 
     def _prepare_record_from_storage(
         self, record: Record | None, storage_id: str
@@ -843,23 +881,9 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            # Called with explicit ID: upsert(id, record)
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            # Called with just record: upsert(record)
-            record = id_or_record
-            # Use Record's built-in ID property which handles all the logic
-            id = record.id
-
-            if id is None:
-                # Generate a new ID if none found
-                id = str(uuid.uuid4())  # type: ignore[unreachable]
-                # Set it on the record for future reference
-                record.storage_id = id
+        # Resolve the storage id, honoring an explicit id and minting via the
+        # overridable _generate_id() hook when the record carries none.
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Conditional upsert: delegate to update()'s atomic compare-and-set. A
         # True return is the update; a stale token raises ``ConcurrencyError``
@@ -1642,23 +1666,9 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            # Called with explicit ID: upsert(id, record)
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            # Called with just record: upsert(record)
-            record = id_or_record
-            # Use Record's built-in ID property which handles all the logic
-            id = record.id
-
-            if id is None:
-                # Generate a new ID if none found
-                id = str(uuid.uuid4())  # type: ignore[unreachable]
-                # Set it on the record for future reference
-                record.storage_id = id
+        # Resolve the storage id, honoring an explicit id and minting via the
+        # overridable _generate_id() hook when the record carries none.
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Conditional upsert: delegate to update()'s atomic compare-and-set. A
         # True return is the update; a stale token raises ``ConcurrencyError``

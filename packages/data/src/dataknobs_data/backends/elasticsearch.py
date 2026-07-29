@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -339,18 +338,9 @@ class SyncElasticsearchDatabase(
         record must already exist with a matching version token, otherwise it
         raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
-        # Determine ID and record based on arguments
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         if expected_version is not None:
             # A conditional upsert never inserts. Delegate to update()'s
@@ -433,7 +423,7 @@ class SyncElasticsearchDatabase(
         bulk_operations = []
         ids = []
         for record in records:
-            record_id = record.id or str(uuid.uuid4())
+            record_id = record.id or self._generate_id()
             ids.append(record_id)
             doc = self._record_to_doc(record, record_id)
             bulk_operations.append(

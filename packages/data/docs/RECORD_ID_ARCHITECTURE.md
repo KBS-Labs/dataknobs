@@ -65,8 +65,11 @@ await db.create(Record({"id": "user-123", "name": "Other"}))  # DuplicateRecordE
 await db.upsert(Record({"id": "user-123", "name": "Other"}))  # overwrites instead
 ```
 
-This is the same contract for the single-record and batch forms, so a record
-keys identically whether written through `create()` or `create_batch()`.
+This is the same contract for the single-record and batch forms, and for
+insert-or-overwrite: a record keys identically whether written through
+`create()`, `create_batch()`, `upsert()`, or `upsert_batch()` — including the
+falsy-id rule, so `upsert(Record({"id": ""}))` mints rather than keying under
+`""`, matching `create` and `upsert_batch`.
 
 ### Read + write coherence
 
@@ -186,15 +189,16 @@ def _generate_id(self) -> str:
     return str(uuid.uuid4())
 ```
 
-Every `create` / `create_batch` mint fallback routes through this hook — the
-base helper above, the SQL create paths (which resolve
-`record.id or self._generate_id()` and pass the id into `build_create_query`, or
-an `id_factory=self._generate_id` into `build_batch_create_query`), and the
-Postgres / Elasticsearch create paths. It is the single extension point for a
-custom storage-id scheme: override it once and every `create()` /
-`create_batch()` path on that backend mints via your implementation, uniformly.
-A caller-supplied `record.id` is always honored — the hook governs only the mint
-fallback.
+Every `create` / `create_batch` **and** `upsert` / `upsert_batch` mint fallback
+routes through this hook — the base create helper above, the shared
+`_resolve_upsert_id` preamble (the single-`upsert` id resolution), the SQL
+create/upsert paths (which resolve `record.id or self._generate_id()` and pass
+an `id_factory=self._generate_id` into `build_batch_create_query` /
+`build_batch_upsert_query`), and the Postgres / Elasticsearch create/upsert
+paths. It is the single extension point for a custom storage-id scheme: override
+it once and every `create()` / `create_batch()` / `upsert()` / `upsert_batch()`
+path on that backend mints via your implementation, uniformly. A caller-supplied
+`record.id` is always honored — the hook governs only the mint fallback.
 
 ```python
 import ulid
@@ -202,16 +206,15 @@ from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 
 class UlidSQLiteDatabase(SyncSQLiteDatabase):
     def _generate_id(self) -> str:
-        return str(ulid.new())   # every minted id is a ULID, on every create path
+        return str(ulid.new())   # every minted id is a ULID, on create and upsert
 ```
 
-> **Scope — `create` / `create_batch` only.** The `upsert()` and `update()`
-> mint fallbacks do **not** yet route through this hook; when they mint (an
-> `upsert`/`update` of a record that carries no id), they still produce a random
-> UUID4 inline. An override therefore governs the create paths but not
-> `upsert(Record(...))` / `update`. If you need a custom scheme on those paths
-> today, set `record.storage_id` explicitly before the write. Unifying the
-> upsert/update mint fallbacks through `_generate_id()` is a tracked follow-up.
+> **Scope — `create` and `upsert` paths.** The hook governs the mint fallback on
+> `create` / `create_batch` / `upsert` / `upsert_batch`. `update` /
+> `update_batch` never mint — every `update` takes an explicit id. A falsy
+> (empty-string) record id is treated as absent and minted on both create and
+> upsert (see the [Write-Keying Contract](#write-keying-contract)), so
+> `upsert(Record(id=""))` keys under a freshly minted id rather than under `""`.
 
 ### Backend Usage Example
 

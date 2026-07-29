@@ -1,13 +1,14 @@
-"""Service-backed backends route their ``create()`` mint through ``_generate_id()``.
+"""Service-backed backends route their ``create()`` / ``upsert()`` mint through ``_generate_id()``.
 
 The in-process matrix (``tests/test_create_mint_id_hook.py``) proves the base
-write-keying helper and the SQL query builders route the mint fallback through
-the overridable ``_generate_id()`` hook. This module covers the backends whose
-``create()`` / ``create_batch()`` mint the id at an *inline* site rather than
-through those shared chokepoints — Postgres and Elasticsearch — so a consumer
-overriding the hook governs their create paths too. (S3's ``create()`` routes
-through the base helper, so it is already covered by the in-process file/memory
-tests.)
+write-keying helper, the shared ``_resolve_upsert_id`` preamble, and the SQL
+query builders route the mint fallback through the overridable
+``_generate_id()`` hook. This module covers the backends whose ``create()`` /
+``create_batch()`` / ``upsert()`` / ``upsert_batch()`` mint the id at an
+*inline* site rather than through those shared chokepoints — Postgres and
+Elasticsearch — so a consumer overriding the hook governs their create *and*
+upsert paths too. (S3's ``create()`` / single ``upsert()`` route through the
+base helper, so they are already covered by the in-process file/memory tests.)
 
 Real services, no mocks: per-backend sentinel subclasses override
 ``_generate_id`` to a recognizable prefix. Postgres requires a running server
@@ -128,6 +129,39 @@ async def test_async_pg_create_batch_mints_via_hook(async_pg: _SentinelAsyncPost
 
 
 @requires_postgres
+def test_sync_pg_upsert_mints_via_hook(sync_pg: _SentinelSyncPostgres) -> None:
+    new_id = sync_pg.upsert(Record({"v": 1}))
+    assert new_id.startswith(_PREFIX)
+    assert sync_pg.read(new_id).get_value("v") == 1
+
+
+@requires_postgres
+def test_sync_pg_upsert_batch_mints_via_hook(sync_pg: _SentinelSyncPostgres) -> None:
+    ids = sync_pg.upsert_batch([Record({"v": i}) for i in range(3)])
+    assert len(ids) == 3
+    assert all(rid.startswith(_PREFIX) for rid in ids)
+    assert len(set(ids)) == 3
+
+
+@requires_postgres
+async def test_async_pg_upsert_mints_via_hook(async_pg: _SentinelAsyncPostgres) -> None:
+    new_id = await async_pg.upsert(Record({"v": 1}))
+    assert new_id.startswith(_PREFIX)
+    got = await async_pg.read(new_id)
+    assert got.get_value("v") == 1
+
+
+@requires_postgres
+async def test_async_pg_upsert_batch_mints_via_hook(
+    async_pg: _SentinelAsyncPostgres,
+) -> None:
+    ids = await async_pg.upsert_batch([Record({"v": i}) for i in range(3)])
+    assert len(ids) == 3
+    assert all(rid.startswith(_PREFIX) for rid in ids)
+    assert len(set(ids)) == 3
+
+
+@requires_postgres
 def test_sync_pg_stream_write_insert_mints_via_hook(sync_pg: _SentinelSyncPostgres) -> None:
     """The streaming INSERT fast-path (``_write_batch``) mints via the hook too."""
     result = sync_pg.stream_write(iter([Record({"v": i}) for i in range(3)]))
@@ -213,6 +247,57 @@ async def test_async_es_create_batch_mints_via_hook(elasticsearch_test_index) ->
     await db.connect()
     try:
         ids = await db.create_batch([Record({"v": i}) for i in range(3)])
+        assert len(ids) == 3
+        assert all(rid.startswith(_PREFIX) for rid in ids)
+        assert len(set(ids)) == 3
+    finally:
+        await db.close()
+
+
+@_requires_es
+def test_sync_es_upsert_mints_via_hook(elasticsearch_test_index) -> None:
+    db = _SentinelSyncElasticsearch(elasticsearch_test_index)
+    db.connect()
+    try:
+        new_id = db.upsert(Record({"v": 1}))
+        assert new_id.startswith(_PREFIX)
+        assert db.read(new_id).get_value("v") == 1
+    finally:
+        db.close()
+
+
+@_requires_es
+def test_sync_es_upsert_batch_mints_via_hook(elasticsearch_test_index) -> None:
+    db = _SentinelSyncElasticsearch(elasticsearch_test_index)
+    db.connect()
+    try:
+        ids = db.upsert_batch([Record({"v": i}) for i in range(3)])
+        assert len(ids) == 3
+        assert all(rid.startswith(_PREFIX) for rid in ids)
+        assert len(set(ids)) == 3
+    finally:
+        db.close()
+
+
+@_requires_es
+async def test_async_es_upsert_mints_via_hook(elasticsearch_test_index) -> None:
+    db = _SentinelAsyncElasticsearch(elasticsearch_test_index)
+    await db.connect()
+    try:
+        new_id = await db.upsert(Record({"v": 1}))
+        assert new_id.startswith(_PREFIX)
+        got = await db.read(new_id)
+        assert got.get_value("v") == 1
+    finally:
+        await db.close()
+
+
+@_requires_es
+async def test_async_es_upsert_batch_mints_via_hook(elasticsearch_test_index) -> None:
+    db = _SentinelAsyncElasticsearch(elasticsearch_test_index)
+    await db.connect()
+    try:
+        ids = await db.upsert_batch([Record({"v": i}) for i in range(3)])
         assert len(ids) == 3
         assert all(rid.startswith(_PREFIX) for rid in ids)
         assert len(set(ids)) == 3

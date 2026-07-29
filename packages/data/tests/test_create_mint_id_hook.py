@@ -150,6 +150,48 @@ def test_sync_create_batch_mints_via_hook(sync_db: object) -> None:
     assert len(set(ids)) == 3  # distinct minted ids
 
 
+def test_sync_upsert_mints_via_hook(sync_db: object) -> None:
+    """A record with no id upserts under a storage id minted via the hook."""
+    new_id = sync_db.upsert(Record({"v": 1}))
+    assert new_id.startswith(_PREFIX)
+    assert sync_db.read(new_id).get_value("v") == 1
+
+
+def test_sync_upsert_honors_explicit_id_over_hook(sync_db: object) -> None:
+    """An explicit ``upsert(id, record)`` id wins; the hook is not consulted."""
+    new_id = sync_db.upsert("explicit", Record({"v": 1}))
+    assert new_id == "explicit"
+    assert not new_id.startswith(_PREFIX)
+    assert sync_db.read("explicit").get_value("v") == 1
+
+
+def test_sync_upsert_batch_mints_via_hook(sync_db: object) -> None:
+    """Every id-less record in an upsert batch mints through the sentinel hook."""
+    ids = sync_db.upsert_batch([Record({"v": i}) for i in range(3)])
+    assert len(ids) == 3
+    assert all(rid.startswith(_PREFIX) for rid in ids)
+    assert len(set(ids)) == 3
+
+
+def test_sync_upsert_falsy_id_mints_matching_create_and_batch(sync_db: object) -> None:
+    """A falsy ("") id is treated as absent and minted — not keyed under "".
+
+    Pins the single-upsert convergence: ``upsert(Record(id=""))`` now mints via
+    the hook (matching ``create`` and ``upsert_batch``) instead of keying the
+    record under the empty string.
+    """
+    upsert_id = sync_db.upsert(Record({"v": 1}, id=""))
+    assert upsert_id.startswith(_PREFIX)
+    assert sync_db.read(upsert_id).get_value("v") == 1
+    assert sync_db.read("") is None  # nothing keyed under ""
+
+    # Parity with create() and upsert_batch() on the same falsy input.
+    create_id = sync_db.create(Record({"v": 2}, id=""))
+    assert create_id.startswith(_PREFIX)
+    batch_ids = sync_db.upsert_batch([Record({"v": 3}, id="")])
+    assert batch_ids[0].startswith(_PREFIX)
+
+
 # ---------------------------------------------------------------------------
 # Async backends
 # ---------------------------------------------------------------------------
@@ -187,3 +229,42 @@ async def test_async_create_batch_mints_via_hook(async_db: object) -> None:
     assert len(ids) == 3
     assert all(rid.startswith(_PREFIX) for rid in ids)
     assert len(set(ids)) == 3
+
+
+async def test_async_upsert_mints_via_hook(async_db: object) -> None:
+    new_id = await async_db.upsert(Record({"v": 1}))
+    assert new_id.startswith(_PREFIX)
+    got = await async_db.read(new_id)
+    assert got.get_value("v") == 1
+
+
+async def test_async_upsert_honors_explicit_id_over_hook(async_db: object) -> None:
+    new_id = await async_db.upsert("explicit", Record({"v": 1}))
+    assert new_id == "explicit"
+    assert not new_id.startswith(_PREFIX)
+    got = await async_db.read("explicit")
+    assert got.get_value("v") == 1
+
+
+async def test_async_upsert_batch_mints_via_hook(async_db: object) -> None:
+    ids = await async_db.upsert_batch([Record({"v": i}) for i in range(3)])
+    assert len(ids) == 3
+    assert all(rid.startswith(_PREFIX) for rid in ids)
+    assert len(set(ids)) == 3
+
+
+async def test_async_upsert_falsy_id_mints_matching_create_and_batch(
+    async_db: object,
+) -> None:
+    """A falsy ("") id is treated as absent and minted — not keyed under ""."""
+    upsert_id = await async_db.upsert(Record({"v": 1}, id=""))
+    assert upsert_id.startswith(_PREFIX)
+    got = await async_db.read(upsert_id)
+    assert got.get_value("v") == 1
+    assert await async_db.read("") is None  # nothing keyed under ""
+
+    # Parity with create() and upsert_batch() on the same falsy input.
+    create_id = await async_db.create(Record({"v": 2}, id=""))
+    assert create_id.startswith(_PREFIX)
+    batch_ids = await async_db.upsert_batch([Record({"v": 3}, id="")])
+    assert batch_ids[0].startswith(_PREFIX)

@@ -23,19 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queryable) or set `record.storage_id` explicitly; use `upsert` for
   insert-or-overwrite. See the Record ID Architecture guide.
 
+- **Minor: `upsert(Record(id=""))` now mints a fresh storage id instead of
+  keying the record under `""`.** A falsy (empty-string) record id is treated as
+  absent and minted via `_generate_id()` on the single-`upsert` path — the same
+  rule `create()` and `upsert_batch()` already applied — so single upsert no
+  longer diverges from batch upsert on an empty-string id (and honors a
+  `_generate_id()` override). A non-empty id is unaffected; if you deliberately
+  relied on `""` as a storage key, set `record.storage_id` explicitly.
+
 ### Added
 
 - **Overridable `_generate_id()` storage-id mint hook.** When a record carries
-  no caller id, `create()` / `create_batch()` mint the storage id through a
-  single overridable hook — `_generate_id()`, defined once on the shared
-  `RecordStorageMixin` that both `SyncDatabase` and `AsyncDatabase` inherit, and
-  routed through by every mint fallback (the base write-keying helper, the SQL
-  query builders, and the Postgres / Elasticsearch create paths). Override it on
-  a backend subclass to supply a custom storage-id scheme (ULID, Snowflake,
-  monotonic/deterministic, tenant-prefixed) uniformly across every create path,
-  instead of patching each backend. The default remains a random UUID4, so
-  existing behavior is unchanged; a caller-supplied `record.id` is always honored
-  and never routes through the hook.
+  no caller id, `create()` / `create_batch()` **and** `upsert()` /
+  `upsert_batch()` mint the storage id through a single overridable hook —
+  `_generate_id()`, defined once on the shared `RecordStorageMixin` that both
+  `SyncDatabase` and `AsyncDatabase` inherit, and routed through by every mint
+  fallback (the base write-keying helper, the shared single-`upsert`
+  id-resolution preamble, the SQL create/upsert query builders, and the Postgres
+  / Elasticsearch create/upsert paths). Override it on a backend subclass to
+  supply a custom storage-id scheme (ULID, Snowflake, monotonic/deterministic,
+  tenant-prefixed) uniformly across every create and upsert path, instead of
+  patching each backend. `update()` / `update_batch()` never mint (every
+  `update` takes an explicit id). The default remains a random UUID4, so existing
+  behavior is unchanged; a caller-supplied `record.id` is always honored and
+  never routes through the hook.
 
 - **`UserStateStore` / `AsyncUserStateStore` — per-user cross-session state
   coordinator.** A config-driven, backend-agnostic coordinator for a user's

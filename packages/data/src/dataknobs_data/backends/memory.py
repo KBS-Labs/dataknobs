@@ -173,18 +173,9 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
         Overrides base class to handle memory-specific storage.
         """
-        # Use base class logic to determine ID and record
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Memory-specific implementation
         async with self._lock:
@@ -501,18 +492,9 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
         Overrides base class to handle memory-specific storage.
         """
-        # Use base class logic to determine ID and record
-        if isinstance(id_or_record, str):
-            id = id_or_record
-            if record is None:
-                raise ValueError("Record required when ID is provided")
-        else:
-            record = id_or_record
-            id = record.id
-            if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
-                record.storage_id = id
+        # Resolve the storage id via the shared helper (honors an explicit id;
+        # mints via the overridable _generate_id() hook when the record has none).
+        id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Memory-specific implementation
         with self._lock:
