@@ -92,8 +92,13 @@ class UserStateSectionSpec(StructuredConfig):
         sensitivity: :class:`Sensitivity` classification driving snapshot
             visibility (see :class:`Sensitivity`). Defaults to ``INTERNAL``.
         version: Section schema version stamped onto every written record
-            (``_section_version``). Reserved for lazy on-read migration;
-            not acted on in the base coordinator.
+            (``_section_version``). When a read surfaces a record stamped
+            behind this version, the section's registered migration chain
+            (see :mod:`dataknobs_data.user.migration`) upgrades it in memory
+            before returning it — and writes the upgrade back when the store
+            is configured with ``persist_migrations``. Must be a positive
+            integer (versions start at ``1``); a zero or negative version is
+            rejected at config-load time. Defaults to ``1``.
         consent_scope: Optional named consent scope this section belongs to.
             A non-``None`` scope gates the section behind a consent grant
             (:meth:`~dataknobs_data.user.store.AsyncUserStateStore.grant_consent`).
@@ -157,6 +162,14 @@ class UserStateStoreConfig(StructuredConfig):
             Off by default — retention is otherwise enforced only by an
             explicit
             :meth:`~dataknobs_data.user.store.AsyncUserStateStore.prune`.
+        persist_migrations: When ``True``, a record upgraded on read by its
+            section's registered migration chain (see
+            :mod:`dataknobs_data.user.migration`) is written back to the store
+            with a compare-and-set guard, so the upgrade is applied once rather
+            than on every read. A concurrent write that advances the record
+            first wins the guard and the write-back is skipped (the in-memory
+            upgrade is still returned). Off by default — migration is otherwise
+            applied in memory on every read without touching the stored record.
     """
 
     backend: str = "memory"
@@ -165,6 +178,7 @@ class UserStateStoreConfig(StructuredConfig):
     enable_event_log: bool = False
     event_log_retention_days: int | None = None
     prune_on_query: bool = False
+    persist_migrations: bool = False
 
     def __post_init__(self) -> None:
         """Validate the declared sections at config-load time.
@@ -187,6 +201,11 @@ class UserStateStoreConfig(StructuredConfig):
         would mark live records as already expired and delete them, so a
         mis-signed window is caught here rather than silently destroying data.
         The same non-positive guard applies to ``event_log_retention_days``.
+
+        A section ``version`` below ``1`` is likewise rejected: schema versions
+        start at 1 and the first migration step is ``1 -> 2``, so a zero or
+        negative version has no registrable upgrade path and would otherwise
+        surface as a confusing read-time migration error.
         """
         if (
             self.event_log_retention_days is not None
@@ -228,6 +247,16 @@ class UserStateStoreConfig(StructuredConfig):
                     "positive number of days. A zero or negative window "
                     "would mark live records as already expired and delete "
                     "them on the next prune.",
+                    context={"namespace": self.namespace, "name": spec.name},
+                )
+            if spec.version < 1:
+                raise ConfigurationError(
+                    f"Section {spec.name!r} declares version={spec.version}: "
+                    "a section schema version must be a positive integer "
+                    "(versions start at 1). A zero or negative version has no "
+                    "registrable migration step (the first upgrader is 1->2), "
+                    "so it is rejected here rather than surfacing as a "
+                    "read-time migration error.",
                     context={"namespace": self.namespace, "name": spec.name},
                 )
             if spec.name in RESERVED_SECTION_NAMES:

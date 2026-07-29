@@ -51,6 +51,7 @@ config = {
 | `enable_event_log` | `False` | When set, appends a metadata-only record to a reserved `events` audit section after every write and scoped deletion; read it with `query_events` (see [Persisted event log](#persisted-event-log)). |
 | `event_log_retention_days` | `None` | Retention window (days) for the reserved `events` audit section; a section-less `prune` ages it out. `None` = unbounded until `clear`. Positive only. |
 | `prune_on_query` | `False` | When set, `query` prunes a windowed collection section's expired records for the queried user before returning (see [Lifecycle: retention pruning](#lifecycle-retention-pruning)). |
+| `persist_migrations` | `False` | When set, a record upgraded on read by its section's migration chain is written back under a compare-and-set guard (see [Schema versioning and migration](#schema-versioning-and-migration)). |
 
 `UserStateSectionSpec` fields: `name`, `kind` (`SectionKind`), `schema`,
 `sensitivity` (`Sensitivity`, default `INTERNAL`), `version` (default `1`),
@@ -59,9 +60,10 @@ section behind a consent grant (see [Governance: consent-gated
 access](#governance-consent-gated-access)). A `retention_days` window ages out
 records in a **collection** section (see [Lifecycle: retention
 pruning](#lifecycle-retention-pruning)) — it is rejected on a document section,
-which holds one evolving record per user and never expires. `version` is
-stamped onto every record but not enforced by the base coordinator; it is
-reserved for schema migration.
+which holds one evolving record per user and never expires. `version` drives lazy on-read schema migration (see [Schema
+versioning and migration](#schema-versioning-and-migration)); it must be a
+positive integer (versions start at `1`), and a zero or negative version is
+rejected at config-load time.
 
 ## Constructing
 
@@ -406,6 +408,74 @@ The record's own `_written_at` scope stamp is the audit timestamp.
 
 The log is tenant-scoped like every other section — `query_events` under a bound
 tenant returns only that tenant's records.
+
+## Schema versioning and migration
+
+Every section carries a schema `version` (default `1`), stamped onto each written
+record as `_section_version`. When a section's payload shape evolves, bump its
+`version` and register the pure per-version upgraders that rewrite an older
+record's payload forward. A read that surfaces a record stamped behind the
+section's current version applies the registered chain **in memory** before
+returning it:
+
+```python
+from dataknobs_data import register_section_migrator
+
+def _v1_to_v2(payload):
+    out = dict(payload)
+    out["theme"] = out.pop("color", "light")   # a renamed field
+    return out
+
+register_section_migrator("preferences", 1, _v1_to_v2)
+
+config = UserStateStoreConfig.from_dict({
+    "namespace": "acme",
+    "sections": [{"name": "preferences", "kind": "document", "version": 2}],
+})
+store = await AsyncUserStateStore.from_config(config)
+
+# A record written by an older (version 1) deployment is upgraded on read:
+record = await store.get_document("user-42", "preferences")
+# record.get_value("_section_version") == 2, payload in the version-2 shape
+```
+
+An upgrader is a pure `Callable[[Mapping], Mapping]`: it receives the record's
+consumer payload — never the coordinator's scope stamps — and returns the next
+version's payload. The boundary is symmetric: any reserved scope stamp the
+upgrader returns (`_section_version`, `_written_at`, `tenant_id`, `user_id`,
+`section`) is stripped from its output, so the coordinator's own re-stamp is the
+sole authority on those fields — a buggy upgrader cannot leak or forge one.
+Register one per step (`v1 -> v2`, `v2 -> v3`, …); the coordinator composes the
+chain for whatever gap a given record has.
+
+- **Lazy, in memory by default.** Migration runs on `get_document`, `query`, and
+  `snapshot` (which reads through them). The stored record is left untouched
+  unless `persist_migrations` is set, and the migrated record keeps its original
+  `_written_at` stamp — a read never resets the retention clock.
+- **Persist-on-read (opt-in).** Set `persist_migrations` to write the upgrade
+  back once, under a compare-and-set guard. A concurrent write that advanced the
+  record first wins the guard; the write-back is skipped and the in-memory
+  upgrade is still returned (migrations are deterministic, so concurrent
+  persists converge on the same content). The write-back is a representation
+  upgrade — it emits no delta event and appends no audit record.
+- **Rollback reads fail open.** A record stamped *newer* than the running spec (a
+  rolled-back deployment reading records a newer one wrote) passes through
+  un-migrated with a `WARNING` — the replica can read it but cannot down-convert
+  it.
+- **A missing step is a wiring bug.** If a record needs a version the registered
+  chain cannot reach (no migrator for the section, or a gap between steps), the
+  read raises `ConfigurationError` rather than returning a partially-upgraded
+  record.
+
+Migrators are registered in a process-global registry keyed by section name
+(as with the other DataKnobs named registries), so a consumer wires each
+section's chain once at import time. Registration is a non-atomic
+read-modify-write of the registry, designed for import-time, single-threaded
+wiring — it is **not** safe against concurrent registration of different steps
+for the same section, so register each chain once at import, before any store
+reads. The reserved `consent` and `events` sections are coordinator-owned and
+never migrated: a migrator registered for one of those reserved names registers
+fine but is **inert** — the on-read migration path never consults it.
 
 ## Opacity-safe user ids
 

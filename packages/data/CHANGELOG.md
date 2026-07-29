@@ -84,6 +84,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positive-only, rejected at config load otherwise). The log is disabled by
   default; a `query_events` on a store without `enable_event_log` raises
   `ConfigurationError`.
+- **Schema versioning with lazy on-read migration for per-user state.** Each
+  section carries a schema `version` (stamped onto every record as
+  `_section_version`); when a read surfaces a record behind that version, the
+  section's registered upgrader chain rewrites its payload forward in memory
+  before returning it (`get_document` / `query` / `snapshot`). Consumers register
+  pure per-version upgraders through a new `register_section_migrator(section,
+  from_version, fn)` / `section_migrators` registry (module
+  `dataknobs_data.user.migration`; `SectionMigrator`, `register_section_migrator`,
+  and `section_migrators` are re-exported from `dataknobs_data`). Migration is
+  in-memory by default and preserves each record's `_written_at`, so a read never
+  resets the retention clock; a new `persist_migrations` config flag writes the
+  upgrade back once under a compare-and-set guard, skipping the write (and
+  returning the in-memory upgrade) when a concurrent write won the guard. A record
+  stamped newer than the running section version passes through un-migrated with a
+  warning (rollback fail-open); a missing step in the upgrade chain raises
+  `ConfigurationError` at read. An upgrader is a pure `Callable[[Mapping],
+  Mapping]` that sees the consumer payload only: the coordinator's scope stamps
+  are stripped from both the upgrader's input and its output, so an upgrader can
+  neither read nor forge `_section_version` / `_written_at` / `tenant_id`. A
+  section `version` must be a positive integer (a zero or negative version is
+  rejected at config load). The reserved `consent` and `events` sections are
+  never migrated.
 
 ### Changed
 
