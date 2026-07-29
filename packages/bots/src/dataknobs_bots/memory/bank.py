@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from dataknobs_common.lifecycle import close_if_owned_sync
+from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_data import Record, SyncDatabase
 
 logger = logging.getLogger(__name__)
@@ -217,6 +217,10 @@ class AsyncBankProtocol(Protocol):
     async def find(self, **field_values: Any) -> list[BankRecord]: ...
 
     async def to_dict(self) -> dict[str, Any]: ...
+
+    async def close(self) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 # =====================================================================
@@ -1064,6 +1068,7 @@ class AsyncMemoryBank:
         duplicate_strategy: str = "allow",
         match_fields: list[str] | None = None,
         storage_mode: str = "inline",
+        owns_db: bool = False,
     ) -> None:
         self._core = _BankCore(
             name=name,
@@ -1074,6 +1079,11 @@ class AsyncMemoryBank:
             storage_mode=storage_mode,
         )
         self._db = db
+        # A caller-supplied db is left to the caller by default — closing
+        # this bank must not tear down a db shared with another holder.
+        # Pass ``owns_db=True`` (or build via ``from_dict(db=None)``) when
+        # the db was created for this bank's exclusive use.
+        self._owns_db = owns_db
         self._on_add_hooks: list[AsyncBankHook] = []
         self._on_update_hooks: list[AsyncBankHook] = []
         self._on_remove_hooks: list[AsyncBankHook] = []
@@ -1333,6 +1343,21 @@ class AsyncMemoryBank:
     # Serialization
     # -----------------------------------------------------------------
 
+    async def close(self) -> None:
+        """Close the underlying database connection if this bank owns it.
+
+        A db supplied by the caller (``owns_db=False``, the default for
+        direct construction) is left open so a db shared across banks
+        survives one bank's close. A db this bank built for its own use
+        (``from_dict(db=None)``, or an explicit ``owns_db=True``) is torn
+        down here.
+        """
+        await close_if_owned(self._db, self._owns_db)
+
+    async def aclose(self) -> None:
+        """Alias for :meth:`close` (stdlib ``contextlib.aclose`` convention)."""
+        await self.close()
+
     async def to_dict(self) -> dict[str, Any]:
         """Serialize the bank to a plain dict.
 
@@ -1345,13 +1370,55 @@ class AsyncMemoryBank:
         return base
 
     @classmethod
-    async def from_dict(cls, d: dict[str, Any]) -> AsyncMemoryBank:
-        """Deserialize a bank from a plain dict."""
-        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+    async def from_dict(
+        cls,
+        d: dict[str, Any],
+        db: Any = None,  # AsyncDatabase
+        *,
+        owns_db: bool | None = None,
+    ) -> AsyncMemoryBank:
+        """Deserialize a bank from a plain dict.
 
-        db = AsyncMemoryDatabase()
+        Args:
+            d: Serialized bank dict (from ``to_dict()``).
+            db: Optional pre-configured async database backend.  When
+                ``None`` a fresh ``AsyncMemoryDatabase`` is created and any
+                serialized records are re-inserted (inline mode).
+            owns_db: Whether the bank owns the db's lifecycle (closes it on
+                ``close()``).  When ``None`` (default) ownership is inferred
+                — a bank that builds its own db (``db is None``) owns it,
+                while a caller-supplied db is left to the caller.  Pass
+                ``True`` explicitly when a db built for this bank's
+                exclusive use is supplied directly (e.g. a per-bank backend
+                created by a wizard factory).  An internally-built db
+                (``db is None``) is always owned: an explicit
+                ``owns_db=False`` is ignored in that case, since the caller
+                holds no reference to close it (passing both would otherwise
+                leak the db).
+        """
+        if db is None:
+            from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+            if owns_db is False:
+                # Contradictory: the bank builds the db itself, so the caller
+                # holds no reference to close it. Surface it rather than
+                # silently leaking, then force ownership.
+                warnings.warn(
+                    "owns_db=False is ignored when db is None; the "
+                    "internally-built db is always owned (the caller holds "
+                    "no reference to close it).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # The bank built this db itself; nobody else can close it, so it
+            # must own it regardless of an explicit owns_db=False.
+            db = AsyncMemoryDatabase()
+            owns_db = True
+        elif owns_db is None:
+            # Caller-supplied db defaults to caller-owned.
+            owns_db = False
         config = _BankCore.extract_config(d)
-        bank = cls(db=db, **config)
+        bank = cls(db=db, owns_db=owns_db, **config)
         for rec_dict in d.get("records", []):
             bank_record = BankRecord.from_dict(rec_dict)
             await db.create(_BankCore.bank_record_to_db_record(bank_record))
