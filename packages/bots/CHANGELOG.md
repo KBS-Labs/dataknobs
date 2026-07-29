@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ownership) and no longer leaks the `AsyncMemoryDatabase` it builds when none is
   supplied. A caller-supplied db is left open (caller-owned); a self-built db is
   owned and closed. Purely additive — `owns_db` defaults to `False`.
+- **`ArtifactBank` / `ArtifactBankCatalog` database teardown.** Both now support
+  `close()`, releasing the per-section and catalog databases they own and
+  matching `MemoryBank`'s owned-vs-injected convention. `ArtifactBank.close()`
+  delegates to each section's `MemoryBank.close()` (a section closes its db only
+  when it owns it, isolating one section's failure from the rest);
+  `ArtifactBankCatalog` gains an optional keyword-only `owns_db` (default
+  `False`) and closes a `from_config`-built db while leaving a caller-injected
+  db open. `WizardReasoning.close()` now closes the artifact catalog it creates.
+  Purely additive.
 
 ## v0.9.2 - 2026-07-27
 

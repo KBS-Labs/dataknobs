@@ -322,7 +322,8 @@ class TestAsyncMemoryBankDbOwnership:
 
 class TestVectorSourceKbOwnership:
     """``VectorKnowledgeSource`` always wraps a caller-supplied KB and
-    must never close it."""
+    must never close it.
+    """
 
     @pytest.mark.asyncio
     async def test_injected_kb_not_closed(self) -> None:
@@ -405,7 +406,8 @@ class TestCompositeMemoryClosesChildren:
     @pytest.mark.asyncio
     async def test_child_protects_its_own_injected_backing_resource(self) -> None:
         """A VectorMemory child leaves its injected vector store open even
-        though the composite closes the child."""
+        though the composite closes the child.
+        """
         from dataknobs_bots.memory.composite import CompositeMemory
         from dataknobs_bots.memory.vector import VectorMemory
         from dataknobs_data.vector.stores.memory import MemoryVectorStore
@@ -622,3 +624,247 @@ class TestDynaBotCascadeOwnership:
         assert bot._owns_memory is True
         assert bot._owns_reasoning_strategy is True
         await bot.close()
+
+
+# =====================================================================
+# ArtifactBank — section-db ownership (delegates to MemoryBank.close)
+# =====================================================================
+
+
+class RaisingSyncDB(SyncMemoryDatabase):
+    """Real ``SyncMemoryDatabase`` whose ``close()`` raises.
+
+    Used to prove ``ArtifactBank.close()`` isolates one failing section's
+    teardown from its siblings. Not a mock — the backend is genuine; only
+    ``close()`` is overridden to fail.
+    """
+
+    def close(self) -> None:
+        raise RuntimeError("section close failure")
+
+
+def _artifact_from_config_with_counting_dbs(
+    section_names: list[str],
+) -> tuple[Any, dict[str, CountingSyncDB]]:
+    """Build an ``ArtifactBank`` via ``from_config`` handing each section a
+    ``CountingSyncDB`` (owned), so teardown of the owned section dbs is
+    observable. Returns ``(artifact, {section_name: db})``.
+    """
+    from dataknobs_bots.memory.artifact_bank import ArtifactBank
+
+    dbs: dict[str, CountingSyncDB] = {}
+
+    def factory(name: str, cfg: dict[str, Any]) -> tuple[Any, str]:
+        db = CountingSyncDB()
+        dbs[name] = db
+        return db, "external"
+
+    config = {
+        "name": "recipe",
+        "fields": {"recipe_name": {"required": True}},
+        "sections": {name: {"schema": {}} for name in section_names},
+    }
+    artifact = ArtifactBank.from_config(config, db_factory=factory)
+    return artifact, dbs
+
+
+class TestArtifactBankClose:
+    """``ArtifactBank.close()`` releases the dbs its sections own and leaves
+    caller-injected section dbs open.
+    """
+
+    def test_close_closes_owned_section_dbs(self) -> None:
+        """The §2.3 leak: a from_config-built artifact closes every owned
+        section db.
+        """
+        artifact, dbs = _artifact_from_config_with_counting_dbs(
+            ["ingredients", "instructions"]
+        )
+
+        artifact.close()
+
+        assert len(dbs) == 2
+        assert all(db.close_count == 1 for db in dbs.values()), (
+            "every owned section db must be closed"
+        )
+
+    def test_close_leaves_injected_section_db_open(self) -> None:
+        """A section handed a caller-owned db must leave it open — the
+        leak's inverse (a shared backing store survives).
+        """
+        from dataknobs_bots.memory.artifact_bank import ArtifactBank
+        from dataknobs_bots.memory.bank import MemoryBank
+
+        shared = CountingSyncDB()
+        section = MemoryBank(name="s", schema={}, db=shared)  # owns_db=False
+        artifact = ArtifactBank(
+            name="a", field_defs={}, sections={"s": section}
+        )
+
+        artifact.close()
+
+        assert shared.close_count == 0, "injected section db must not be closed"
+        section.add({"x": 1})  # still usable
+        assert section.count() == 1
+
+    def test_close_twice_is_safe(self) -> None:
+        """Closing an artifact twice does not raise.
+
+        There is no dedup layer — ``close()`` delegates to each section on
+        every call — but the backend's ``close()`` is safe to repeat, so the
+        second call is harmless.
+        """
+        artifact, dbs = _artifact_from_config_with_counting_dbs(["s"])
+
+        artifact.close()
+        artifact.close()  # must not raise
+
+        assert dbs["s"].close_count == 2
+
+    def test_close_isolates_section_failure(self) -> None:
+        """One section whose close() raises does not prevent the sibling
+        section's db from being closed (the per-section try/except).
+        """
+        from dataknobs_bots.memory.artifact_bank import ArtifactBank
+        from dataknobs_bots.memory.bank import MemoryBank
+
+        good = CountingSyncDB()
+        bad_section = MemoryBank(
+            name="bad", schema={}, db=RaisingSyncDB(), owns_db=True
+        )
+        good_section = MemoryBank(
+            name="good", schema={}, db=good, owns_db=True
+        )
+        artifact = ArtifactBank(
+            name="a",
+            field_defs={},
+            sections={"bad": bad_section, "good": good_section},
+        )
+
+        artifact.close()  # must not raise despite the failing section
+
+        assert good.close_count == 1, "sibling section must still be closed"
+
+
+# =====================================================================
+# ArtifactBankCatalog — owned-vs-injected db close
+# =====================================================================
+
+
+class TestArtifactBankCatalogClose:
+    """``ArtifactBankCatalog`` closes its db only when it owns it."""
+
+    def test_from_config_owns_and_closes_db(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The §2.2 leak: a from_config-built catalog owns its db (built +
+        connected by the factory) and closes it.
+        """
+        import dataknobs_data
+        from dataknobs_bots.memory.catalog import ArtifactBankCatalog
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        catalog = ArtifactBankCatalog.from_config({"backend": "memory"})
+
+        assert catalog._owns_db is True
+        assert len(created) == 1
+        assert created[0].close_count == 0
+
+        catalog.close()
+
+        assert created[0].close_count == 1, "owned catalog db must be closed"
+
+    def test_injected_db_not_closed(self) -> None:
+        """A caller-supplied catalog db survives close() (default owns_db)."""
+        from dataknobs_bots.memory.catalog import ArtifactBankCatalog
+
+        shared = CountingSyncDB()
+        catalog = ArtifactBankCatalog(shared)
+
+        assert catalog._owns_db is False
+        catalog.close()
+
+        assert shared.close_count == 0, "injected catalog db must not be closed"
+        # Still usable by its owner after the catalog's close().
+        assert catalog.count() == 0
+
+
+# =====================================================================
+# WizardReasoning — artifact-catalog close cascade
+# =====================================================================
+
+
+class TestWizardCatalogCascade:
+    """``WizardReasoning.close()`` closes the catalog it creates, and the
+    banks loop still closes the section dbs.
+
+    Constructs ``WizardReasoning`` directly (a legitimate internal-lifecycle
+    unit test per the DynaBot testing mandate's exception) and drives the
+    real ``_init_artifact`` wiring, monkeypatching the database factory so
+    both the section db and the catalog db are observable ``CountingSyncDB``
+    instances.
+    """
+
+    @pytest.mark.asyncio
+    async def test_wizard_close_closes_catalog_and_sections(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dataknobs_data
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        created: list[CountingSyncDB] = []
+
+        def fake_create(**kwargs: Any) -> CountingSyncDB:
+            db = CountingSyncDB()
+            created.append(db)
+            return db
+
+        monkeypatch.setattr(
+            dataknobs_data.database_factory, "create", fake_create
+        )
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict({
+            "name": "w",
+            "version": "1.0",
+            "settings": {},
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        })
+        strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        # A non-memory section backend routes _create_bank_db through the
+        # (patched) factory; the catalog's from_config always does. Both
+        # dbs are owned (section owns_db=True, catalog owns_db=True).
+        strategy._init_artifact({
+            "name": "recipe",
+            "fields": {"recipe_name": {"required": True}},
+            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+            "catalog": {"backend": "memory"},
+        })
+
+        assert len(created) == 2, "one section db + one catalog db"
+        assert all(db.close_count == 0 for db in created)
+
+        await strategy.close()
+
+        assert all(db.close_count == 1 for db in created), (
+            "wizard close() must reach every owned db (section + catalog)"
+        )

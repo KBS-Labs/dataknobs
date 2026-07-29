@@ -1295,6 +1295,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 "Closed %d memory bank database(s)", len(self._banks)
             )
 
+        # Close the artifact catalog if one was created. The catalog was
+        # built by this wizard (``_init_artifact`` →
+        # ``ArtifactBankCatalog.from_config``, which connects a db), so the
+        # wizard owns it. The catalog closes its db only when it owns it.
+        # The section dbs are already released by the banks loop above
+        # (``self._banks`` *are* the artifact's sections), so only the
+        # catalog remains.
+        if self._catalog is not None and hasattr(self._catalog, "close"):
+            self._catalog.close()
+            logger.debug("Closed artifact catalog")
+
     def _partition_data(
         self, data: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
