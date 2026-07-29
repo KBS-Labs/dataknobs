@@ -374,15 +374,22 @@ class TestRecordIDManagement:
         assert uuid_valid
     
     def test_storage_id_assignment(self):
-        """Test that storage_id is assigned when a new ID is generated."""
+        """A minted storage id is returned by upsert without mutating the caller.
+
+        Copy-first contract: ``upsert(record)`` resolves the id on a copy, so the
+        caller's record is never stamped; the resolved id is the return value.
+        """
         db = SyncMemoryDatabase()
-        
+
         # Create record without ID
         record = Record({"data": "test"})
         assert record.storage_id is None
-        
-        # Upsert should assign storage_id
+
+        # Upsert mints and returns a storage id...
         result_id = db.upsert(record)
-        
-        # After upsert, record should have storage_id set
-        assert record.storage_id == result_id
+        assert result_id  # a fresh id was returned
+
+        # ...but does NOT mutate the caller's record (copy-first invariant).
+        assert record.storage_id is None
+        # The record is retrievable under the returned id.
+        assert db.read(result_id).get_value("data") == "test"

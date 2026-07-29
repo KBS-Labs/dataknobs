@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_generate_id()` override). A non-empty id is unaffected; if you deliberately
   relied on `""` as a storage key, set `record.storage_id` explicitly.
 
+- **Minor: `upsert()` no longer mutates the caller's record.** The
+  resolved/minted storage id is now stamped onto a copy (matching `create`,
+  `create_batch`, and `upsert_batch`, which were already copy-first), so no write
+  method mutates the record object the caller passes in — including the buffered
+  transaction's `tx.upsert(id, record)` staging. Read the resolved id from
+  `upsert()`'s return value (`new_id = db.upsert(record)`); a caller that
+  previously relied on `record.storage_id` being stamped in place after the call
+  must use the return value instead.
+
 ### Added
 
 - **Overridable `_generate_id()` storage-id mint hook.** When a record carries

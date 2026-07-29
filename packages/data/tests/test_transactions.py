@@ -765,3 +765,25 @@ async def test_multi_kind_commit_fails_closed_when_transaction_hook_not_overridd
         assert await db.count() == 0
     finally:
         await db.close()
+
+
+async def test_transaction_upsert_id_form_does_not_mutate_caller_record():
+    """Staging ``tx.upsert(id, record)`` must not stamp the caller's record.
+
+    Reproduce-first: ``BufferedTransaction._coalesce_runs`` stamped
+    ``record.storage_id = id`` in place on the staged caller record before
+    flushing to ``upsert_batch``; after the copy-first fix the stamp lands on a
+    copy, leaving the caller's record untouched — matching the non-transactional
+    ``AsyncDatabase.upsert`` invariant (no write method mutates the caller).
+    """
+    db = await _sqlite_db()
+    try:
+        rec = Record({"v": 1})  # no id
+        before = rec.storage_id
+        async with db.transaction() as tx:
+            await tx.upsert("explicit", rec)
+        assert rec.storage_id == before  # caller record NOT stamped to "explicit"
+        got = await db.read("explicit")
+        assert got is not None and got.get_value("v") == 1
+    finally:
+        await db.close()

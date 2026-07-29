@@ -431,8 +431,12 @@ class RecordStorageMixin:
         fresh id via the overridable :meth:`_generate_id` hook only when the
         record carries none — the same ``record.id or self._generate_id()`` rule
         create applies, so a consumer overriding the hook governs minted ids on
-        single upsert too. The resolved id is stamped onto the record for the
-        record-only call form.
+        single upsert too.
+
+        Like :meth:`_prepare_record_for_storage`, this is copy-first: the
+        resolved id is stamped onto a **copy**, so the caller's record is never
+        mutated (no write method mutates the caller's record). The resolved id is
+        the returned ``storage_id`` — also ``upsert()``'s return value.
 
         A falsy (empty-string) record id is treated as absent and minted, so
         ``upsert(Record(id=""))`` keys under a fresh id rather than under ``""``
@@ -453,11 +457,16 @@ class RecordStorageMixin:
         if isinstance(id_or_record, str):
             if record is None:
                 raise ValueError("Record required when ID is provided")
-            return id_or_record, record
-        record = id_or_record
-        resolved = record.id or self._generate_id()
-        record.storage_id = resolved
-        return resolved, record
+            # Copy so the caller's record is never mutated; the explicit id is
+            # authoritative and overrides any storage_id the caller pre-set.
+            record_copy = record.copy(deep=True)
+            record_copy.storage_id = id_or_record
+            return id_or_record, record_copy
+        # Copy so the caller's record is never mutated by the id assignment.
+        record_copy = id_or_record.copy(deep=True)
+        resolved = record_copy.id or self._generate_id()
+        record_copy.storage_id = resolved
+        return resolved, record_copy
 
     def _prepare_record_from_storage(
         self, record: Record | None, storage_id: str
@@ -903,16 +912,9 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         # behind exists() also skips a doomed UPDATE on the common insert path.
         if await self.exists(id) and await self.update(id, record):
             return id
-        # Stamp the resolved id onto the record before create so the explicit
-        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
-        # so it must override any differing ``storage_id`` the caller pre-set on
-        # the record (a conditional ``if not record.storage_id`` guard would let
-        # create write under the record's own id and silently ignore ``id``). In
-        # the ``upsert(record)`` form ``id`` already equals the record's id, so
-        # this reproduces prior behavior there (a true no-op only when
-        # ``storage_id`` was already set; when the id came from an ``id`` field
-        # or a minted uuid it stamps ``storage_id``, exactly as before).
-        record.storage_id = id
+        # ``record`` is the prepared copy from _resolve_upsert_id, already
+        # carrying the resolved storage id (the explicit id wins there), so
+        # create() keys it correctly without a further stamp.
         created_id = await self.create(record)
         # Return the created ID (might be different from what we provided).
         return created_id or id
@@ -1688,16 +1690,9 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         # behind exists() also skips a doomed UPDATE on the common insert path.
         if self.exists(id) and self.update(id, record):
             return id
-        # Stamp the resolved id onto the record before create so the explicit
-        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
-        # so it must override any differing ``storage_id`` the caller pre-set on
-        # the record (a conditional ``if not record.storage_id`` guard would let
-        # create write under the record's own id and silently ignore ``id``). In
-        # the ``upsert(record)`` form ``id`` already equals the record's id, so
-        # this reproduces prior behavior there (a true no-op only when
-        # ``storage_id`` was already set; when the id came from an ``id`` field
-        # or a minted uuid it stamps ``storage_id``, exactly as before).
-        record.storage_id = id
+        # ``record`` is the prepared copy from _resolve_upsert_id, already
+        # carrying the resolved storage id (the explicit id wins there), so
+        # create() keys it correctly without a further stamp.
         created_id = self.create(record)
         # Return the created ID (might be different from what we provided).
         return created_id or id
