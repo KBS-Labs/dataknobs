@@ -25,6 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only through `grant_consent` / `revoke_consent`. Revocation is block-only (the
   stored data is left in place for a later re-grant); erasure via `clear()` is
   never consent-gated. Sections that declare no `consent_scope` are unaffected.
+- **Retention pruning for per-user state sections.** A **collection** section
+  declaring a `retention_days` window ages out records whose `_written_at` stamp
+  is older than the window. `UserStateStore` / `AsyncUserStateStore` gain
+  `prune(user_id, section=None)` (deletes the expired records and returns the
+  count — with `section=None`, across every windowed collection section) that a
+  consumer schedules on its own cadence. A new `prune_on_query` config flag
+  additionally prunes a windowed section's expired records for the queried user
+  before a `query` returns (off by default). Retention time is measured against
+  an injectable `now` clock (a `Callable[[], datetime]`, defaulting to
+  wall-clock UTC). A `retention_days` on a **document** section — which holds one
+  evolving record per user and never expires — is rejected at config load with
+  `ConfigurationError`. A non-positive `retention_days` (zero or negative) is
+  likewise rejected at config load — such a window would mark live records as
+  already expired and delete them, so a mis-signed window is caught at the
+  boundary rather than silently destroying data. Retention expiry is fail-safe:
+  a record whose `_written_at` stamp is missing, unparseable, or not comparable
+  to `now` (an aware/naive timezone mismatch between the stamp and the injected
+  clock) is treated as not-expired and left in place rather than crashing the
+  prune. Pruning is data minimization and, like `clear()`, is never
+  consent-gated; deletions (`delete_record` / `clear` / `prune`) fire no
+  delta event.
 
 ### Changed
 
