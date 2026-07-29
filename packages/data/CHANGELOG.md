@@ -62,6 +62,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callback registry and optional `EventBus` fan-out as the write topic (the sync
   store still rejects an injected `event_bus`; in-process callbacks fire on both
   variants).
+- **Persisted append-only audit log for per-user state.** Setting
+  `enable_event_log` registers a reserved `events` collection section and appends
+  one metadata-only record to it after every data write (`put_document` /
+  `add_record` / `update_record`) and scoped deletion (`delete_record` / `prune`).
+  `UserStateStore` / `AsyncUserStateStore` gain `query_events(user_id, query=None)`
+  to read the trail; the reserved section is walled off from the content API
+  (`events` is now a reserved section name — declaring it raises
+  `ConfigurationError` — and reading or writing it through `get_document` /
+  `query` / `put_document` / `add_record` raises), so audit entries cannot be
+  forged or clobbered and are appended only by the coordinator. Each record
+  stamps the operation metadata under `op` / `op_section` / `op_record_id` /
+  `op_count` / `op_sections` keys — never a section value, so a `SENSITIVE`
+  section's contents cannot leak into the log — with the record's own
+  `_written_at` as the audit timestamp. A consent-refused write logs nothing (the
+  gate raises before the write); whole-user `clear` (right-to-erasure) appends
+  nothing (the log is erased with the user, and re-materialising a record would
+  defeat the erasure — the ephemeral `user_state:section_deleted` event still
+  fires). A new `event_log_retention_days` config field bounds the log through
+  the ordinary section-less `prune` sweep (unbounded until `clear` when unset;
+  positive-only, rejected at config load otherwise). The log is disabled by
+  default; a `query_events` on a store without `enable_event_log` raises
+  `ConfigurationError`.
 
 ### Changed
 

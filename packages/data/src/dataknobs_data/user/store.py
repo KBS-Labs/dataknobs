@@ -67,6 +67,7 @@ from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
 from dataknobs_data.user.config import (
     RESERVED_CONSENT_SECTION,
+    RESERVED_EVENTS_SECTION,
     SectionKind,
     Sensitivity,
     UserStateSectionSpec,
@@ -479,14 +480,19 @@ class _UserStateStoreCommon:
     def _register_reserved_sections(self) -> None:
         """Register coordinator-managed sections not declared by the consumer.
 
-        The reserved ``consent`` document section is registered whenever at
-        least one declared section carries a ``consent_scope`` (no
-        consent-scoped sections → not registered → zero overhead). It joins
-        ``self._sections`` so the consent helpers and :meth:`clear` see it, and
+        Two reserved sections are auto-managed. The ``consent`` document
+        section is registered whenever at least one declared section carries a
+        ``consent_scope`` (no consent-scoped sections → not registered → zero
+        overhead). The ``events`` collection section is registered whenever
+        ``enable_event_log`` is set, carrying the store's
+        ``event_log_retention_days`` window so a section-less :meth:`prune`
+        sweeps it like any other windowed section. Each joins ``self._sections``
+        so the coordinator's own helpers and :meth:`clear` see it, and
         ``self._reserved_sections`` so it is distinguishable from a consumer
-        section; it never surfaces in :meth:`snapshot` (which iterates only
-        ``config.sections``). The frozen config is left untouched — the
-        reserved entry is a runtime-only addition.
+        section and walled off from the content API (:meth:`_require_kind`);
+        neither surfaces in :meth:`snapshot` (which iterates only
+        ``config.sections``). The frozen config is left untouched — the reserved
+        entries are runtime-only additions.
         """
         if any(s.consent_scope is not None for s in self.config.sections):
             self._sections[RESERVED_CONSENT_SECTION] = UserStateSectionSpec(
@@ -495,6 +501,14 @@ class _UserStateStoreCommon:
                 sensitivity=Sensitivity.INTERNAL,
             )
             self._reserved_sections.add(RESERVED_CONSENT_SECTION)
+        if self.config.enable_event_log:
+            self._sections[RESERVED_EVENTS_SECTION] = UserStateSectionSpec(
+                name=RESERVED_EVENTS_SECTION,
+                kind=SectionKind.COLLECTION,
+                sensitivity=Sensitivity.INTERNAL,
+                retention_days=self.config.event_log_retention_days,
+            )
+            self._reserved_sections.add(RESERVED_EVENTS_SECTION)
 
     def _consent_enabled(self) -> bool:
         """Whether a reserved ``consent`` section is registered for this store."""
@@ -513,6 +527,27 @@ class _UserStateStoreCommon:
             raise ConfigurationError(
                 "Consent management is unavailable: no declared section "
                 "carries a consent_scope, so there is nothing to gate.",
+                context={"namespace": self.config.namespace},
+            )
+        return spec
+
+    def _event_log_enabled(self) -> bool:
+        """Whether a reserved ``events`` audit section is registered."""
+        return RESERVED_EVENTS_SECTION in self._sections
+
+    def _events_spec(self) -> UserStateSectionSpec:
+        """Return the reserved ``events`` spec, or raise if the log is disabled.
+
+        The audit log is only present when ``enable_event_log`` is set; calling
+        :meth:`~AsyncUserStateStore.query_events` otherwise is a configuration
+        error surfaced here with an actionable message rather than a confusing
+        ``unknown section`` deep in a read.
+        """
+        spec = self._sections.get(RESERVED_EVENTS_SECTION)
+        if spec is None:
+            raise ConfigurationError(
+                "The persisted event log is unavailable: this store was not "
+                "configured with enable_event_log=True.",
                 context={"namespace": self.config.namespace},
             )
         return spec
@@ -659,6 +694,41 @@ class _UserStateStoreCommon:
         if sections is not None:
             payload["sections"] = dict(sections)
         return payload
+
+    def _event_record(
+        self,
+        user_id: str,
+        op: str,
+        *,
+        op_section: str | None,
+        op_record_id: str | None = None,
+        op_count: int | None = None,
+        op_sections: Mapping[str, int] | None = None,
+    ) -> Record:
+        """Build one metadata-only record for the persisted ``events`` log.
+
+        The operation's metadata is stamped under ``op``-prefixed keys so it
+        never collides with — nor is overwritten by — the coordinator-owned
+        scope fields :meth:`_build_record` applies (``section`` names the log
+        itself; the logged operation's target is ``op_section``). Storage-id
+        keys are likewise avoided (``op_record_id`` rather than ``record_id``,
+        which :meth:`_build_record` rejects). No section *value* is ever
+        included — only routing metadata — so a SENSITIVE section's contents
+        cannot leak into the INTERNAL log. The record's own ``_written_at``
+        stamp (via :meth:`_build_record`) is the audit timestamp. ``op_section``
+        is ``None`` for a whole-user / multi-section operation; ``op_sections``
+        carries the ``{name: deleted}`` split of a section-less ``prune``.
+        """
+        payload: dict[str, Any] = {"op": op, "op_section": op_section}
+        if op_record_id is not None:
+            payload["op_record_id"] = op_record_id
+        if op_count is not None:
+            payload["op_count"] = op_count
+        if op_sections is not None:
+            payload["op_sections"] = dict(op_sections)
+        return self._build_record(
+            payload, user_id, RESERVED_EVENTS_SECTION, self._events_spec()
+        )
 
 
 # --------------------------------------------------------------------- #
@@ -870,6 +940,9 @@ class AsyncUserStateStore(
             doc_id, record, expected_version=expected_version
         )
         await self._fire_written(user_id, section, spec, "put_document")
+        await self._append_event(
+            user_id, "put_document", op_section=section, op_record_id=result_id
+        )
         return result_id
 
     # ----- collection sections ----- #
@@ -886,6 +959,9 @@ class AsyncUserStateStore(
         record = self._build_record(data, user_id, section, spec)
         record_id = await self._db.create(record)
         await self._fire_written(user_id, section, spec, "add_record")
+        await self._append_event(
+            user_id, "add_record", op_section=section, op_record_id=record_id
+        )
         return record_id
 
     async def query(
@@ -912,6 +988,30 @@ class AsyncUserStateStore(
             await self.prune(user_id, section)
         return await self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
+        )
+
+    async def query_events(
+        self, user_id: str, query: Query | None = None
+    ) -> list[Record]:
+        """Read ``user_id``'s persisted audit-log records (newest-window first).
+
+        The reserved ``events`` section is walled off from the generic content
+        API (:meth:`_require_kind` refuses it), so the log has this dedicated,
+        read-only accessor — there is no matching public write method; records
+        are appended only by the coordinator's own write/delete paths. Each
+        record is metadata-only (``op`` / ``op_section`` / ``op_record_id`` /
+        ``op_count`` / ``op_sections``, plus the coordinator's scope stamps
+        including ``_written_at``); no section value is ever present. The
+        optional ``query`` adds payload filters / sort / pagination over that
+        metadata; the user (+ bound tenant) scope is AND-composed automatically.
+        Raises :class:`~dataknobs_common.exceptions.ConfigurationError` when the
+        store was not configured with ``enable_event_log``.
+        """
+        self._events_spec()
+        return await self._db.search(
+            _read_filter(
+                query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id
+            )
         )
 
     async def prune(self, user_id: str, section: str | None = None) -> int:
@@ -972,6 +1072,13 @@ class AsyncUserStateStore(
                 count=total,
                 sections=per_section if section is None else None,
             )
+            await self._append_event(
+                user_id,
+                "prune",
+                op_section=section,
+                op_count=total,
+                op_sections=per_section if section is None else None,
+            )
         return total
 
     async def record_version(
@@ -1017,6 +1124,12 @@ class AsyncUserStateStore(
         )
         if updated:
             await self._fire_written(user_id, section, spec, "update_record")
+            await self._append_event(
+                user_id,
+                "update_record",
+                op_section=section,
+                op_record_id=record_id,
+            )
         return updated
 
     async def delete_record(
@@ -1043,6 +1156,13 @@ class AsyncUserStateStore(
                 op="delete_record",
                 count=1,
                 record_id=record_id,
+            )
+            await self._append_event(
+                user_id,
+                "delete_record",
+                op_section=section,
+                op_record_id=record_id,
+                op_count=1,
             )
         return deleted
 
@@ -1150,6 +1270,38 @@ class AsyncUserStateStore(
                 record_id=record_id,
                 sections=sections,
             ),
+        )
+
+    async def _append_event(
+        self,
+        user_id: str,
+        op: str,
+        *,
+        op_section: str | None,
+        op_record_id: str | None = None,
+        op_count: int | None = None,
+        op_sections: Mapping[str, int] | None = None,
+    ) -> None:
+        """Append one metadata-only record to the persisted ``events`` log.
+
+        A no-op unless ``enable_event_log`` is set. Best-effort after the
+        primary write/delete has persisted (mirroring the non-load-bearing
+        ephemeral fire); the append is a second, independent ``create`` and is
+        never itself logged, so it cannot recurse. Whole-user erasure
+        (:meth:`clear`) intentionally does not call this — re-materialising a
+        record in the just-erased user's own log would defeat the erasure.
+        """
+        if not self._event_log_enabled():
+            return
+        await self._db.create(
+            self._event_record(
+                user_id,
+                op,
+                op_section=op_section,
+                op_record_id=op_record_id,
+                op_count=op_count,
+                op_sections=op_sections,
+            )
         )
 
 
@@ -1307,6 +1459,9 @@ class UserStateStore(
             doc_id, record, expected_version=expected_version
         )
         self._fire_written(user_id, section, spec, "put_document")
+        self._append_event(
+            user_id, "put_document", op_section=section, op_record_id=result_id
+        )
         return result_id
 
     # ----- collection sections ----- #
@@ -1320,6 +1475,9 @@ class UserStateStore(
         record = self._build_record(data, user_id, section, spec)
         record_id = self._db.create(record)
         self._fire_written(user_id, section, spec, "add_record")
+        self._append_event(
+            user_id, "add_record", op_section=section, op_record_id=record_id
+        )
         return record_id
 
     def query(
@@ -1343,6 +1501,24 @@ class UserStateStore(
             self.prune(user_id, section)
         return self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
+        )
+
+    def query_events(
+        self, user_id: str, query: Query | None = None
+    ) -> list[Record]:
+        """Read ``user_id``'s persisted audit-log records (see async twin).
+
+        Dedicated read-only accessor for the reserved ``events`` section, which
+        the generic content API refuses. Records are metadata-only; the user
+        (+ bound tenant) scope is AND-composed. Raises
+        :class:`~dataknobs_common.exceptions.ConfigurationError` when the store
+        was not configured with ``enable_event_log``.
+        """
+        self._events_spec()
+        return self._db.search(
+            _read_filter(
+                query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id
+            )
         )
 
     def prune(self, user_id: str, section: str | None = None) -> int:
@@ -1399,6 +1575,13 @@ class UserStateStore(
                 count=total,
                 sections=per_section if section is None else None,
             )
+            self._append_event(
+                user_id,
+                "prune",
+                op_section=section,
+                op_count=total,
+                op_sections=per_section if section is None else None,
+            )
         return total
 
     def record_version(
@@ -1441,6 +1624,12 @@ class UserStateStore(
         )
         if updated:
             self._fire_written(user_id, section, spec, "update_record")
+            self._append_event(
+                user_id,
+                "update_record",
+                op_section=section,
+                op_record_id=record_id,
+            )
         return updated
 
     def delete_record(
@@ -1465,6 +1654,13 @@ class UserStateStore(
                 op="delete_record",
                 count=1,
                 record_id=record_id,
+            )
+            self._append_event(
+                user_id,
+                "delete_record",
+                op_section=section,
+                op_record_id=record_id,
+                op_count=1,
             )
         return deleted
 
@@ -1561,4 +1757,34 @@ class UserStateStore(
                 record_id=record_id,
                 sections=sections,
             ),
+        )
+
+    def _append_event(
+        self,
+        user_id: str,
+        op: str,
+        *,
+        op_section: str | None,
+        op_record_id: str | None = None,
+        op_count: int | None = None,
+        op_sections: Mapping[str, int] | None = None,
+    ) -> None:
+        """Append one metadata-only record to the persisted ``events`` log.
+
+        Sync mirror of the async twin: a no-op unless ``enable_event_log`` is
+        set; best-effort after the primary write/delete persists; never itself
+        logged (no recursion); not called from :meth:`clear` (erasure leaves no
+        per-user trace).
+        """
+        if not self._event_log_enabled():
+            return
+        self._db.create(
+            self._event_record(
+                user_id,
+                op,
+                op_section=op_section,
+                op_record_id=op_record_id,
+                op_count=op_count,
+                op_sections=op_sections,
+            )
         )
