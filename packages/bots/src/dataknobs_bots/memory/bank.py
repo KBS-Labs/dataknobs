@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
-from dataknobs_data import Record, SyncDatabase
+from dataknobs_data import AsyncDatabase, Record, SyncDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -1062,7 +1062,7 @@ class AsyncMemoryBank:
         self,
         name: str,
         schema: dict[str, Any],
-        db: Any,  # AsyncDatabase
+        db: AsyncDatabase,
         *,
         max_records: int | None = None,
         duplicate_strategy: str = "allow",
@@ -1373,7 +1373,7 @@ class AsyncMemoryBank:
     async def from_dict(
         cls,
         d: dict[str, Any],
-        db: Any = None,  # AsyncDatabase
+        db: AsyncDatabase | None = None,
         *,
         owns_db: bool | None = None,
     ) -> AsyncMemoryBank:
