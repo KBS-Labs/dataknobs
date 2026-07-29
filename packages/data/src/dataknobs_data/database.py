@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -360,7 +361,97 @@ def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
     return None
 
 
-class AsyncDatabase(CapabilityMixin, ABC):
+class RecordStorageMixin:
+    """Record id-resolution and marshalling helpers shared by both database ABCs.
+
+    ``AsyncDatabase`` and ``SyncDatabase`` are independent sibling ABCs, but
+    these helpers are pure-sync and identical for both: they resolve a record's
+    storage id for a write (honoring a caller id, minting via
+    :meth:`_generate_id` only when absent) and marshal records to and from
+    storage. Housing them once keeps the write-keying rule — and its single
+    overridable mint hook — from diverging between the sync and async trees.
+    """
+
+    def _generate_id(self) -> str:
+        """Mint a fresh storage id for a record that carries no caller id.
+
+        The single overridable id-mint extension point. Override to supply a
+        custom storage-id scheme (ULID, Snowflake, monotonic/deterministic,
+        tenant-prefixed, ...) uniformly across every ``create`` /
+        ``create_batch`` path — this helper and the SQL query builders all route
+        their mint fallback through this hook. The default is a random UUID4. A
+        caller-supplied ``record.id`` is always honored; this hook governs only
+        the mint fallback.
+
+        Scope — ``create`` / ``create_batch`` only: the ``upsert`` and
+        ``update`` mint fallbacks do **not** yet route through this hook (they
+        still mint a UUID4 inline). An override here therefore changes minted
+        ids on the create paths but not on ``upsert(Record(...))`` /
+        ``update`` — if you need a custom scheme on those paths today, stamp
+        ``record.storage_id`` explicitly before the write. Unifying the
+        upsert/update mint fallbacks through this hook is a tracked follow-up.
+        """
+        return str(uuid.uuid4())
+
+    def _ensure_record_id(self, record: Record, record_id: str) -> Record:
+        """Ensure a record has its ID set (delegates to utility function)."""
+        return ensure_record_id(record, record_id)
+
+    def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
+        """Resolve a record's storage id for a write, honoring a caller id.
+
+        The storage id is ``record.id`` (the 5-step resolution: storage id →
+        legacy id → payload ``id`` field → metadata ``id`` → payload
+        ``record_id`` field); a fresh id is minted via :meth:`_generate_id` only
+        when the record carries no id at all. This is the same rule the SQL
+        query builders apply (``build_create_query`` /
+        ``build_batch_create_query``), so a caller-supplied id keys a record
+        identically on every backend and method. A colliding id fails closed at
+        the backend's insert (the atomic-insert contract); ``upsert`` overwrites.
+
+        Args:
+            record: The record to prepare
+
+        Returns:
+            Tuple of (prepared_record_copy, storage_id)
+        """
+        # Copy so the caller's record is never mutated by the id assignment.
+        record_copy = record.copy(deep=True)
+        storage_id = record.id or self._generate_id()
+        record_copy.storage_id = storage_id
+        return record_copy, storage_id
+
+    def _prepare_record_from_storage(
+        self, record: Record | None, storage_id: str
+    ) -> Record | None:
+        """Prepare a record retrieved from storage by ensuring storage_id is set.
+
+        Args:
+            record: The record retrieved from storage (or None)
+            storage_id: The storage ID used to retrieve the record
+
+        Returns:
+            Record with storage_id set, or None if record was None
+        """
+        if record:
+            record_copy = record.copy(deep=True)
+            # Ensure storage_id is set
+            if not record_copy.has_storage_id():
+                record_copy.storage_id = storage_id
+            return record_copy
+        return None
+
+    def _process_search_results(
+        self,
+        results: list[tuple[str, Record]],
+        query: Query,
+        deep_copy: bool = True,
+    ) -> list[Record]:
+        """Process search results (delegates to utility function)."""
+        return process_search_results(results, query, deep_copy)
+
+
+class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     """Abstract base class for async database implementations.
 
     Provides a unified async interface for CRUD operations, querying, and streaming
@@ -493,62 +584,6 @@ class AsyncDatabase(CapabilityMixin, ABC):
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
-
-    def _ensure_record_id(self, record: Record, record_id: str) -> Record:
-        """Ensure a record has its ID set (delegates to utility function)."""
-        return ensure_record_id(record, record_id)
-
-    def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
-        """Resolve a record's storage id for a write, honoring a caller id.
-
-        The storage id is ``record.id`` (the 5-step resolution: storage id →
-        legacy id → payload ``id`` field → metadata ``id`` → payload
-        ``record_id`` field); a fresh uuid is minted only when the record
-        carries no id at all. This is the same rule the SQL query builders
-        apply (``build_create_query`` / ``build_batch_create_query``), so a
-        caller-supplied id keys a record identically on every backend and
-        method. A colliding id fails closed at the backend's insert (the
-        atomic-insert contract); ``upsert`` overwrites.
-
-        Args:
-            record: The record to prepare
-
-        Returns:
-            Tuple of (prepared_record_copy, storage_id)
-        """
-        import uuid
-        # Copy so the caller's record is never mutated by the id assignment.
-        record_copy = record.copy(deep=True)
-        storage_id = record.id or str(uuid.uuid4())
-        record_copy.storage_id = storage_id
-        return record_copy, storage_id
-
-    def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
-        """Prepare a record retrieved from storage by ensuring storage_id is set.
-        
-        Args:
-            record: The record retrieved from storage (or None)
-            storage_id: The storage ID used to retrieve the record
-            
-        Returns:
-            Record with storage_id set, or None if record was None
-        """
-        if record:
-            record_copy = record.copy(deep=True)
-            # Ensure storage_id is set
-            if not record_copy.has_storage_id():
-                record_copy.storage_id = storage_id
-            return record_copy
-        return None
-
-    def _process_search_results(
-        self,
-        results: list[tuple[str, Record]],
-        query: Query,
-        deep_copy: bool = True
-    ) -> list[Record]:
-        """Process search results (delegates to utility function)."""
-        return process_search_results(results, query, deep_copy)
 
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
@@ -808,8 +843,6 @@ class AsyncDatabase(CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        import uuid
-
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)
@@ -1210,7 +1243,7 @@ class AsyncDatabase(CapabilityMixin, ABC):
         return instance
 
 
-class SyncDatabase(CapabilityMixin, ABC):
+class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     """Synchronous variant of the Database abstract base class.
 
     Provides a unified synchronous interface for CRUD operations, querying, and streaming
@@ -1312,62 +1345,6 @@ class SyncDatabase(CapabilityMixin, ABC):
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
-
-    def _ensure_record_id(self, record: Record, record_id: str) -> Record:
-        """Ensure a record has its ID set (delegates to utility function)."""
-        return ensure_record_id(record, record_id)
-
-    def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
-        """Resolve a record's storage id for a write, honoring a caller id.
-
-        The storage id is ``record.id`` (the 5-step resolution: storage id →
-        legacy id → payload ``id`` field → metadata ``id`` → payload
-        ``record_id`` field); a fresh uuid is minted only when the record
-        carries no id at all. This is the same rule the SQL query builders
-        apply (``build_create_query`` / ``build_batch_create_query``), so a
-        caller-supplied id keys a record identically on every backend and
-        method. A colliding id fails closed at the backend's insert (the
-        atomic-insert contract); ``upsert`` overwrites.
-
-        Args:
-            record: The record to prepare
-
-        Returns:
-            Tuple of (prepared_record_copy, storage_id)
-        """
-        import uuid
-        # Copy so the caller's record is never mutated by the id assignment.
-        record_copy = record.copy(deep=True)
-        storage_id = record.id or str(uuid.uuid4())
-        record_copy.storage_id = storage_id
-        return record_copy, storage_id
-
-    def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
-        """Prepare a record retrieved from storage by ensuring storage_id is set.
-        
-        Args:
-            record: The record retrieved from storage (or None)
-            storage_id: The storage ID used to retrieve the record
-            
-        Returns:
-            Record with storage_id set, or None if record was None
-        """
-        if record:
-            record_copy = record.copy(deep=True)
-            # Ensure storage_id is set
-            if not record_copy.has_storage_id():
-                record_copy.storage_id = storage_id
-            return record_copy
-        return None
-
-    def _process_search_results(
-        self,
-        results: list[tuple[str, Record]],
-        query: Query,
-        deep_copy: bool = True
-    ) -> list[Record]:
-        """Process search results (delegates to utility function)."""
-        return process_search_results(results, query, deep_copy)
 
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
@@ -1665,8 +1642,6 @@ class SyncDatabase(CapabilityMixin, ABC):
                 match the record's current version token (including when the
                 record does not exist).
         """
-        import uuid
-
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)

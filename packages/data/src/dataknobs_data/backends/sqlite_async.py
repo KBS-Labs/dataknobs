@@ -188,7 +188,8 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         """Create a new record."""
         self._check_connection()
 
-        query, params = self.query_builder.build_create_query(record)
+        record_id = record.id or self._generate_id()
+        query, params = self.query_builder.build_create_query(record, record_id=record_id)
 
         try:
             await self.db.execute(query, params)
@@ -392,9 +393,12 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         self._check_connection()
 
-        # Use the shared batch create query builder (honors record.id; raises
-        # DuplicateRecordError up front on a within-batch duplicate id).
-        query, params, ids = self.query_builder.build_batch_create_query(records)
+        # Use the shared batch create query builder (honors record.id, mints via
+        # _generate_id; raises DuplicateRecordError up front on a within-batch
+        # duplicate id).
+        query, params, ids = self.query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         own_tx = _tx is None
         if own_tx:

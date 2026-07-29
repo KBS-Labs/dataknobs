@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Overridable `_generate_id()` storage-id mint hook.** When a record carries
+  no caller id, `create()` / `create_batch()` mint the storage id through a
+  single overridable hook — `_generate_id()`, defined once on the shared
+  `RecordStorageMixin` that both `SyncDatabase` and `AsyncDatabase` inherit, and
+  routed through by every mint fallback (the base write-keying helper, the SQL
+  query builders, and the Postgres / Elasticsearch create paths). Override it on
+  a backend subclass to supply a custom storage-id scheme (ULID, Snowflake,
+  monotonic/deterministic, tenant-prefixed) uniformly across every create path,
+  instead of patching each backend. The default remains a random UUID4, so
+  existing behavior is unchanged; a caller-supplied `record.id` is always honored
+  and never routes through the hook.
+
 - **`UserStateStore` / `AsyncUserStateStore` — per-user cross-session state
   coordinator.** A config-driven, backend-agnostic coordinator for a user's
   state across sessions, built on the `SyncDatabase` / `AsyncDatabase`

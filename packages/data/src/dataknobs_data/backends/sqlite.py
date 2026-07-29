@@ -436,9 +436,12 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         self._check_connection()
 
-        # Use the shared batch create query builder (honors record.id; raises
-        # DuplicateRecordError up front on a within-batch duplicate id).
-        query, params, ids = self.query_builder.build_batch_create_query(records)
+        # Use the shared batch create query builder (honors record.id, mints via
+        # _generate_id; raises DuplicateRecordError up front on a within-batch
+        # duplicate id).
+        query, params, ids = self.query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         cursor = self.conn.cursor()
         try:

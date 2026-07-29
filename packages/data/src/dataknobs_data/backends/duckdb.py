@@ -230,7 +230,8 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
     def _create_sync(self, record: Record) -> str:
         """Synchronous create implementation."""
-        query, params = self.query_builder.build_create_query(record)
+        record_id = record.id or self._generate_id()
+        query, params = self.query_builder.build_create_query(record, record_id=record_id)
 
         try:
             with self._lock:
@@ -586,7 +587,9 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         skips its own ``begin``/``commit``/``rollback``.
         """
         # Use the shared batch create query builder
-        query, params, ids = self.query_builder.build_batch_create_query(records)
+        query, params, ids = self.query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         # Execute the batch insert in a transaction
         with self._lock:
@@ -1029,7 +1032,8 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             The record ID
         """
         self._check_connection()
-        query, params = self.query_builder.build_create_query(record)
+        record_id = record.id or self._generate_id()
+        query, params = self.query_builder.build_create_query(record, record_id=record_id)
 
         try:
             self.conn.execute(query, params)
@@ -1237,7 +1241,9 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             return []
 
         self._check_connection()
-        query, params, ids = self.query_builder.build_batch_create_query(records)
+        query, params, ids = self.query_builder.build_batch_create_query(
+            records, id_factory=self._generate_id
+        )
 
         try:
             self.conn.begin()
