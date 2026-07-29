@@ -758,6 +758,8 @@ class BotTestHarness:
         extraction_scope: str = "current_message",
         tools: list[Any] | None = None,
         middleware: list[Any] | None = None,
+        platform_middleware: list[Any] | None = None,
+        platform_conversation_middleware: list[Any] | None = None,
         strategy: ReasoningStrategy | None = None,
         strict_tools: bool = True,
         strict: bool = False,
@@ -789,8 +791,25 @@ class BotTestHarness:
                 bot. Useful for ReAct strategy tests that need tool
                 execution.
             middleware: Optional list of ``Middleware`` instances to append
-                to the bot. Useful for testing middleware hooks like
-                ``after_turn`` and ``on_tool_executed``.
+                to the bot *after* construction. Useful for testing
+                middleware hooks like ``after_turn`` and ``on_tool_executed``.
+                Distinct from ``platform_middleware``: this post-appends to
+                the built ``bot.middleware`` and does not exercise the
+                ``from_config`` additive channel.
+            platform_middleware: Optional list of ``Middleware`` instances
+                routed **through** ``DynaBot.from_config(platform_middleware=
+                ...)`` — exercises the real additive channel, so the
+                config-resolved ``middleware:`` block is preserved and the
+                platform middleware is appended after it during the config
+                resolve. The platform middleware survives the harness's
+                post-construction provider replacement (it lives on
+                ``bot.middleware``, independent of the provider). If both
+                ``middleware=`` (post-append) and ``platform_middleware=``
+                (from_config) are supplied, the final ``bot.middleware`` order
+                is ``[config..., platform..., harness-appended...]``.
+            platform_conversation_middleware: The
+                ``conversation_middleware`` analogue, routed through
+                ``DynaBot.from_config(platform_conversation_middleware=...)``.
             strategy: Optional reasoning strategy instance to replace the
                 one created by ``from_config()``.  Useful for testing
                 custom strategy implementations (e.g. strategies that
@@ -881,8 +900,16 @@ class BotTestHarness:
                 },
             }
 
-        # Create bot
-        bot = await DynaBot.from_config(bot_config)
+        # Create bot. Platform middleware is routed through from_config so the
+        # additive channel is exercised for real (the config-resolved
+        # middleware list is preserved and the platform instances appended
+        # during the config resolve). Passing None is byte-identical to a
+        # bare from_config call (from_config only threads non-None values).
+        bot = await DynaBot.from_config(
+            bot_config,
+            platform_middleware=platform_middleware,
+            platform_conversation_middleware=platform_conversation_middleware,
+        )
 
         # Close the original provider created by from_config() — we replace
         # it with a fresh EchoProvider that has a clean response queue.

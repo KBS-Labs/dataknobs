@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Additive `platform_middleware` / `platform_conversation_middleware`
+  kwargs on `DynaBot.from_config`.** A second, additive pre-built middleware
+  channel distinct from the existing `middleware=` / `conversation_middleware=`
+  replace channel: where the replace kwargs substitute the config-resolved
+  list, the new kwargs **append** to whatever the resolve produced (config path
+  or replace-override path). For installing always-on, cross-cutting middleware
+  carrying a live shared collaborator on every bot a platform builds, without
+  dropping each bot's own config-declared middleware. Appended middleware runs
+  after config middleware (last on every bot-turn hook; innermost-request /
+  outermost-response on the onion `conversation_middleware` list). Omitting the
+  new params is byte-identical to prior behavior. `BotTestHarness.create` grows
+  matching `platform_middleware=` / `platform_conversation_middleware=`
+  pass-through params routed through `from_config`.
+
 ## v0.9.3 - 2026-07-29
 
 ### Added
