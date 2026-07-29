@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.9.3 - 2026-07-29
+
 ### Added
 
 - **`ReasoningStrategy.on_conversation_evicted(conversation_id)` hook.** A new

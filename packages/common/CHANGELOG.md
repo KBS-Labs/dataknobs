@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.6.3 - 2026-07-29
+
 ### Added
 
 - `ConsentRequiredError` in `dataknobs_common.exceptions` (exported from the

@@ -5,6 +5,72 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-29
+
+### dataknobs-bots [0.9.2]
+
+#### Fixed
+- scope wizard undo/rewind bank revert per conversation
+- Scope WizardReasoning memory banks per conversation
+- harden wizard close cascade + restore bank lifecycle
+- add database teardown to ArtifactBank and ArtifactBankCatalog
+- type AsyncMemoryBank db params as AsyncDatabase
+- AsyncMemoryBank database lifecycle parity + from_dict leak
+
+### dataknobs-common [1.6.3]
+
+#### Added
+- consent-gated access for per-user state sections
+
+### dataknobs-config [0.4.4]
+
+#### Changed
+- maintenance release
+
+### dataknobs-structures [1.0.15]
+
+#### Changed
+- maintenance release
+
+### dataknobs-utils [1.2.18]
+
+#### Changed
+- maintenance release
+
+### dataknobs-xization [1.3.14]
+
+#### Changed
+- maintenance release
+
+### dataknobs-data [0.7.0]
+
+#### Added
+- add section schema versioning with lazy on-read migration for per-user state
+- add a persisted append-only audit log for per-user state
+- per-section prune attribution + deletion-event hardening
+- emit a delta event on per-user state deletion and erasure
+- retention pruning for per-user state sections
+- consent-gated access for per-user state sections
+- route upsert mint fallback through _generate_id() hook
+- route create() mint through one overridable _generate_id() hook
+
+#### Changed
+- maintenance release
+
+#### Fixed
+- harden on-read migration payload isolation + version validation
+- make per-user event-log append truly best-effort
+- harden retention pruning (deep-review findings)
+- lock the reserved consent section out of the content API
+- upsert no longer mutates the caller's record
+- mint id-less bulk writes; record-id docs + S3 no-block test
+
+### dataknobs-fsm [0.3.3]
+
+#### Changed
+- maintenance release
+
+
 ## Release - 2026-07-27
 
 ### dataknobs-common [1.6.2]
