@@ -719,6 +719,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
         conversation_middleware: list[ConversationMiddleware] | None = None,
+        platform_middleware: list[Middleware] | None = None,
+        platform_conversation_middleware: list[ConversationMiddleware] | None = None,
         reasoning_components: Mapping[str, Any] | None = None,
     ) -> DynaBot:
         """Create DynaBot from configuration.
@@ -763,6 +765,24 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 When provided, replaces any ``conversation_middleware``
                 defined in config.  Use this to inject a shared / per-test
                 middleware instance against an otherwise config-driven bot.
+            platform_middleware: Pre-built bot-turn middleware that is
+                *appended* to (never substituted for) the bot's
+                config-resolved ``middleware`` — and to the ``middleware=``
+                replace-override list if that is also supplied. Use this for
+                always-on, cross-cutting middleware installed on every bot a
+                platform builds (e.g. a shared state-writer holding a live
+                per-deployment collaborator) without dropping each bot's own
+                config-declared middleware. Appended middleware runs
+                **after** config middleware on every bot-turn hook (its
+                ``after_turn`` observes the fully-processed turn). Omitting
+                it is byte-identical to today.
+            platform_conversation_middleware: The
+                ``conversation_middleware`` analogue — appended to the
+                resolved LLM-call middleware list. Because
+                ``ConversationManager`` runs middleware onion-style
+                (``process_request`` forward, ``process_response``
+                reversed), appended middleware wraps **innermost** on the
+                request and **outermost** on the response.
             reasoning_components: Optional mapping of consumer-supplied
                 collaborators forwarded into the reasoning strategy's
                 ``StructuredConfigConsumer.components`` channel at
@@ -813,6 +833,12 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 config,
                 conversation_middleware=[HistoryRedactionMiddleware(...)],
             )
+
+            # Platform middleware — added to (not replacing) config middleware
+            bot = await DynaBot.from_config(
+                config,
+                platform_middleware=[shared_state_writer],
+            )
             ```
         """
         components: dict[str, Any] = {}
@@ -822,13 +848,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             components["middleware"] = middleware
         if conversation_middleware is not None:
             components["conversation_middleware"] = conversation_middleware
+        if platform_middleware is not None:
+            components["platform_middleware"] = platform_middleware
+        if platform_conversation_middleware is not None:
+            components["platform_conversation_middleware"] = (
+                platform_conversation_middleware
+            )
         if reasoning_components is not None:
             components["reasoning_components"] = reasoning_components
         # Async-canonical construction: route through the structured-config
         # lifecycle (from_config_async → __init__ → _setup → _ainit) rather
         # than returning a half-built instance. The `llm` / `middleware` /
-        # `conversation_middleware` / `reasoning_components` kwargs travel
-        # the injected-collaborator channel to _ainit.
+        # `conversation_middleware` / `platform_middleware` /
+        # `platform_conversation_middleware` / `reasoning_components` kwargs
+        # travel the injected-collaborator channel to _ainit.
         return await cls.from_config_async(config, **components)
 
     async def _ainit(
@@ -837,6 +870,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
         conversation_middleware: list[ConversationMiddleware] | None = None,
+        platform_middleware: list[Middleware] | None = None,
+        platform_conversation_middleware: list[ConversationMiddleware] | None = None,
         reasoning_components: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> None:
@@ -858,6 +893,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             await self._build_collaborators(
                 middleware_override=middleware,
                 conversation_middleware_override=conversation_middleware,
+                platform_middleware=platform_middleware,
+                platform_conversation_middleware=platform_conversation_middleware,
                 reasoning_components=reasoning_components,
             )
             return
@@ -883,6 +920,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             await self._build_collaborators(
                 middleware_override=middleware,
                 conversation_middleware_override=conversation_middleware,
+                platform_middleware=platform_middleware,
+                platform_conversation_middleware=platform_conversation_middleware,
                 reasoning_components=reasoning_components,
             )
         except Exception:
@@ -894,6 +933,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         *,
         middleware_override: list[Middleware] | None = None,
         conversation_middleware_override: list[ConversationMiddleware] | None = None,
+        platform_middleware: list[Middleware] | None = None,
+        platform_conversation_middleware: list[ConversationMiddleware] | None = None,
         reasoning_components: Mapping[str, Any] | None = None,
     ) -> None:
         """Build and bind the configured collaborators onto ``self``.
@@ -911,6 +952,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         collaborators). Collisions on those bot-managed names raise
         ``ConfigurationError`` to surface configuration errors loudly
         rather than silently dropping the consumer's value.
+
+        ``platform_middleware`` / ``platform_conversation_middleware`` are
+        *appended* to the resolved bot-turn / LLM-call lists (config path
+        or replace-override path) rather than substituted — an empty/omitted
+        list is a no-op. See :meth:`from_config` for the ordering semantics.
         """
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
@@ -1193,6 +1239,12 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     mw = self._create_bot_middleware(mw_config)
                     if mw:
                         middleware.append(mw)
+        # Platform middleware: additive — appended after the resolved list
+        # (config path OR replace-override path). Runs LAST on every bot-turn
+        # hook (its after_turn observes the fully-processed turn), never
+        # dropping the bot's own middleware. Omitting it is a no-op.
+        if platform_middleware:
+            middleware.extend(platform_middleware)
 
         # Create conversation_middleware (ConversationMiddleware — LLM-call
         # wraps). Built the same way as ``middleware`` but lives in a
@@ -1211,6 +1263,12 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     mw = self._create_conversation_middleware(mw_config)
                     if mw is not None:
                         conversation_middleware.append(mw)
+        # Platform conversation_middleware: additive — appended after the
+        # resolved list. ConversationManager runs middleware onion-style
+        # (process_request forward, process_response reversed), so appended
+        # middleware wraps innermost-on-request / outermost-on-response.
+        if platform_conversation_middleware:
+            conversation_middleware.extend(platform_conversation_middleware)
 
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None

@@ -545,6 +545,51 @@ bot = await DynaBot.from_config(
 When `middleware=` is passed, it completely replaces any middleware defined in the
 config dict. Pass `middleware=[]` to explicitly disable all middleware.
 
+### Platform (additive) middleware
+
+The `middleware=` / `conversation_middleware=` kwargs **replace** config
+middleware — the right shape for "run exactly this, ignore config" (e.g.
+single-middleware testing). When you instead need to install an **always-on,
+cross-cutting** middleware on **every** bot a platform builds — *without*
+dropping each bot's own config-declared middleware — use the additive
+`platform_middleware=` / `platform_conversation_middleware=` kwargs. These
+**append** to whatever the resolve produced (the config path **or** the
+`middleware=` replace-override path):
+
+```python
+# A shared state-writer holding a live per-deployment collaborator.
+state_writer = StudentStateMiddleware(user_state_store)  # one shared instance
+
+bot = await DynaBot.from_config(
+    config,                            # config may declare its own middleware:
+    platform_middleware=[state_writer],  # appended, never substituted
+)
+# bot.middleware == [<config middleware...>, state_writer]
+```
+
+This channel exists specifically for a **live shared collaborator** (an object
+that cannot be expressed as a config `{class, params}` spec) that must not
+clobber the bot's own middleware. Omitting the platform kwargs is
+byte-identical to today.
+
+**Ordering.** Appended platform middleware runs **after** config middleware:
+
+- **Bot-turn `platform_middleware`** — dispatched by simple forward iteration,
+  so the platform middleware runs **last** on every hook. Its `on_turn_start`
+  transform sees the message as modified by all config middleware; its
+  `after_turn` observer sees the fully-processed turn. This is exactly what a
+  platform observer / state-writer wants.
+- **LLM-call `platform_conversation_middleware`** — forwarded to every
+  `ConversationManager`, which runs middleware **onion-style**
+  (`process_request` forward, `process_response` reversed). Appending therefore
+  positions the platform middleware **innermost on the request** (last before
+  the LLM call) and **outermost on the response** (first after the LLM
+  returns).
+
+To exercise the additive channel in tests, route it through `from_config` via
+`BotTestHarness.create(..., platform_middleware=[...])` — distinct from the
+harness's `middleware=` param, which post-appends to the built bot.
+
 ---
 
 ## Best Practices
