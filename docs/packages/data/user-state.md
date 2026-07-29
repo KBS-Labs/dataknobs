@@ -48,7 +48,8 @@ config = {
 | `backend` | `"memory"` | Backing database backend, built only when no database is injected. |
 | `namespace` | `"user_state"` | Logical namespace isolating this coordinator's records; feeds the derived document id and the default single-tenant context. |
 | `sections` | `()` | The declared sections (`UserStateSectionSpec` list). |
-| `enable_event_log` | `False` | Reserved flag for a persisted audit section (inert in the base coordinator). |
+| `enable_event_log` | `False` | When set, appends a metadata-only record to a reserved `events` audit section after every write and scoped deletion; read it with `query_events` (see [Persisted event log](#persisted-event-log)). |
+| `event_log_retention_days` | `None` | Retention window (days) for the reserved `events` audit section; a section-less `prune` ages it out. `None` = unbounded until `clear`. Positive only. |
 | `prune_on_query` | `False` | When set, `query` prunes a windowed collection section's expired records for the queried user before returning (see [Lifecycle: retention pruning](#lifecycle-retention-pruning)). |
 
 `UserStateSectionSpec` fields: `name`, `kind` (`SectionKind`), `schema`,
@@ -340,6 +341,71 @@ coroutine, and the sync `fire` path cannot drive it safely from within a running
 loop. The sync `UserStateStore` therefore **rejects an injected `event_bus` at
 construction** — use `AsyncUserStateStore` for bus fan-out, or register sync
 callbacks on `store._callbacks` directly for in-process observation.
+
+## Persisted event log
+
+The delta events above are *ephemeral* — an in-process notification with no
+storage. Set `enable_event_log` for a **persisted** per-user audit trail: the
+coordinator registers a reserved `events` collection section and appends one
+**metadata-only** record to it after every data write and scoped deletion. Read
+it with `query_events`:
+
+```python
+config = UserStateStoreConfig.from_dict({
+    "namespace": "acme",
+    "enable_event_log": True,
+    "event_log_retention_days": 90,   # optional; unbounded when omitted
+    "sections": [{"name": "activity", "kind": "collection"}],
+})
+store = await AsyncUserStateStore.from_config(config)
+
+await store.add_record("user-42", "activity", {"event": "login"})
+events = await store.query_events("user-42")
+# [Record(op="add_record", op_section="activity", op_record_id=..., _written_at=...)]
+```
+
+Each record carries the operation metadata under `op`-prefixed keys — never a
+section value, so a `SENSITIVE` section's contents cannot leak into the log:
+
+| field | meaning |
+|---|---|
+| `op` | the logged operation (`put_document` / `add_record` / `update_record` / `delete_record` / `prune`) |
+| `op_section` | the section the operation targeted, or `None` for a section-less `prune` |
+| `op_record_id` | the record id for a single-record operation |
+| `op_count` | the number removed for a delete operation |
+| `op_sections` | the `{section: removed_count}` split of a section-less `prune` |
+
+The record's own `_written_at` scope stamp is the audit timestamp.
+
+- **Read-only, coordinator-written.** The reserved `events` section is walled off
+  from the generic content API (a `put_document` / `query` of `"events"` raises),
+  so a consumer cannot forge or clobber audit entries; records are appended only
+  by the coordinator's own write/delete paths and read only through
+  `query_events`. A `query_events` on a store without `enable_event_log` raises
+  `ConfigurationError`.
+- **A refused write logs nothing.** A consent gate raises before the primary
+  write, so a refused write never reaches the append — the log records completed
+  operations only.
+- **Erasure leaves no trace.** `clear` (right-to-erasure) deliberately appends
+  **no** record: it erases the log along with the rest of the user's state, and
+  re-materialising a `clear` record into the just-erased section would defeat the
+  erasure. The *ephemeral* `user_state:section_deleted` event still fires for
+  real-time audit.
+- **Consent changes are ephemeral-only.** Consent grants / revocations fire the
+  ephemeral write event but are not appended to the persisted log — it captures
+  the consumer's data operations.
+- **Retention.** Set `event_log_retention_days` to age the log out through the
+  ordinary section-less `prune` sweep; without it the log grows until `clear`.
+- **Best-effort, non-atomic.** The append is a second write after the primary one
+  persists (mirroring the ephemeral fire); no cross-record transaction spans the
+  two. A backend failure appending the audit entry is logged and swallowed, never
+  propagated — the primary operation already succeeded, so raising would
+  spuriously fail (and, on a retry, duplicate) it. The trade-off is that the log
+  may miss an entry for an operation that did persist; `clear`-scoped erasure and
+  the ephemeral delta event are unaffected.
+
+The log is tenant-scoped like every other section — `query_events` under a bound
+tenant returns only that tenant's records.
 
 ## Opacity-safe user ids
 

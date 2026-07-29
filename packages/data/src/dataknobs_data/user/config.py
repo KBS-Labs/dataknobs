@@ -31,11 +31,19 @@ from dataknobs_common.structured_config import StructuredConfig
 #: cannot drift from the store's usage.
 RESERVED_CONSENT_SECTION = "consent"
 
+#: Name of the reserved collection section the coordinator auto-manages to hold
+#: the persisted append-only audit log when ``enable_event_log`` is set. Defined
+#: here (the lower module) so the store imports it without a circular dependency
+#: and the reserved-name guard below cannot drift from the store's usage.
+RESERVED_EVENTS_SECTION = "events"
+
 #: Section names the coordinator reserves for its own auto-managed sections. A
 #: consumer that declares a section with one of these names collides with the
 #: reserved section (which shares the same name map), so it is rejected at
 #: config-load time rather than silently shadowed.
-RESERVED_SECTION_NAMES: frozenset[str] = frozenset({RESERVED_CONSENT_SECTION})
+RESERVED_SECTION_NAMES: frozenset[str] = frozenset(
+    {RESERVED_CONSENT_SECTION, RESERVED_EVENTS_SECTION}
+)
 
 
 class SectionKind(str, Enum):
@@ -124,9 +132,25 @@ class UserStateStoreConfig(StructuredConfig):
             document-id and the default single-tenant context's ``domain_id``.
         sections: The declared sections. Every section the coordinator's API
             addresses must appear here; an unknown section name raises.
-        enable_event_log: Reserved flag for a persisted append-only audit
-            section. Inert in the base coordinator (delta events are emitted
-            through the in-process callback registry regardless).
+        enable_event_log: When ``True``, the coordinator auto-registers a
+            reserved ``events`` collection section and appends one
+            metadata-only record to it after every data write and scoped
+            deletion (a persisted per-user audit trail, distinct from — and in
+            addition to — the in-process delta events emitted through the
+            callback registry). The log is read through
+            :meth:`~dataknobs_data.user.store.AsyncUserStateStore.query_events`;
+            it is never written or read through the generic content API. Off by
+            default.
+        event_log_retention_days: Optional retention window, in days, for the
+            reserved ``events`` audit section (only meaningful with
+            ``enable_event_log``). When set, a section-less
+            :meth:`~dataknobs_data.user.store.AsyncUserStateStore.prune` sweeps
+            expired audit records alongside the consumer's own windowed
+            sections; when ``None`` (the default) the log is unbounded until the
+            consumer erases the user with
+            :meth:`~dataknobs_data.user.store.AsyncUserStateStore.clear`. When
+            set it must be a positive number of days (a zero or negative window
+            is rejected at config-load time).
         prune_on_query: When ``True``, a ``query`` of a collection section
             carrying a ``retention_days`` window first prunes that section's
             expired records for the queried user (lazy retention enforcement).
@@ -139,6 +163,7 @@ class UserStateStoreConfig(StructuredConfig):
     namespace: str = "user_state"
     sections: tuple[UserStateSectionSpec, ...] = ()
     enable_event_log: bool = False
+    event_log_retention_days: int | None = None
     prune_on_query: bool = False
 
     def __post_init__(self) -> None:
@@ -161,7 +186,20 @@ class UserStateStoreConfig(StructuredConfig):
         (zero or negative) on any section is likewise rejected — such a window
         would mark live records as already expired and delete them, so a
         mis-signed window is caught here rather than silently destroying data.
+        The same non-positive guard applies to ``event_log_retention_days``.
         """
+        if (
+            self.event_log_retention_days is not None
+            and self.event_log_retention_days < 1
+        ):
+            raise ConfigurationError(
+                "event_log_retention_days="
+                f"{self.event_log_retention_days} is invalid: a retention "
+                "window must be a positive number of days. A zero or negative "
+                "window would mark live audit records as already expired and "
+                "delete them on the next prune.",
+                context={"namespace": self.namespace},
+            )
         seen: set[str] = set()
         for spec in self.sections:
             if not spec.name:
