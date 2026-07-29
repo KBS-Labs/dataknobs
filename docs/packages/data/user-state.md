@@ -61,7 +61,9 @@ access](#governance-consent-gated-access)). A `retention_days` window ages out
 records in a **collection** section (see [Lifecycle: retention
 pruning](#lifecycle-retention-pruning)) — it is rejected on a document section,
 which holds one evolving record per user and never expires. `version` drives lazy on-read schema migration (see [Schema
-versioning and migration](#schema-versioning-and-migration)).
+versioning and migration](#schema-versioning-and-migration)); it must be a
+positive integer (versions start at `1`), and a zero or negative version is
+rejected at config-load time.
 
 ## Constructing
 
@@ -439,8 +441,12 @@ record = await store.get_document("user-42", "preferences")
 
 An upgrader is a pure `Callable[[Mapping], Mapping]`: it receives the record's
 consumer payload — never the coordinator's scope stamps — and returns the next
-version's payload. Register one per step (`v1 -> v2`, `v2 -> v3`, …); the
-coordinator composes the chain for whatever gap a given record has.
+version's payload. The boundary is symmetric: any reserved scope stamp the
+upgrader returns (`_section_version`, `_written_at`, `tenant_id`, `user_id`,
+`section`) is stripped from its output, so the coordinator's own re-stamp is the
+sole authority on those fields — a buggy upgrader cannot leak or forge one.
+Register one per step (`v1 -> v2`, `v2 -> v3`, …); the coordinator composes the
+chain for whatever gap a given record has.
 
 - **Lazy, in memory by default.** Migration runs on `get_document`, `query`, and
   `snapshot` (which reads through them). The stored record is left untouched
@@ -463,8 +469,13 @@ coordinator composes the chain for whatever gap a given record has.
 
 Migrators are registered in a process-global registry keyed by section name
 (as with the other DataKnobs named registries), so a consumer wires each
-section's chain once at import time. The reserved `consent` and `events`
-sections are coordinator-owned and never migrated.
+section's chain once at import time. Registration is a non-atomic
+read-modify-write of the registry, designed for import-time, single-threaded
+wiring — it is **not** safe against concurrent registration of different steps
+for the same section, so register each chain once at import, before any store
+reads. The reserved `consent` and `events` sections are coordinator-owned and
+never migrated: a migrator registered for one of those reserved names registers
+fine but is **inert** — the on-read migration path never consults it.
 
 ## Opacity-safe user ids
 

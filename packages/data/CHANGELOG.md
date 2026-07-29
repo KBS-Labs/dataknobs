@@ -99,7 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning the in-memory upgrade) when a concurrent write won the guard. A record
   stamped newer than the running section version passes through un-migrated with a
   warning (rollback fail-open); a missing step in the upgrade chain raises
-  `ConfigurationError` at read. The reserved `consent` and `events` sections are
+  `ConfigurationError` at read. An upgrader is a pure `Callable[[Mapping],
+  Mapping]` that sees the consumer payload only: the coordinator's scope stamps
+  are stripped from both the upgrader's input and its output, so an upgrader can
+  neither read nor forge `_section_version` / `_written_at` / `tenant_id`. A
+  section `version` must be a positive integer (a zero or negative version is
+  rejected at config load). The reserved `consent` and `events` sections are
   never migrated.
 
 ### Changed

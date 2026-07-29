@@ -130,6 +130,22 @@ def register_section_migrator(
     :data:`SectionUpgrader` — it receives a version-``from_version`` consumer
     payload and returns the version-``from_version + 1`` payload, and must not
     mutate its input.
+
+    .. note::
+       This is a non-atomic read-modify-write of the registry (get the current
+       migrator, add a step, put it back). It is designed for **import-time,
+       single-threaded** wiring — the same usage contract as the sibling
+       ``stage_synthesizer_backends`` / ``intent_classifier_backends``
+       registries — and is **not** safe against concurrent registration of
+       different steps for the same section (two racing writers can lose a
+       step, last-write-wins on the whole migrator). Register every section's
+       chain once at module import, before any store reads.
+
+    .. note::
+       The coordinator reserves the ``consent`` and ``events`` section names
+       for its own auto-managed sections, and those never route through the
+       on-read migration path. A migrator registered for a reserved section
+       name registers fine but is **inert** — it is never consulted.
     """
     existing = section_migrators.get_optional(section)
     migrator = existing if existing is not None else SectionMigrator(section)

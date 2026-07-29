@@ -47,6 +47,7 @@ from dataknobs_data.user.migration import (
     resolve_chain,
     section_migrators,
 )
+from dataknobs_data.user.store import SECTION_WRITTEN_TOPIC
 
 _START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -78,6 +79,24 @@ def _rename_theme_to_appearance(payload: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     if "theme" in out:
         out["appearance"] = out.pop("theme")
+    return out
+
+
+def _leaky_upgrader(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A buggy upgrader that (wrongly) emits coordinator-owned scope stamps.
+
+    An upgrader is contracted to return the *consumer payload only*. This one
+    additionally returns a literal ``tenant_id`` / ``_written_at`` /
+    ``_section_version`` — the reserved scope stamps. The migration boundary
+    strips reserved keys from the upgrader's *output* (symmetric with the input
+    strip), so none of these can survive into the returned or persisted record;
+    the coordinator's own re-stamp is the sole authority on those fields.
+    """
+    out = dict(payload)
+    out["theme"] = out.pop("color", "light")
+    out["tenant_id"] = "SPOOFED"
+    out["_written_at"] = "SPOOFED"
+    out["_section_version"] = 999
     return out
 
 
@@ -648,3 +667,304 @@ def test_migration_method_parity() -> None:
     from dataknobs_data.user.store import _UserStateStoreCommon
 
     assert hasattr(_UserStateStoreCommon, "_migrate_on_read")
+
+
+# --------------------------------------------------------------------- #
+# 19. A buggy upgrader cannot leak a coordinator-owned scope stamp: the
+#     migration boundary strips reserved keys from the upgrader OUTPUT
+#     (symmetric with the input strip), so the isolation guarantee holds
+#     in both directions. Reproduce-first for the output-strip fix — the
+#     load-bearing assertion is the single-tenant ``tenant_id`` leak, which
+#     the coordinator's re-stamp does not otherwise overwrite.
+# --------------------------------------------------------------------- #
+
+
+async def test_upgrader_cannot_leak_scope_stamp_async(migrator: Any) -> None:
+    migrator("prefs", 1, _leaky_upgrader)
+    db = AsyncMemoryDatabase()
+    store_v1 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    # Single-tenant store: no bound tenant, so the coordinator re-stamp never
+    # adds a ``tenant_id`` — a leaked one would survive unless stripped.
+    store_v2 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db
+    )
+    try:
+        await store_v1.put_document("u1", "prefs", {"color": "dark"})
+        original = await store_v1.get_document("u1", "prefs")
+        assert original is not None
+
+        migrated = await store_v2.get_document("u1", "prefs")
+        assert migrated is not None
+        # The real upgrade still applied.
+        assert migrated.get_value("theme") == "dark"
+        # The upgrader's spurious reserved stamps are stripped, not leaked:
+        assert migrated.get_value("tenant_id") is None
+        assert "tenant_id" not in migrated.data
+        # The coordinator's own re-stamp is authoritative (never the spoof).
+        assert migrated.get_value("_section_version") == 2
+        assert (
+            migrated.get_value("_written_at")
+            == original.get_value("_written_at")
+        )
+        assert migrated.get_value("_written_at") != "SPOOFED"
+    finally:
+        await store_v2.close()
+
+
+def test_upgrader_cannot_leak_scope_stamp_sync(migrator: Any) -> None:
+    migrator("prefs", 1, _leaky_upgrader)
+    db = SyncMemoryDatabase()
+    store_v1 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    store_v2 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db
+    )
+    try:
+        store_v1.put_document("u1", "prefs", {"color": "dark"})
+        original = store_v1.get_document("u1", "prefs")
+        assert original is not None
+
+        migrated = store_v2.get_document("u1", "prefs")
+        assert migrated is not None
+        assert migrated.get_value("theme") == "dark"
+        assert migrated.get_value("tenant_id") is None
+        assert "tenant_id" not in migrated.data
+        assert migrated.get_value("_section_version") == 2
+        assert (
+            migrated.get_value("_written_at")
+            == original.get_value("_written_at")
+        )
+        assert migrated.get_value("_written_at") != "SPOOFED"
+    finally:
+        store_v2.close()
+
+
+# --------------------------------------------------------------------- #
+# 20. A section ``version`` below 1 is rejected at config-load time (the
+#     floor matches SectionMigrator.with_step's from_version >= 1), so a
+#     0/negative version fails fast at construction rather than surfacing as
+#     an unregisterable-step ConfigurationError at read time.
+# --------------------------------------------------------------------- #
+
+
+def test_section_version_below_one_rejected_at_config_load() -> None:
+    with pytest.raises(ConfigurationError):
+        UserStateStoreConfig.from_dict(_doc_cfg(0))
+    with pytest.raises(ConfigurationError):
+        UserStateStoreConfig.from_dict(_doc_cfg(-1))
+    # Version 1 (the floor) is accepted.
+    cfg = UserStateStoreConfig.from_dict(_doc_cfg(1))
+    assert cfg.sections[0].version == 1
+
+
+# --------------------------------------------------------------------- #
+# 21. A persist-on-read migration is a representation upgrade, not a
+#     semantic write: it emits NO delta event and appends NO audit record,
+#     even when the store has the event log enabled.
+# --------------------------------------------------------------------- #
+
+
+async def test_persist_migration_emits_no_event_or_audit_async(
+    migrator: Any,
+) -> None:
+    migrator("prefs", 1, _rename_color_to_theme)
+    db = AsyncMemoryDatabase()
+    # store_v1 writes without an event log (no audit seeded by the write).
+    store_v1 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    store_v2 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(
+            _doc_cfg(2, persist_migrations=True, enable_event_log=True)
+        ),
+        db=db,
+    )
+    try:
+        await store_v1.put_document("u1", "prefs", {"color": "dark"})
+        written: list[Any] = []
+        store_v2._callbacks.register(SECTION_WRITTEN_TOPIC, written.append)
+
+        migrated = await store_v2.get_document("u1", "prefs")
+        assert migrated is not None and migrated.get_value("theme") == "dark"
+
+        # The upgrade WAS persisted (a v1 store reading it downgrades-through).
+        raw = await store_v1.get_document("u1", "prefs")
+        assert raw is not None and raw.get_value("_section_version") == 2
+
+        # ...but the write-back fired no delta event and appended no audit.
+        assert written == []
+        assert await store_v2.query_events("u1") == []
+    finally:
+        await store_v2.close()
+
+
+def test_persist_migration_emits_no_event_or_audit_sync(migrator: Any) -> None:
+    migrator("prefs", 1, _rename_color_to_theme)
+    db = SyncMemoryDatabase()
+    store_v1 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    store_v2 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(
+            _doc_cfg(2, persist_migrations=True, enable_event_log=True)
+        ),
+        db=db,
+    )
+    try:
+        store_v1.put_document("u1", "prefs", {"color": "dark"})
+        written: list[Any] = []
+        store_v2._callbacks.register(SECTION_WRITTEN_TOPIC, written.append)
+
+        migrated = store_v2.get_document("u1", "prefs")
+        assert migrated is not None and migrated.get_value("theme") == "dark"
+
+        raw = store_v1.get_document("u1", "prefs")
+        assert raw is not None and raw.get_value("_section_version") == 2
+
+        assert written == []
+        assert store_v2.query_events("u1") == []
+    finally:
+        store_v2.close()
+
+
+# --------------------------------------------------------------------- #
+# 22. Erasure/persist race: a clear() landing between the migration read and
+#     its CAS write-back cannot resurrect the deleted record — the memory
+#     backend's ``update`` never inserts (returns False for an absent id), so
+#     the stale-token write-back is a no-op. The in-memory upgrade is still
+#     returned to the caller.
+# --------------------------------------------------------------------- #
+
+
+class _EraseOnGetVersionAsyncDB(AsyncMemoryDatabase):
+    """Deletes the record inside ``get_version``, simulating a concurrent
+    ``clear()`` landing between the migration read and the CAS write-back."""
+
+    async def get_version(self, id: str) -> str | None:
+        token = await super().get_version(id)
+        await super().delete(id)
+        return token
+
+
+class _EraseOnGetVersionSyncDB(SyncMemoryDatabase):
+    """Sync mirror of :class:`_EraseOnGetVersionAsyncDB`."""
+
+    def get_version(self, id: str) -> str | None:
+        token = super().get_version(id)
+        super().delete(id)
+        return token
+
+
+async def test_persist_migration_erasure_race_no_resurrection_async(
+    migrator: Any,
+) -> None:
+    migrator("prefs", 1, _rename_color_to_theme)
+    db = _EraseOnGetVersionAsyncDB()
+    store_v1 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    store_v2 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
+        db=db,
+    )
+    try:
+        await store_v1.put_document("u1", "prefs", {"color": "dark"})
+
+        # The record is erased mid-migration (inside the write-back's
+        # get_version); the caller still receives the in-memory upgrade.
+        migrated = await store_v2.get_document("u1", "prefs")
+        assert migrated is not None and migrated.get_value("theme") == "dark"
+
+        # The stale-token CAS write-back was a no-op: NOT resurrected.
+        raw = await store_v1.get_document("u1", "prefs")
+        assert raw is None
+    finally:
+        await store_v2.close()
+
+
+def test_persist_migration_erasure_race_no_resurrection_sync(
+    migrator: Any,
+) -> None:
+    migrator("prefs", 1, _rename_color_to_theme)
+    db = _EraseOnGetVersionSyncDB()
+    store_v1 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
+    )
+    store_v2 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
+        db=db,
+    )
+    try:
+        store_v1.put_document("u1", "prefs", {"color": "dark"})
+
+        migrated = store_v2.get_document("u1", "prefs")
+        assert migrated is not None and migrated.get_value("theme") == "dark"
+
+        raw = store_v1.get_document("u1", "prefs")
+        assert raw is None
+    finally:
+        store_v2.close()
+
+
+# --------------------------------------------------------------------- #
+# 23. Collection persist-back path: a collection record upgraded on read is
+#     written back to storage (the document persist tests cover the document
+#     path; this covers the ``query`` -> ``r.storage_id`` collection path).
+# --------------------------------------------------------------------- #
+
+
+async def test_persist_migration_collection_writes_back_async(
+    migrator: Any,
+) -> None:
+    migrator("notes", 1, _rename_color_to_theme)
+    db = AsyncMemoryDatabase()
+    store_v1 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db
+    )
+    store_v2 = AsyncUserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_coll_cfg(2, persist_migrations=True)),
+        db=db,
+    )
+    try:
+        await store_v1.add_record("u1", "notes", {"color": "dark"})
+
+        migrated = await store_v2.query("u1", "notes")
+        assert len(migrated) == 1 and migrated[0].get_value("theme") == "dark"
+
+        # Persisted to the stored collection record (a v1 store downgrades
+        # through, surfacing the stored content unchanged).
+        stored = await store_v1.query("u1", "notes")
+        assert len(stored) == 1
+        assert stored[0].get_value("theme") == "dark"
+        assert "color" not in stored[0].data
+        assert stored[0].get_value("_section_version") == 2
+    finally:
+        await store_v2.close()
+
+
+def test_persist_migration_collection_writes_back_sync(migrator: Any) -> None:
+    migrator("notes", 1, _rename_color_to_theme)
+    db = SyncMemoryDatabase()
+    store_v1 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db
+    )
+    store_v2 = UserStateStore.from_components(
+        UserStateStoreConfig.from_dict(_coll_cfg(2, persist_migrations=True)),
+        db=db,
+    )
+    try:
+        store_v1.add_record("u1", "notes", {"color": "dark"})
+
+        migrated = store_v2.query("u1", "notes")
+        assert len(migrated) == 1 and migrated[0].get_value("theme") == "dark"
+
+        stored = store_v1.query("u1", "notes")
+        assert len(stored) == 1
+        assert stored[0].get_value("theme") == "dark"
+        assert "color" not in stored[0].data
+        assert stored[0].get_value("_section_version") == 2
+    finally:
+        store_v2.close()

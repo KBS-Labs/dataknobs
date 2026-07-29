@@ -96,7 +96,9 @@ class UserStateSectionSpec(StructuredConfig):
             behind this version, the section's registered migration chain
             (see :mod:`dataknobs_data.user.migration`) upgrades it in memory
             before returning it — and writes the upgrade back when the store
-            is configured with ``persist_migrations``. Defaults to ``1``.
+            is configured with ``persist_migrations``. Must be a positive
+            integer (versions start at ``1``); a zero or negative version is
+            rejected at config-load time. Defaults to ``1``.
         consent_scope: Optional named consent scope this section belongs to.
             A non-``None`` scope gates the section behind a consent grant
             (:meth:`~dataknobs_data.user.store.AsyncUserStateStore.grant_consent`).
@@ -199,6 +201,11 @@ class UserStateStoreConfig(StructuredConfig):
         would mark live records as already expired and delete them, so a
         mis-signed window is caught here rather than silently destroying data.
         The same non-positive guard applies to ``event_log_retention_days``.
+
+        A section ``version`` below ``1`` is likewise rejected: schema versions
+        start at 1 and the first migration step is ``1 -> 2``, so a zero or
+        negative version has no registrable upgrade path and would otherwise
+        surface as a confusing read-time migration error.
         """
         if (
             self.event_log_retention_days is not None
@@ -240,6 +247,16 @@ class UserStateStoreConfig(StructuredConfig):
                     "positive number of days. A zero or negative window "
                     "would mark live records as already expired and delete "
                     "them on the next prune.",
+                    context={"namespace": self.namespace, "name": spec.name},
+                )
+            if spec.version < 1:
+                raise ConfigurationError(
+                    f"Section {spec.name!r} declares version={spec.version}: "
+                    "a section schema version must be a positive integer "
+                    "(versions start at 1). A zero or negative version has no "
+                    "registrable migration step (the first upgrader is 1->2), "
+                    "so it is rejected here rather than surfacing as a "
+                    "read-time migration error.",
                     context={"namespace": self.namespace, "name": spec.name},
                 )
             if spec.name in RESERVED_SECTION_NAMES:

@@ -320,15 +320,23 @@ def _migrate_record(
     """Apply the resolved upgrader chain to ``record`` (pure, no I/O, no clock).
 
     Operates on the consumer payload only — the coordinator-owned scope stamps
-    (:data:`_RESERVED_FIELDS`) are stripped before upgrading and re-applied
-    afterward, so an upgrader never sees nor rewrites them. ``_section_version``
-    is re-stamped to the spec's current version; the original ``_written_at``
-    is **preserved** (a lazy read-migration must not reset the retention clock)
-    and the ``storage_id`` (record identity) is carried through unchanged.
+    (:data:`_RESERVED_FIELDS`) are stripped before upgrading and, symmetrically,
+    stripped again from the upgrader's output before the coordinator re-stamps
+    them, so an upgrader never sees, rewrites, *or leaks* them: a buggy upgrader
+    that returns a literal ``tenant_id`` (which a single-tenant re-stamp would
+    not otherwise overwrite) or ``_written_at`` cannot smuggle it through.
+    ``_section_version`` is re-stamped to the spec's current version; the
+    original ``_written_at`` is **preserved** (a lazy read-migration must not
+    reset the retention clock) and the ``storage_id`` (record identity) is
+    carried through unchanged.
     """
     payload: dict[str, Any] = _public_data(record)
     for upgrade in chain:
         payload = dict(upgrade(payload))
+    # Symmetric output strip: an upgrader is contracted to return consumer
+    # payload only; drop any reserved scope stamp it (wrongly) emitted so the
+    # coordinator's re-stamp below is the sole authority on those fields.
+    payload = {k: v for k, v in payload.items() if k not in _RESERVED_FIELDS}
     payload.update(
         _scope_fields(
             record.get_value("user_id"),
