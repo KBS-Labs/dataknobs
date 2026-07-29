@@ -76,6 +76,11 @@ class TestBuildTransformContextFallback:
         reasoning = WizardReasoning.__new__(WizardReasoning)
         reasoning._artifact_registry = None
         reasoning._review_executor = None
+        # Banks are scoped per conversation via the ``_conv_state`` map; seed
+        # it so the ``_banks`` property (which writes into the active slot)
+        # resolves without a full __init__.
+        reasoning._conv_state = {}
+        reasoning._default_claimed = False
         reasoning._banks = {}
 
         result = reasoning._build_transform_context(None)

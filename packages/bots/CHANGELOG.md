@@ -7,8 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`ReasoningStrategy.on_conversation_evicted(conversation_id)` hook.** A new
+  per-conversation teardown seam (default no-op) alongside the existing
+  checkpoint hooks. The bot calls it when a conversation's in-memory state is
+  reclaimed (LRU eviction or explicit clear) so a strategy holding
+  per-conversation resources can release them. Any reasoning strategy with
+  per-conversation resources can adopt it.
+
+### Changed
+
+- **`ReasoningStrategy.undo_to_checkpoint` now takes the `ConversationManager`
+  as its first argument** — `undo_to_checkpoint(manager, checkpoint_node_id)`.
+  A strategy that scopes state per conversation needs the conversation identity
+  to revert the correct state, since the bot reaches this hook on undo paths
+  where `restore_from_checkpoint` does not run. Strategies overriding this hook
+  must add the `manager` parameter; the base implementation remains a no-op.
+
 ### Fixed
 
+- **`WizardReasoning` memory banks are now scoped per conversation.** The
+  wizard's live memory banks, artifact, and catalog were held as a single
+  strategy-instance slot, while one strategy is shared across every conversation
+  a bot serves — so two concurrent conversations contended over the same bank
+  references, and each turn's state restore could clobber (or, after the recent
+  bank-teardown fix, close the live database connection of) another
+  conversation's banks. Banks / artifact / catalog are now keyed per
+  conversation (via a task-local active-conversation key, so each turn's task
+  resolves its own conversation across `await` boundaries), so concurrent
+  conversations no longer share, clobber, or tear down each other's bank
+  databases. A conversation's owned bank databases are released when its cached
+  state is evicted, via the new `ReasoningStrategy.on_conversation_evicted`
+  hook, which the bot fires from its single conversation-reclamation choke
+  point (error-isolated so a failing release cannot break cache eviction).
+  Strategy `close()` now tears down every resident conversation's banks (and
+  cancels every conversation's pending ephemeral tasks), not merely the most
+  recently accessed one. Undo and rewind — including undoing back through the
+  first turn — revert the banks of the conversation being undone rather than
+  whichever conversation was last active, even when the undo request runs in a
+  fresh task. Single-conversation and sequential-per-turn behavior is unchanged
+  — the first conversation adopts the construction-time banks, building them
+  exactly once.
 - **`AsyncMemoryBank` database lifecycle parity.** `AsyncMemoryBank` now
   supports owned-vs-injected database teardown — an `owns_db` constructor flag
   plus `close()` / `aclose()` methods routed through `close_if_owned`, matching

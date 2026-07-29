@@ -113,8 +113,9 @@ class TestBaseNoOpDefaults:
     @pytest.mark.asyncio
     async def test_base_undo_to_checkpoint_is_noop(self) -> None:
         strategy = _NoOpStrategy()
+        manager = _StubManager()
         # Should not raise on any node id.
-        strategy.undo_to_checkpoint("0.0.0")
+        strategy.undo_to_checkpoint(manager, "0.0.0")
 
 
 # =====================================================================
@@ -227,7 +228,9 @@ class TestWizardUndoToCheckpoint:
             bank.add({"name": f"{name}-drop"}, source_node_id="0.0.1")
             assert bank.count() == 2
 
-        strategy.undo_to_checkpoint("0.0")
+        # A stub manager with no ``conversation_id`` keys the default
+        # (construction-time) slot — where ``_build_wizard`` built these banks.
+        strategy.undo_to_checkpoint(_StubManager(), "0.0")
 
         for name in ("alpha", "beta"):
             survivors = [r.data["name"] for r in banks[name].all()]
@@ -238,7 +241,7 @@ class TestWizardUndoToCheckpoint:
         strategy = _build_wizard()
         assert dict(strategy.banks) == {}
         # No bank means nothing to forward to — call must not raise.
-        strategy.undo_to_checkpoint("node-42")
+        strategy.undo_to_checkpoint(_StubManager(), "node-42")
 
     def test_with_real_memory_bank_does_not_raise(self) -> None:
         """A wizard with a real ``MemoryBank`` undoes cleanly even when the
@@ -251,6 +254,6 @@ class TestWizardUndoToCheckpoint:
         bank = banks["ingredients"]
         assert isinstance(bank, MemoryBank)
         # Real ``MemoryBank.undo_to_checkpoint`` returns 0 on empty bank.
-        strategy.undo_to_checkpoint("0.0.0")
+        strategy.undo_to_checkpoint(_StubManager(), "0.0.0")
         # Bank still has zero records — the call was a no-op.
         assert list(bank.all()) == []

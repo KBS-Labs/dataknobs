@@ -3050,9 +3050,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         conversation's in-memory state routes through here, so the two
         structures can never drift apart (dropping one while leaking the
         other). Both pops are unconditional and no-op when absent.
+
+        The reasoning strategy is also notified so it can release any
+        per-conversation resources it holds (e.g. a wizard's per-conversation
+        memory-bank database connections). Error-isolated per the close-
+        ownership convention: a failing strategy release must not break cache
+        eviction. The ``on_conversation_evicted`` hook defaults to a no-op on
+        ``ReasoningStrategy``, so non-wizard strategies need no wiring.
         """
         self._conversation_managers.pop(conversation_id, None)
         self._turn_checkpoints.pop(conversation_id, None)
+        strategy = self.reasoning_strategy
+        if strategy is not None:
+            try:
+                strategy.on_conversation_evicted(conversation_id)
+            except Exception:
+                logger.exception(
+                    "Error releasing per-conversation reasoning state for %s",
+                    conversation_id,
+                )
 
     def _on_conversation_evicted(
         self, conversation_id: str, _manager: ConversationManager
@@ -3932,7 +3948,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._restore_wizard_from_node(manager, checkpoint_node_id)
 
         # Revert banks via backend-managed checkpointing
-        self._undo_banks_to_checkpoint(checkpoint_node_id)
+        self._undo_banks_to_checkpoint(manager, checkpoint_node_id)
 
         return UndoResult(
             undone_user_message=undone_user,
@@ -4070,14 +4086,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         )
 
     def _undo_banks_to_checkpoint(
-        self, checkpoint_node_id: str | None
+        self, manager: ConversationManager, checkpoint_node_id: str | None
     ) -> None:
         """Forward checkpoint-revert to the reasoning strategy.
 
         Strategies that hold node-keyed state (e.g. wizard memory banks)
         override ``ReasoningStrategy.undo_to_checkpoint``. Others inherit
         the base no-op.
+
+        ``manager`` is forwarded so a strategy scoping state per conversation
+        can resolve which conversation is being undone — this hook runs even on
+        the undo paths where ``_restore_wizard_from_node`` early-returned
+        (empty anchor / missing node), so it must carry conversation identity
+        itself rather than relying on ``restore_from_checkpoint`` having run.
         """
         if self.reasoning_strategy is None:
             return
-        self.reasoning_strategy.undo_to_checkpoint(checkpoint_node_id)
+        self.reasoning_strategy.undo_to_checkpoint(manager, checkpoint_node_id)

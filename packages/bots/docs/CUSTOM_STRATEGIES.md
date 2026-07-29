@@ -268,6 +268,31 @@ async def close(self) -> None:
         await self._query_provider.close()
 ```
 
+`close()` fires at bot shutdown and must release resources for **every**
+conversation still resident. If your strategy holds *per-conversation*
+resources, also override `on_conversation_evicted` (below) so they are freed
+as each conversation is reclaimed, rather than accumulating until shutdown.
+
+### `on_conversation_evicted()` — Per-Conversation Cleanup
+
+Override if your strategy holds resources scoped to a single conversation
+(e.g. per-conversation database connections). DynaBot fires this hook from its
+single conversation-reclamation choke point whenever a conversation's in-memory
+state is dropped — LRU eviction (honoring `max_cached_conversations`) or an
+explicit `clear_conversation()`. Default: no-op.
+
+```python
+def on_conversation_evicted(self, conversation_id: str) -> None:
+    state = self._per_conversation.pop(conversation_id, None)
+    if state is not None:
+        state.close()  # release this conversation's owned resources
+```
+
+The call is error-isolated by the bot, so a raised exception is logged and does
+not break cache eviction. `WizardReasoning` uses this hook to close the memory
+bank databases owned by an evicted conversation; strategies without
+per-conversation resources inherit the no-op and need no override.
+
 ### Phased Turn Execution (`PhasedReasoningProtocol`)
 
 By default, DynaBot calls `generate()` as a single opaque call, then runs

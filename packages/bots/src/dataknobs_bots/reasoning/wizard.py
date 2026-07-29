@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import copy
 import inspect
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -128,6 +130,75 @@ _INJECTED_FSM_SENTINEL = "<injected-fsm>"
 # Re-exports for backward compatibility are handled by the import block
 # above (from .wizard_types import ...).  All public names that were
 # previously defined here are still importable from this module.
+
+
+class _DefaultConvKey:
+    """Sentinel type for the construction-time / no-active-turn bank slot.
+
+    A distinct singleton *type* — not a magic string — so a real
+    ``conversation_id`` (untrusted input) can never collide with the reserved
+    default-slot key by happening to be named the same thing.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<no-conversation>"
+
+
+#: Reserved key for the construction-time / no-active-turn bank slot.
+#: A wizard builds its banks at construction (so non-turn readers — the
+#: ``advance()`` API, the ``_build_transform_context`` fallback, direct
+#: introspection — see banks before any conversation runs) into this slot.
+#: The first real conversation *adopts* this pristine slot (re-keying it to
+#: that conversation's id) so the common single-conversation case builds its
+#: banks exactly once, byte-identical to the pre-per-conversation behavior.
+_DEFAULT_CONV_KEY: _DefaultConvKey = _DefaultConvKey()
+
+#: A per-conversation bank-slot key: a real ``conversation_id`` string, or the
+#: :data:`_DEFAULT_CONV_KEY` sentinel for the construction-time slot.
+_ConvKey = str | _DefaultConvKey
+
+#: Task-local key of the conversation the current turn is serving. ``asyncio``
+#: copies the context into each ``Task``, so two concurrently running turns
+#: (each in its own task) see their own value across ``await`` boundaries —
+#: the precise, minimal isolation for "which conversation is *this task*
+#: serving." Set at every turn / checkpoint entry (``_get_wizard_state`` /
+#: ``advance`` / ``restore_from_checkpoint`` / ``undo_to_checkpoint``);
+#: defaults to :data:`_DEFAULT_CONV_KEY` outside a turn.
+_active_conversation: contextvars.ContextVar[_ConvKey] = contextvars.ContextVar(
+    "wizard_active_conversation", default=_DEFAULT_CONV_KEY
+)
+
+
+def _conversation_key(manager: Any) -> _ConvKey:
+    """Resolve a manager's conversation id to a bank-slot key.
+
+    Returns the manager's ``conversation_id`` when present, else the
+    :data:`_DEFAULT_CONV_KEY` sentinel (non-conversational / id-less callers
+    share the construction-time slot). Centralizes the idiom so every turn and
+    checkpoint entry point keys its banks identically.
+    """
+    return getattr(manager, "conversation_id", None) or _DEFAULT_CONV_KEY
+
+
+@dataclass
+class _ConvBankState:
+    """Per-conversation live bank state for :class:`WizardReasoning`.
+
+    Transient — rebuilt from the per-conversation snapshot persisted in
+    ``manager.metadata['wizard']``. Replaces the former single shared
+    ``self._banks`` / ``self._artifact`` / ``self._catalog`` slots so
+    concurrent conversations served by one strategy do not clobber or tear
+    down each other's live banks. ``initialized`` records whether this
+    conversation's banks have been built from the templates yet.
+    """
+
+    banks: dict[str, Any] = field(default_factory=dict)
+    artifact: Any = None
+    catalog: Any = None
+    last_wizard_state: WizardState | None = None
+    initialized: bool = False
 
 
 class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], ReasoningStrategy):
@@ -555,24 +626,37 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # and snapshot lifecycle (extracted to ConfirmationEvaluator).
         self._confirmation = ConfirmationEvaluator()
 
-        # Track last wizard state for cleanup in close()
-        self._last_wizard_state: WizardState | None = None
+        # Per-conversation live bank state. Banks / artifact / catalog are
+        # scoped per conversation (keyed by conversation id) instead of a
+        # single shared slot, so concurrent conversations served by one
+        # strategy never clobber or tear down each other's banks. The
+        # ``self._banks`` / ``self._artifact`` / ``self._catalog`` /
+        # ``self._last_wizard_state`` attributes are properties resolving the
+        # active conversation's slot (see :meth:`_current_slot`). At
+        # construction the active key is :data:`_DEFAULT_CONV_KEY`, so the
+        # builds below populate that pristine slot; the first real
+        # conversation adopts it (byte-identical single-conversation build).
+        self._conv_state: dict[_ConvKey, _ConvBankState] = {}
+        self._default_claimed: bool = False
 
-        # Initialise MemoryBank instances from wizard-level ``banks`` config
+        # Conversation-independent templates (same for every conversation).
         self._bank_configs: dict[str, dict[str, Any]] = dict(
             wizard_fsm.settings.get("banks", {})
         )
-        self._banks: dict[str, Any] = {}
-        self._init_banks()
+        self._artifact_config: dict[str, Any] | None = None
+        self._catalog_config: dict[str, Any] | None = None
+        self._seed_config: dict[str, Any] | None = None
 
-        # Initialise ArtifactBank if ``artifact`` config is present.
-        # When artifact is configured, its sections ARE the banks —
-        # ``self._banks`` references the same MemoryBank instances.
-        self._artifact: Any = None
-        self._catalog: Any = None
+        # Build the construction-time (default-key) slot. When an artifact is
+        # configured, its sections ARE the banks — ``self._banks`` references
+        # the same MemoryBank instances.
         artifact_config = wizard_fsm.settings.get("artifact")
         if artifact_config:
-            self._init_artifact(artifact_config)
+            self._setup_artifact_static(artifact_config)
+            self._build_artifact_instance()
+        else:
+            self._init_banks()
+        self._current_slot().initialized = True
 
         # Subflow manager — owns active subflow FSM and push/pop lifecycle.
         # Created with a placeholder evaluate_condition; patched below
@@ -641,9 +725,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             allow_amendments=self._allow_amendments,
             section_to_stage_mapping=self._section_to_stage_mapping,
             extractor=self._extractor,
-            banks=self._banks,
-            artifact=self._artifact,
-            catalog=self._catalog,
+            get_banks=lambda: self._banks,
+            get_artifact=lambda: self._artifact,
+            get_catalog=lambda: self._catalog,
             execute_fsm_step=self._execute_fsm_step,
             run_post_transition_lifecycle=self._run_post_transition_lifecycle,
             generate_stage_response=self._generate_stage_response_for_nav,
@@ -657,6 +741,97 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._wizard_fsm.set_transform_context_factory(
             self._build_transform_context
         )
+
+    # -----------------------------------------------------------------
+    # Per-conversation bank-state resolution
+    # -----------------------------------------------------------------
+
+    def _current_slot(self) -> _ConvBankState:
+        """Return the active conversation's bank-state slot, creating it.
+
+        Resolves the task-local :data:`_active_conversation` key (set at
+        every turn entry; :data:`_DEFAULT_CONV_KEY` outside a turn). A fresh
+        key gets an empty, uninitialized slot — the getter/setter properties
+        below read and write through this slot so all existing
+        ``self._banks`` / ``self._artifact`` / ``self._catalog`` access sites
+        resolve to the active conversation without change.
+        """
+        return self._conv_state.setdefault(
+            _active_conversation.get(), _ConvBankState()
+        )
+
+    @property
+    def _banks(self) -> dict[str, Any]:
+        """The active conversation's live memory banks (mutable dict)."""
+        return self._current_slot().banks
+
+    @_banks.setter
+    def _banks(self, value: dict[str, Any]) -> None:
+        self._current_slot().banks = value
+
+    @property
+    def _artifact(self) -> Any:
+        """The active conversation's ArtifactBank (or ``None``)."""
+        return self._current_slot().artifact
+
+    @_artifact.setter
+    def _artifact(self, value: Any) -> None:
+        self._current_slot().artifact = value
+
+    @property
+    def _catalog(self) -> Any:
+        """The active conversation's artifact catalog (or ``None``)."""
+        return self._current_slot().catalog
+
+    @_catalog.setter
+    def _catalog(self, value: Any) -> None:
+        self._current_slot().catalog = value
+
+    @property
+    def _last_wizard_state(self) -> WizardState | None:
+        """The active conversation's last wizard state (for task cleanup)."""
+        return self._current_slot().last_wizard_state
+
+    @_last_wizard_state.setter
+    def _last_wizard_state(self, value: WizardState | None) -> None:
+        self._current_slot().last_wizard_state = value
+
+    def _ensure_slot_built(self) -> None:
+        """Ensure the active conversation's banks/artifact are built.
+
+        Called at turn entry after the active-conversation key is set.
+        Runs synchronously (no ``await``), so it is atomic with respect to
+        other tasks — the adopt/build decision below cannot interleave with a
+        concurrent turn.
+
+        The first real conversation *adopts* the pristine construction-time
+        (:data:`_DEFAULT_CONV_KEY`) slot — re-keying it to that conversation
+        so the common single-conversation case builds its banks exactly once
+        (byte-identical to the pre-per-conversation behavior). Every
+        subsequent fresh conversation builds its own banks from the templates
+        so it never inherits another conversation's live banks.
+        """
+        key = _active_conversation.get()
+        existing = self._conv_state.get(key)
+        if existing is not None and existing.initialized:
+            return
+
+        # First real conversation adopts the unclaimed construction slot.
+        if key != _DEFAULT_CONV_KEY and not self._default_claimed:
+            default = self._conv_state.get(_DEFAULT_CONV_KEY)
+            if default is not None and default.initialized:
+                self._conv_state[key] = default
+                del self._conv_state[_DEFAULT_CONV_KEY]
+                self._default_claimed = True
+                return
+
+        # Otherwise build this conversation's banks fresh from the templates.
+        self._conv_state.setdefault(key, _ConvBankState())
+        if self._artifact_config is not None:
+            self._build_artifact_instance()
+        else:
+            self._init_banks()
+        self._current_slot().initialized = True
 
     def _build_transform_context(self, func_context: Any) -> Any:
         """Fallback transform context factory.
@@ -812,19 +987,27 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 len(banks_data),
             )
 
-    def _close_banks(self) -> None:
-        """Close every current memory bank, error-isolated per bank.
+    def _close_banks(self, banks: dict[str, Any] | None = None) -> None:
+        """Close a set of memory banks, error-isolated per bank.
 
         Releases each bank's owned db (a caller-injected db is left open by
-        the bank's own ``owns_db`` gate). Shared by :meth:`close` and by the
-        restore path: the strategy object outlives a single turn, and a
-        persistent (non-memory) section/bank backend opens a real connection,
-        so rebuilding the banks on a later turn without first closing the
-        prior set would orphan that connection every turn. Does not clear
-        ``self._banks`` — the caller either replaces it wholesale (restore)
-        or is tearing the strategy down (:meth:`close`).
+        the bank's own ``owns_db`` gate). Shared by three callers, all routing
+        through this single teardown path:
+
+        - the restore path, which closes the *active* conversation's prior-turn
+          banks before rebuilding them (``banks=None`` → ``self._banks``): the
+          strategy object outlives a single turn, and a persistent (non-memory)
+          section/bank backend opens a real connection, so rebuilding without
+          first closing the prior set would orphan that connection every turn;
+        - :meth:`close` and :meth:`on_conversation_evicted`, which pass an
+          explicit conversation's ``banks`` dict so teardown works even after
+          that conversation's slot has been popped from ``self._conv_state``.
+
+        Does not clear the banks dict — the caller either replaces it wholesale
+        (restore) or is discarding the whole slot (teardown).
         """
-        for name, bank in self._banks.items():
+        target = self._banks if banks is None else banks
+        for name, bank in target.items():
             try:
                 bank.close()
             except Exception:
@@ -842,15 +1025,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         return _bank
 
     def _init_artifact(self, artifact_config: dict[str, Any]) -> None:
-        """Create an ``ArtifactBank`` from wizard ``artifact`` config.
+        """Set up artifact templates and build the current slot's instance.
 
-        When an artifact is configured, its sections replace the banks —
-        ``self._banks`` and ``self._bank_configs`` are populated from
-        the artifact's sections.
+        Convenience entry that captures the conversation-independent artifact
+        config (via :meth:`_setup_artifact_static`) and then builds the
+        artifact instance into the active conversation's slot (via
+        :meth:`_build_artifact_instance`).
 
-        If the config contains a ``catalog`` key, an
-        ``ArtifactBankCatalog`` is also created and stored on
-        ``self._catalog``.
+        Retained as a single-call convenience for direct/test callers only —
+        construction and the per-conversation lazy-build path
+        (:meth:`_ensure_slot_built`) call :meth:`_setup_artifact_static` and
+        :meth:`_build_artifact_instance` separately so the static setup runs
+        exactly once while the instance is (re)built per conversation.
 
         Args:
             artifact_config: Artifact configuration dict with ``name``,
@@ -861,9 +1047,26 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             ConfigurationError: If both ``banks`` and ``artifact`` are
                 configured.
         """
-        from dataknobs_common.exceptions import ConfigurationError
+        self._setup_artifact_static(artifact_config)
+        self._build_artifact_instance()
 
-        from ..memory.artifact_bank import ArtifactBank
+    def _setup_artifact_static(self, artifact_config: dict[str, Any]) -> None:
+        """Capture conversation-independent artifact templates (runs once).
+
+        When an artifact is configured, its sections replace the banks —
+        ``self._bank_configs`` is populated from the artifact's sections.
+        The catalog and seed sub-configs are captured for the per-conversation
+        instance build. Does NOT create any live instance; that is
+        :meth:`_build_artifact_instance` (which runs once per conversation).
+
+        Args:
+            artifact_config: Artifact configuration dict.
+
+        Raises:
+            ConfigurationError: If both ``banks`` and ``artifact`` are
+                configured.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
 
         if self._bank_configs:
             raise ConfigurationError(
@@ -871,26 +1074,41 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 "Use artifact.sections instead of banks.",
                 context={"setting": "artifact"},
             )
+        self._artifact_config = artifact_config
+        self._bank_configs = dict(artifact_config.get("sections", {}))
+        self._catalog_config = artifact_config.get("catalog")
+        self._seed_config = artifact_config.get("seed")
+
+    def _build_artifact_instance(self) -> None:
+        """Build the active conversation's ArtifactBank, catalog, and banks.
+
+        Writes into the active conversation's slot (via the ``self._artifact``
+        / ``self._banks`` / ``self._catalog`` setters). Runs once per
+        conversation — at construction for the default slot, and lazily on
+        each fresh conversation's first turn (:meth:`_ensure_slot_built`).
+        Requires :meth:`_setup_artifact_static` to have captured the templates.
+        """
+        from ..memory.artifact_bank import ArtifactBank
+
+        assert self._artifact_config is not None
+        artifact_config = self._artifact_config
         self._artifact = ArtifactBank.from_config(
             artifact_config, db_factory=self._create_bank_db
         )
         self._banks = dict(self._artifact.sections)
-        self._bank_configs = dict(artifact_config.get("sections", {}))
 
         # Optionally create a catalog for storing/loading artifacts.
-        catalog_config = artifact_config.get("catalog")
-        if catalog_config:
+        if self._catalog_config:
             from ..memory.catalog import ArtifactBankCatalog
 
             self._catalog = ArtifactBankCatalog.from_config({
-                **catalog_config,
+                **self._catalog_config,
                 "artifact_config": artifact_config,
             })
 
         # Optionally seed the artifact from a file.
-        seed_config = artifact_config.get("seed")
-        if seed_config:
-            self._seed_artifact(seed_config)
+        if self._seed_config:
+            self._seed_artifact(self._seed_config)
 
     def _seed_artifact(self, seed_config: dict[str, Any]) -> None:
         """Populate the artifact from a seed file.
@@ -1244,6 +1462,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Silent no-op when the node has no ``wizard_fsm_state`` (e.g.
         checkpoints predating wizard activation).
+
+        Writes only to ``manager.metadata`` (the next ``generate()`` /
+        ``_get_wizard_state`` reads it back and sets the active-conversation
+        key then), so this method touches no per-conversation bank state and
+        needs no active-conversation key of its own. :meth:`undo_to_checkpoint`
+        — the other half of the bot's undo/rewind flow — sets the key
+        independently from ``manager``, so bank reverting does not depend on
+        this method having run first (the flow skips restore on the
+        empty-anchor / missing-node early-return paths).
         """
         fsm_state = node_metadata.get("wizard_fsm_state")
         if not fsm_state:
@@ -1257,56 +1484,123 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         wizard_meta["history"] = fsm_state.get("history", [])
         manager.metadata["wizard"] = wizard_meta
 
-    def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> None:
-        """Revert wizard memory banks to the checkpoint.
+    def undo_to_checkpoint(
+        self,
+        manager: ReasoningManagerProtocol,
+        checkpoint_node_id: str | None,
+    ) -> None:
+        """Revert *this conversation's* wizard memory banks to the checkpoint.
 
-        Iterates the wizard's ``MemoryBank`` instances and forwards
-        the checkpoint id. Banks that don't expose
-        ``undo_to_checkpoint`` are silently skipped (defensive — every
-        ``MemoryBank`` does expose it today, but the existing bot-side
-        guard is retained to match the prior behaviour exactly).
+        Sets the active-conversation key from ``manager`` before resolving
+        banks, so it reverts the undoing conversation's slot regardless of the
+        task-local key on entry. This is load-bearing: the bot's undo/rewind
+        flow reaches this method on paths where :meth:`restore_from_checkpoint`
+        did NOT run (the empty-anchor ``checkpoint_node_id is None`` case —
+        undoing back through the first turn — and the missing/invalid-node
+        early returns), and each request runs in its own task whose key
+        defaults to :data:`_DEFAULT_CONV_KEY`. Keying off ``manager`` here
+        makes bank reverting self-sufficient rather than dependent on a sibling
+        hook having set the key first.
+
+        Iterates the conversation's ``MemoryBank`` instances and forwards the
+        checkpoint id. Banks that don't expose ``undo_to_checkpoint`` are
+        silently skipped (defensive — every ``MemoryBank`` does expose it
+        today, but the existing bot-side guard is retained to match the prior
+        behaviour exactly).
         """
+        _active_conversation.set(_conversation_key(manager))
         for bank in self._banks.values():
             if hasattr(bank, "undo_to_checkpoint"):
                 bank.undo_to_checkpoint(checkpoint_node_id)
 
+    def _close_conversation_slot(
+        self, conversation_id: _ConvKey, state: _ConvBankState
+    ) -> None:
+        """Close one conversation's memory banks and artifact catalog.
+
+        Closes ``state`` directly (not via the ``self._banks`` / ``self._catalog``
+        properties) so it works whether or not the slot is still resident in
+        ``self._conv_state`` — :meth:`on_conversation_evicted` pops the slot
+        first. Each teardown step is error-isolated per the close-ownership
+        convention: a failing section bank must not orphan the catalog db
+        beneath it, and one conversation's failure must not stop the rest.
+
+        The banks are always wizard-built (``_init_banks`` / ``_restore_banks``
+        / artifact sections — there is no bank-injection path), so the wizard
+        owns them; each bank closes its own db only when it owns it
+        (``owns_db``). The catalog (when configured) is built by
+        ``_build_artifact_instance`` and owns its db, closed the same way.
+        """
+        self._close_banks(state.banks)
+        if state.banks:
+            logger.debug(
+                "Closed %d memory bank database(s) for conversation %s",
+                len(state.banks),
+                conversation_id,
+            )
+        catalog = state.catalog
+        if catalog is not None and hasattr(catalog, "close"):
+            try:
+                catalog.close()
+                logger.debug(
+                    "Closed artifact catalog for conversation %s",
+                    conversation_id,
+                )
+            except Exception:
+                logger.exception("Error closing artifact catalog")
+
+    def on_conversation_evicted(self, conversation_id: str) -> None:
+        """Release a single conversation's banks + catalog on eviction.
+
+        Called by the bot's ``_drop_conversation_cache`` choke point when a
+        conversation's in-memory state is reclaimed (LRU eviction or explicit
+        clear). Pops that conversation's bank slot and closes its owned
+        databases — the bank-cache lifetime therefore tracks the bot's
+        conversation-manager LRU, with no new eviction policy or unbounded
+        growth. A concurrent conversation's banks live under a different key
+        and are untouched. No-op when the conversation holds no bank slot.
+        """
+        key = conversation_id or _DEFAULT_CONV_KEY
+        state = self._conv_state.pop(key, None)
+        if state is None:
+            return
+        self._close_conversation_slot(key, state)
+
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 
-        Cancels any in-flight asyncio tasks stored in ephemeral keys,
-        closes the SchemaExtractor's LLM provider if present (releasing
-        HTTP connections), and closes all memory bank database connections.
-        Should be called when the reasoning strategy is no longer needed
-        (typically via DynaBot.close()).
+        Cancels any in-flight asyncio tasks stored in ephemeral keys (for
+        **every** resident conversation), closes the SchemaExtractor's LLM
+        provider if present (releasing HTTP connections), and closes every
+        resident conversation's memory bank database connections and artifact
+        catalog. Should be called when the reasoning strategy is no longer
+        needed (typically via DynaBot.close()).
 
-        Note:
-            Wizard state is per-conversation (stored in manager.metadata).
-            This method cancels tasks accessible via the last-used manager's
-            state. If multiple conversations are active simultaneously,
-            only the tasks from the most recently accessed state are
-            cancelled here.
+        Banks / artifact / catalog and ``_last_wizard_state`` are scoped per
+        conversation, so this tears down all conversations still resident —
+        not merely the most recently accessed one (a conversation evicted
+        earlier had its banks released by :meth:`on_conversation_evicted`).
         """
-        # Cancel asyncio tasks stored in ephemeral wizard state keys
-        if hasattr(self, "_last_wizard_state") and self._last_wizard_state:
-            cancelled = 0
+        # Cancel asyncio tasks stored in ephemeral wizard state keys, for
+        # every resident conversation's last state (not just the last-used).
+        cancelled = 0
+        for state in self._conv_state.values():
+            last_state = state.last_wizard_state
+            if not last_state:
+                continue
             for key in self._ephemeral_keys:
-                val = self._last_wizard_state.data.get(key)
+                val = last_state.data.get(key)
                 if isinstance(val, asyncio.Task) and not val.done():
                     val.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await val
                     cancelled += 1
-            if cancelled:
-                logger.debug("Cancelled %d ephemeral task(s)", cancelled)
+        if cancelled:
+            logger.debug("Cancelled %d ephemeral task(s)", cancelled)
 
-        # Each teardown step below is error-isolated so one failing
-        # subsystem cannot orphan the resources the later steps release —
-        # matching DynaBot.close()'s per-subsystem isolation convention. A
-        # section bank whose close() raised would otherwise propagate out of
-        # the banks loop and skip the catalog close beneath it, leaking the
-        # owned db connection the cascade exists to release.
-
-        # Close extractor's LLM provider
+        # Close extractor's LLM provider (strategy-level, once). Error-isolated
+        # so a failing extractor close cannot orphan the per-conversation banks
+        # released below — matching DynaBot.close()'s per-subsystem isolation.
         if self._extractor is not None and hasattr(self._extractor, "close"):
             try:
                 await self._extractor.close()
@@ -1314,36 +1608,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             except Exception:
                 logger.exception("Error closing WizardReasoning extractor")
 
-        # Close memory bank database connections. The banks are always
-        # built by this wizard (``_init_banks`` / ``_restore_banks`` /
-        # artifact sections — there is no bank-injection path), so the
-        # wizard owns them and closes each. Each bank in turn closes its db
-        # only when it owns it (``owns_db``): wizard-built banks own the
-        # per-bank db this wizard created for them, while a db a bank was
-        # handed by a caller is left open — so a backing store shared
-        # across banks survives one bank's close. One bank's failure is
-        # isolated so the rest — and the catalog below — still close. The
-        # same helper releases the prior turn's banks before a restore
-        # rebuilds them, so this teardown logic lives in one place.
-        self._close_banks()
-        if self._banks:
-            logger.debug(
-                "Closed %d memory bank database(s)", len(self._banks)
-            )
-
-        # Close the artifact catalog if one was created. The catalog was
-        # built by this wizard (``_init_artifact`` →
-        # ``ArtifactBankCatalog.from_config``, which connects a db), so the
-        # wizard owns it. The catalog closes its db only when it owns it.
-        # The section dbs are already released by the banks loop above
-        # (``self._banks`` *are* the artifact's sections), so only the
-        # catalog remains.
-        if self._catalog is not None and hasattr(self._catalog, "close"):
-            try:
-                self._catalog.close()
-                logger.debug("Closed artifact catalog")
-            except Exception:
-                logger.exception("Error closing artifact catalog")
+        # Close every resident conversation's banks + catalog. Each slot's
+        # teardown is error-isolated (per :meth:`_close_conversation_slot`), so
+        # one conversation's failing close does not leak another's dbs.
+        for key, state in list(self._conv_state.items()):
+            self._close_conversation_slot(key, state)
+        self._conv_state.clear()
 
     def _partition_data(
         self, data: dict[str, Any]
@@ -2832,6 +3102,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 "and no navigation command is provided"
             )
 
+        # The non-conversational API has no ConversationManager (and thus no
+        # conversation id), so its banks live in the construction-time default
+        # slot. Set the active key and ensure that slot is built (rebuilding
+        # it if a conversational turn adopted it away) before any bank access.
+        _active_conversation.set(_DEFAULT_CONV_KEY)
+        self._ensure_slot_built()
+
         # Clear per-turn keys from previous turn
         for key in self._per_turn_keys:
             state.data.pop(key, None)
@@ -3127,9 +3404,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
 
-        Stores a reference to the returned state as ``_last_wizard_state``
-        so that ``close()`` can cancel any dangling asyncio tasks stored
-        in ephemeral keys.
+        Sets the task-local active-conversation key to this manager's
+        conversation id so every downstream ``self._banks`` / ``self._artifact``
+        / ``self._catalog`` access resolves *this* conversation's slot — the
+        primary entry every per-turn path funnels through. Ensures the
+        conversation's banks are built (adopting the construction slot for the
+        first conversation, building fresh otherwise). Stores the returned
+        state as ``_last_wizard_state`` (per conversation) so ``close()`` can
+        cancel any dangling asyncio tasks stored in ephemeral keys.
+
+        Runs synchronously (no ``await``), so it is atomic with respect to a
+        concurrently running turn for another conversation; the ContextVar
+        keeps each task's active conversation isolated across ``await``
+        boundaries once set here.
 
         Args:
             manager: ConversationManager instance
@@ -3137,6 +3424,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Returns:
             WizardState instance
         """
+        _active_conversation.set(_conversation_key(manager))
+        self._ensure_slot_built()
         wizard_data = manager.metadata.get("wizard", {})
         if wizard_data.get("fsm_state"):
             fsm_state = wizard_data["fsm_state"]
@@ -3479,9 +3768,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Per-call closure captures local llm and turn values so that
         # concurrent FSM steps each see their own context.
-        # Note: _artifact_registry, _review_executor, and _banks are
-        # accessed via self (not captured by value) — they are set once
-        # at construction and are stable during FSM execution.
+        # Note: _artifact_registry and _review_executor are accessed via self
+        # (not captured by value) — set once at construction, stable during FSM
+        # execution. _banks is read via self as well, but resolves the active
+        # conversation's slot through the task-local ``_active_conversation``
+        # key set at turn entry — so reading it via ``self`` (never a captured
+        # local) is what keeps concurrent turns' banks isolated.
         from ..artifacts.transforms import TransformContext
 
         def _scoped_factory(func_context: Any) -> Any:
