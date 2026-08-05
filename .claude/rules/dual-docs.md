@@ -48,6 +48,30 @@ When updating documentation for any package:
    - Ensure new pages are added to `mkdocs.yml` if needed
    - Verify cross-links work
 
+4. **Classify the pair in the doc-mirror manifest:**
+   ```bash
+   python3 bin/docs-mirror-check.py
+   ```
+   Every top-level `*.md` in both trees must be classified in
+   `.dataknobs/docs-mirror-manifest.json`, so a **new doc fails this guard
+   until you classify it**. `mkdocs build --strict` will NOT catch that —
+   run the guard too (or `bin/run-quality-checks.sh`, which invokes it).
+
+   Pick the class by how the two copies are kept in agreement:
+
+   | Class | Use when |
+   |---|---|
+   | `transclude` | Site page is a `--8<--` include of the package source (**preferred for new docs** — drift is structurally impossible) |
+   | `symlink` | Site page symlinks the source; no intra-doc links need site-form rewriting |
+   | `mirror` | Hand-authored copy, content-guarded; `--fix` regenerates it |
+   | `diverge` | Intentional divergence; recorded, not content-checked |
+   | `package_only` / `site_only` | Genuinely unpaired — **not** a fallback for a pair you did not want to classify |
+
+   A paired entry may point at a subdirectory on either side (a package
+   source under `guides/`, or a site page under `guides/` as every bots
+   guide is), so prefer a real pair over `package_only`/`site_only`:
+   an unpaired classification opts the file out of per-class verification.
+
 ## Package-to-MkDocs Mapping
 
 | Package | Package Docs | MkDocs Docs |

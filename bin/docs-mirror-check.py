@@ -30,10 +30,12 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
 Completeness: every top-level ``*.md`` in both trees MUST be classified. An
 unclassified file (or a manifest entry with no file on disk) fails the check
 -- that is what makes silent drift impossible to introduce: a new doc forces
-a classification decision at PR time. A paired entry may point at a package
-*subdirectory* source (e.g. a transclusion of ``guides/events.md``); such a
-source is not a top-level package doc, so it is exempt from the top-level
-completeness set (its existence is still enforced by the per-class check).
+a classification decision at PR time. A paired entry may point at a
+*subdirectory* on either side -- a package source under ``guides/`` (e.g. a
+transclusion of ``guides/events.md``), or a site page under ``guides/``
+(where every bots guide lives). Such a file is not a top-level doc, so it is
+exempt from the top-level completeness set; its existence and the pair's
+invariant are still enforced by the per-class check.
 
 Modes:
 
@@ -346,28 +348,29 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
             )
         store[name] = bucket
 
-    def _add_pkg(name: str, bucket: str) -> None:
-        # A paired entry may source from a package subdirectory (e.g. a
-        # transclusion of ``guides/events.md``). Such a source is not a
-        # top-level package doc, so it is not part of the top-level
-        # completeness set -- its existence is enforced by the per-class check
-        # instead. Only top-level sources participate here.
+    def _add_paired(store: dict[str, str], name: str, bucket: str, side: str) -> None:
+        # A paired entry may point at a *subdirectory* on either side: a
+        # package source under ``guides/`` (a transclusion of
+        # ``guides/events.md``), or a site page under ``guides/`` (where every
+        # bots guide lives). Such a file is not a top-level doc, so it is not
+        # part of the top-level completeness set -- its existence, and the
+        # pair's invariant, are enforced by the per-class check instead. Only
+        # top-level paths participate here.
+        #
+        # Both sides must apply this rule. Exempting only the package side
+        # made a subdirectory site page inexpressible as a pair -- it would
+        # fail the "manifest references missing site doc" check below, since
+        # ``site_on_disk`` is a non-recursive glob of basenames -- which in
+        # turn forced genuine pairs to be recorded as ``package_only`` and
+        # silently opted them out of per-class verification.
         if "/" in name:
             return
-        _add(pkg_classified, name, bucket, "package")
+        _add(store, name, bucket, side)
 
-    for pair in entry.get("symlink", []):
-        _add_pkg(pair["package"], "symlink")
-        _add(site_classified, pair["site"], "symlink", "site")
-    for pair in entry.get("mirror", []):
-        _add_pkg(pair["package"], "mirror")
-        _add(site_classified, pair["site"], "mirror", "site")
-    for pair in entry.get("transclude", []):
-        _add_pkg(pair["package"], "transclude")
-        _add(site_classified, pair["site"], "transclude", "site")
-    for pair in entry.get("diverge", []):
-        _add_pkg(pair["package"], "diverge")
-        _add(site_classified, pair["site"], "diverge", "site")
+    for kind in ("symlink", "mirror", "transclude", "diverge"):
+        for pair in entry.get(kind, []):
+            _add_paired(pkg_classified, pair["package"], kind, "package")
+            _add_paired(site_classified, pair["site"], kind, "site")
     for name in entry.get("package_only", []):
         _add(pkg_classified, name, "package_only", "package")
     for name in entry.get("site_only", []):
