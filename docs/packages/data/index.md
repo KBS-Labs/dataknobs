@@ -30,8 +30,19 @@ pip install dataknobs-data
 pip install dataknobs-data[postgres]    # PostgreSQL support
 pip install dataknobs-data[elasticsearch]  # Elasticsearch support
 pip install dataknobs-data[s3]          # S3 support
+
+# Vector stores — one extra per store
+pip install dataknobs-data[faiss]       # FAISS vector store
+pip install dataknobs-data[pgvector]    # pgvector store (includes asyncpg)
+pip install dataknobs-data[chroma]      # Chroma vector store
+
 pip install dataknobs-data[all]         # All backends
 ```
+
+`dataknobs-data[vector]` remains available as a roll-up of all three
+vector stores. Note that it — and `[all]` — pulls chromadb, which
+currently carries an unfixed upstream advisory, so prefer the narrow
+extra for the store you actually use.
 
 ## Quick Start
 

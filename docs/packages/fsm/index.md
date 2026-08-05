@@ -78,12 +78,27 @@ pip install dataknobs-fsm
 Or with optional dependencies:
 
 ```bash
-# With database support
-pip install dataknobs-fsm[database]
+# With PostgreSQL database support
+pip install dataknobs-fsm[postgres]
+
+# With a single vector store (pick what you use)
+pip install dataknobs-fsm[faiss]
+pip install dataknobs-fsm[pgvector]
+pip install dataknobs-fsm[chroma]
 
 # With all extras
 pip install dataknobs-fsm[all]
 ```
+
+The vector backends are separate extras so you install only the store you
+use; `dataknobs-fsm[vector]` remains available as a roll-up of all three.
+Note that `chroma` (and therefore `vector` and `all`) pulls chromadb,
+which currently carries an unfixed upstream advisory — prefer the narrow
+extra for the store you actually need.
+
+Other database backends (SQLite, DuckDB, Elasticsearch, S3) come from
+`dataknobs-data`, a base dependency — install its extra for the backend
+in use, e.g. `pip install 'dataknobs-data[duckdb]'`.
 
 For LLM functionality, install the separate LLM package:
 ```bash

@@ -909,7 +909,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
             self._is_initialized = True
         except ImportError as e:
-            raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
+            raise ImportError(
+                "aiohttp package not installed. "
+                "Install with: pip install 'dataknobs-llm[ollama]'"
+            ) from e
 
     async def _close_client(self) -> None:
         """Close the aiohttp session."""

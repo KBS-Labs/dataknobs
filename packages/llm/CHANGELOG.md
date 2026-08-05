@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Corrected install instructions that named extras this package does not
+  declare: `dataknobs-llm[all-providers]` (the real roll-up is
+  `dataknobs-llm[all]`), `dataknobs-llm[dev]` (dev dependencies live in a
+  uv dependency group, not an extra — use `uv sync --all-packages` from a
+  workspace checkout), and `dataknobs-llm[yaml]` for file-based prompt
+  libraries (`pyyaml` is a base dependency, so no extra is needed). Each
+  previously resolved to the base package with a pip warning.
+
+### Changed
+
+- The `ImportError` raised when aiohttp is missing now points at the
+  floor-governed extras — `pip install 'dataknobs-llm[ollama]'` /
+  `pip install 'dataknobs-llm[huggingface]'` — instead of an unqualified
+  `pip install aiohttp`, so a consumer following the hint gets the
+  CVE floor declared below rather than an unconstrained aiohttp.
+
+### Security
+
+- Bumped minimum `aiohttp` requirement (extras: `ollama`,
+  `huggingface`) from `>=3.14.1` to `>=3.14.3` to extend the prior
+  `<=3.13.3` CVE sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf)
+  through the 3.14.2 and 3.14.3 advisories flagged at the floor
+  resolve. The one reachable finding is GHSA-cq5v-8q36-5273 /
+  CVE-2026-69244 (CVSS 7.1, out-of-bounds heap read in the C
+  response parser while building an error message for a malformed
+  chunked response, causing a client-side DoS), fixed in 3.14.3:
+  every `aiohttp` call site in this package is an outbound
+  `ClientSession` parsing server responses, and the advisory's
+  `AIOHTTP_NO_EXTENSIONS=1` workaround is not set. The floor also
+  sweeps two 3.14.2 fixes triaged unreachable —
+  GHSA-mfx4-hv73-q22v / CVE-2026-69243 (CVSS 6.3, HTTP request
+  smuggling via WebSocket upgrade) affects the server-side
+  component, which this package does not use, and
+  GHSA-mq44-7p77-q5h7 / CVE-2026-59881 (CVSS 6.9, WebSocket client
+  decompressing RSV1 frames without a negotiated
+  `permessage-deflate` extension) has no `ws_connect` call sites to
+  reach it. The inline floor comment in `pyproject.toml` records the
+  same per-advisory triage so future audits surface the reasoning
+  rather than re-deriving it.
+
 ## v0.6.9 - 2026-07-29
 
 ## v0.6.8 - 2026-07-27
