@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs-fsm[chroma]`, `[faiss]`, and `[pgvector]` extras** splitting
+  the former all-or-nothing `vector` extra, so a consumer can install just
+  the vector store it uses. Previously reaching FAISS or pgvector also
+  pulled chromadb, which carries an unfixed pre-authentication code
+  injection advisory (GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311, CVSS 9.3, no
+  upstream fix as of 2026-08-05 and no release above the affected range);
+  `dataknobs-fsm[faiss]` and `dataknobs-fsm[pgvector]` now avoid it
+  entirely. `dataknobs-fsm[vector]` is retained as a roll-up of all three,
+  so existing installs are unaffected, and `dataknobs-fsm[all]` continues
+  to include every backend — chromadb among them. Consumers who want the
+  full install minus Chroma should use
+  `dataknobs-fsm[llm,http,postgres,faiss,pgvector]`.
+
+  Each extra forwards to the matching `dataknobs-data` extra rather than
+  re-pinning the drivers here, so the vector-store floors have a single
+  home in the package that owns the stores.
+
+- **`dataknobs-fsm[postgres]` extra**, forwarding to
+  `dataknobs-data[postgres]`. It covers the Postgres-backed database
+  surface — `DatabaseResource`, `StorageBackend.POSTGRES`, `DatabaseETL`,
+  and the `backend: postgres` config path in the simple and async APIs —
+  all of which run through dataknobs-data's backends, so the psycopg2 /
+  sqlalchemy / asyncpg floors stay owned by that package. Rolled into
+  `dataknobs-fsm[all]`. Unlike `dataknobs-bots[postgres]`, this extra does
+  not pull `dataknobs-common[postgres]`: this package reaches neither the
+  Postgres advisory lock nor the Postgres event bus.
+
+### Fixed
+
+- `PgVectorStore` is now usable from a `dataknobs-fsm` extra install. The
+  `vector` extra declared `pgvector` but not `asyncpg`, which the store
+  lazy-imports as its transport, so `pip install dataknobs-fsm[vector]`
+  left it raising `asyncpg is not installed` at runtime. Forwarding to
+  `dataknobs-data[pgvector]` picks up the driver that package has always
+  carried, and the `vector` roll-up inherits the fix.
+
+- Corrected install instructions naming a `dataknobs-fsm[database]` extra
+  that was never declared — it resolved to the base package with a pip
+  warning, leaving Postgres-backed storage to fail at runtime on a missing
+  driver. The documented command is now `dataknobs-fsm[postgres]`, which
+  exists as of this release.
+
+### Security
+
+- Bumped minimum `aiohttp` requirement (extra: `http`) from
+  `>=3.14.1` to `>=3.14.3` to extend the prior `<=3.13.3` CVE sweep
+  (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) through the 3.14.2 and
+  3.14.3 advisories flagged at the floor resolve. The one reachable
+  finding is GHSA-cq5v-8q36-5273 / CVE-2026-69244 (CVSS 7.1,
+  out-of-bounds heap read in the C response parser while building an
+  error message for a malformed chunked response, causing a
+  client-side DoS), fixed in 3.14.3: the `http` IO adapters use
+  `aiohttp` purely as an outbound `ClientSession` parsing server
+  responses, and the advisory's `AIOHTTP_NO_EXTENSIONS=1` workaround
+  is not set. The floor also sweeps two 3.14.2 fixes triaged
+  unreachable — GHSA-mfx4-hv73-q22v / CVE-2026-69243 (CVSS 6.3, HTTP
+  request smuggling via WebSocket upgrade) affects the server-side
+  component, which this package does not use, and
+  GHSA-mq44-7p77-q5h7 / CVE-2026-59881 (CVSS 6.9, WebSocket client
+  decompressing RSV1 frames without a negotiated
+  `permessage-deflate` extension) has no `ws_connect` call sites to
+  reach it.
+
+- Re-verified the accepted GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311
+  (CVSS 9.3, pre-authentication code injection via the
+  `/api/v2/.../collections` endpoint) against the `chromadb>=1.0.0`
+  floor (extra: `vector`). As of 2026-08-05 the advisory still
+  affects 1.0.0–1.5.9 with no upstream fix, and 1.5.9 remains the
+  latest release, so no floor bump can clear it. Risk accepted
+  unchanged: the endpoint is server-mode only and is not exposed via
+  the `dataknobs-data` `ChromaVectorStore` client, which uses
+  embedded/persistent modes. The inline floor comment records the
+  refreshed verification date.
+
 ## v0.3.3 - 2026-07-29
 
 ### Fixed

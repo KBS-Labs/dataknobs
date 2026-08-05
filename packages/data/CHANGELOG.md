@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs-data[chroma]`, `[faiss]`, and `[pgvector]` extras** splitting
+  the former all-or-nothing `vector` extra, so a consumer can install just
+  the vector store it uses. Previously reaching FAISS or pgvector also
+  pulled chromadb, which carries an unfixed pre-authentication code
+  injection advisory (GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311, CVSS 9.3, no
+  upstream fix as of 2026-08-05 and no release above the affected range);
+  `dataknobs-data[faiss]` and `dataknobs-data[pgvector]` avoid it
+  entirely. `[pgvector]` carries `asyncpg`, the transport `PgVectorStore`
+  lazy-imports.
+
+  `dataknobs-data[vector]` is retained as a roll-up of all three and
+  resolves to exactly the same distributions as before, so existing
+  installs are unaffected; `dataknobs-data[all]` likewise continues to
+  include every backend, chromadb among them. For the full install minus
+  Chroma, use
+  `dataknobs-data[postgres,sqlite,duckdb,s3,elasticsearch,parquet,faiss,pgvector]`.
+
+  This package owns the vector stores, so these extras are the single
+  source of their dependency floors — `dataknobs-fsm` and
+  `dataknobs-bots` now forward to them instead of re-pinning the drivers.
+
+### Security
+
+- Re-verified the accepted GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311
+  (CVSS 9.3, pre-authentication code injection via the
+  `/api/v2/.../collections` endpoint) against the `chromadb>=1.0.0`
+  floor (extra: `vector`), flagged again at the floor resolve. As of
+  2026-08-05 the advisory still affects 1.0.0–1.5.9 with no upstream
+  fix, and 1.5.9 remains the latest release, so no floor bump can
+  clear it. Risk accepted unchanged: `ChromaVectorStore` uses
+  `chromadb.Client` / `chromadb.PersistentClient` only — never
+  `HttpClient` or server mode — so the vulnerable endpoint is not
+  reachable from this package. The inline floor comment records the
+  refreshed verification date.
+
 ## v0.7.0 - 2026-07-29
 
 ### Added

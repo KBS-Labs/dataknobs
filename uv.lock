@@ -1206,6 +1206,25 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "aioboto3" },
+    { name = "aiohttp" },
+    { name = "boto3" },
+    { name = "dataknobs-common", extra = ["postgres"] },
+    { name = "dataknobs-data", extra = ["faiss", "postgres"] },
+    { name = "fastapi" },
+    { name = "starlette" },
+]
+faiss = [
+    { name = "dataknobs-data", extra = ["faiss"] },
+]
+http = [
+    { name = "aiohttp" },
+]
+postgres = [
+    { name = "dataknobs-common", extra = ["postgres"] },
+    { name = "dataknobs-data", extra = ["postgres"] },
+]
 s3 = [
     { name = "aioboto3" },
     { name = "boto3" },
@@ -1218,6 +1237,7 @@ server = [
 [package.dev-dependencies]
 dev = [
     { name = "aioboto3" },
+    { name = "aiohttp" },
     { name = "blockbuster" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1233,10 +1253,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aioboto3", marker = "extra == 's3'", specifier = ">=12.0.0" },
+    { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.14.3" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
+    { name = "dataknobs-bots", extras = ["faiss", "http", "postgres", "s3", "server"], marker = "extra == 'all'", editable = "packages/bots" },
     { name = "dataknobs-common", editable = "packages/common" },
+    { name = "dataknobs-common", extras = ["postgres"], marker = "extra == 'postgres'", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["faiss"], marker = "extra == 'faiss'", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["postgres"], marker = "extra == 'postgres'", editable = "packages/data" },
     { name = "dataknobs-fsm", editable = "packages/fsm" },
     { name = "dataknobs-llm", editable = "packages/llm" },
     { name = "dataknobs-utils", editable = "packages/utils" },
@@ -1248,11 +1273,12 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "starlette", marker = "extra == 'server'", specifier = ">=1.3.1" },
 ]
-provides-extras = ["s3", "server"]
+provides-extras = ["faiss", "http", "postgres", "s3", "server", "all"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "aioboto3", specifier = ">=12.0.0" },
+    { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "blockbuster", specifier = ">=1.5.26,<2.0.0" },
     { name = "fastapi", specifier = ">=0.133.0" },
     { name = "httpx", specifier = ">=0.27.0" },
@@ -1388,6 +1414,9 @@ all = [
     { name = "pyarrow" },
     { name = "sqlalchemy" },
 ]
+chroma = [
+    { name = "chromadb" },
+]
 dev = [
     { name = "black" },
     { name = "moto" },
@@ -1405,8 +1434,15 @@ duckdb = [
 elasticsearch = [
     { name = "elasticsearch", extra = ["async"] },
 ]
+faiss = [
+    { name = "faiss-cpu" },
+]
 parquet = [
     { name = "pyarrow" },
+]
+pgvector = [
+    { name = "asyncpg" },
+    { name = "pgvector" },
 ]
 postgres = [
     { name = "asyncpg" },
@@ -1447,23 +1483,24 @@ requires-dist = [
     { name = "aioboto3", marker = "extra == 's3'", specifier = ">=12.0.0" },
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.19.0" },
+    { name = "asyncpg", marker = "extra == 'pgvector'", specifier = ">=0.29.0" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
-    { name = "asyncpg", marker = "extra == 'vector'", specifier = ">=0.29.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
-    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0.0" },
+    { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=1.0.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
+    { name = "dataknobs-data", extras = ["chroma", "faiss", "pgvector"], marker = "extra == 'vector'", editable = "packages/data" },
     { name = "dataknobs-data", extras = ["postgres", "sqlite", "duckdb", "s3", "elasticsearch", "parquet", "vector"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.1.0" },
     { name = "elasticsearch", extras = ["async"], marker = "extra == 'elasticsearch'", specifier = ">=8.0.0,<9.0.0" },
-    { name = "faiss-cpu", marker = "extra == 'vector'", specifier = ">=1.7.4" },
+    { name = "faiss-cpu", marker = "extra == 'faiss'", specifier = ">=1.7.4" },
     { name = "moto", marker = "extra == 'dev'", specifier = ">=4.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
-    { name = "pgvector", marker = "extra == 'vector'", specifier = ">=0.2.0" },
+    { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.2.0" },
     { name = "psycopg2", marker = "extra == 'postgres'", specifier = ">=2.9.0" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=23.0.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1475,7 +1512,7 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'postgres'", specifier = ">=2.0.0" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=3.7.0" },
 ]
-provides-extras = ["postgres", "sqlite", "duckdb", "s3", "elasticsearch", "parquet", "vector", "all", "dev"]
+provides-extras = ["postgres", "sqlite", "duckdb", "s3", "elasticsearch", "parquet", "chroma", "faiss", "pgvector", "vector", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1514,12 +1551,13 @@ dependencies = [
 all = [
     { name = "aiohttp" },
     { name = "anthropic" },
-    { name = "chromadb" },
-    { name = "faiss-cpu" },
+    { name = "dataknobs-data", extra = ["chroma", "faiss", "pgvector", "postgres"] },
     { name = "httpx" },
     { name = "langchain" },
     { name = "openai" },
-    { name = "pgvector" },
+]
+chroma = [
+    { name = "dataknobs-data", extra = ["chroma"] },
 ]
 dev = [
     { name = "black" },
@@ -1534,6 +1572,9 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
 ]
+faiss = [
+    { name = "dataknobs-data", extra = ["faiss"] },
+]
 http = [
     { name = "aiohttp" },
     { name = "httpx" },
@@ -1543,10 +1584,14 @@ llm = [
     { name = "langchain" },
     { name = "openai" },
 ]
+pgvector = [
+    { name = "dataknobs-data", extra = ["pgvector"] },
+]
+postgres = [
+    { name = "dataknobs-data", extra = ["postgres"] },
+]
 vector = [
-    { name = "chromadb" },
-    { name = "faiss-cpu" },
-    { name = "pgvector" },
+    { name = "dataknobs-data", extra = ["chroma", "faiss", "pgvector"] },
 ]
 
 [package.dev-dependencies]
@@ -1562,18 +1607,21 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
-    { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.14.1" },
+    { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.14.3" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.7.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
-    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.3.3" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", editable = "packages/data" },
-    { name = "dataknobs-fsm", extras = ["llm", "http", "vector"], marker = "extra == 'all'", editable = "packages/fsm" },
+    { name = "dataknobs-data", extras = ["chroma"], marker = "extra == 'chroma'", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["faiss"], marker = "extra == 'faiss'", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["pgvector"], marker = "extra == 'pgvector'", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["postgres"], marker = "extra == 'postgres'", editable = "packages/data" },
+    { name = "dataknobs-fsm", extras = ["chroma", "faiss", "pgvector"], marker = "extra == 'vector'", editable = "packages/fsm" },
+    { name = "dataknobs-fsm", extras = ["llm", "http", "postgres", "vector"], marker = "extra == 'all'", editable = "packages/fsm" },
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
-    { name = "faiss-cpu", marker = "extra == 'vector'", specifier = ">=1.7.4" },
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27.0" },
     { name = "ijson", specifier = ">=3.2.0" },
     { name = "langchain", marker = "extra == 'llm'", specifier = ">=1.3.9" },
@@ -1582,7 +1630,6 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.0.0" },
-    { name = "pgvector", marker = "extra == 'vector'", specifier = ">=0.2.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=11.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
@@ -1593,7 +1640,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
 ]
-provides-extras = ["llm", "http", "vector", "all", "dev"]
+provides-extras = ["llm", "http", "postgres", "chroma", "faiss", "pgvector", "vector", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1665,8 +1712,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'huggingface'", specifier = ">=3.14.1" },
-    { name = "aiohttp", marker = "extra == 'ollama'", specifier = ">=3.14.1" },
+    { name = "aiohttp", marker = "extra == 'huggingface'", specifier = ">=3.14.3" },
+    { name = "aiohttp", marker = "extra == 'ollama'", specifier = ">=3.14.3" },
     { name = "aiosqlite", marker = "extra == 'sqlite-cache'", specifier = ">=0.19.0" },
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.18.0" },
     { name = "dataknobs-common", editable = "packages/common" },
@@ -1739,7 +1786,7 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "json-stream", specifier = ">=2.3.0" },
     { name = "lxml", specifier = ">=6.1.0" },
-    { name = "nltk", specifier = ">=3.10.0" },
+    { name = "nltk", specifier = ">=3.10.2" },
     { name = "pandas", specifier = ">=1.3.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
@@ -1871,7 +1918,7 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "more-itertools", specifier = ">=8.10.0" },
-    { name = "nltk", specifier = ">=3.10.0" },
+    { name = "nltk", specifier = ">=3.10.2" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
 ]
@@ -4291,7 +4338,7 @@ wheels = [
 
 [[package]]
 name = "nltk"
-version = "3.10.1"
+version = "3.10.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -4300,9 +4347,9 @@ dependencies = [
     { name = "regex" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/65/20fa203b28b258fa1222305593ca281e4ad33729c389676bc0d29a8856fd/nltk-3.10.1.tar.gz", hash = "sha256:86a1b41d9ca0d35a2cb72fa60af4c9aaba9fe405b717161fd94cecd69f467007", size = 3098602, upload-time = "2026-08-01T06:25:20.748Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/16/24d639531e73cbc6884fb251d116dfe469df9c595e0dcf24668c54d0e8d3/nltk-3.10.2.tar.gz", hash = "sha256:fcfd80fb77931868cea8357573c79838b8abc609942ef9914d1c9f6070d4645c", size = 3101716, upload-time = "2026-08-05T09:56:20.657Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/47/44ffb39cb0edf6b7164fdd87441044d0a1924f0a2d8470e1ad0f533711e0/nltk-3.10.1-py3-none-any.whl", hash = "sha256:55b8780b6b97732c1c3806d4ae02d46113204b11bfdc19dddb95729f627f8853", size = 1725226, upload-time = "2026-08-01T06:25:08.199Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/2b/bf677eb32ca6684b270c0d19ab133c2271e9f3375997e5a8dd2b08e3152d/nltk-3.10.2-py3-none-any.whl", hash = "sha256:2c7ccacb765c5e26b0cb60fb1b57080af522c6924d12a714a243305ba3637412", size = 1725815, upload-time = "2026-08-05T09:56:09.657Z" },
 ]
 
 [[package]]

@@ -11,8 +11,8 @@ pip install dataknobs-fsm
 Or with optional dependencies:
 
 ```bash
-# With database support
-pip install dataknobs-fsm[database]
+# With PostgreSQL database support
+pip install dataknobs-fsm[postgres]
 
 # With LLM provider support
 pip install dataknobs-fsm[llm]

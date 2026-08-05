@@ -42,10 +42,10 @@ The Dataknobs LLM package provides a comprehensive system for managing prompts a
 ```bash
 # Install the package
 uv add dataknobs-llm
-
-# With optional dependencies for file-based prompts
-uv add dataknobs-llm[yaml]
 ```
+
+File-based (YAML) prompt libraries need no extra — `pyyaml` is a base
+dependency of this package.
 
 **Dependencies**:
 - `dataknobs-common` - Utilities

@@ -137,6 +137,15 @@ Supported backend types:
 
 Fetch configurations from REST APIs:
 
+Requires the `http` extra, which carries the aiohttp transport:
+
+```bash
+pip install 'dataknobs-bots[http]'
+```
+
+The module imports cleanly without aiohttp; `initialize()` raises
+`ImportError` with the same hint if the extra is missing.
+
 ```python
 from dataknobs_bots.registry import HTTPRegistryBackend
 

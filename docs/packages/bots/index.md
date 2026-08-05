@@ -373,9 +373,13 @@ pip install dataknobs-bots[faiss]
 
 # All optional dependencies
 pip install dataknobs-bots[all]
+```
 
-# For development
-pip install dataknobs-bots[dev]
+For development, dev dependencies live in the uv dependency group rather
+than an extra, so install them from a workspace checkout:
+
+```bash
+uv sync --all-packages
 ```
 
 ## Requirements

@@ -49,11 +49,25 @@ elasticsearch = [
 parquet = [
     "pyarrow>=23.0.1",  # PYSEC-2026-113 (CVSS 7.0) fixed in 23.0.1; also sweeps PYSEC-2023-238 (CVSS 9.8) and PYSEC-2024-161 (both fixed by 17.0.0)
 ]
-vector = [
+# This package owns the vector stores, so it owns their dependency
+# floors — the narrow extras below are the single source, and consuming
+# packages forward to them rather than re-pinning the drivers.  Splitting
+# by store also keeps `chromadb` (see its comment) out of an install that
+# only needs FAISS or pgvector.
+chroma = [
+    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c/PYSEC-2026-311 (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-08-05 (1.5.9 is still the latest release, so no floor bump can clear it) — not exposed in this package (ChromaVectorStore uses chromadb.Client / chromadb.PersistentClient only; no HttpClient / server mode)
+]
+faiss = [
+    "faiss-cpu>=1.7.4",  # FaissVectorStore's backend; numpy is already a base dependency, so this is the whole requirement
+]
+pgvector = [
     "pgvector>=0.2.0",  # PostgreSQL vector extension
-    "faiss-cpu>=1.7.4",  # Optional for Faiss backend
-    "chromadb>=1.0.0",  # Optional for Chroma backend; ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c/PYSEC-2026-311 (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-07-06 — not exposed in this package (ChromaVectorStore uses chromadb.Client / chromadb.PersistentClient only; no HttpClient / server mode)
-    "asyncpg>=0.29.0",  # Required for PgVectorStore backend
+    "asyncpg>=0.29.0",  # PgVectorStore's transport — lazy-imported, and the store raises "asyncpg is not installed" without it
+]
+# Back-compat roll-up: `dataknobs-data[vector]` keeps resolving to every
+# vector backend, so existing installs are unaffected by the split.
+vector = [
+    "dataknobs-data[chroma,faiss,pgvector]",
 ]
 all = [
     "dataknobs-data[postgres,sqlite,duckdb,s3,elasticsearch,parquet,vector]",

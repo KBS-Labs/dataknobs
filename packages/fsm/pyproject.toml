@@ -39,15 +39,42 @@ llm = [
 ]
 http = [
     "httpx>=0.27.0",  # GHSA-vqfr-h8mv-ghfj in transitive h11<0.16 (CVSS 9.1) swept by httpcore 1.x (required by httpx>=0.27)
-    "aiohttp>=3.14.1",  # extends the prior <=3.13.3 sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) through 3.14.x. Adds GHSA-hg6j-4rv6-33pg (CVSS 6.6, per-request cookies= cross-origin leak), GHSA-jg22-mg44-37j8 (CVSS 6.4, CookieJar.load() deserialization), and the rest of the <3.14.x sweep landing across 3.14.0 / 3.14.1. The two named highs were triaged unreachable from this codebase (outbound HTTP uses header-based auth; CookieJar.load() is not invoked) but bumping clears the floor-resolve audit regardless. Unblocked by the workspace move off aioresponses to an in-process aiohttp.web test server.
+    "aiohttp>=3.14.3",  # extends the prior <=3.13.3 sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) and the >=3.14.1 floor through the 3.14.2 / 3.14.3 advisories. GHSA-cq5v-8q36-5273 / CVE-2026-69244 (CVSS 7.1, out-of-bounds heap read in the C response parser's malformed-chunked error path -> client-side DoS) is fixed in 3.14.3 and is the one reachable finding: every aiohttp call site in this workspace is an outbound ClientSession parsing server responses, and the AIOHTTP_NO_EXTENSIONS=1 workaround is not set. Also sweeps two 3.14.2 fixes triaged unreachable — GHSA-mfx4-hv73-q22v / CVE-2026-69243 (CVSS 6.3, request smuggling via WebSocket upgrade, server-side component only; aiohttp.web appears solely in the in-process test server) and GHSA-mq44-7p77-q5h7 / CVE-2026-59881 (CVSS 6.9, WebSocket client decompresses RSV1 frames without negotiated permessage-deflate; no ws_connect call sites exist). Retains the prior 3.14.1 coverage of GHSA-hg6j-4rv6-33pg (CVSS 6.6, per-request cookies= cross-origin leak) and GHSA-jg22-mg44-37j8 (CVSS 6.4, CookieJar.load() deserialization), both unreachable (outbound HTTP uses header-based auth; CookieJar.load() is not invoked).
 ]
+# `dataknobs-fsm[postgres]` covers the Postgres-backed database surface:
+# `DatabaseResource` / `StorageBackend.POSTGRES` / `DatabaseETL` and the
+# `backend: postgres` config path in the simple + async APIs, all of which
+# run through dataknobs-data's backends.  Forwarding to that package's
+# extra keeps the psycopg2 / sqlalchemy / asyncpg floors in a single place
+# rather than re-pinning the drivers here.  Unlike `dataknobs-bots`, this
+# package does not reach dataknobs-common's Postgres lock or event bus —
+# the `PostgresEventBus` mention in `resources.pool` is a docstring
+# analogy for the constructor shape, not a dependency.
+postgres = [
+    "dataknobs-data[postgres]",
+]
+# One narrow extra per vector store, so a consumer installs exactly the
+# store it uses — reaching FAISS or pgvector no longer drags in chromadb,
+# which carries an unfixed advisory (documented at the dataknobs-data
+# declaration).  Each forwards to dataknobs-data, which owns the stores
+# and therefore their dependency floors; re-pinning the drivers here
+# would give the same floor two homes to drift between.
+chroma = [
+    "dataknobs-data[chroma]",
+]
+faiss = [
+    "dataknobs-data[faiss]",
+]
+pgvector = [
+    "dataknobs-data[pgvector]",
+]
+# Back-compat roll-up: `dataknobs-fsm[vector]` keeps resolving to every
+# vector backend, so existing installs are unaffected by the split.
 vector = [
-    "pgvector>=0.2.0",
-    "faiss-cpu>=1.7.4",
-    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c/PYSEC-2026-311 (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-07-06 — not exposed via the dataknobs-data ChromaVectorStore client (embedded/persistent modes only)
+    "dataknobs-fsm[chroma,faiss,pgvector]",
 ]
 all = [
-    "dataknobs-fsm[llm,http,vector]",
+    "dataknobs-fsm[llm,http,postgres,vector]",
 ]
 dev = [
     "pytest>=8.0.0",

@@ -221,10 +221,14 @@ pip install dataknobs-llm[openai]
 pip install dataknobs-llm[anthropic]
 
 # With all LLM providers
-pip install dataknobs-llm[all-providers]
+pip install dataknobs-llm[all]
+```
 
-# For development
-pip install dataknobs-llm[dev]
+For development, dev dependencies live in the uv dependency group rather
+than an extra, so install them from a workspace checkout:
+
+```bash
+uv sync --all-packages
 ```
 
 ## Requirements

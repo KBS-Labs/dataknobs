@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Raised the `nltk` floor to `>=3.10.2`, excluding the broken 3.10.1
+  release. 3.10.1 shipped an import-security hook (`nltk/inisec.py`) that
+  blocked any module whose install path resolved under the current working
+  directory, without excluding an in-tree virtualenv. With the venv inside
+  the project — uv's default layout — every nltk-initiated `import regex`
+  raised `ImportError: Blocked import of regex from current working
+  directory`, which in this workspace made six of the nine workspace packages fail to import at all;
+  running with `cwd=/` blocked the standard library. The `PYTHONSAFEPATH`
+  workaround named in the error message does not help, because the check
+  is path containment rather than `sys.path` membership. Upstream removed
+  the module in 3.10.2.
+
 ## v1.2.18 - 2026-07-29
 
 ## v1.2.17 - 2026-07-20

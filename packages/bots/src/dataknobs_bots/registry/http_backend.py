@@ -2,6 +2,11 @@
 
 This module provides an HTTP/REST backend for fetching bot configurations
 from external services, enabling centralized configuration management.
+
+aiohttp is treated as an optional dependency: importing this module
+without aiohttp installed succeeds, but initializing
+:class:`HTTPRegistryBackend` raises ``ImportError`` with an install hint
+(``pip install 'dataknobs-bots[http]'``).
 """
 
 from __future__ import annotations
@@ -197,7 +202,7 @@ class HTTPRegistryBackend(RegistryBackend):
         except ImportError as e:
             raise ImportError(
                 "aiohttp is required for HTTPRegistryBackend. "
-                "Install it with: pip install aiohttp"
+                "Install with: pip install 'dataknobs-bots[http]'"
             ) from e
 
     async def close(self) -> None:

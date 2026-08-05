@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs-bots[postgres]` and `dataknobs-bots[faiss]` extras.** Both
+  were already documented in the README, user guide, and package index
+  but never existed, so `pip install dataknobs-bots[postgres]` warned and
+  resolved to the base package — leaving the PostgreSQL registry backends
+  and FAISS vector memory to fail at runtime on a missing driver.
+  `postgres` forwards to `dataknobs-data[postgres]` (registry storage via
+  `create_registry_backend` / `DataKnobsRegistryAdapter`) and
+  `dataknobs-common[postgres]` (the cross-replica ingest lock reached by
+  `IngestOrchestrator` -> `create_lock({"backend": "postgres"})`), so the
+  driver floors stay owned by those packages. `faiss` forwards to the
+  narrow `dataknobs-data[faiss]` rather than `dataknobs-data[vector]`,
+  whose roll-up would also pull chromadb — carrying an unfixed
+  pre-authentication code-injection advisory (GHSA-f4j7-r4q5-qw2c /
+  PYSEC-2026-311, CVSS 9.3) — and pgvector, needed only by the
+  Postgres-backed store.
+
+- **`dataknobs-bots[all]` extra**, resolving to
+  `dataknobs-bots[faiss,http,postgres,s3,server]` — the roll-up every
+  sibling package already provides (`dataknobs-data[all]`,
+  `dataknobs-fsm[all]`, `dataknobs-llm[all]`). Also already documented
+  and likewise nonexistent, so it too silently resolved to the base
+  package. Note it does **not** pull chromadb or pgvector, per the
+  narrow `faiss` scoping above.
+
+- **`dataknobs-bots[http]` extra** declaring `aiohttp>=3.14.3`, the
+  transport `HTTPRegistryBackend` (`registry.http_backend`) has always
+  used. The module continues to lazy-import aiohttp so the package
+  imports cleanly without the extra; `initialize()` raises `ImportError`
+  with a `pip install 'dataknobs-bots[http]'` hint (previously an
+  unqualified `pip install aiohttp`).
+
+### Security
+
+- Put `HTTPRegistryBackend`'s aiohttp transport under a declared version
+  floor. aiohttp was never declared by this package, so it reached
+  consumers only transitively — through the `s3` extra's
+  `aioboto3` -> `aiobotocore` chain, or a sibling package's own extra —
+  and no dataknobs floor governed the version an `HTTPRegistryBackend`
+  user actually installed; the floor-resolve audit could not see the
+  dependency at all. The new `http` extra pins `aiohttp>=3.14.3`,
+  matching the `dataknobs-llm` / `dataknobs-fsm` floors, which clears
+  GHSA-cq5v-8q36-5273 / CVE-2026-69244 (CVSS 7.1, out-of-bounds heap
+  read in the C response parser while building an error message for a
+  malformed chunked response, causing a client-side DoS). That advisory
+  is reachable on this path: `HTTPRegistryBackend` is an outbound
+  `ClientSession` parsing responses from a consumer-configured registry
+  server, and the advisory's `AIOHTTP_NO_EXTENSIONS=1` workaround is not
+  set. The floor also sweeps the 3.14.2 fixes GHSA-mfx4-hv73-q22v (CVSS
+  6.3, server-side request smuggling via WebSocket upgrade) and
+  GHSA-mq44-7p77-q5h7 (CVSS 6.9, WebSocket client RSV1 decompression
+  without a negotiated `permessage-deflate` extension), both unreachable
+  here, plus the prior `<=3.14.1` sweep (highest CVSS 9.1:
+  GHSA-63hf-3vf5-4wqf).
+
+- Declared `aiohttp` in the dev dependency group as well, so the
+  in-process `aiohttp.web` test server backing the `HTTPRegistryBackend`
+  tests no longer depends on aiohttp arriving transitively via the
+  unrelated `aioboto3` dev dependency.
+
 ## v0.9.4 - 2026-07-29
 
 ### Added
