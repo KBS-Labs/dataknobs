@@ -76,6 +76,7 @@ nav:
       - packages/common/structured-config.md
       - packages/common/serialization.md
       - packages/common/plugin-registry.md
+      - packages/common/packs.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:
@@ -221,6 +222,7 @@ nav:
         - packages/bots/guides/provider-registry.md
         - packages/bots/guides/tools.md
         - packages/bots/guides/middleware.md
+        - packages/bots/guides/behavior-packs.md
         - packages/bots/guides/bot-manager.md
         - packages/bots/guides/observability.md
         - packages/bots/guides/rag-ingestion.md

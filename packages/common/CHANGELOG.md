@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs_common.packs`** — ordered, precedence-resolved composition of
+  named declaration bundles. A *pack* is a named, frozen, partial
+  declaration; a *binding* selects packs for one deployment and may tune
+  them; resolution folds the selection — lowest `priority` first — field by
+  field, under rules each field declares for itself. `PackSpec` (a frozen
+  `StructuredConfig` subclass) is the base a domain package subclasses to
+  name its fields, declaring a per-field rule for each in `_COMPOSITION`;
+  `PackRegistry` (a `Registry`, since packs are eagerly registered
+  declarations rather than lazily-constructed backends) holds specs keyed
+  by `spec.name` and provides the pure, synchronous `resolve(bindings)`;
+  `PackResolution` carries the applied specs in fold order, the composed
+  spec, and any diagnostics. `MergeKind` supplies six built-in rules
+  (`LAST_WINS`, `FIRST_WINS`, `UNANIMOUS`, `CONCAT`, `CONCAT_UNIQUE`,
+  `MERGE`), and a plain `Reducer` — `(acc, next) -> value` — is accepted
+  anywhere a `MergeKind` is, so semantics the vocabulary does not cover
+  (recursive merge via `dataknobs_config.inheritance.deep_merge`, which
+  matches the signature exactly) are reachable without this package
+  depending on `dataknobs-config`. A field participates in the fold only
+  when its contributed value differs from that field's declared default, so
+  a pack that does not mention a field cannot clobber one that does.
+  Failures split into two deliberately distinct families: authoring bugs (a
+  field with no declared rule, a rule for a nonexistent field, a non-meta
+  field with no default, a value whose shape contradicts its rule) raise
+  `ConfigurationError` at `PackRegistry` construction, while binding
+  problems raise `PackResolutionError` carrying a machine-readable `reason`
+  (`unknown_pack`, `unknown_binding_key`, `locked_pack_disabled`,
+  `field_conflict`, `invalid_binding`). Non-fatal diagnostics are structured
+  `PackWarning`s with a stable `code` (`priority_tie`, `value_override`,
+  `key_override`) so a deployment can escalate one class of collision
+  without pattern-matching prose. `compose_packs` exposes the underlying
+  fold for callers that already hold specs in the order they want. No
+  module-level singleton is provided — a pack binding is a per-deployment
+  decision, and a process-global registry would be a multi-tenant hazard.
+  `MergeKind`, `Reducer`, `CompositionRule`, `PackSpec`, `PackWarning`,
+  `PackResolution`, `PackResolutionError`, `compose_packs`, and
+  `PackRegistry` are exported from the top-level `dataknobs_common`
+  namespace. See `docs/guides/packs.md`.
+
 ## v1.6.3 - 2026-07-29
 
 ### Added

@@ -1,9 +1,9 @@
 {
-  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. A paired entry may source from a package subdirectory (e.g. a transclusion of guides/events.md); such a source is not a top-level package doc and is exempt from the top-level completeness set. See the guard's module docstring for the full model.",
+  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. A paired entry may point at a subdirectory on either side — a package source under guides/ (e.g. a transclusion of guides/events.md), or a site page under guides/ (where every bots guide lives); such a file is not a top-level doc and is exempt from the top-level completeness set, but its existence and the pair's invariant are still enforced by the per-class check. See the guard's module docstring for the full model.",
   "_schema": {
     "symlink": "Site page is a symlink to the package source; drift is structurally impossible. The guard verifies the site path is a symlink resolving to the package source. Used when the source has no intra-doc links that need site-form rewriting. Each entry: {package, site}.",
     "transclude": "Site page is a pymdownx `--8<--` include of the package source; drift is structurally impossible. The guard only verifies the include still points at the source. Each entry: {package, site}.",
-    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence \u2014 make the surrounding line unique or drop the exception.",
+    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence — make the surrounding line unique or drop the exception.",
     "diverge": "Intentional content divergence (structural landing page, faithful condensation, independent elaboration). Recorded, not content-checked; both files must exist. Each entry: {package, site, reason}.",
     "package_only": "Package doc with no site mirror. Listed by package filename.",
     "site_only": "Site-native page with no package source. Listed by site filename."
@@ -24,6 +24,10 @@
         {
           "package": "guides/locks.md",
           "site": "locks.md"
+        },
+        {
+          "package": "guides/packs.md",
+          "site": "packs.md"
         },
         {
           "package": "guides/plugin-registry.md",
@@ -210,6 +214,44 @@
     "bots": {
       "package_dir": "packages/bots/docs",
       "site_dir": "docs/packages/bots",
+      "transclude": [
+        {
+          "package": "BEHAVIOR_PACKS.md",
+          "site": "guides/behavior-packs.md"
+        },
+        {
+          "package": "CUSTOM_STRATEGIES.md",
+          "site": "guides/custom-strategies.md"
+        },
+        {
+          "package": "DYNAMIC_REGISTRATION.md",
+          "site": "guides/dynamic-registration.md"
+        },
+        {
+          "package": "GROUNDED_REASONING.md",
+          "site": "guides/grounded-reasoning.md"
+        },
+        {
+          "package": "HYBRID_REASONING.md",
+          "site": "guides/hybrid-reasoning.md"
+        },
+        {
+          "package": "PROMPT_ENVELOPE.md",
+          "site": "guides/prompt-envelope.md"
+        },
+        {
+          "package": "RAG_QUERY.md",
+          "site": "guides/rag-query.md"
+        },
+        {
+          "package": "RAG_RETRIEVAL.md",
+          "site": "guides/rag-retrieval.md"
+        },
+        {
+          "package": "WIZARD_CONFIG_BUILDER.md",
+          "site": "guides/wizard-config-builder.md"
+        }
+      ],
       "package_only": [
         "API.md",
         "ARCHITECTURE.md",
@@ -218,27 +260,19 @@
         "CONFIGURATION.md",
         "CONFIG_TOOLKIT.md",
         "CONTEXT_AWARE_WIZARDS.md",
-        "CUSTOM_STRATEGIES.md",
-        "DYNAMIC_REGISTRATION.md",
-        "GROUNDED_REASONING.md",
-        "HYBRID_REASONING.md",
         "MIDDLEWARE.md",
         "MIGRATION.md",
         "MULTI_TENANT.md",
         "PROMPT_CUSTOMIZATION.md",
-        "PROMPT_ENVELOPE.md",
         "PROMPT_REFERENCE.md",
         "PROVIDER_REGISTRY.md",
         "RAG_INGESTION.md",
-        "RAG_QUERY.md",
-        "RAG_RETRIEVAL.md",
         "RUBRICS.md",
         "TEMPLATE_SECURITY.md",
         "TESTING.md",
         "TOOLS.md",
         "USER_GUIDE.md",
         "WIZARD_ADVANCE_API.md",
-        "WIZARD_CONFIG_BUILDER.md",
         "WIZARD_SUBFLOWS.md"
       ],
       "site_only": [

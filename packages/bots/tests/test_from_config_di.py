@@ -8,7 +8,6 @@ Tests the ``llm`` and ``middleware`` override kwargs on
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import pytest
 
@@ -559,7 +558,7 @@ class TestMiddlewareSpecResolution:
             "optional": True,
         }
 
-        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.bot.base"):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.middleware.factory"):
             assert DynaBot._create_bot_middleware(spec) is None
             assert DynaBot._create_conversation_middleware(spec) is None
 
@@ -620,7 +619,7 @@ class TestMiddlewareSpecResolution:
             "optional": True,
         }
 
-        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.bot.base"):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.middleware.factory"):
             assert DynaBot._create_conversation_middleware(spec) is None
 
         assert _CONVERSATION_MIDDLEWARE_CLASS in caplog.text
