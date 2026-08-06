@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MultiAuthorityData.get_unique_vals_df` raised `TypeError` for columns with
+  a pandas extension dtype (nullable `Int64`, `category`, `string`). Integer
+  detection now recognises extension dtypes, so these columns produce a
+  unique-value frame like any other — integer columns indexed by value,
+  others by position.
 - Raised the `nltk` floor to `>=3.10.2`, excluding the broken 3.10.1
   release. 3.10.1 shipped an import-security hook (`nltk/inisec.py`) that
   blocked any module whose install path resolved under the current working

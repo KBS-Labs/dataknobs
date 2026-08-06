@@ -525,8 +525,8 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         """Get a dataframe with the unique values from the column and the given
         column name.
         """
-        data = np.sort(pd.unique(col.dropna()))
-        if np.issubdtype(col.dtype, np.integer):
+        data = np.sort(np.asarray(pd.unique(col.dropna())))
+        if pd.api.types.is_integer_dtype(col.dtype):
             # IDs for an integer column are the integers themselves
             col_df = pd.DataFrame({name: data}, index=data)
         else:

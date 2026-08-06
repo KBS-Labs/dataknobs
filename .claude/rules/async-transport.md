@@ -54,15 +54,38 @@ catastrophic under concurrency.
 
 ## Suppressing a Finding
 
+**This section governs the blocking-I/O members of the family** — `ASYNC210`
+(blocking HTTP client), `ASYNC230` (blocking `open()`), `ASYNC240` (blocking
+`Path`/`os` call), `ASYNC251` (`time.sleep`). Those are the checks that detect
+a stalled event loop, which is what this rule exists to prevent.
+
 A genuine blocking call is **fixed (offloaded), not ignored**. A per-file
 `ASYNC` ignore is permitted ONLY for a verified false positive — a cheap,
 one-shot, setup-time stat that is not on a hot loop, or a call also reachable
 from sync contexts — and MUST carry a one-line justification. Never a blanket
-`ASYNC` ignore, and never an ignore on a true-positive blocking site.
+ignore of a blocking-I/O check, and never an ignore on a true-positive
+blocking site.
 
 > **Do NOT add `anyio` / `trio` to satisfy `ASYNC240`.** The dependency-free
 > fix is `asyncio.to_thread` around the stat/open; adding an async-filesystem
 > dependency is rejected by the dependency bar.
+
+### Members with no blocking semantics
+
+`flake8-async` also ships checks that are not about blocking the loop —
+notably `ASYNC109`, which objects to a `timeout` parameter on an `async def`
+and prefers `asyncio.timeout` at the call site. A finding there is a
+signature-shape opinion, not a stalled loop: the flagged code performs no I/O
+on the event loop, and "fixing" it changes a public signature. Every such site
+in this repo is a contract method (`DistributedLock.acquire`,
+`RateLimiter.acquire`) or a graceful-shutdown method, where the parameter *is*
+the interface and an implementation forwards it rather than timing out
+client-side.
+
+These are outside this rule. Silencing one — including family-wide — is an
+ordinary API decision, made on its own merits and recorded with its rationale
+beside the `ignore`. It is not the blanket suppression prohibited above, and
+it leaves the blocking-I/O members fully enforced.
 
 ## References
 
