@@ -107,7 +107,7 @@ import dataclasses
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, NamedTuple, TypeAlias, TypeVar
 
@@ -209,35 +209,20 @@ Reducer: TypeAlias = Callable[[Any, Any], Any]
 CompositionRule: TypeAlias = MergeKind | Reducer
 
 
-class _ValueRenderingStrEnum(str, Enum):
-    """A ``str`` enum that renders as its *value*, not ``Class.MEMBER``.
-
-    ``(str, Enum)`` is the spelling used across the tree, but it inherits
-    ``Enum.__str__``, so an f-string or ``%s`` renders the member repr where
-    a log line wants the value. Overriding ``__str__`` restores it — exactly
-    the behaviour :class:`enum.StrEnum` provides.
-
-    ``StrEnum`` itself would be the obvious base (the package requires
-    3.12), but the mypy configuration still declares ``python_version =
-    "3.10"``, under which ``enum.StrEnum`` does not resolve. Correcting that
-    is a repo-wide change; this base keeps the fix local.
-
-    Diagnostic vocabularies are read by machines *and* written to logs, so
-    both properties are load-bearing. Comparison, hashing, set membership
-    and JSON all behave as the plain string either way.
-    """
-
-    # Exactly how ``enum.StrEnum`` defines it: bypass ``Enum.__str__`` and
-    # defer to the mixed-in ``str``, which is the value itself.
-    __str__ = str.__str__
-
-
-class PackWarningCode(_ValueRenderingStrEnum):
+class PackWarningCode(StrEnum):
     """The complete :attr:`PackWarning.code` vocabulary.
 
     One definition. The members below are what resolution emits, what a
     consumer branches on, and what the guide's table is checked against —
     there is no second list to drift from.
+
+    :class:`~enum.StrEnum` rather than the ``(str, Enum)`` spelling used
+    elsewhere in the tree: a diagnostic code is read by machines *and*
+    written to logs, and only ``StrEnum`` gives both. Comparison, hashing,
+    set membership and JSON behave as the plain string either way, but
+    ``(str, Enum)`` inherits ``Enum.__str__``, so an f-string or ``%s``
+    would render ``PackWarningCode.KEY_OVERRIDE`` where the documented
+    contract says ``key_override``.
     """
 
     #: Selected packs share a priority *and* contend for a field, so
@@ -252,7 +237,7 @@ class PackWarningCode(_ValueRenderingStrEnum):
     BINDING_OVERRIDE_IGNORED = "binding_override_ignored"
 
 
-class PackResolutionReason(_ValueRenderingStrEnum):
+class PackResolutionReason(StrEnum):
     """The complete :attr:`PackResolutionError.reason` vocabulary.
 
     The counterpart to :class:`PackWarningCode`, one severity up: every
