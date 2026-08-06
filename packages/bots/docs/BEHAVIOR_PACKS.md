@@ -37,8 +37,8 @@ audit = BehaviorPackSpec(
 )
 ```
 
-Every field is optional — a pack is a *partial* contribution, and an unset
-field is one the pack does not speak to.
+Every field other than `name` is optional — a pack is a *partial*
+contribution, and an unset field is one the pack does not speak to.
 
 | Field | Type | Rule | Meaning |
 |---|---|---|---|
@@ -80,6 +80,17 @@ They are kept as data — not instances — so this spec and `DynaBotConfig`
 cannot drift, and so a pack stays serializable. Turn them into live
 instances with
 [`build_middleware` / `build_conversation_middleware`](middleware.md#building-middleware-from-specs).
+
+> **Packs and bindings are trusted configuration.** A spec's `class` is a
+> dotted path that gets imported and instantiated, so building one executes
+> whatever that module and constructor do. `middleware` composes with
+> `CONCAT`, which means a binding body can *append* a spec — so anyone who
+> can write a binding can name any importable class.
+>
+> Author packs and bindings in the same trust domain as the application's
+> own code. Never build either from end-user input or from a blob a tenant
+> supplies. If per-tenant selection is needed, let the tenant choose among
+> pack *names* you registered, and keep the pack contents yours.
 
 ## The registry
 
@@ -123,12 +134,25 @@ resolution.spec             # the composed BehaviorPackSpec
 resolution.warnings         # structured PackWarning diagnostics
 ```
 
-An empty binding mapping resolves to an all-default composed spec with no
-applied packs — **packs are opt-in.**
+Every named pack must be registered — including one you are switching off,
+since `enabled: false` is a statement about a pack the deployment knows
+about. An empty binding mapping resolves to an all-default composed spec
+with no applied packs — **packs are opt-in.**
+
+When a platform baseline and a per-tenant overlay both have a say, combine
+them with `merge_bindings` rather than by hand — later layers win per pack
+and per key, and it is what lets a baseline's `locked: true` outrank a
+tenant's `enabled: false`:
+
+```python
+from dataknobs_common.packs import merge_bindings
+
+resolution = registry.resolve(merge_bindings(platform_bindings, tenant_bindings))
+```
 
 See [Pack Composition → Bindings](../../common/packs.md) for
 the full binding contract (`enabled` / `locked` / `priority`, field
-overrides, and why unknown keys are rejected rather than ignored).
+overrides, layering, and why unknown keys are rejected rather than ignored).
 
 ## Installing a composed pack
 
@@ -284,6 +308,8 @@ resolution.warnings
 | Binding names an unregistered pack | `PackResolutionError(reason="unknown_pack")` |
 | `locked: true` with `enabled: false` | `PackResolutionError(reason="locked_pack_disabled")` |
 | Typo'd binding key (`lockd: true`) | `PackResolutionError(reason="unknown_binding_key")` |
+| Binding gives a field a value its rule cannot use (a string for `middleware`) | `PackResolutionError(reason="invalid_binding")` |
+| Binding overrides a field whose rule then discards the value | Resolves, with a `binding_override_ignored` warning |
 | Declared synthesizer not registered | `ConfigurationError` from `verify_stage_synthesizers` |
 | Middleware spec class is the wrong flavor | `ConfigurationError` from `build_middleware` (always — never covered by `optional`) |
 

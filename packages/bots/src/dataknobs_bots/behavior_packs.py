@@ -176,6 +176,13 @@ def verify_stage_synthesizers(names: Iterable[str]) -> None:
             :data:`~dataknobs_bots.reasoning.stage_synthesizer_backends`.
             The message lists every missing name and what is registered, so
             one call reports the whole gap rather than the first of it.
+
+            Deliberately a plain ``ConfigurationError`` with no ``reason``,
+            unlike the ``PackResolutionError``s resolution raises: a
+            declared-but-unregistered synthesizer is a *wiring* bug — a
+            missing import or a typo in code — not operator input a
+            deployment could correct, so there is nothing for a caller to
+            branch on.
     """
     missing = sorted({name for name in names if not stage_synthesizer_backends.has(name)})
     if not missing:

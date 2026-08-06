@@ -545,8 +545,9 @@ bot = await DynaBot.from_config(
 )
 ```
 
-Both take a **sequence** of specs and return a **list** of live instances —
-the shape both install channels want.
+Both take an **iterable** of specs and return a **list** of live instances —
+the shape both install channels want. Each is consumed once, so a
+one-shot generator is fine.
 
 | Function | Builds | For |
 |---|---|---|
@@ -556,6 +557,16 @@ the shape both install channels want.
 
 Both wrappers delegate to `resolve_middleware_from_spec`, so there is
 exactly one resolution body and the two flavors cannot drift.
+
+> **Middleware specs are trusted configuration.** A spec's `class` is a
+> dotted path that gets imported and instantiated, so resolving one executes
+> whatever that module and constructor do — import *is* execution, and there
+> is no allow-list or sandbox here.
+>
+> Specs must come from the same trust domain as the application's own code:
+> a config file, a deployment's policy bundle, a pack a platform team
+> authored. Never build one from end-user input, a request body, or a
+> per-tenant blob the tenant supplies.
 
 ### Spec shape
 

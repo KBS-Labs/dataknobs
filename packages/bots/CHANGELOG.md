@@ -43,9 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `middleware:` and `conversation_middleware:` blocks, now free-standing so
   anything assembling middleware declaratively can produce instances to
   hand to `from_config(..., platform_middleware=...)` without reaching into
-  bot internals. The two wrappers take a sequence of specs and return a
+  bot internals. The two wrappers take an iterable of specs and return a
   list of live instances; both delegate to `resolve_middleware_from_spec`,
   so there is exactly one resolution body and the two flavors cannot drift.
+  Middleware specs are **trusted configuration**: a spec's `class` is a
+  dotted path that is imported and instantiated, so specs must never be
+  built from end-user or per-tenant input.
   `optional: true` continues to cover only transient resolution failures
   (missing module / class / bad constructor params) — a class-shape
   mismatch, such as a turn-lifecycle `Middleware` listed under
@@ -55,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result rather than a `None` hole, so the returned list is directly usable
   as `platform_middleware`; resolve specs one at a time when you need to
   know which was skipped.
+
+  Two observable consequences of the move, both intended. Resolution now
+  logs under `dataknobs_bots.middleware.factory` rather than
+  `dataknobs_bots.bot.base`, so anything filtering middleware-resolution
+  logs by logger name needs updating. And a configured bot-turn
+  `Middleware` whose class defines a falsy `__bool__` / `__len__` is now
+  installed rather than silently dropped: the bot-turn path tested
+  truthiness where the conversation path tested `is not None`, and the two
+  now agree on `is not None`.
 
 - **`dataknobs-bots[postgres]` and `dataknobs-bots[faiss]` extras.** Both
   were already documented in the README, user guide, and package index

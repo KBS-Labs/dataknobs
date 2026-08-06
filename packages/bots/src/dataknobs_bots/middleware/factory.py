@@ -22,7 +22,7 @@ Two flavors, wired to different layers:
   :class:`~dataknobs_llm.conversations.ConversationMiddleware`, which wraps
   the ``llm.complete`` call itself.
 
-Both take a *sequence* of specs and return a list of live instances, which
+Both take an *iterable* of specs and return a list of live instances, which
 is the shape both install channels want — ``DynaBot`` builds its own two
 configured lists through them, and a caller assembling middleware
 declaratively hands the result straight to
@@ -31,6 +31,21 @@ declaratively hands the result straight to
 
 Both delegate to :func:`resolve_middleware_from_spec`, so there is exactly
 one resolution body and the two flavors cannot drift.
+
+.. warning::
+
+   **Middleware specs are trusted configuration.** A spec's ``class`` is a
+   dotted path that gets imported and instantiated, so resolving one
+   executes whatever that module and constructor do. Specs must come from
+   the same trust domain as the application's own code — a config file, a
+   deployment's policy bundle, a pack a platform team authored.
+
+   Never build a spec from end-user input, a request body, or a per-tenant
+   blob supplied by the tenant. That applies with particular force to
+   composed declarations: a pack field holding middleware specs concatenates
+   contributions, so an attacker who can add one entry to a binding body can
+   name any importable class. There is no allow-list here and no sandbox —
+   import *is* execution.
 """
 
 from __future__ import annotations

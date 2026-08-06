@@ -3786,8 +3786,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     # Middleware spec resolution lives in
     # :mod:`dataknobs_bots.middleware.factory` so anything assembling
     # middleware declaratively can reach it without going through the bot.
-    # These three stay as private aliases for in-tree callers; the public
-    # functions are the supported entry points.
+    # These three stay as private aliases so an out-of-tree caller holding a
+    # reference to one keeps working; nothing in this repo calls them outside
+    # tests. The public functions are the supported entry points.
 
     @staticmethod
     def _resolve_middleware_from_spec(
@@ -3803,7 +3804,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     def _create_bot_middleware(config: dict[str, Any]) -> Middleware | None:
         """Single-spec form of :func:`~dataknobs_bots.middleware.build_middleware`.
 
-        The public builders take a sequence; this keeps the historical
+        The public builders take an iterable; this keeps the historical
         one-spec-in / one-instance-out shape for anything holding a
         reference to it.
         """
