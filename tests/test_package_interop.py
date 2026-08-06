@@ -1,4 +1,15 @@
-"""Integration tests to verify interoperability between dataknobs packages."""
+"""Cross-package interoperability guards.
+
+Each package's own suite proves that package works. These prove the workspace
+composes: that the public exports resolve, that objects handed from one package
+to another are accepted, and that the deprecated aggregate package still
+re-exports what it promises. Nothing here needs an external service.
+
+They live beside the other workspace guards rather than under ``integration/``
+because that directory means "needs a running service" to every entry point
+that reads it — the quality gate skips it in the unit step, and ``bin/test.sh``
+scans packages only. Filed there, these ran nowhere.
+"""
 
 import pytest
 

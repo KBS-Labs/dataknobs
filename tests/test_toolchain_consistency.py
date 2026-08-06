@@ -1,14 +1,17 @@
-"""Reproduce-first guard for toolchain Python-level declarations.
+"""Reproduce-first guard for hand-maintained toolchain declarations.
 
 Every project in the workspace declares ``requires-python = ">=3.12"``. Any
 *other* declaration of a Python level — a type checker's target, a formatter's
 target, an interpreter pin, a published classifier, or the scaffolding template
-that seeds new packages — must agree with that floor.
+that seeds new packages — must agree with that floor. The same applies to a
+toolchain declaration that names a *directory* rather than a version: a search
+path pointing at something that does not exist.
 
-A stale declaration fails silently, and in one direction only: telling a tool to
-assume an older interpreter makes it reject or avoid what is actually
-available, and it never reports the gap. The cost shows up as an *absence*, so
-nothing goes red. These tests are the thing that goes red.
+Both fail silently, and in one direction only: telling a tool to assume an older
+interpreter makes it reject or avoid what is actually available, and handing it
+a search path that does not exist makes it look in one fewer place. Neither
+reports the gap. The cost shows up as an *absence*, so nothing goes red. These
+tests are the thing that goes red.
 
 Each test collects **every** violation before asserting, so one run reports the
 whole drift surface rather than the first item found.
@@ -130,6 +133,105 @@ def test_workspace_tests_are_reachable():
 
     assert not violations, "Workspace guards are unreachable:\n" + "\n".join(
         f"  - {v}" for v in violations
+    )
+
+
+def test_no_workspace_test_is_filed_where_nothing_runs_it():
+    """``tests/integration/`` is reached by no entry point, in either mode.
+
+    The unit step skips it by name, on the reasonable assumption that
+    "integration" means "needs a running service". The integration step cannot
+    reach it either: that loop is ``packages/*/tests/integration``, so a
+    workspace-level directory is outside it by construction. A file placed
+    here therefore runs nowhere — which is how eight cross-package interop
+    tests sat un-run, none of which needed a service in the first place.
+
+    Asserting the directory stays empty is the cheap half of the fix. The
+    expensive half — deciding where a workspace test that *does* need a
+    service should run — is a real question, and this makes it get asked at
+    the moment someone has one rather than after it has silently not run.
+    """
+    integration = Path(__file__).resolve().parent / "integration"
+    stranded = sorted(integration.glob("test_*.py")) if integration.is_dir() else []
+
+    assert not stranded, (
+        "These tests are collected by no entry point:\n"
+        + "\n".join(f"  - {_rel(p)}" for p in stranded)
+        + "\n  The unit step passes --ignore for this directory and the "
+        "integration step only loops packages/*/tests/integration.\n"
+        "  Move them beside the other workspace guards if they need no "
+        "service, or give the gate a step that runs them."
+    )
+
+
+#: The workflow whose path filter decides whether the quality gate runs at all.
+CI_WORKFLOW = Path(".github/workflows/quality-validation.yml")
+
+
+def _ci_code_filter_patterns() -> list[str]:
+    """The ``code`` path-filter patterns, read without a YAML dependency.
+
+    The filter is a block scalar handed to ``dorny/paths-filter``, so its
+    entries are plain quoted strings one per line between ``code:`` and the
+    next sibling key.
+    """
+    text = (ROOT / CI_WORKFLOW).read_text(encoding="utf-8")
+    block = re.search(r"^(\s+)code:\n(.*?)(?=^\1\S)", text, re.DOTALL | re.MULTILINE)
+    assert block is not None, f"{CI_WORKFLOW}: no 'code:' path filter found"
+    return re.findall(r"^\s*-\s*'([^']+)'", block.group(2), re.MULTILINE)
+
+
+def _glob_to_re(pattern: str) -> re.Pattern[str]:
+    """A conservative subset of the matcher ``dorny/paths-filter`` uses."""
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + r"(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + r".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + r"[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + r"[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile(f"^{out}$")
+
+
+def test_ci_runs_the_gate_when_a_guarded_file_changes():
+    """A guard that CI never starts is the same as a guard that does not exist.
+
+    Every check in this file reads a hand-maintained toolchain declaration,
+    and the point of reading it is to catch the pull request that changes it.
+    That pull request is exactly the one an over-narrow path filter drops: an
+    unprefixed ``pyproject.toml`` pattern matches the root file and nothing
+    under ``packages/``, so a change to a package's lint target, type-checker
+    target, or published classifiers matched no pattern and the whole quality
+    job was skipped. The declarations these tests assert on were the ones CI
+    was least likely to look at.
+
+    Files are checked for coverage rather than the pattern list being frozen,
+    so adding a new guarded declaration and forgetting its trigger fails here.
+    """
+    guarded = [
+        _rel(path) for path in (*_pyprojects(), *_mypy_inis(), *_interpreter_pins())
+    ]
+    guarded += [
+        _rel(ROOT / name)
+        for name in ("pytest.ini", ".pylintrc")
+        if (ROOT / name).exists()
+    ]
+
+    patterns = [_glob_to_re(p) for p in _ci_code_filter_patterns()]
+    violations = [
+        f"{name}: matched by no pattern, so a change to it skips the quality job"
+        for name in guarded
+        if not any(p.match(name) for p in patterns)
+    ]
+
+    assert not violations, (
+        f"{CI_WORKFLOW} does not trigger on files these guards assert against:\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
 
 
@@ -266,6 +368,58 @@ def test_ruff_target_version_matches_floor(floor):
     ]
 
     assert not violations, _fmt(violations, floor)
+
+
+# --------------------------------------------------------------------------
+# Search paths — declarations that name a directory instead of a version
+# --------------------------------------------------------------------------
+
+
+def _mypy_path_entries() -> list[tuple[Path, str]]:
+    """Every ``mypy_path`` entry declared anywhere, as ``(config, entry)``.
+
+    Both spellings are read: the ``.ini`` files hold one colon-separated
+    string, while a ``[tool.mypy]`` table may hold either that or a list.
+    """
+    entries: list[tuple[Path, str]] = []
+
+    for path in _mypy_inis():
+        for match in re.finditer(r"^\s*mypy_path\s*=\s*(.+)$", path.read_text(), re.MULTILINE):
+            entries += [(path, part) for part in match.group(1).split(":")]
+
+    for path in _pyprojects():
+        declared = _load(path).get("tool", {}).get("mypy", {}).get("mypy_path")
+        if isinstance(declared, str):
+            entries += [(path, part) for part in declared.split(":")]
+        elif isinstance(declared, list):
+            entries += [(path, str(part)) for part in declared]
+
+    return [(path, stripped) for path, entry in entries if (stripped := entry.strip())]
+
+
+def test_mypy_path_entries_resolve():
+    """A ``mypy_path`` entry that does not exist is skipped without a word.
+
+    mypy does not validate its search path — a directory that was renamed,
+    or a package that was planned and never created, simply contributes no
+    modules. Every import that would have resolved through it then falls back
+    to ``ignore_missing_imports``, so the symbols come back as ``Any`` and the
+    run still reports success. The type checking is gone; the green is not.
+
+    Entries are resolved against the repository root because that is where
+    every gate script invokes mypy from — ``bin/validate.sh`` passes an
+    absolute ``--config-file`` and runs at the root, so a relative entry here
+    is root-relative in practice.
+    """
+    violations = [
+        f"{_rel(path)}: mypy_path entry {entry!r} is not a directory"
+        for path, entry in _mypy_path_entries()
+        if not (ROOT / entry).is_dir()
+    ]
+
+    assert not violations, "Toolchain search paths point at nothing:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
 
 
 # --------------------------------------------------------------------------

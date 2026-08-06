@@ -35,6 +35,17 @@ jobs:
               - '.pre-commit-config.yaml'
               - 'bin/**'
               - 'tests/**'
+              # Toolchain declarations. An unprefixed 'pyproject.toml' matches
+              # the root file only, so without these a change to a package's
+              # lint target, type-checker target, or classifiers skipped this
+              # job entirely — including any change that reverts one. The
+              # workspace guards assert against every file listed here, and
+              # they cannot run on a job that does not start.
+              - 'packages/*/pyproject.toml'
+              - 'mypy.ini'
+              - 'pytest.ini'
+              - '.python-version'
+              - '.pylintrc'
             docs:
               - 'docs/**'
               - '!docs/changelog.md'
