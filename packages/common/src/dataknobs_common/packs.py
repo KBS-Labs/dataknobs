@@ -213,8 +213,8 @@ class PackWarningCode(StrEnum):
     """The complete :attr:`PackWarning.code` vocabulary.
 
     One definition. The members below are what resolution emits, what a
-    consumer branches on, and what the guide's table is checked against —
-    there is no second list to drift from.
+    consumer branches on, and what every documented table is checked
+    against — no hand-maintained copy can drift from them unnoticed.
 
     :class:`~enum.StrEnum` rather than the ``(str, Enum)`` spelling used
     elsewhere in the tree: a diagnostic code is read by machines *and*
@@ -280,6 +280,13 @@ class PackWarning:
     packs: tuple[str, ...] = ()
     field: str | None = None
 
+    def __post_init__(self) -> None:
+        # The plain string is accepted — that is the documented equivalence
+        # — but normalized, so the declared type is what is stored rather
+        # than what was intended, and an unknown code fails closed here in
+        # the same way every other value this module accepts does.
+        object.__setattr__(self, "code", PackWarningCode(self.code))
+
     def __str__(self) -> str:
         return self.message
 
@@ -300,6 +307,11 @@ class PackResolutionError(ConfigurationError):
     def __init__(
         self, message: str, *, reason: PackResolutionReason, **context: Any
     ) -> None:
+        # Normalized for the same reason as ``PackWarning.code``: a plain
+        # string stays acceptable, but an unrecognized one is a typo, not a
+        # new vocabulary member, and this is the only public constructor
+        # through which one could reach a consumer's ``except`` clause.
+        reason = PackResolutionReason(reason)
         super().__init__(message, context={"reason": reason, **context})
         self.reason = reason
 

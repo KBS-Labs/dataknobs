@@ -68,7 +68,7 @@ resolution = registry.resolve({"base": {}, "regulated": {"locked": True}})
 resolution.packs           # ('base', 'regulated')
 resolution.spec.filters    # ('dedupe', 'pii-redact')  — deduped concat
 resolution.spec.limits     # {'max_mb': 10}  — highest priority wins the key
-resolution.warnings        # (PackWarning(code='key_override', ...),)
+resolution.warnings        # one PackWarning, code 'key_override'
 ```
 
 ## Declaring a spec
@@ -187,7 +187,7 @@ pinned.register_pack(PinPack(name="base", engine="v1"))
 
 resolution = pinned.resolve({"base": {"engine": "v2"}})
 resolution.spec.engine                        # 'v1' — the pack pinned it
-[w.code for w in resolution.warnings]         # ['binding_override_ignored']
+[str(w.code) for w in resolution.warnings]    # ['binding_override_ignored']
 ```
 
 #### Making "explicitly the default" expressible in a pack
@@ -332,7 +332,7 @@ platform = {"regulated": {"locked": True}}
 tenant = {"regulated": {"enabled": False}}
 
 registry.resolve(merge_bindings(platform, tenant))
-# PackResolutionError(reason="locked_pack_disabled")
+# PackResolutionError(reason=PackResolutionReason.LOCKED_PACK_DISABLED)
 ```
 
 Later layers win, per pack and per key. This is also what makes `locked`

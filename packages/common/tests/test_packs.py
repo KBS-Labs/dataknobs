@@ -19,7 +19,7 @@ import pickle
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any
 
@@ -587,6 +587,72 @@ def test_vocabulary_members_render_as_their_value() -> None:
     reason = PackResolutionReason.UNKNOWN_PACK
     assert f"{reason}" == "unknown_pack"
     assert reason == "unknown_pack"
+
+
+def test_the_two_vocabularies_share_no_value() -> None:
+    """Disjoint, because across them equality is plain string equality.
+
+    Members hash and compare as their value, so one present in both would
+    be indistinguishable — and ``test_every_declared_member_is_still_
+    reachable`` collects observations into a ``set[Enum]``, where a shared
+    value would satisfy the *other* vocabulary's guard without ever being
+    emitted by it.
+    """
+
+    class _Elsewhere(StrEnum):
+        KEY_OVERRIDE = "key_override"
+
+    # The mechanism, asserted rather than assumed.
+    assert _Elsewhere.KEY_OVERRIDE == PackWarningCode.KEY_OVERRIDE
+    assert {PackWarningCode.KEY_OVERRIDE} == {_Elsewhere.KEY_OVERRIDE}
+
+    shared = {m.value for m in PackWarningCode} & {
+        m.value for m in PackResolutionReason
+    }
+    assert not shared, (
+        f"{sorted(shared)} appears in both vocabularies; a warning code and "
+        f"a resolution reason that compare equal cannot be told apart by "
+        f"any consumer branching on either"
+    )
+
+
+def test_a_code_or_reason_given_as_a_bare_value_is_coerced() -> None:
+    """The declared types are enforced, so what is stored is always a member.
+
+    A caller may still pass the plain string — that is the documented
+    equivalence — but it is normalized on the way in, so a consumer reading
+    ``warning.code.name`` never has to wonder which it got.
+    """
+    assert PackWarning(code="key_override", message="m").code is (
+        PackWarningCode.KEY_OVERRIDE
+    )
+    assert PackResolutionError("m", reason="unknown_pack").reason is (
+        PackResolutionReason.UNKNOWN_PACK
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "bad"),
+    [
+        pytest.param(
+            lambda v: PackWarning(code=v, message="m"), "not_a_code", id="code"
+        ),
+        pytest.param(
+            lambda v: PackResolutionError("m", reason=v), "not_a_reason", id="reason"
+        ),
+    ],
+)
+def test_an_unknown_code_or_reason_is_rejected(
+    build: Callable[[Any], Any], bad: str
+) -> None:
+    """Fail closed, like every other value this module accepts.
+
+    Both fields were annotated as their vocabulary while accepting any
+    string, which is the one aspirational surface in a module that
+    validates a spec's every value, rule, and binding.
+    """
+    with pytest.raises(ValueError, match=bad):
+        build(bad)
 
 
 # --------------------------------------------------------------------------
@@ -1283,6 +1349,11 @@ _VOCABULARIES = [
     ),
 ]
 
+_VOCABULARY_CLASSES = [
+    pytest.param(PackWarningCode, id="PackWarningCode"),
+    pytest.param(PackResolutionReason, id="PackResolutionReason"),
+]
+
 
 @pytest.mark.parametrize(("vocabulary", "observe"), _VOCABULARIES)
 def test_every_declared_member_is_still_reachable(
@@ -1304,26 +1375,213 @@ def test_every_declared_member_is_still_reachable(
     )
 
 
-@pytest.mark.parametrize(("vocabulary", "observe"), _VOCABULARIES)
+def _documented_vocabulary(vocabulary: type[Enum], text: str) -> dict[str, str]:
+    """Parse the guide's table for ``vocabulary`` into ``{MEMBER: value}``.
+
+    The table is found by its header row, whose first cell names the class.
+    Rows are read until the table ends, and the first two cells of each are
+    taken as the member name and its value, both stripped of the backticks
+    the guide renders them in.
+
+    Parsing rather than searching the whole document, because a value that
+    also appears in prose makes containment blind to its own table: it
+    cannot distinguish "documented in the table" from "mentioned in a
+    sentence", which is precisely the state the guide claims impossible.
+    """
+    header = f"| `{vocabulary.__name__}` |"
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(header)]
+    if len(starts) != 1:
+        return {}
+
+    documented: dict[str, str] = {}
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith("|"):
+            break
+        cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
+        if len(cells) < 2 or set(cells[0]) <= {"-", ":"}:
+            continue  # the |---|---| separator
+        documented[cells[0]] = cells[1]
+    return documented
+
+
+_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "packs.md"
+
+
+def _guide_text() -> str:
+    """The guide, or a hard failure — never a skip.
+
+    A guard whose absent input turns it into a silent pass is a guard that
+    reports green while checking nothing.
+    """
+    assert _GUIDE.is_file(), (
+        f"{_GUIDE} is missing. It carries the documented copy of both "
+        f"vocabularies, so its absence disables a drift guard rather than "
+        f"making one inapplicable."
+    )
+    return _GUIDE.read_text()
+
+
+def _assert_guide_documents(vocabulary: type[Enum], text: str) -> None:
+    """Assert the guide's table for ``vocabulary`` matches it exactly.
+
+    Both directions in one comparison, because both are real drift: a
+    member the table omits is a contract a consumer cannot discover, and a
+    row naming a member that no longer exists is one they will write code
+    against and get an ``AttributeError`` from.
+    """
+    documented = _documented_vocabulary(vocabulary, text)
+    declared = {member.name: member.value for member in vocabulary}
+    assert documented == declared, (
+        f"the guide's `{vocabulary.__name__}` table and the enum disagree.\n"
+        f"  table: {documented}\n"
+        f"  enum:  {declared}"
+    )
+
+
+@pytest.mark.parametrize("vocabulary", _VOCABULARY_CLASSES)
 def test_every_declared_member_is_described_in_the_guide(
-    vocabulary: type[Enum], observe: Callable[[], set[Enum]]
+    vocabulary: type[Enum],
 ) -> None:
     """The one remaining copy of each vocabulary: the guide's table.
 
-    Containment rather than table parsing, so the guide stays free to be
-    restructured. Only this direction is checked: extracting candidate
-    values back out of prose would collect every inline-code span in the
-    document, and a guard that fires on a legitimate edit is worse than no
-    guard. A stale row is a documentation bug; an *undocumented* member is
-    a contract a consumer cannot discover.
+    The table is parsed and compared as a mapping, not searched for as a
+    substring. Substring containment cannot tell the table apart from the
+    surrounding prose, and six of the nine values are also mentioned in
+    prose — so a deleted *row* would have left the guard green while the
+    table a consumer builds an escalation table from was already wrong.
     """
-    guide = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "packs.md"
-    if not guide.is_file():  # pragma: no cover - packaging layouts without docs
-        pytest.skip("package docs not present in this layout")
+    _assert_guide_documents(vocabulary, _guide_text())
 
-    text = guide.read_text()
-    missing = sorted((m for m in vocabulary if m.value not in text), key=str)
-    assert not missing, f"{vocabulary.__name__} members absent from the guide: {missing}"
+
+# The guard above is only worth having if it actually fires. Each test below
+# drifts the *real* guide text one way and asserts the guard rejects it — so
+# the guard is checked against the document's real shape rather than against
+# a hand-written fixture that could format its table differently.
+
+
+def _drifted(old: str, new: str) -> str:
+    """The guide with a single literal replaced, asserting it was present."""
+    text = _guide_text()
+    assert old in text, f"guide no longer contains {old!r}; update this test"
+    return text.replace(old, new, 1)
+
+
+def test_guard_rejects_a_deleted_table_row() -> None:
+    """A dropped row must fail even though prose still mentions the value.
+
+    This is the drift the guard exists to catch and the one containment
+    could not see: `key_override` appears in the guide twice more outside
+    the table, so removing its row leaves the string present.
+    """
+    row = "| `KEY_OVERRIDE` | `key_override` |"
+    text = _guide_text()
+    without_row = "\n".join(
+        line for line in text.splitlines() if not line.startswith(row)
+    )
+    assert "key_override" in without_row, (
+        "this test's premise is that the value survives elsewhere in the "
+        "guide; if it no longer does, containment would have caught this"
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_guide_documents(PackWarningCode, without_row)
+
+
+def test_guard_rejects_a_misspelled_member_name() -> None:
+    """The member-name column is checked, not just the value column.
+
+    A consumer copies `PackWarningCode.PRIORITY_TIED` out of the table and
+    gets an ``AttributeError``; the value column is still correct, so
+    nothing else would notice.
+    """
+    with pytest.raises(AssertionError):
+        _assert_guide_documents(
+            PackWarningCode, _drifted("| `PRIORITY_TIE` |", "| `PRIORITY_TIED` |")
+        )
+
+
+def test_guard_rejects_a_row_for_a_member_that_no_longer_exists() -> None:
+    """Reverse drift: the table outliving the member it documents.
+
+    A member removed from the enum but left in the table reads to a
+    consumer as a case they must handle and can never see.
+    """
+    with pytest.raises(AssertionError):
+        _assert_guide_documents(
+            PackResolutionReason,
+            _drifted(
+                "| `UNKNOWN_PACK` | `unknown_pack` |",
+                "| `RETIRED_REASON` | `retired_reason` | Gone |\n"
+                "| `UNKNOWN_PACK` | `unknown_pack` |",
+            ),
+        )
+
+
+def test_guard_rejects_a_row_whose_value_does_not_match_its_member() -> None:
+    """The two columns are checked against each other, not independently.
+
+    `key_override` again, because its value is also mentioned in prose —
+    so the row can carry the wrong string while the document as a whole
+    still contains the right one.
+    """
+    with pytest.raises(AssertionError):
+        _assert_guide_documents(
+            PackWarningCode, _drifted("| `key_override` |", "| `key_overridden` |")
+        )
+
+
+def _assert_no_documented_code_repr(text: str) -> None:
+    """No documented output may render a code through ``repr``.
+
+    ``str`` is what this module promises of a code — pinned by
+    ``test_vocabulary_members_render_as_their_value`` — and ``repr`` is
+    not. Two of this guide's documented outputs showed the dataclass repr,
+    so both went stale the moment the codes stopped being bare strings,
+    while every guard in this file stayed green.
+    """
+    stale = [line.strip() for line in text.splitlines() if "PackWarning(code=" in line]
+    assert not stale, (
+        f"documented output renders a code through repr: {stale}. Show the "
+        f"str rendering instead — it is the contract, and it is pinned."
+    )
+
+
+def test_the_guide_documents_no_code_repr() -> None:
+    """The recurrence guard for the drift above."""
+    _assert_no_documented_code_repr(_guide_text())
+
+
+def test_guard_rejects_a_documented_code_repr() -> None:
+    """Reintroducing the stale rendering must fail."""
+    with pytest.raises(AssertionError):
+        _assert_no_documented_code_repr(
+            _drifted(
+                "# one PackWarning, code 'key_override'",
+                "# (PackWarning(code='key_override', ...),)",
+            )
+        )
+
+
+@pytest.mark.parametrize("vocabulary", _VOCABULARY_CLASSES)
+def test_guard_rejects_a_guide_with_the_table_removed(
+    vocabulary: type[Enum],
+) -> None:
+    """A restructure that drops the table fails loudly, not vacuously.
+
+    Parsing makes the table load-bearing, so its absence has to be an
+    error. Containment would have kept passing on the prose alone.
+    """
+    header = f"| `{vocabulary.__name__}` |"
+    text = _guide_text()
+    without_table = "\n".join(
+        line
+        for line in text.splitlines()
+        if not (line.startswith(header) or line.startswith("| `"))
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_guide_documents(vocabulary, without_table)
 
 
 def test_all_lists_every_public_name_the_module_defines() -> None:
@@ -1359,4 +1617,22 @@ def test_all_lists_every_public_name_the_module_defines() -> None:
     public = {name for name in defined if not name.startswith("_")}
     assert not (public - set(packs_module.__all__)), (
         f"public names missing from __all__: {sorted(public - set(packs_module.__all__))}"
+    )
+
+
+def test_every_module_export_is_re_exported_at_the_top_level() -> None:
+    """The re-export claim the CHANGELOG makes, checked rather than trusted.
+
+    Both vocabularies shipped re-exported but absent from that list, which
+    is the same hand-maintained-copy drift the vocabularies themselves were
+    reshaped to make impossible.
+    """
+    import dataknobs_common
+    import dataknobs_common.packs as packs_module
+
+    missing = sorted(set(packs_module.__all__) - set(dataknobs_common.__all__))
+    assert not missing, (
+        f"{missing} are exported from dataknobs_common.packs but not from "
+        f"the top-level namespace, which the package documents as carrying "
+        f"all of them"
     )

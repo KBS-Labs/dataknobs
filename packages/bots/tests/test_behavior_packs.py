@@ -13,6 +13,8 @@ No mocks: real ``PackRegistry``, real middleware classes, and a real
 
 from __future__ import annotations
 
+import pathlib
+import re
 from typing import Any
 
 import pytest
@@ -31,7 +33,12 @@ from dataknobs_bots.reasoning import (
 )
 from dataknobs_bots.testing import BotTestHarness
 from dataknobs_common.exceptions import ConfigurationError
-from dataknobs_common.packs import PackRegistry, PackResolutionError
+from dataknobs_common.packs import (
+    PackRegistry,
+    PackResolutionError,
+    PackResolutionReason,
+    PackWarningCode,
+)
 from dataknobs_common.testing import assert_structured_config_roundtrip
 from dataknobs_llm.conversations import ConversationMiddleware
 
@@ -518,3 +525,74 @@ async def test_pack_middleware_is_additive_to_the_bots_own(
     assert "_RecordingMiddleware" in names
     # Additive means appended: the pack's middleware runs after the bot's.
     assert names.index("LoggingMiddleware") < names.index("_RecordingMiddleware")
+
+
+# The vocabularies themselves live in dataknobs-common and are guarded
+# against that package's guide. This guide is their *second* documented
+# copy, hand-maintained and in a different package, so it needs its own
+# guard — a reason removed upstream would otherwise keep being documented
+# here, and a bots consumer builds their escalation table from this table.
+
+
+_BEHAVIOR_PACKS_GUIDE = (
+    pathlib.Path(__file__).parents[1] / "docs" / "BEHAVIOR_PACKS.md"
+)
+
+
+def _assert_documented_vocabulary_is_real(text: str) -> None:
+    """Every vocabulary member this guide names must still exist.
+
+    Only this direction. The guide's table describes *bot* failure modes,
+    not a reproduction of the upstream vocabulary, so a member it does not
+    happen to mention is not drift — but one it mentions that no longer
+    exists is a case a consumer will write unreachable code for.
+
+    Both patterns are exact rather than prose-scraped: a reason appears as
+    ``reason="..."`` inside a constructor illustration, and a code as
+    ```...` warning``.
+    """
+    reasons = set(re.findall(r'reason="([a-z_]+)"', text))
+    codes = set(re.findall(r"`([a-z_]+)` warning", text))
+
+    # Both patterns are exact, so a reflow that changed how the guide spells
+    # them would leave nothing to check and this guard would pass on an
+    # empty set — the vacuity it exists to prevent.
+    assert reasons and codes, (
+        f"extracted {len(reasons)} reasons and {len(codes)} codes from the "
+        f"guide; it documents both, so an empty side means the spelling "
+        f"changed and the patterns above need updating"
+    )
+
+    unknown_reasons = sorted(reasons - {m.value for m in PackResolutionReason})
+    unknown_codes = sorted(codes - {m.value for m in PackWarningCode})
+
+    assert not unknown_reasons, (
+        f"guide documents PackResolutionError reasons that do not exist: "
+        f"{unknown_reasons}"
+    )
+    assert not unknown_codes, (
+        f"guide documents PackWarning codes that do not exist: {unknown_codes}"
+    )
+
+
+def test_guide_documents_only_real_vocabulary_members() -> None:
+    """The bots-side copy of both vocabularies is checked, not assumed."""
+    assert _BEHAVIOR_PACKS_GUIDE.is_file(), (
+        f"{_BEHAVIOR_PACKS_GUIDE} is missing; its absence disables a drift "
+        f"guard rather than making one inapplicable."
+    )
+    _assert_documented_vocabulary_is_real(_BEHAVIOR_PACKS_GUIDE.read_text())
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        pytest.param('reason="retired_reason"', id="reason"),
+        pytest.param("`retired_code` warning", id="code"),
+    ],
+)
+def test_guard_rejects_a_documented_member_that_no_longer_exists(drift: str) -> None:
+    """The guard fires on a member this guide outlived."""
+    text = _BEHAVIOR_PACKS_GUIDE.read_text() + f"\n| x | {drift} |\n"
+    with pytest.raises(AssertionError):
+        _assert_documented_vocabulary_is_real(text)

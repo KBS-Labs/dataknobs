@@ -80,11 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `locked` load-bearing: a platform baseline can assert a pack a per-tenant
   overlay must not switch off. No module-level singleton is provided — a
   pack binding is a per-deployment decision, and a process-global registry
-  would be a multi-tenant hazard. `MergeKind`, `UNSET`, `Reducer`,
-  `CompositionRule`, `PackSpec`, `PackWarning`, `PackResolution`,
-  `PackResolutionError`, `compose_packs`, `merge_bindings`, and
-  `PackRegistry` are exported from the top-level `dataknobs_common`
-  namespace. See `docs/guides/packs.md`.
+  would be a multi-tenant hazard. A `code` or `reason` supplied as its
+  plain string is normalized to its member, and one that names neither is
+  rejected, so what a consumer reads off a warning or an error is always a
+  member. `MergeKind`, `UNSET`, `Reducer`,
+  `CompositionRule`, `PackSpec`, `PackWarning`, `PackWarningCode`,
+  `PackResolution`, `PackResolutionError`, `PackResolutionReason`,
+  `compose_packs`, `merge_bindings`, and `PackRegistry` are exported from
+  the top-level `dataknobs_common` namespace. See `docs/guides/packs.md`.
 
 ## v1.6.3 - 2026-07-29
 
