@@ -52,13 +52,21 @@ Failure posture — two error families, deliberately distinct:
 
 - **Declaration/wiring errors** raise :class:`ConfigurationError`: a field
   with no declared rule, a rule for a field that does not exist, a non-meta
-  field with no default, a value whose shape contradicts its rule. These are
-  authoring bugs and surface as early as possible (spec-class validation runs
-  when a :class:`PackRegistry` is constructed).
+  field with no default, a registered spec whose class adds fields the
+  registry's class cannot compose, a *spec's* value whose shape contradicts
+  its rule, a custom reducer that raises. These are authoring bugs. Most
+  surface when a :class:`PackRegistry` is constructed or a spec registered;
+  a value's shape and a reducer's behaviour are only knowable once there is
+  a value, so those surface at :meth:`PackRegistry.resolve`.
 - **Resolution errors** raise :class:`PackResolutionError` (a
   ``ConfigurationError`` subclass) carrying ``context["reason"]``: an unknown
   pack name, an unknown binding key, a locked-but-disabled pack, a conflict
-  under ``UNANIMOUS``, a malformed binding.
+  under ``UNANIMOUS``, a malformed binding, or a *binding's* value whose
+  shape contradicts its rule.
+
+The split follows the value's **origin**, not its symptom: the same
+malformed value is a programmer error inside a spec and operator input
+inside a binding, so only the latter carries a machine-readable ``reason``.
 
 Nothing here does I/O, and :meth:`PackRegistry.resolve` is pure: it mutates
 neither the registry, the bindings mapping, nor the registered specs.
@@ -98,12 +106,12 @@ Example:
 from __future__ import annotations
 
 import dataclasses
-import functools
+import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, ClassVar, Generic, TypeAlias, TypeVar
+from typing import Any, ClassVar, Generic, NamedTuple, TypeAlias, TypeVar
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.registry import Registry
@@ -273,13 +281,21 @@ class PackSpec(StructuredConfig):
     safe to run repeatedly against a shared registry.
 
     Value normalization: :meth:`__post_init__` converts ``list`` values to
-    ``tuple`` and copies ``Mapping``/``set`` values. This is necessary
-    because :meth:`~dataknobs_common.structured_config.StructuredConfig.from_dict`
+    ``tuple``, ``set`` values to ``frozenset``, and copies ``Mapping``
+    values. This is necessary because
+    :meth:`~dataknobs_common.structured_config.StructuredConfig.from_dict`
     assigns non-config, non-enum field values verbatim — a YAML list would
     otherwise land in a ``tuple[...]``-annotated field as a ``list``, and a
-    caller's dict would alias into the "frozen" spec. Normalization is
-    *shallow*: container elements are shared by reference and must be
-    treated as read-only.
+    caller's dict would alias into the "frozen" spec.
+
+    Normalization is *shallow*, and ``frozen=True`` blocks only rebinding a
+    field, never writing *through* one. So a ``dict``-typed field value and
+    every container element are **read-only by convention**: writing to one
+    mutates the registered spec in place and changes what every later
+    resolution composes. Copy before mutating
+    (``dict(spec.limits)``). Sequence and set fields are immutable by
+    construction; mappings are not, deliberately — see
+    :func:`_normalize_value`.
 
     A subclass defining its own ``__post_init__`` **must** call
     ``super().__post_init__()``.
@@ -299,7 +315,14 @@ class PackSpec(StructuredConfig):
     _COMPOSITION: ClassVar[Mapping[str, CompositionRule]] = MappingProxyType({})
 
     def __post_init__(self) -> None:
-        """Normalize and copy container field values in place (see class docs)."""
+        """Normalize and copy container field values in place (see class docs).
+
+        Note the asymmetry with the instruction this class gives *its*
+        subclasses: no ``super().__post_init__()`` call here, because
+        :class:`StructuredConfig` defines none and calling it would raise
+        ``AttributeError``. Subclasses of ``PackSpec`` do have one to call —
+        this method — so they must.
+        """
         for f in dataclasses.fields(self):
             current = getattr(self, f.name)
             normalized = _normalize_value(current)
@@ -334,9 +357,14 @@ class PackResolution(Generic[SpecT]):
 
 @dataclass(frozen=True)
 class _CompositionPlan:
-    """Validated, cached composition metadata for one spec class."""
+    """Validated, cached composition metadata for one spec class.
 
-    spec_cls: type[PackSpec]
+    Deliberately holds **no** reference to the spec class: the plan is the
+    value in a :class:`weakref.WeakKeyDictionary` keyed on that class, and a
+    value referencing its own key would pin the entry forever. Code needing
+    the class takes it as a separate argument.
+    """
+
     #: Non-meta field name -> declared rule, in dataclass field order.
     rules: Mapping[str, CompositionRule]
     #: Non-meta field name -> its normalized declared default.
@@ -348,17 +376,28 @@ class _CompositionPlan:
 def _normalize_value(value: Any) -> Any:
     """Return a normalized, non-aliasing copy of a field value.
 
-    ``list`` -> ``tuple`` (config sources produce lists; the field contract
-    is immutable), ``Mapping`` -> a fresh ``dict``, ``set`` -> a fresh
-    ``set``. Everything else — scalars, tuples, frozensets, live objects —
+    ``list`` -> ``tuple``, ``set`` -> ``frozenset``, ``Mapping`` -> a fresh
+    ``dict``. Everything else — scalars, tuples, frozensets, live objects —
     passes through by identity. Shallow by design: elements are shared.
+
+    Sequences and sets end up genuinely immutable; **mappings do not**, and
+    that asymmetry is deliberate rather than an oversight. Wrapping a
+    mapping in ``MappingProxyType`` would make it unwritable but also
+    un-``deepcopy``-able, and
+    :meth:`~dataknobs_common.structured_config.StructuredConfig.to_dict`
+    delegates to ``dataclasses.asdict``, which deep-copies every field
+    value — so freezing would trade a documented read-only *convention* for
+    a broken serialization *contract*, and would booby-trap any consumer
+    calling ``dataclasses.asdict`` on a spec directly. A dict field is
+    therefore copied (never aliased to the caller's) but must be treated as
+    read-only, exactly as its elements must be.
     """
     if isinstance(value, Mapping):
         return dict(value)
     if isinstance(value, list):
         return tuple(value)
-    if isinstance(value, set):
-        return set(value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(value)
     return value
 
 
@@ -371,9 +410,30 @@ def _field_default(f: dataclasses.Field[Any]) -> Any:
     return dataclasses.MISSING
 
 
-@functools.cache
+#: Memo for :func:`_composition_plan`, keyed *weakly* on the spec class.
+#:
+#: A plain ``functools.cache`` would key a process-lifetime dict on the class
+#: itself, making every spec class permanently reachable along with its
+#: module globals. Harmless for module-scope specs, but a process that builds
+#: spec classes dynamically — or a test suite defining them per-test — would
+#: leak one per class.
+#:
+#: This only works because ``_CompositionPlan`` holds no strong reference back
+#: to the class: a value that referenced its own key would keep the entry
+#: alive forever, which is why ``_assert_composable`` takes the class as a
+#: separate argument rather than reading it off the plan.
+_PLAN_CACHE: weakref.WeakKeyDictionary[type[PackSpec], _CompositionPlan] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def _composition_plan(spec_cls: type[PackSpec]) -> _CompositionPlan:
     """Validate a spec class's composition declaration and cache the plan.
+
+    Caching is a pure memo: concurrent first calls may both build a plan and
+    the last write wins, which is harmless because the result depends only
+    on the class and nothing compares plans by identity. Failures are not
+    cached — an invalid class re-raises on every call.
 
     Four checks, all fail-closed:
 
@@ -401,10 +461,21 @@ def _composition_plan(spec_cls: type[PackSpec]) -> _CompositionPlan:
             f"Expected a PackSpec subclass, got {spec_cls!r}",
             context={"spec_cls": repr(spec_cls)},
         )
-    if not dataclasses.is_dataclass(spec_cls):
+    cached = _PLAN_CACHE.get(spec_cls)
+    if cached is not None:
+        return cached
+    # NOT ``dataclasses.is_dataclass``: that tests for ``__dataclass_fields__``,
+    # which every subclass inherits from the decorated base — so it is true even
+    # for an undecorated subclass, whose own annotations are then invisible to
+    # ``dataclasses.fields``. The failure would surface below as "_COMPOSITION
+    # keys that are not non-meta fields", pointing at the wrong thing entirely.
+    # (Non-frozen needs no check: ``dataclasses`` itself refuses to inherit a
+    # non-frozen dataclass from a frozen one.)
+    if "__dataclass_fields__" not in spec_cls.__dict__:
         raise ConfigurationError(
             f"{spec_cls.__qualname__} must be decorated with "
-            "@dataclass(frozen=True) to be used as a pack spec",
+            "@dataclass(frozen=True) to be used as a pack spec; without it "
+            "its own fields are invisible to composition",
             context={"spec_cls": spec_cls.__qualname__},
         )
 
@@ -440,25 +511,18 @@ def _composition_plan(spec_cls: type[PackSpec]) -> _CompositionPlan:
     if missing_rule or missing_default or bad_rule or unknown_rule:
         problems: list[str] = []
         if missing_rule:
-            problems.append(
-                f"fields with no _COMPOSITION rule: {sorted(missing_rule)}"
-            )
+            problems.append(f"fields with no _COMPOSITION rule: {sorted(missing_rule)}")
         if unknown_rule:
-            problems.append(
-                f"_COMPOSITION keys that are not non-meta fields: {unknown_rule}"
-            )
+            problems.append(f"_COMPOSITION keys that are not non-meta fields: {unknown_rule}")
         if missing_default:
             problems.append(
                 f"fields with no default (a pack is a partial contribution): "
                 f"{sorted(missing_default)}"
             )
         if bad_rule:
-            problems.append(
-                f"rules that are neither a MergeKind nor callable: {sorted(bad_rule)}"
-            )
+            problems.append(f"rules that are neither a MergeKind nor callable: {sorted(bad_rule)}")
         raise ConfigurationError(
-            f"{spec_cls.__qualname__} has an incoherent composition plan — "
-            + "; ".join(problems),
+            f"{spec_cls.__qualname__} has an incoherent composition plan — " + "; ".join(problems),
             context={
                 "spec_cls": spec_cls.__qualname__,
                 "missing_rule": sorted(missing_rule),
@@ -468,15 +532,92 @@ def _composition_plan(spec_cls: type[PackSpec]) -> _CompositionPlan:
             },
         )
 
-    return _CompositionPlan(
-        spec_cls=spec_cls,
+    plan = _CompositionPlan(
         rules=MappingProxyType(rules),
         defaults=MappingProxyType(defaults),
-        binding_keys=frozenset(_BINDING_FLAGS | (all_fields - {"name"})),
+        # Composable fields plus the two flags plus ``priority`` — NOT every
+        # non-``name`` field. A spec class that extends ``_META_FIELDS`` gets
+        # no fold handling for the extra descriptor, so advertising it as a
+        # binding key would accept it and then silently ignore it.
+        binding_keys=frozenset(_BINDING_FLAGS | set(rules) | {"priority"}),
+    )
+    _PLAN_CACHE[spec_cls] = plan
+    return plan
+
+
+def _assert_composable(
+    spec_type: type[PackSpec], spec_cls: type[PackSpec], plan: _CompositionPlan
+) -> None:
+    """Reject a spec whose own class adds fields the plan cannot compose.
+
+    ``isinstance`` admits a subclass, but composition is defined entirely by
+    the registry's declared class: the composed result is an instance of
+    *that* class, built from *its* rules. A field only the subclass declares
+    therefore has no rule, no plan default, and nowhere to land in the
+    composed spec — it would be dropped silently, yielding a plausible-
+    looking result that is missing data. Two subclasses in one registry
+    could not produce a single composed type at all.
+
+    Subclassing for *behaviour* stays legal; it is extra fields that cannot
+    be honoured, so that is exactly what this rejects.
+    """
+    if spec_type is spec_cls:
+        return
+    extra = sorted(
+        {f.name for f in dataclasses.fields(spec_type)}
+        - {f.name for f in dataclasses.fields(spec_cls)}
+    )
+    if not extra:
+        return
+    raise ConfigurationError(
+        f"{spec_type.__qualname__} declares field(s) {extra} that "
+        f"{spec_cls.__qualname__} does not, so composition — which "
+        f"builds a {spec_cls.__qualname__} from its own rules — cannot "
+        "carry them. Declare the fields on the registry's spec class.",
+        context={
+            "spec_cls": spec_cls.__qualname__,
+            "got": spec_type.__qualname__,
+            "uncomposable_fields": extra,
+        },
     )
 
 
-def _check_value_shape(rule: CompositionRule, field_name: str, value: Any, source: str) -> None:
+def _rule_label(rule: CompositionRule) -> str:
+    """A stable string for a rule, for error context.
+
+    A custom :data:`Reducer` has no ``.value``, so fall back to its name.
+    """
+    if isinstance(rule, MergeKind):
+        return rule.value
+    return getattr(rule, "__name__", repr(rule))
+
+
+def _shape_error(
+    message: str, field_name: str, source: str, rule: CompositionRule, from_binding: bool
+) -> ConfigurationError:
+    """Build the right error family for a bad contributed value.
+
+    The two families answer different questions. A value inside a *spec* is
+    written by the pack author in code, so a bad shape there is a
+    programmer error that should never reach a request — plain
+    :class:`ConfigurationError`. The same bad shape inside a *binding* is
+    operator input, which a deployment has to be able to catch and report
+    against a stable ``reason`` rather than by matching prose.
+    """
+    context = {"field": field_name, "source": source, "rule": _rule_label(rule)}
+    if from_binding:
+        return PackResolutionError(message, reason="invalid_binding", **context)
+    return ConfigurationError(message, context=context)
+
+
+def _check_value_shape(
+    rule: CompositionRule,
+    field_name: str,
+    value: Any,
+    source: str,
+    *,
+    from_binding: bool = False,
+) -> None:
     """Reject a contributed value whose shape contradicts its declared rule.
 
     ``CONCAT``/``CONCAT_UNIQUE`` need a non-string sequence and ``MERGE``
@@ -485,22 +626,30 @@ def _check_value_shape(rule: CompositionRule, field_name: str, value: Any, sourc
     opaque ``TypeError`` deep in the fold. The check runs on every
     contribution — including the first — so a one-pack resolution and a
     two-pack resolution reject the same bad values.
+
+    ``from_binding`` selects the error family (see :func:`_shape_error`).
     """
     if rule is MergeKind.MERGE:
         if not isinstance(value, Mapping):
-            raise ConfigurationError(
+            raise _shape_error(
                 f"Field '{field_name}' declares MergeKind.MERGE but "
                 f"'{source}' contributed a {type(value).__name__}; "
                 "MERGE requires a mapping",
-                context={"field": field_name, "source": source, "rule": rule.value},
+                field_name,
+                source,
+                rule,
+                from_binding,
             )
     elif rule in (MergeKind.CONCAT, MergeKind.CONCAT_UNIQUE):
         if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
-            raise ConfigurationError(
+            raise _shape_error(
                 f"Field '{field_name}' declares {rule} but '{source}' "
                 f"contributed a {type(value).__name__}; concatenation "
                 "requires a non-string sequence",
-                context={"field": field_name, "source": source, "rule": rule.value},
+                field_name,
+                source,
+                rule,
+                from_binding,
             )
 
 
@@ -517,6 +666,21 @@ def _concat_unique(acc: Sequence[Any], nxt: Sequence[Any]) -> tuple[Any, ...]:
     return tuple(out)
 
 
+class _Reduction(NamedTuple):
+    """One fold step's outcome.
+
+    ``contributed`` records whether the incoming pack influenced ``value``.
+    It is false only where a rule discards the incoming value outright
+    (``FIRST_WINS`` against an already-pinned field), so that pack is left
+    out of the field's provenance and cannot appear in a later warning's
+    source list.
+    """
+
+    value: Any
+    warnings: tuple[PackWarning, ...]
+    contributed: bool
+
+
 def _reduce_field(
     rule: CompositionRule,
     field_name: str,
@@ -524,10 +688,12 @@ def _reduce_field(
     nxt: Any,
     acc_packs: tuple[str, ...],
     next_pack: str,
-) -> tuple[Any, tuple[PackWarning, ...]]:
+) -> _Reduction:
     """Fold one further contribution into a field's accumulated value.
 
-    Returns the new value and any diagnostics. Raises
+    Returns the new value, any diagnostics, and whether ``next_pack``
+    actually contributed to the result — the last so provenance names packs
+    that influenced the value rather than packs that merely tried. Raises
     :class:`PackResolutionError` only for a ``UNANIMOUS`` conflict — the one
     case where two packs make incompatible claims that no rule can
     reconcile.
@@ -542,7 +708,24 @@ def _reduce_field(
     dispatch points that can drift. One branch decides both.
     """
     if not isinstance(rule, MergeKind):
-        return rule(acc, nxt), ()
+        # A custom reducer gets no _check_value_shape pass — the module cannot
+        # know what shapes it accepts — so the wrap is what supplies the field
+        # and pack context that check exists to guarantee. Without it a
+        # mismatched value surfaces as a bare TypeError from inside the fold,
+        # naming neither the field nor the pack that contributed it.
+        try:
+            return _Reduction(rule(acc, nxt), (), True)
+        except Exception as exc:
+            raise ConfigurationError(
+                f"The custom reducer for '{field_name}' failed folding "
+                f"'{next_pack}' into {list(acc_packs)}: {exc}",
+                context={
+                    "field": field_name,
+                    "source": next_pack,
+                    "rule": _rule_label(rule),
+                    "packs": [*acc_packs, next_pack],
+                },
+            ) from exc
 
     if rule is MergeKind.UNANIMOUS:
         if acc != nxt:
@@ -555,45 +738,59 @@ def _reduce_field(
                 packs=[*acc_packs, next_pack],
                 values=[repr(acc), repr(nxt)],
             )
-        return acc, ()
+        # Agreement is a contribution: both packs assert this value.
+        return _Reduction(acc, (), True)
 
     if rule in (MergeKind.LAST_WINS, MergeKind.FIRST_WINS):
         winner, loser = (nxt, acc) if rule is MergeKind.LAST_WINS else (acc, nxt)
         if acc == nxt:
-            return winner, ()
-        return winner, (
-            PackWarning(
-                code="value_override",
-                message=(
-                    f"'{field_name}' set by multiple packs ({[*acc_packs, next_pack]}); "
-                    f"{rule} keeps {winner!r} and discards {loser!r}"
+            return _Reduction(winner, (), True)
+        # Under FIRST_WINS the later value is thrown away, so this pack did not
+        # contribute: recording it would make a *subsequent* pack's warning cite
+        # a pack whose value was already discarded.
+        contributed = rule is MergeKind.LAST_WINS
+        return _Reduction(
+            winner,
+            (
+                PackWarning(
+                    code="value_override",
+                    message=(
+                        f"'{field_name}' set by multiple packs "
+                        f"({[*acc_packs, next_pack]}); "
+                        f"{rule} keeps {winner!r} and discards {loser!r}"
+                    ),
+                    packs=(*acc_packs, next_pack),
+                    field=field_name,
                 ),
-                packs=(*acc_packs, next_pack),
-                field=field_name,
             ),
+            contributed,
         )
 
     if rule is MergeKind.CONCAT:
-        return tuple(acc) + tuple(nxt), ()
+        return _Reduction(tuple(acc) + tuple(nxt), (), True)
 
     if rule is MergeKind.CONCAT_UNIQUE:
-        return _concat_unique(acc, nxt), ()
+        return _Reduction(_concat_unique(acc, nxt), (), True)
 
     # MergeKind.MERGE — the only remaining member.
     overridden = sorted(str(key) for key in nxt if key in acc and acc[key] != nxt[key])
     merged = {**acc, **nxt}
     if not overridden:
-        return merged, ()
-    return merged, (
-        PackWarning(
-            code="key_override",
-            message=(
-                f"'{next_pack}' overrides keys {overridden} of '{field_name}' "
-                f"previously set by {list(acc_packs)}"
+        return _Reduction(merged, (), True)
+    return _Reduction(
+        merged,
+        (
+            PackWarning(
+                code="key_override",
+                message=(
+                    f"'{next_pack}' overrides keys {overridden} of '{field_name}' "
+                    f"previously set by {list(acc_packs)}"
+                ),
+                packs=(*acc_packs, next_pack),
+                field=field_name,
             ),
-            packs=(*acc_packs, next_pack),
-            field=field_name,
         ),
+        True,
     )
 
 
@@ -601,8 +798,9 @@ def _reduce_field(
 class _Contribution:
     """One labelled set of field values entering the fold.
 
-    ``explicit`` records whether *presence of a key* is meaningful for this
-    contribution — which depends on where it came from, not on its content:
+    ``origin`` records where the values came from, which is what decides
+    whether *presence of a key* is meaningful — a property of the source,
+    not of the content:
 
     - A **spec** is a frozen dataclass, so every field is always present and
       "did not mention it" is unrecoverable from the mapping alone. Absence
@@ -615,7 +813,17 @@ class _Contribution:
 
     label: str
     values: Mapping[str, Any]
-    explicit: bool = False
+    #: ``"spec"`` for a registered declaration, ``"binding"`` for a
+    #: deployment body. One fact with two consequences — it decides both
+    #: how participation is measured and which error family a bad value
+    #: raises — so it is stored once rather than as two booleans that could
+    #: be set inconsistently.
+    origin: str = "spec"
+
+    @property
+    def explicit(self) -> bool:
+        """Whether *presence of a key* is meaningful for this contribution."""
+        return self.origin == "binding"
 
 
 def _fold(
@@ -656,12 +864,19 @@ def _fold(
             value = _normalize_value(contributed[field_name])
             if not contribution.explicit and value == plan.defaults[field_name]:
                 continue
-            _check_value_shape(rule, field_name, value, label)
+            _check_value_shape(rule, field_name, value, label, from_binding=contribution.explicit)
             if field_name not in values:
+                # Seed concatenation fields as a tuple so the composed shape
+                # does not depend on how many packs contributed: two or more
+                # go through ``tuple(acc) + tuple(nxt)``, and a lone
+                # contribution would otherwise keep whatever sequence type it
+                # arrived as.
+                if rule in (MergeKind.CONCAT, MergeKind.CONCAT_UNIQUE):
+                    value = tuple(value)
                 values[field_name] = value
                 sources[field_name] = [label]
                 continue
-            merged, warns = _reduce_field(
+            reduction = _reduce_field(
                 rule,
                 field_name,
                 values[field_name],
@@ -669,9 +884,10 @@ def _fold(
                 tuple(sources[field_name]),
                 label,
             )
-            values[field_name] = merged
-            sources[field_name].append(label)
-            warnings.extend(warns)
+            values[field_name] = reduction.value
+            if reduction.contributed:
+                sources[field_name].append(label)
+            warnings.extend(reduction.warnings)
 
     return values, tuple(warnings)
 
@@ -714,13 +930,65 @@ def compose_packs(
                 f"{type(spec).__qualname__}",
                 context={"spec_cls": spec_cls.__qualname__, "got": type(spec).__qualname__},
             )
+        _assert_composable(type(spec), spec_cls, plan)
         contributions.append(
-            _Contribution(
-                spec.name, {name: getattr(spec, name) for name in plan.rules}
-            )
+            _Contribution(spec.name, {name: getattr(spec, name) for name in plan.rules})
         )
     values, warnings = _fold(plan, contributions)
     return spec_cls(name=composed_name, **values), warnings
+
+
+def merge_bindings(*layers: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge ordered binding layers into one binding mapping, later winning.
+
+    Bindings arrive in layers whenever more than one authority has a say —
+    a platform baseline plus a per-tenant overlay being the usual shape.
+    Without this, each deployment hand-merges those dicts at wiring time,
+    which is the same lossy ad-hoc merging this module exists to replace.
+
+    It is also what makes ``locked`` more than a tautology. Within a single
+    body, ``locked: true`` next to ``enabled: false`` is a contradiction the
+    same author wrote and could simply not have written. Across layers it is
+    load-bearing::
+
+        platform = {"audit": {"locked": True}}
+        tenant = {"audit": {"enabled": False}}
+        registry.resolve(merge_bindings(platform, tenant))
+        # PackResolutionError(reason="locked_pack_disabled")
+
+    Merging is per pack and *shallow* within a body: a later layer replaces
+    the keys it names and leaves the rest. Field overrides are values in
+    that mapping, so a later layer's ``middleware`` replaces an earlier
+    layer's rather than appending — layer precedence is a different
+    question from the per-field composition a pack's ``_COMPOSITION``
+    governs, and conflating them would make a binding's meaning depend on
+    which layer it came from. Compose *packs* to accumulate; layer
+    *bindings* to override.
+
+    Args:
+        layers: Binding mappings in ascending precedence (the last wins).
+
+    Returns:
+        A new mapping; no input layer is mutated or aliased.
+    """
+    merged: dict[str, Any] = {}
+    for layer in layers:
+        if not isinstance(layer, Mapping):
+            raise PackResolutionError(
+                f"Each binding layer must be a mapping; got {type(layer).__name__}",
+                reason="invalid_binding",
+            )
+        for pack_name, body in layer.items():
+            if not isinstance(body, Mapping):
+                # Left for resolve() to reject with full registry context.
+                merged[pack_name] = body
+                continue
+            existing = merged.get(pack_name)
+            if isinstance(existing, Mapping):
+                merged[pack_name] = {**existing, **body}
+            else:
+                merged[pack_name] = dict(body)
+    return merged
 
 
 class PackRegistry(Registry[SpecT], Generic[SpecT]):
@@ -807,6 +1075,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
                 f"'{item.name}'; a pack is addressed by its own name",
                 context={"registry": self.name, "key": key, "name": item.name},
             )
+        _assert_composable(type(item), self._spec_cls, _composition_plan(self._spec_cls))
         super().register(key, item, metadata, allow_overwrite)
 
     def resolve(
@@ -869,6 +1138,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
         registration_order = {name: index for index, (name, _) in enumerate(snapshot)}
 
         selected: list[tuple[int, int, SpecT]] = []
+        binding_warnings: list[PackWarning] = []
         for pack_name, binding in bindings.items():
             spec = registered.get(pack_name)
             if spec is None:
@@ -882,20 +1152,19 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             body = self._validated_binding(pack_name, binding, plan)
             if body is None:
                 continue
-            applied = self._apply_binding(spec, body, plan)
+            applied, applied_warnings = self._apply_binding(spec, body, plan)
+            binding_warnings.extend(applied_warnings)
             selected.append((applied.priority, registration_order[pack_name], applied))
 
         selected.sort(key=lambda entry: (entry[0], entry[1]))
         ordered = [spec for _, _, spec in selected]
 
-        warnings = list(_priority_tie_warnings(selected))
+        warnings = binding_warnings + list(_priority_tie_warnings(selected, plan))
         composed, compose_warnings = compose_packs(
             ordered, self._spec_cls, composed_name=composed_name
         )
         warnings.extend(compose_warnings)
-        return PackResolution(
-            applied=tuple(ordered), spec=composed, warnings=tuple(warnings)
-        )
+        return PackResolution(applied=tuple(ordered), spec=composed, warnings=tuple(warnings))
 
     def _validated_binding(
         self,
@@ -957,18 +1226,26 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
         spec: SpecT,
         binding: Mapping[str, Any],
         plan: _CompositionPlan,
-    ) -> SpecT:
-        """Return ``spec`` with the binding's overrides applied.
+    ) -> tuple[SpecT, tuple[PackWarning, ...]]:
+        """Return ``spec`` with the binding's overrides applied, plus warnings.
 
-        Composition warnings raised here are deliberately dropped: a binding
+        The fold's own ``value_override`` warnings are dropped: a binding
         overriding its own pack's declared value is an intentional
-        deployment act, not a diagnostic. A ``UNANIMOUS`` conflict still
-        raises (see :meth:`resolve`).
+        deployment act, not a diagnostic. The reverse is *not* — a rule that
+        discards the binding's value (``FIRST_WINS`` already pinned by this
+        pack) means an operator typed a key that did nothing, and whether it
+        does nothing depends on the pack's content rather than on anything
+        visible in the binding. That is reported.
+
+        A ``UNANIMOUS`` conflict still raises (see :meth:`resolve`).
         """
         overrides = {key: value for key, value in binding.items() if key in plan.rules}
         priority = self._binding_priority(spec, binding)
         if not overrides and priority == spec.priority:
-            return spec
+            # Rebuild anyway: returning the registered instance here and a new
+            # one otherwise would make ``resolution.applied`` alias the
+            # registry depending on the binding's content.
+            return dataclasses.replace(spec), ()
 
         spec_values = {name: getattr(spec, name) for name in plan.rules}
         values, _ = _fold(
@@ -977,11 +1254,51 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
                 _Contribution(spec.name, spec_values),
                 # A binding names its fields, so presence is the contribution
                 # — including naming one to clear it back to its default.
-                _Contribution(f"{spec.name}[binding]", overrides, explicit=True),
+                _Contribution(f"{spec.name}[binding]", overrides, origin="binding"),
             ],
         )
-        applied = type(spec)(name=spec.name, priority=priority, **values)
-        return applied
+        # ``replace`` rather than ``type(spec)(name=..., **values)``: the plan
+        # covers only composable fields, so reconstructing from them alone
+        # would silently reset any field it cannot see — an extra
+        # ``_META_FIELDS`` descriptor, for instance.
+        applied = dataclasses.replace(spec, priority=priority, **values)
+        return applied, self._ignored_override_warnings(spec, overrides, values, plan)
+
+    @staticmethod
+    def _ignored_override_warnings(
+        spec: SpecT,
+        overrides: Mapping[str, Any],
+        values: Mapping[str, Any],
+        plan: _CompositionPlan,
+    ) -> tuple[PackWarning, ...]:
+        """Warn for each override whose value the field's rule threw away.
+
+        Detected by outcome rather than by rule name: an override was
+        discarded exactly when the resolved value is the pack's own and is
+        not the one the binding asked for. ``CONCAT``/``MERGE`` results
+        differ from both inputs, so they never match.
+        """
+        ignored = [
+            key
+            for key, raw in overrides.items()
+            if key in values
+            and values[key] == getattr(spec, key)
+            and values[key] != _normalize_value(raw)
+        ]
+        return tuple(
+            PackWarning(
+                code="binding_override_ignored",
+                message=(
+                    f"Binding for '{spec.name}' sets '{key}' to "
+                    f"{overrides[key]!r}, but the field's declared "
+                    f"{_rule_label(plan.rules[key])} rule keeps the pack's "
+                    f"{getattr(spec, key)!r}"
+                ),
+                packs=(spec.name,),
+                field=key,
+            )
+            for key in ignored
+        )
 
     def _binding_priority(self, spec: SpecT, binding: Mapping[str, Any]) -> int:
         """The binding's ``priority`` override, or the spec's own."""
@@ -1000,28 +1317,54 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
         return priority
 
 
+def _participating_fields(spec: PackSpec, plan: _CompositionPlan) -> frozenset[str]:
+    """The non-meta fields this spec actually contributes to the fold."""
+    return frozenset(
+        name for name in plan.rules if _normalize_value(getattr(spec, name)) != plan.defaults[name]
+    )
+
+
 def _priority_tie_warnings(
     selected: Sequence[tuple[int, int, PackSpec]],
+    plan: _CompositionPlan,
 ) -> Iterator[PackWarning]:
-    """Emit one warning per group of selected packs sharing a priority.
+    """Warn for each priority group whose members contend for a field.
 
     A tie resolves deterministically (registration order), but silently — so
-    the tie is surfaced rather than left for a future registration-order
-    change to alter composition invisibly.
+    a tie that *decides something* is surfaced rather than left for a future
+    registration-order change to alter composition invisibly.
+
+    Restricted to packs that actually co-contribute to at least one field.
+    ``priority`` defaults to ``0``, so a bare group-by-priority fires on the
+    ordinary "bind two packs, don't bother with priorities" case, where no
+    field is contended and the order changes nothing. A diagnostic that
+    fires when nothing is wrong trains consumers to filter its code out,
+    which costs them the case it exists for.
     """
-    grouped: dict[int, list[str]] = {}
+    grouped: dict[int, list[PackSpec]] = {}
     for priority, _, spec in selected:
-        grouped.setdefault(priority, []).append(spec.name)
-    for priority, names in grouped.items():
-        if len(names) > 1:
-            yield PackWarning(
-                code="priority_tie",
-                message=(
-                    f"Packs {names} share priority {priority}; composition order "
-                    "falls back to registration order"
-                ),
-                packs=tuple(names),
-            )
+        grouped.setdefault(priority, []).append(spec)
+    for priority, specs in grouped.items():
+        if len(specs) < 2:
+            continue
+        seen: set[str] = set()
+        contended: set[str] = set()
+        for spec in specs:
+            fields = _participating_fields(spec, plan)
+            contended |= fields & seen
+            seen |= fields
+        if not contended:
+            continue
+        names = [spec.name for spec in specs]
+        yield PackWarning(
+            code="priority_tie",
+            message=(
+                f"Packs {names} share priority {priority} and both set "
+                f"{sorted(contended)}; composition order falls back to "
+                "registration order"
+            ),
+            packs=tuple(names),
+        )
 
 
 __all__ = [
@@ -1034,4 +1377,5 @@ __all__ = [
     "PackWarning",
     "Reducer",
     "compose_packs",
+    "merge_bindings",
 ]

@@ -145,6 +145,7 @@ from dataknobs_common.packs import (
     PackWarning,
     Reducer,
     compose_packs,
+    merge_bindings,
 )
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
@@ -358,6 +359,7 @@ __all__ = [
     "PackResolution",
     "PackResolutionError",
     "compose_packs",
+    "merge_bindings",
     "PackRegistry",
     # Postgres config
     "normalize_postgres_connection_config",

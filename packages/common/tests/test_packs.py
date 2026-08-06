@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import gc
 import pickle
+import weakref
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -29,6 +31,7 @@ from dataknobs_common.packs import (
     PackSpec,
     PackWarning,
     compose_packs,
+    merge_bindings,
 )
 from dataknobs_common.registry import BackendRegistry
 from dataknobs_common.testing import assert_structured_config_roundtrip
@@ -739,3 +742,440 @@ def test_unset_is_identity_stable_across_copy_and_pickle() -> None:
 
 def test_unset_spec_round_trips_through_dict() -> None:
     assert_structured_config_roundtrip(SentinelPack(name="s", mode="strict"))
+
+
+# --------------------------------------------------------------------------
+# Reconstruction fidelity — a spec must survive resolution intact
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TenantDemoPack(DemoPack):
+    """A registrable subclass carrying a field the base plan cannot see."""
+
+    tenant: str | None = None
+
+    _COMPOSITION = MappingProxyType(
+        {**DemoPack._COMPOSITION, "tenant": MergeKind.LAST_WINS}
+    )
+
+
+@dataclass(frozen=True)
+class RegionPack(PackSpec):
+    """A spec that extends ``_META_FIELDS`` with a third descriptor."""
+
+    region: str = "us"
+    mode: str | None = None
+
+    _META_FIELDS = frozenset({"name", "priority", "region"})
+    _COMPOSITION = MappingProxyType({"mode": MergeKind.LAST_WINS})
+
+
+def test_subclass_adding_no_fields_is_still_registrable() -> None:
+    """The guard is about uncomposable *fields*, not about subclassing.
+
+    A subclass that only adds behaviour composes identically to its base,
+    so rejecting it would be a blanket ban where a precise one is possible.
+    """
+
+    @dataclass(frozen=True)
+    class BehaviourOnly(DemoPack):
+        def describe(self) -> str:
+            return f"{self.name}:{self.mode}"
+
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(BehaviourOnly(name="ext", mode="strict"))
+
+    resolution = reg.resolve({"ext": {"mode": "lax"}})
+
+    assert resolution.applied[0].mode == "lax"
+
+
+def test_binding_application_preserves_extra_meta_fields() -> None:
+    """A third ``_META_FIELDS`` entry must survive binding application."""
+    reg: PackRegistry[RegionPack] = PackRegistry("regions", RegionPack)
+    reg.register_pack(RegionPack(name="eu", region="eu", mode="strict"))
+
+    resolution = reg.resolve({"eu": {"mode": "lax"}})
+
+    assert resolution.applied[0].region == "eu"
+
+
+def test_binding_naming_an_unhandled_meta_field_is_rejected() -> None:
+    """``binding_keys`` must not advertise a meta field the fold ignores."""
+    reg: PackRegistry[RegionPack] = PackRegistry("regions", RegionPack)
+    reg.register_pack(RegionPack(name="eu", region="eu"))
+
+    with pytest.raises(PackResolutionError) as excinfo:
+        reg.resolve({"eu": {"region": "apac"}})
+
+    assert excinfo.value.reason == "unknown_binding_key"
+
+
+def test_registering_a_subclass_with_uncomposable_fields_is_rejected() -> None:
+    """The composed spec cannot carry a field the plan has no rule for.
+
+    Registration is the earliest point this is knowable, so it fails there
+    rather than silently dropping the field from ``resolution.spec``.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        reg.register_pack(TenantDemoPack(name="ext", tenant="acme"))
+
+    assert "tenant" in str(excinfo.value)
+
+
+def test_compose_packs_rejects_a_subclass_with_uncomposable_fields() -> None:
+    """The same guard on the lower-level primitive."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        compose_packs([TenantDemoPack(name="ext", tenant="acme")], DemoPack)
+
+    assert "tenant" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# Binding overrides that the declared rule discards
+# --------------------------------------------------------------------------
+
+
+def test_discarded_binding_override_is_surfaced_as_a_warning() -> None:
+    """A FIRST_WINS field pinned by the pack silently ignores its binding.
+
+    The binding key was typed by an operator and had no effect; without a
+    diagnostic that is indistinguishable from it having been honoured.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="base", pinned="a"))
+
+    resolution = reg.resolve({"base": {"pinned": "b"}})
+
+    assert resolution.applied[0].pinned == "a"
+    codes = {w.code for w in resolution.warnings}
+    assert "binding_override_ignored" in codes
+    ignored = next(w for w in resolution.warnings if w.code == "binding_override_ignored")
+    assert ignored.field == "pinned"
+
+
+def test_honored_binding_override_emits_no_warning() -> None:
+    """A binding that wins is an intentional deployment act, not a diagnostic."""
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="base", mode="strict"))
+
+    resolution = reg.resolve({"base": {"mode": "lax"}})
+
+    assert resolution.applied[0].mode == "lax"
+    assert resolution.warnings == ()
+
+
+# --------------------------------------------------------------------------
+# Error family for operator-supplied values
+# --------------------------------------------------------------------------
+
+
+def test_binding_supplied_bad_shape_raises_the_resolution_family() -> None:
+    """A bad value in a binding is operator input, not an authoring bug.
+
+    It must be catchable through the documented
+    ``except PackResolutionError as exc: exc.reason`` recipe.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="base", checks=("pii",)))
+
+    with pytest.raises(PackResolutionError) as excinfo:
+        reg.resolve({"base": {"checks": "pii"}})
+
+    assert excinfo.value.reason == "invalid_binding"
+    assert excinfo.value.context["field"] == "checks"
+
+
+def test_spec_supplied_bad_shape_still_raises_the_authoring_family() -> None:
+    """The spec-sourced half of the split is unchanged."""
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="base", checks="pii"))  # type: ignore[arg-type]
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        reg.resolve({"base": {}})
+
+    assert not isinstance(excinfo.value, PackResolutionError)
+
+
+# --------------------------------------------------------------------------
+# Spec-class validation reachability
+# --------------------------------------------------------------------------
+
+
+def test_undecorated_subclass_is_named_as_the_problem() -> None:
+    """``is_dataclass`` is true for any subclass, so the guard needs the own-dict.
+
+    Without it the failure surfaces as "keys that are not non-meta fields",
+    pointing the author at ``_COMPOSITION`` rather than the missing
+    decorator.
+    """
+
+    class Undecorated(PackSpec):
+        mode: str | None = None
+
+        _COMPOSITION = MappingProxyType({"mode": MergeKind.LAST_WINS})
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        PackRegistry("undecorated", Undecorated)
+
+    assert "@dataclass(frozen=True)" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# Custom reducer failures
+# --------------------------------------------------------------------------
+
+
+def test_failing_custom_reducer_is_wrapped_with_field_context() -> None:
+    """A reducer given a shape it cannot handle must not surface raw.
+
+    ``_check_value_shape`` exists so the built-in kinds never raise an
+    opaque ``TypeError`` from inside the fold; a custom reducer has no
+    such check, so the wrap is what supplies the same context.
+    """
+
+    def add(acc: Any, nxt: Any) -> Any:
+        return acc + nxt
+
+    @dataclass(frozen=True)
+    class ReducerPack(PackSpec):
+        total: Any = 0
+
+        _COMPOSITION = MappingProxyType({"total": add})
+
+    reg: PackRegistry[ReducerPack] = PackRegistry("reducers", ReducerPack)
+    reg.register_pack(ReducerPack(name="a", priority=0, total=1))
+    reg.register_pack(ReducerPack(name="b", priority=1, total="oops"))
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        reg.resolve({"a": {}, "b": {}})
+
+    message = str(excinfo.value)
+    assert "total" in message
+    assert "b" in message
+
+
+# --------------------------------------------------------------------------
+# Priority ties that cannot matter
+# --------------------------------------------------------------------------
+
+
+def test_priority_tie_on_disjoint_fields_does_not_warn() -> None:
+    """Two packs at the default priority touching different fields.
+
+    ``priority`` defaults to 0, so warning on every tie fires in the
+    ordinary case and trains consumers to filter the code out.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="a", mode="strict"))
+    reg.register_pack(DemoPack(name="b", pinned="x"))
+
+    resolution = reg.resolve({"a": {}, "b": {}})
+
+    assert [w.code for w in resolution.warnings] == []
+
+
+def test_priority_tie_on_a_shared_field_still_warns() -> None:
+    """The case the diagnostic exists for: order decides the outcome."""
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="a", mode="strict"))
+    reg.register_pack(DemoPack(name="b", mode="lax"))
+
+    resolution = reg.resolve({"a": {}, "b": {}})
+
+    assert "priority_tie" in {w.code for w in resolution.warnings}
+
+
+# --------------------------------------------------------------------------
+# Immutability of registered specs
+# --------------------------------------------------------------------------
+
+
+def test_set_field_is_immutable_by_construction() -> None:
+    """``set`` normalizes to ``frozenset``, matching ``list`` -> ``tuple``.
+
+    Mappings deliberately stay writable — ``MappingProxyType`` cannot be
+    deep-copied, and ``StructuredConfig.to_dict`` delegates to
+    ``dataclasses.asdict``, which deep-copies every field value. The
+    read-only contract for dict fields is therefore documented rather than
+    enforced; see ``_normalize_value``.
+    """
+
+    @dataclass(frozen=True)
+    class SetPack(PackSpec):
+        tags: frozenset[str] = frozenset()
+
+        _COMPOSITION = MappingProxyType({"tags": MergeKind.LAST_WINS})
+
+    spec = SetPack(name="a", tags={"x", "y"})  # type: ignore[arg-type]
+
+    assert spec.tags == frozenset({"x", "y"})
+    with pytest.raises(AttributeError):
+        spec.tags.add("z")  # type: ignore[attr-defined]
+
+
+def test_specs_with_container_fields_survive_serialization(
+    registry: PackRegistry[DemoPack],
+) -> None:
+    """The contract that rules out freezing mapping fields.
+
+    ``to_dict`` deep-copies through ``dataclasses.asdict``, and a consumer
+    may reasonably call ``asdict`` directly, so every field value has to
+    remain deep-copyable.
+    """
+    spec = registry.get("base")
+    assert spec is not None
+
+    assert copy.deepcopy(spec) == spec
+    assert pickle.loads(pickle.dumps(spec)) == spec
+    assert dataclasses.asdict(spec)["limits"] == dict(spec.limits)
+
+
+# --------------------------------------------------------------------------
+# Layered bindings
+# --------------------------------------------------------------------------
+
+
+def test_merge_bindings_lets_a_later_layer_override_one_key() -> None:
+    merged = merge_bindings(
+        {"base": {"mode": "strict", "priority": 5}},
+        {"base": {"mode": "lax"}},
+    )
+
+    assert merged == {"base": {"mode": "lax", "priority": 5}}
+
+
+def test_merge_bindings_unions_packs_across_layers() -> None:
+    merged = merge_bindings({"a": {}}, {"b": {"enabled": False}})
+
+    assert sorted(merged) == ["a", "b"]
+
+
+def test_merge_bindings_does_not_mutate_or_alias_its_layers() -> None:
+    platform = {"base": {"mode": "strict"}}
+    tenant: dict[str, Any] = {"base": {}}
+
+    merged = merge_bindings(platform, tenant)
+    merged["base"]["mode"] = "clobbered"
+
+    assert platform == {"base": {"mode": "strict"}}
+    assert tenant == {"base": {}}
+
+
+def test_locked_becomes_load_bearing_across_layers(
+    registry: PackRegistry[DemoPack],
+) -> None:
+    """The workflow ``locked`` exists for.
+
+    Within one body the contradiction is one author's typo; across layers a
+    platform baseline is asserting a pack a tenant must not switch off.
+    """
+    platform = {"base": {"locked": True}}
+    tenant = {"base": {"enabled": False}}
+
+    with pytest.raises(PackResolutionError) as excinfo:
+        registry.resolve(merge_bindings(platform, tenant))
+
+    assert excinfo.value.reason == "locked_pack_disabled"
+
+
+def test_an_unlocked_pack_can_still_be_disabled_by_a_later_layer(
+    registry: PackRegistry[DemoPack],
+) -> None:
+    resolution = registry.resolve(
+        merge_bindings({"base": {}}, {"base": {"enabled": False}})
+    )
+
+    assert resolution.packs == ()
+
+
+def test_merge_bindings_of_nothing_is_empty() -> None:
+    assert merge_bindings() == {}
+
+
+def test_merge_bindings_rejects_a_non_mapping_layer() -> None:
+    with pytest.raises(PackResolutionError) as excinfo:
+        merge_bindings({"a": {}}, ["not-a-layer"])  # type: ignore[arg-type]
+
+    assert excinfo.value.reason == "invalid_binding"
+
+
+# --------------------------------------------------------------------------
+# Hygiene: cache lifetime, shape uniformity, provenance accuracy
+# --------------------------------------------------------------------------
+
+
+def test_composition_plan_cache_does_not_pin_spec_classes() -> None:
+    """The plan cache must not keep every spec class alive forever.
+
+    Keying a process-lifetime cache on the class itself makes the class
+    permanently reachable. Harmless for module-scope specs, but a process
+    that builds spec classes dynamically — or a test suite that defines them
+    per-test — leaks one class plus its module globals each time.
+    """
+
+    @dataclass(frozen=True)
+    class Ephemeral(PackSpec):
+        mode: str | None = None
+
+        _COMPOSITION = MappingProxyType({"mode": MergeKind.LAST_WINS})
+
+    PackRegistry("ephemeral", Ephemeral)  # populates the plan cache
+    ref = weakref.ref(Ephemeral)
+
+    del Ephemeral
+    gc.collect()
+
+    assert ref() is None
+
+
+def test_concat_yields_a_tuple_even_with_one_participating_pack() -> None:
+    """The composed shape must not depend on how many packs contributed.
+
+    Two or more contributions go through ``tuple(acc) + tuple(nxt)``; a lone
+    contribution used to pass through with whatever sequence type it had, so
+    a consumer's ``spec.steps[0]`` worked but ``spec.steps + (...)`` did not.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="solo", steps=range(3)))  # type: ignore[arg-type]
+
+    composed = reg.resolve({"solo": {}}).spec
+
+    assert isinstance(composed.steps, tuple)
+    assert composed.steps == (0, 1, 2)
+
+
+def test_first_wins_warning_omits_an_already_discarded_pack() -> None:
+    """Provenance must list packs that contributed, not packs that tried.
+
+    Under FIRST_WINS the second pack's value is discarded, so naming it
+    among the sources of the third pack's warning points the reader at a
+    pack that never influenced the value.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="a", priority=0, pinned="x"))
+    reg.register_pack(DemoPack(name="b", priority=1, pinned="y"))
+    reg.register_pack(DemoPack(name="c", priority=2, pinned="z"))
+
+    resolution = reg.resolve({"a": {}, "b": {}, "c": {}})
+
+    assert resolution.spec.pinned == "x"
+    pinned_warnings = [w for w in resolution.warnings if w.field == "pinned"]
+    assert pinned_warnings[-1].packs == ("a", "c")
+
+
+def test_unanimous_agreement_still_records_every_asserting_pack() -> None:
+    """Over-trigger guard: agreeing packs all contributed the value."""
+    reg: PackRegistry[DemoPack] = PackRegistry("demo", DemoPack)
+    reg.register_pack(DemoPack(name="a", priority=0, tier="std", mode="m1"))
+    reg.register_pack(DemoPack(name="b", priority=1, tier="std", mode="m2"))
+    reg.register_pack(DemoPack(name="c", priority=2, tier="std", mode="m3"))
+
+    resolution = reg.resolve({"a": {}, "b": {}, "c": {}})
+
+    # LAST_WINS on `mode` keeps full history: every pack did set it.
+    mode_warnings = [w for w in resolution.warnings if w.field == "mode"]
+    assert mode_warnings[-1].packs == ("a", "b", "c")

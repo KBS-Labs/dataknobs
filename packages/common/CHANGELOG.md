@@ -42,19 +42,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worth reaching for only on `LAST_WINS` / `FIRST_WINS` / `UNANIMOUS`.
   Failures split into two deliberately distinct families: authoring bugs (a
   field with no declared rule, a rule for a nonexistent field, a non-meta
-  field with no default, a value whose shape contradicts its rule) raise
-  `ConfigurationError` at `PackRegistry` construction, while binding
-  problems raise `PackResolutionError` carrying a machine-readable `reason`
-  (`unknown_pack`, `unknown_binding_key`, `locked_pack_disabled`,
-  `field_conflict`, `invalid_binding`). Non-fatal diagnostics are structured
-  `PackWarning`s with a stable `code` (`priority_tie`, `value_override`,
-  `key_override`) so a deployment can escalate one class of collision
-  without pattern-matching prose. `compose_packs` exposes the underlying
-  fold for callers that already hold specs in the order they want. No
-  module-level singleton is provided — a pack binding is a per-deployment
-  decision, and a process-global registry would be a multi-tenant hazard.
-  `MergeKind`, `UNSET`, `Reducer`, `CompositionRule`, `PackSpec`, `PackWarning`,
-  `PackResolution`, `PackResolutionError`, `compose_packs`, and
+  field with no default, a spec class adding fields the registry's class
+  cannot compose, a *spec's* value whose shape contradicts its rule, a
+  custom reducer that raises) surface as `ConfigurationError`, while
+  problems in a *binding* raise `PackResolutionError` carrying a
+  machine-readable `reason` (`unknown_pack`, `unknown_binding_key`,
+  `locked_pack_disabled`, `field_conflict`, `invalid_binding`). The split
+  follows the value's origin rather than its symptom: the same malformed
+  value is a programmer error inside a spec and operator input inside a
+  binding, so a bad binding value is catchable by `reason` rather than by
+  matching prose. Most authoring checks run when the `PackRegistry` is
+  constructed or a spec registered; a value's shape and a reducer's
+  behavior are only knowable once there is a value, so those run at
+  `resolve()`. A registry holds exactly one spec class — registering a
+  subclass that adds its own fields is rejected, since the composed result
+  is an instance of the registry's class and such a field would have no
+  rule and nowhere to land. Non-fatal diagnostics are structured
+  `PackWarning`s with a stable `code` (`priority_tie` — raised only when
+  tied packs actually contend for a field, so the common
+  everything-at-`priority=0` case stays quiet; `value_override`;
+  `key_override`; `binding_override_ignored`, for a binding key whose
+  declared rule then discarded the binding's value) so a deployment can
+  escalate one class of collision without pattern-matching prose. A
+  warning's `packs` names the packs that *contributed* to the field's
+  current value, so a `FIRST_WINS` value that was discarded does not linger
+  in a later warning's source list. The composed shape is independent of how
+  many packs contributed — a `CONCAT` / `CONCAT_UNIQUE` field is always a
+  `tuple`, a `MERGE` field always a `dict`, even with a single participant.
+  `compose_packs` exposes the underlying fold for callers that already hold
+  specs in the order they want, and `merge_bindings` layers ordered binding
+  mappings (later layers winning per pack and per key), which is what makes
+  `locked` load-bearing: a platform baseline can assert a pack a per-tenant
+  overlay must not switch off. No module-level singleton is provided — a
+  pack binding is a per-deployment decision, and a process-global registry
+  would be a multi-tenant hazard. `MergeKind`, `UNSET`, `Reducer`,
+  `CompositionRule`, `PackSpec`, `PackWarning`, `PackResolution`,
+  `PackResolutionError`, `compose_packs`, `merge_bindings`, and
   `PackRegistry` are exported from the top-level `dataknobs_common`
   namespace. See `docs/guides/packs.md`.
 

@@ -9,7 +9,8 @@ packs for one deployment and may tune them. **Resolution** folds the
 selected packs — lowest priority first — field by field.
 
 The module is deliberately vocabulary-free. It knows `name`, `priority`,
-and a per-field merge rule; it knows nothing about what the fields *mean*.
+the `enabled` / `locked` binding flags, and a per-field merge rule; it
+knows nothing about what the fields *mean*.
 Domain packages define the vocabulary by subclassing `PackSpec`
 (`dataknobs_bots.BehaviorPackSpec` is one such subclass).
 
@@ -34,7 +35,6 @@ speech and none of them are the same operation.
 ```python
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
 
 from dataknobs_common.packs import MergeKind, PackRegistry, PackSpec
 
@@ -124,6 +124,10 @@ Every rule is applied as a left fold over the participating packs in
 | `CONCAT_UNIQUE` | Sequences joined, order-preserving dedup | Set-like names where a repeat is noise |
 | `MERGE` | Shallow mapping merge, later packs win per key | Independent knobs contributed by several packs |
 
+The composed shape does not depend on how many packs contributed: a
+`CONCAT` / `CONCAT_UNIQUE` field is always a `tuple` and a `MERGE` field
+always a `dict`, whether one pack participated or five.
+
 ### Participation: the rule that makes this work
 
 A field **participates in the fold only when its contributed value differs
@@ -131,7 +135,19 @@ from that field's declared default.** "Unset" is "still at the default".
 
 This is what makes `LAST_WINS` and `UNANIMOUS` behave: a pack that does not
 mention a field must not clobber a pack that does. `CONCAT` and `MERGE` are
-unaffected — an empty contribution is already a no-op.
+unaffected **as long as the field's declared default is empty**, since then
+a non-participating contribution and an empty one amount to the same thing.
+
+Give a `CONCAT` field a *non-empty* default and that stops holding: with
+
+```python
+steps: tuple[str, ...] = ("audit",)
+```
+
+a pack contributing exactly `("audit",)` is indistinguishable from one that
+left the field alone, so it is skipped and the composed result has one
+`"audit"` rather than two. Declare collection fields with an empty default
+unless you specifically want that.
 
 The rule exists because a spec is a frozen dataclass: every field is always
 present, so "did not mention this" is not recoverable from the object and has
@@ -152,6 +168,27 @@ Participation is all that presence decides — the field's declared rule still
 governs the outcome. A binding cannot take back a `FIRST_WINS` field its own
 pack already pinned, and disagreeing with a `UNANIMOUS` field raises
 `field_conflict` rather than clearing it.
+
+Because whether that happens depends on the *pack's* content rather than on
+anything visible in the binding, an override a rule discards is reported as
+a `binding_override_ignored` warning rather than passing silently — the key
+was typed by an operator and did nothing:
+
+```python
+@dataclass(frozen=True)
+class PinPack(PackSpec):
+    engine: str | None = None
+
+    _COMPOSITION = MappingProxyType({"engine": MergeKind.FIRST_WINS})
+
+
+pinned = PackRegistry("pinned", PinPack)
+pinned.register_pack(PinPack(name="base", engine="v1"))
+
+resolution = pinned.resolve({"base": {"engine": "v2"}})
+resolution.spec.engine                        # 'v1' — the pack pinned it
+[w.code for w in resolution.warnings]         # ['binding_override_ignored']
+```
 
 #### Making "explicitly the default" expressible in a pack
 
@@ -187,7 +224,8 @@ way it would with `None`.
 
 Reach for this only on `LAST_WINS` / `FIRST_WINS` / `UNANIMOUS`, where a
 default-valued contribution is meaningful. It buys nothing on `CONCAT` /
-`CONCAT_UNIQUE` / `MERGE`, where an empty contribution is already a no-op.
+`CONCAT_UNIQUE` / `MERGE` declared with an empty default, where an empty
+contribution is already a no-op.
 Test it with `is UNSET` — identity is the contract, and it survives copy,
 deepcopy, and pickle. It is an object rather than a string, so it does not
 survive a JSON round-trip; a spec that must serialize to JSON should keep a
@@ -230,6 +268,11 @@ A custom reducer produces **no diagnostics** — `PackWarning`s are emitted
 only by the built-in kinds, because the `Reducer` signature deliberately
 carries neither the field name nor the contributing pack names.
 
+It also gets no shape check, since the module cannot know what shapes it
+accepts. If it raises, the exception is wrapped in a `ConfigurationError`
+naming the field and the pack being folded in, so a mismatch does not
+surface as a bare `TypeError` from inside the fold.
+
 ## Bindings
 
 A binding body is **a partial spec plus two flags**:
@@ -262,10 +305,47 @@ is deliberate: a `UNANIMOUS` field can be re-asserted by a binding but not
 
 **Unknown binding keys are rejected, not ignored.** A typo'd `lockd: true`
 that parsed as an unknown key would silently disable the safety contract.
-The `name` key is not bindable — a pack is addressed by its own name.
+Only composable fields plus `enabled` / `locked` / `priority` are bindable:
+`name` is not (a pack is addressed by its own name), and neither is any
+further descriptor a spec class adds to `_META_FIELDS`, since the fold has
+no rule for it and would accept the key and then ignore it.
+
+**Binding a pack requires it to be registered — including to disable it.**
+Membership is checked before `enabled`, so `{"nope": {"enabled": false}}`
+raises `unknown_pack` rather than resolving to nothing. Disabling is a
+statement *about a known pack*, so a name that has been renamed or removed
+should fail rather than quietly turn into a no-op.
 
 An empty bindings mapping resolves to an all-default composed spec with no
 applied packs. **Packs are opt-in.**
+
+### Layering bindings
+
+When more than one authority has a say — a platform baseline plus a
+per-tenant overlay — merge the layers with `merge_bindings` rather than by
+hand:
+
+```python
+from dataknobs_common.packs import merge_bindings
+
+platform = {"regulated": {"locked": True}}
+tenant = {"regulated": {"enabled": False}}
+
+registry.resolve(merge_bindings(platform, tenant))
+# PackResolutionError(reason="locked_pack_disabled")
+```
+
+Later layers win, per pack and per key. This is also what makes `locked`
+more than a formality: inside a single body, `locked: true` next to
+`enabled: false` is one author contradicting themselves; across layers it
+is a platform baseline a tenant may not switch off.
+
+Merging is **shallow within a body** — a later layer replaces the keys it
+names. A later layer's `filters` replaces an earlier layer's rather than
+appending, because layer precedence and per-field composition answer
+different questions, and conflating them would make a binding's meaning
+depend on which layer it came from. Compose *packs* to accumulate; layer
+*bindings* to override.
 
 ### Loading from YAML
 
@@ -296,9 +376,16 @@ Because the fold runs low-to-high:
 
 Ties break by **registration order** (FIFO). Registration order is
 therefore part of the contract, not an implementation detail — and a tie
-also emits a `priority_tie` warning, so the tie is surfaced rather than
-left for a future registration-order change to alter composition
-invisibly.
+that *decides something* also emits a `priority_tie` warning, so it is
+surfaced rather than left for a future registration-order change to alter
+composition invisibly.
+
+"Decides something" is the qualifier: the warning fires only when the tied
+packs actually contend for a field. `priority` defaults to `0`, so binding
+two packs without setting priorities is the ordinary case, and warning
+there — where no field is contended and the order changes nothing — would
+train consumers to filter the code out and cost them the case it exists
+for.
 
 ## Diagnostics and failure
 
@@ -310,9 +397,10 @@ failure without pattern-matching prose:
 
 | `code` | Emitted when |
 |---|---|
-| `priority_tie` | Two or more selected packs share a priority |
+| `priority_tie` | Two or more selected packs share a priority **and contend for a field** |
 | `value_override` | `LAST_WINS` / `FIRST_WINS` discarded a differing value |
 | `key_override` | `MERGE` overrode keys another pack had set |
+| `binding_override_ignored` | A binding named a field whose declared rule then discarded the binding's value |
 
 ```python
 for warning in resolution.warnings:
@@ -321,26 +409,45 @@ for warning in resolution.warnings:
     logger.warning("pack composition: %s", warning)
 ```
 
+`PackWarning.packs` names the packs that **contributed** to the field's
+current value, not every pack that mentioned it. Under `FIRST_WINS` a pack
+whose value was discarded is left out, so it cannot show up as a source in
+a later pack's warning.
+
 A binding overriding *its own pack's* declared value produces no warning —
-that is an intentional deployment act, not a diagnostic.
+that is an intentional deployment act, not a diagnostic. The reverse does:
+if the field's rule discards the binding's value, `binding_override_ignored`
+reports it, because an operator typed a key that did nothing.
 
 ### Errors — two families, deliberately distinct
 
 **Declaration/wiring errors** raise `ConfigurationError`: a field with no
 declared rule, a rule for a field that does not exist, a non-meta field
-with no default, a value whose shape contradicts its rule. These are
-authoring bugs and surface as early as possible.
+with no default, a registered spec whose class adds fields the registry's
+class cannot compose, a *spec's* value whose shape contradicts its rule, or
+a custom reducer that fails. These are authoring bugs — the code is wrong,
+not the deployment.
+
+Most surface when the `PackRegistry` is constructed or the spec is
+registered. Two cannot: a value's shape and a reducer's behavior are only
+knowable once there is a value to check, so those surface at `resolve()`.
 
 **Resolution errors** raise `PackResolutionError` (a `ConfigurationError`
-subclass) carrying a machine-readable `reason`:
+subclass) carrying a machine-readable `reason`. These are operator input —
+a binding a deployment supplied:
 
 | `reason` | Cause |
 |---|---|
 | `unknown_pack` | A binding names a pack that is not registered |
-| `unknown_binding_key` | A binding body carries a key that is neither a flag nor a field |
+| `unknown_binding_key` | A binding body carries a key that is neither a flag nor a composable field |
 | `locked_pack_disabled` | `locked: true` with `enabled: false` |
 | `field_conflict` | Two packs disagree on a `UNANIMOUS` field |
-| `invalid_binding` | Malformed body, or a non-boolean flag / non-integer priority |
+| `invalid_binding` | Malformed body, a non-boolean flag / non-integer priority, or a *binding's* value whose shape contradicts its rule |
+
+The split follows the value's **origin**, not its symptom: the same bad
+shape is an authoring bug inside a spec (written in code) and operator
+input inside a binding (written in deployment config), so it raises a
+different family in each case and only the latter carries a `reason`.
 
 ```python
 from dataknobs_common.packs import PackResolutionError
@@ -355,17 +462,30 @@ except PackResolutionError as exc:
 
 ## Value normalization
 
-`PackSpec.__post_init__` converts `list` values to `tuple` and copies
-`Mapping` / `set` values.
+`PackSpec.__post_init__` converts `list` values to `tuple`, `set` values to
+`frozenset`, and copies `Mapping` values.
 
 This is necessary because `StructuredConfig.from_dict` assigns non-config,
 non-enum field values verbatim: a YAML list would otherwise land in a
 `tuple[...]`-annotated field as a `list`, and a caller's dict would alias
 into the "frozen" spec.
 
-Normalization is **shallow** — container *elements* are shared by
-reference and must be treated as read-only. For a field holding raw
-mappings (middleware specs, say), do not mutate the mappings you passed in.
+Normalization is **shallow**, and `frozen=True` blocks only *rebinding* a
+field, never writing *through* one. So a `dict`-typed field value and every
+container element are **read-only by convention**:
+
+```python
+spec = registry.get("base")
+spec.limits["rps"] = 0        # legal Python — and it mutates the registry
+limits = dict(spec.limits)    # do this instead
+```
+
+Sequence and set fields come out immutable by construction. Mappings do not,
+and that asymmetry is deliberate: `MappingProxyType` cannot be deep-copied,
+and `StructuredConfig.to_dict` delegates to `dataclasses.asdict`, which
+deep-copies every field value — so freezing would trade a documented
+convention for a broken serialization contract, and would booby-trap any
+consumer calling `dataclasses.asdict` on a spec directly.
 
 ## Composing specs you already hold
 
@@ -389,11 +509,19 @@ registry, the registered specs, nor the `bindings` mapping, and resolving
 the same bindings twice yields equal results. Nothing in the module does
 I/O.
 
-`PackRegistry` extends
-[`Registry`](plugin-registry.md), inheriting thread-safety, optional
-metrics, and structural conformance to `BackendRegistry`. It extends
-`Registry` rather than `PluginRegistry` because packs are eagerly
-registered *declarations*, not lazily-constructed backends.
+`PackRegistry` extends `dataknobs_common.registry.Registry`, inheriting
+thread-safety, optional metrics, and structural conformance to
+`BackendRegistry`. It extends `Registry` rather than `PluginRegistry`
+because packs are eagerly registered *declarations*, not
+lazily-constructed backends — a distinction the
+[Plugin Registry guide](plugin-registry.md) draws in its opening.
+
+A registry holds **exactly one spec class**, and composition is defined
+entirely by that class's `_COMPOSITION`. Registering a subclass that adds
+its own fields is rejected: the composed result is an instance of the
+registry's class, so a field only the subclass declares has no rule and
+nowhere to land, and would be dropped silently. Subclassing to add
+*behavior* is fine — it is extra fields that cannot be honoured.
 
 **No module-level singleton is provided, and consumers should not create
 one.** A pack binding is a per-deployment decision; a process-global pack
@@ -413,6 +541,7 @@ registry is a multi-tenant hazard. Construct one and own it.
 | `PackWarning` | Structured non-fatal diagnostic (`code`, `message`, `packs`, `field`) |
 | `PackResolutionError` | Fail-closed rejection carrying `reason` |
 | `compose_packs` | Fold an already-ordered sequence of specs |
+| `merge_bindings` | Merge ordered binding layers, later layers winning |
 
 All are exported from the top-level `dataknobs_common` namespace.
 
