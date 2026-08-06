@@ -11,8 +11,6 @@ that reads it — the quality gate skips it in the unit step, and ``bin/test.sh`
 scans packages only. Filed there, these ran nowhere.
 """
 
-import pytest
-
 
 def test_structures_package_imports():
     """Test that structures package exports are accessible."""
@@ -29,7 +27,7 @@ def test_structures_package_imports():
     assert doc.text == "test"
     
     # cdict requires a callable accept function
-    cd = cdict(lambda d, k, v: True, {"key": "value"})
+    cd = cdict(lambda _d, _k, _v: True, {"key": "value"})
     assert cd["key"] == "value"
 
 
@@ -172,7 +170,7 @@ def test_complex_workflow():
     
     # Create a tree structure
     tree = Tree({"text": doc.text, "normalized": normalized})
-    child = tree.add_child({"features": {"text_length": len(doc.text)}})
+    tree.add_child({"features": {"text_length": len(doc.text)}})
     
     # Use json utils to navigate the tree data
     tree_data = tree.data

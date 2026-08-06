@@ -29,9 +29,8 @@ two lines in one function disagreeing about which mechanism they used.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from tests._workspace import ROOT
 DK = ROOT / "bin" / "dk"
 
 #: The linters that resolve config by walking up from the working directory.

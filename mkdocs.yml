@@ -405,7 +405,6 @@ plugins:
             packages/common/src,
             packages/config/src,
             packages/data/src,
-            packages/kv/src,
             packages/structures/src,
             packages/utils/src,
             packages/xization/src,

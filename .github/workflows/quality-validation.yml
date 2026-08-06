@@ -46,6 +46,12 @@ jobs:
               - 'pytest.ini'
               - '.python-version'
               - '.pylintrc'
+              # This file. Without it a pull request whose only change deletes
+              # the patterns above matches nothing, skips the sole PR-time
+              # quality job, and reports green — leaving every declaration
+              # above untriggered from that merge forward. The docs filter
+              # below already covers its own workflow for the same reason.
+              - '.github/workflows/quality-validation.yml'
             docs:
               - 'docs/**'
               - '!docs/changelog.md'

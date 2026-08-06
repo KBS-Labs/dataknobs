@@ -25,10 +25,11 @@ and docs are outside the sweep entirely.
 from __future__ import annotations
 
 import re
-import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from tests._workspace import ROOT
+from tests._workspace import python_floor as _floor
+from tests._workspace import rel as _rel
 
 #: Spelling -> what to use instead. Both are aliases of the same object on the
 #: declared floor, so replacing one is a rename, not a behaviour change.
@@ -36,16 +37,6 @@ REDUNDANT_SPELLINGS = {
     "asyncio.TimeoutError": "TimeoutError (the same class since 3.11)",
     "timezone.utc": "UTC, from datetime (the same object since 3.11)",
 }
-
-def _floor() -> tuple[int, int]:
-    """The workspace Python floor, from the root ``requires-python``."""
-    requires = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
-        "requires-python"
-    ]
-    match = re.search(r"(\d+)\.(\d+)", requires)
-    assert match is not None, f"root requires-python is unparseable: {requires!r}"
-    return int(match.group(1)), int(match.group(2))
-
 
 def _sub_floor_claim_re() -> re.Pattern[str]:
     """``Python <major>.<minor>`` for every minor below the floor.
@@ -69,10 +60,6 @@ def _sub_floor_claim_re() -> re.Pattern[str]:
 #: raise one. The reason is mandatory: a bare marker would make this an escape
 #: hatch from the guard rather than a documented exception to it.
 EXEMPT_RE = re.compile(r"#\s*sweep-exempt:\s*(\S.*)")
-
-
-def _rel(path: Path) -> str:
-    return str(path.relative_to(ROOT))
 
 
 def _in_history(path: Path) -> bool:

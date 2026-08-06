@@ -33,7 +33,8 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+from tests._workspace import ROOT
+from tests._workspace import rel as _rel
 
 #: Declined because each changes a public API rather than syntax. Named here so
 #: adding a decline to root without mirroring it fails, rather than drifting.
@@ -44,9 +45,11 @@ DECLINED = frozenset({"ASYNC109", "UP040", "UP042", "UP046", "UP047"})
 ENABLED_BLOCK_RE = re.compile(r"^linter\.rules\.enabled = \[(.*?)^\]", re.DOTALL | re.MULTILINE)
 RULE_CODE_RE = re.compile(r"\(([A-Z]+\d+)\)")
 
-
-def _rel(path: Path) -> str:
-    return str(path.relative_to(ROOT))
+#: How this repo resolves ruff. A bare ``ruff`` is not on PATH — it works under
+#: the gate only because ``uv run pytest`` prepends ``.venv/bin``, so a bare
+#: ``pytest`` would degrade every check below to a silent skip. Every other tool
+#: call in the repo is spelled this way for the same reason.
+RUFF = ("uv", "run", "ruff")
 
 
 def _ruff_configs() -> dict[Path, dict]:
@@ -59,16 +62,41 @@ def _ruff_configs() -> dict[Path, dict]:
     return found
 
 
+def _declared(ruff: dict, key: str) -> set[str]:
+    """A declared selector list, under every spelling ruff accepts.
+
+    ``extend-<key>`` counts. It is the idiomatic way to add to an inherited
+    config rather than replace it, so a check that reads only the plain key is
+    blind to the single most likely form of the edit it exists to catch.
+    """
+    lint = ruff.get("lint", {})
+    return {
+        entry
+        for section in (lint, ruff)
+        for name in (key, f"extend-{key}")
+        for entry in section.get(name, []) or []
+    }
+
+
 def _ignores(ruff: dict) -> set[str]:
-    return set(ruff.get("lint", {}).get("ignore", []) or ruff.get("ignore", []) or [])
+    return _declared(ruff, "ignore")
 
 
 def _selects(ruff: dict) -> set[str]:
-    return set(ruff.get("lint", {}).get("select", []) or ruff.get("select", []) or [])
+    return _declared(ruff, "select")
 
 
 def _package_configs() -> dict[Path, dict]:
     return {p: r for p, r in _ruff_configs().items() if p != ROOT / "pyproject.toml"}
+
+
+def _probe_file(config: Path) -> Path | None:
+    """A source file the given config governs, for asking ruff what applies."""
+    return next(iter(sorted((config.parent / "src").rglob("*.py"))), None)
+
+
+def _ruff_missing() -> bool:
+    return shutil.which("uv") is None
 
 
 def _enabled_rules(probe: Path, config: Path | None) -> frozenset[str]:
@@ -84,23 +112,30 @@ def _enabled_rules(probe: Path, config: Path | None) -> frozenset[str]:
     ``select`` and ``ignore`` say, because ``convention = "google"`` disables
     them. Each of those errors is silent, and two of them point the wrong way.
     """
-    proc = subprocess.run(
+    return _resolve_enabled(
         [
-            "ruff",
+            *RUFF,
             "check",
             "--show-settings",
             *(("--config", str(config)) if config else ()),
             str(probe),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        check=False,
+        ]
     )
+
+
+def _resolve_enabled(command: list[str]) -> frozenset[str]:
+    """Run a ``--show-settings`` command and return the rule codes it reports.
+
+    A shifted output format, a non-zero exit, or empty stdout all leave no
+    block to parse and raise here with both streams attached. That direction
+    matters: silently returning an empty set would make every comparison below
+    report "no divergence" for the one reason that guarantees it saw nothing.
+    """
+    proc = subprocess.run(command, capture_output=True, text=True, cwd=ROOT, check=False)
     block = ENABLED_BLOCK_RE.search(proc.stdout)
     assert block is not None, (
-        f"ruff --show-settings did not report a rule set for {_rel(probe)}"
-        f"{f' under {_rel(config)}' if config else ''}:\n{proc.stdout}\n{proc.stderr}"
+        f"ruff --show-settings reported no rule set for: {' '.join(command)}\n"
+        f"{proc.stdout}\n{proc.stderr}"
     )
     return frozenset(RULE_CODE_RE.findall(block.group(1)))
 
@@ -148,21 +183,79 @@ def test_every_declined_rule_carries_a_reason_in_root():
     )
 
 
+def _rules_of(selectors: set[str], probe: Path) -> frozenset[str]:
+    """What ``selectors`` select, isolated from every config in the tree.
+
+    ``--isolated`` is what makes this answer "what does this selector mean" and
+    not "what is enabled here" — no discovered config, and so no ``ignore``
+    subtracting from the result. That distinction is the whole reason this
+    exists: whether root *selects* a family is a different question from
+    whether root currently *runs* every rule in it, and only the first one
+    decides if a package has diverged.
+    """
+    return _resolve_enabled([*RUFF, "check", "--show-settings", "--isolated",
+                             "--select", ",".join(sorted(selectors)), str(probe)])
+
+
 def test_no_package_selects_a_family_root_does_not():
     """The direction that is aligned today, held as a hard error.
 
-    Every package's ``select`` is a subset of root's, so a package adding a
+    Every package's selectors resolve inside root's, so a package adding a
     family the gate does not run is a *new* divergence rather than an existing
     one — and it arrives the same way all of these did, as one plausible line
-    in one file. Compared on the declared selectors rather than the resolved
-    rule set, because that is the edit a reviewer sees.
+    in one file.
+
+    Resolved through ruff rather than by differencing the declared selectors,
+    for the reasons ``_enabled_rules`` gives at length, plus two this check
+    would hit on its own. A string difference reads a family *rename* as a
+    divergence — ruff renamed ``TCH`` to ``TC`` and these configs still spell
+    it the old way, so a package modernizing one line would fail a test that
+    should not care. And it compares against what root *runs*, which is
+    narrower than what root *selects*, so any family root partly ignores
+    (``TC001``-``TC003`` among them) reads as missing.
+
+    The declared selectors are still what gets *reported*, because that is the
+    edit a reviewer has to find. They are just not what gets compared.
     """
+    if _ruff_missing():
+        pytest.skip("ruff is not installed")
+
+    packages = _package_configs()
+    assert packages, "no package declares its own [tool.ruff] — this guard is checking nothing"
+
     root_select = _selects(_ruff_configs()[ROOT / "pyproject.toml"])
-    violations = [
-        f"{_rel(path)}: selects {sorted(extra)}, which root does not"
-        for path, ruff in _package_configs().items()
-        if (extra := _selects(ruff) - root_select)
-    ]
+    assert root_select, "root declares no ruff selectors — nothing to measure packages against"
+
+    violations = []
+    unprobed: list[str] = []
+    for path, ruff in packages.items():
+        candidates = _selects(ruff) - root_select
+        if not candidates:
+            # Nothing to check: this package selects nothing root does not.
+            continue
+        probe = _probe_file(path)
+        if probe is None:
+            # Could not check, which is a different fact from "checked, clean".
+            # This package declares selectors root lacks and has no source file
+            # to resolve them against, so passing here means unverified rather
+            # than verified — say so instead of dropping it.
+            unprobed.append(f"{_rel(path)}: selects {sorted(candidates)}")
+            continue
+        rogue = sorted(
+            selector
+            for selector in candidates
+            if _rules_of({selector}, probe) - _rules_of(root_select, probe)
+        )
+        if rogue:
+            violations.append(f"{_rel(path)}: selects {rogue}, which root does not")
+
+    if unprobed:
+        warnings.warn(
+            "No source file under src/ to resolve selectors against, so these "
+            "packages' divergence from root is unverified:\n"
+            + "\n".join(f"  - {u}" for u in unprobed),
+            stacklevel=1,
+        )
 
     assert not violations, (
         "Package lint policy has diverged from the authoritative config:\n"
@@ -187,19 +280,34 @@ def test_report_rules_packages_enable_that_the_gate_does_not():
     output, which makes the number visible and its growth noticeable, without
     handing anyone a failing check they can only clear by guessing.
     """
-    if shutil.which("ruff") is None:
-        pytest.skip("ruff is not installed")
+    if _ruff_missing():
+        pytest.skip("uv is not available to resolve ruff")
 
     root_config = ROOT / "pyproject.toml"
-    gaps: dict[str, list[str]] = {}
+    packages = _package_configs()
+    assert packages, "no package declares its own [tool.ruff] — this guard is checking nothing"
 
-    for path in _package_configs():
-        probes = sorted((path.parent / "src").rglob("*.py"))
-        if not probes:
+    gaps: dict[str, list[str]] = {}
+    unprobed: list[str] = []
+
+    for path in packages:
+        probe = _probe_file(path)
+        if probe is None:
+            # Reported rather than skipped: a package with no source under
+            # src/ is either mid-restructure or newly laid out, and either way
+            # its lint policy silently stops being compared to anything.
+            unprobed.append(_rel(path))
             continue
-        extra = _enabled_rules(probes[0], None) - _enabled_rules(probes[0], root_config)
+        extra = _enabled_rules(probe, None) - _enabled_rules(probe, root_config)
         if extra:
             gaps[path.parent.name] = sorted(extra)
+
+    if unprobed:
+        warnings.warn(
+            "No source file found under src/ for "
+            f"{', '.join(unprobed)} — their ruff config is unchecked",
+            stacklevel=1,
+        )
 
     if not gaps:
         return

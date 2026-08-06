@@ -94,7 +94,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src"
 cache_dir = ".mypy_cache"
 incremental = true
 # Note: For focused type checking that suppresses less critical errors,
@@ -339,6 +339,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # queue-drain poll; asyncio.sleep does not block the loop (style lint, not an I/O defect). Idiomatic Queue.join()/task_done() migration tracked separately
 "packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # one-time ingest-setup path resolution (cwd + existence checks); setup-time, not a per-record hot path
 "packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]  # cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call
+"tests/test_package_interop.py" = ["F401"]  # an import smoke test: the import IS the assertion, so "unused" is the subject rather than a defect
 
 [tool.ruff.lint.isort]
 # Configure import sorting
