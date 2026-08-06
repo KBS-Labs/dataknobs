@@ -172,7 +172,10 @@ class LLMProviderFactory:
         # Get provider class from registry
         provider_class = _provider_registry.get_factory(llm_config.provider)
         if not provider_class:
-            available = _provider_registry.list_keys()
+            # Through ``list_providers`` so the failure message and the
+            # supported read-side query cannot disagree — and so the list is
+            # sorted rather than in registration order.
+            available = self.list_providers()
             raise ValueError(
                 f"Unknown provider: {llm_config.provider}. "
                 f"Available providers: {available}"
@@ -207,6 +210,23 @@ class LLMProviderFactory:
             ```
         """
         _provider_registry.register(name, provider_class, override=True)
+
+    @staticmethod
+    def list_providers() -> list[str]:
+        """Every registered provider family key, sorted.
+
+        The read-side counterpart to :meth:`register_provider`, and the
+        supported way for a consumer to ask "what can ``provider:`` be set
+        to?" — config validators, schema/documentation generators, and
+        interactive config builders all need that list, and without this they
+        transcribe one into a literal that cannot include anything registered
+        later. Reflects consumer registrations, so it stays correct for
+        providers DK has never heard of.
+
+        Returns:
+            Sorted canonical family keys (e.g. ``["anthropic", "bedrock", …]``).
+        """
+        return sorted(_provider_registry.list_keys())
 
     def __call__(
         self,

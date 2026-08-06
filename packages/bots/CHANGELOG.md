@@ -99,6 +99,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a `pip install 'dataknobs-bots[http]'` hint (previously an
   unqualified `pip install aiohttp`).
 
+- **`bedrock` rate family in `CostTrackingMiddleware.DEFAULT_RATES`**, priced
+  against the Anthropic models Bedrock resells. Listed separately from
+  `anthropic` rather than aliased, so the two can diverge when Bedrock's
+  pricing does and so a `cost_rates={"bedrock": …}` override cannot rewrite
+  Anthropic's. Bedrock's fully-qualified model IDs
+  (`anthropic.claude-3-5-sonnet-20241022-v2:0`) resolve through the existing
+  partial-match fallback. An `echo` entry is priced at zero — a test double
+  performs no inference, so zero is its true price.
+
+- **A WARNING when cost tracking cannot price a request.** A rate-table miss
+  recorded `$0.00` silently, which is what let the provider-key defect below
+  survive for the life of the feature. Misses now log once per
+  `(provider, model)` pair, naming whether the family or the model was
+  unknown and pointing at `CostTrackingMiddleware(cost_rates=…)`. Providers
+  with a genuine zero price (`ollama`, `echo`) do not warn. `huggingface` is
+  deliberately left unpriced rather than defaulted to zero: it covers both
+  free local inference and the paid Inference API, so a zero entry would
+  assert that paid traffic is free.
+
+- **`TurnState.provider_impl`** and a matching `provider_impl` field on the
+  `turn_complete` structured log payload, carrying the concrete provider
+  class. See the `### Changed` note below — this is the field that preserves
+  what `provider` used to contain.
+
+- **`TurnState.pricing`** — the per-model USD rates the provider resolved for
+  the turn's model, or `None` when it sources none. Captured while the
+  provider object is still in hand, because `TurnState` discards it after
+  reading a name: a rate not taken there has to be guessed from a second
+  table later, which is how the cost middleware's hand-written duplicate came
+  to exist and to drift.
+
+### Changed
+
+- **The `provider` value in turn logs and in `after_message` middleware
+  kwargs is now the canonical provider family key rather than the provider
+  class name** — `"openai"` where it previously read `"OpenAIProvider"`. A
+  dashboard, alert, or middleware keyed on the old string will stop matching.
+  The class name has not been dropped: it moved to `TurnState.provider_impl`
+  and to the `provider_impl` log field, so both identities remain available
+  and each now has a name that says which one it is.
+
+  The same rename reaches every cost-stats surface: the `by_provider` keys
+  returned by `get_client_stats()` / `get_all_stats()`, and the buckets in
+  `export_stats_json()` / `export_stats_csv()`. A billing pipeline parsing
+  that output sees a bucket rename, which is the most likely place a
+  consumer is keyed on the old value.
+
+- **Cost is now priced from the provider's own model profile when it has
+  one**, falling back to the middleware's table only for families and models
+  the catalogs do not cover. Resolution order is: a rate you supplied via
+  `cost_rates=`, then the provider's catalog pricing, then the built-in
+  table, then `$0.00` with a warning. Recorded costs will change for
+  providers whose catalog pricing differs from the built-in table — which is
+  most of them, since the table is a hand-maintained duplicate marked
+  "Updated Dec 2024" and the catalogs carry a verification date. `o1-mini`,
+  for instance, was billed at roughly 2.7x its real rate on an exact match.
+
+- **Persisted conversation metadata records the canonical family key.** The
+  `provider` value in the metadata `DynaBot` seeds a `ConversationManager`
+  with previously carried `config.provider` verbatim, so a `provider: OpenAI`
+  deployment stored `"OpenAI"` while the same turn's cost bucket said
+  `"openai"`. This metadata is durable, so the mismatch outlived the process
+  that wrote it.
+
+- **`llm.provider` config validation reads the provider registry** instead of
+  a transcribed list of five names. The literal had already drifted — it
+  rejected `bedrock`, a family DK ships and prices — and it rejected
+  `provider: OpenAI`, which the runtime accepts because the registry
+  canonicalizes its lookups. Most importantly it could never accept a
+  provider registered through `LLMProviderFactory.register_provider`, so the
+  documented extension point was silently disabled at the validation layer.
+  Comparison is now case-insensitive and the valid-options list is live, so
+  `DynaBotConfigSchema.get_valid_options("llm", "provider")` and the
+  generated documentation include consumer-registered providers. Genuinely
+  closed sets (`memory.type`, `reasoning.strategy`) keep literal enums —
+  though case-insensitive comparison now applies to *every* schema enum, not
+  only the registry-backed one. Those sets are also resolved through
+  registries built with `canonicalize_keys=True`, so `type: Buffer` already
+  worked at runtime and the validator no longer disagrees with it.
+
+  A property may declare `enum_registry: <name>` to be checked against a live
+  registry instead of a literal `enum`. A name this build does not have leaves
+  the field unconstrained and logs a warning, rather than rejecting every
+  value for it — a consumer schema may name a registry a newer DK supplies.
+
+### Fixed
+
+- **Cost tracking recorded `$0.00` for every paid provider.** Usage was keyed
+  on the provider *class* name (`"OpenAIProvider"`), which matches no entry in
+  a rate table keyed by family (`"openai"`), so every lookup missed and every
+  request priced at zero. Turns are now keyed on the family, and spend is no
+  longer split across two buckets when a config author capitalizes the
+  provider name. The lookup key comes from the provider itself rather than
+  being reconstructed, so the four consumers of provider identity agree.
+
+- **Per-instance `cost_rates=` overrides permanently rewrote the class-level
+  defaults.** `DEFAULT_RATES` was shallow-copied, so each instance shared the
+  same nested per-family dicts as the class attribute, and the merge mutated
+  them in place. One middleware instance's custom rates therefore changed
+  pricing for every instance constructed afterwards in the same process —
+  including instances belonging to other tenants. The defaults are now
+  deep-copied per instance — and so is the dict the caller supplies, which
+  was the other half of the same problem: the merge inserted the caller's
+  nested dicts by reference, so a module-level rate constant shared across
+  per-tenant instances put every tenant back on one object and let this class
+  mutate a constant it was only given to read.
+
+- **The rate table's model lookup billed dated model IDs at the wrong
+  model's rate.** Repairing the family key made a code path live that had
+  never run in production: with the lookup key a class name, `_calculate_cost`
+  returned `0.0` before reaching the table at all. Its fallback scanned model
+  keys in dict-insertion order and took the first whose name was a substring
+  of the requested model — and `gpt-4o` is a prefix of
+  `gpt-4o-mini-2024-07-18`, which is the id OpenAI actually returns. The mini
+  model was billed at the full model's rate, ~16x. The scan now takes the
+  **longest** matching key, and no longer matches in the reverse direction
+  (`model in model_key`), which had let a request for `gpt-4` be priced as
+  `gpt-4o` — a different model. Neither case was caught by the miss warning,
+  because a wrong match is still a match.
+
+- **`TurnState` no longer records a class name as the provider family.** An
+  object that served a turn without declaring a family key left its class
+  name in `provider_name`, which keys rate tables, metrics labels, and log
+  fields — re-creating one layer down the defect the family/implementation
+  split exists to close. The field is left empty instead, so consumers read
+  `"unknown"` and the miss warning fires, rather than a plausible-looking key
+  missing silently. `provider_impl` still carries the class, and is now read
+  from the provider's `impl_name` rather than re-derived, so a provider that
+  declares one is honored.
+
 ### Security
 
 - Put `HTTPRegistryBackend`'s aiohttp transport under a declared version

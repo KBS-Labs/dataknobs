@@ -969,6 +969,11 @@ class _ShapedRequest(NamedTuple):
 class LLMProvider(ABC):
     """Base LLM provider interface."""
 
+    #: Consumer-declared family key, or ``None`` to derive it from the config.
+    #: A class-level default so :attr:`provider_name`'s getter works before any
+    #: assignment; an instance assignment shadows it.
+    _provider_name_override: str | None = None
+
     def __init__(
         self,
         config: Union[LLMConfig, Config, Dict[str, Any]],
@@ -986,6 +991,63 @@ class LLMProvider(ABC):
         self._is_initialized = False
         self._is_closing = False
         self._in_flight: set[asyncio.Task[Any]] = set()
+
+    @property
+    def provider_name(self) -> str:
+        """Canonical family key identifying this provider (e.g. ``"openai"``).
+
+        Lower-cased so it matches the key the provider registry resolves on
+        (``PluginRegistry(canonicalize_keys=True)``) regardless of how the
+        config author spelled it — ``provider: OpenAI`` and
+        ``provider: openai`` both report ``"openai"``.
+
+        **This is the identifier to key on** for cost tables, metrics labels,
+        and structured log fields. The Python class name is an implementation
+        detail and is deliberately not used; see :attr:`impl_name`.
+
+        The verbatim configured string remains available as
+        ``provider.config.provider`` for the rare consumer that wants to echo
+        back exactly what the config author typed.
+
+        Assignable: a provider fronting an endpoint whose family the config
+        cannot name — an OpenAI-compatible gateway configured as
+        ``provider: openai-compatible`` but billed as ``acme`` — declares its
+        own key by assigning to this attribute. See the setter.
+        """
+        return self._provider_name_override or self.config.provider.lower()
+
+    @provider_name.setter
+    def provider_name(self, value: str | None) -> None:
+        """Declare this provider's family key, overriding the configured one.
+
+        Canonicalized on the way in, so a declared key obeys the same
+        closed-set rule as a configured one and the two cannot disagree about
+        spelling. Assign ``None`` to clear the override and fall back to the
+        config.
+
+        This setter exists because the attribute was already a de-facto
+        extension point: consumers reach it through
+        ``getattr(provider, "provider_name", None)``, so a consumer provider
+        could set it directly long before it became a property. A read-only
+        property would revoke that with an ``AttributeError`` at construction.
+        """
+        self._provider_name_override = value.lower() if value else None
+
+    @property
+    def impl_name(self) -> str:
+        """Concrete provider class serving this call — for diagnostics only.
+
+        Unlike :attr:`provider_name`, this is an **open** set: it is whatever
+        class is in the path, including wrappers such as
+        ``CachingEmbedProvider``, and consumer-registered providers DK has
+        never heard of. Use it in log lines, error messages, and debugging
+        output to answer "what object actually handled this?".
+
+        **Never key a lookup table on it.** Rate tables, metrics labels, and
+        routing decisions belong on :attr:`provider_name`; keying on the class
+        name is precisely the defect this pair of accessors exists to close.
+        """
+        return type(self).__name__
 
     def _validate_prompt_builder(self, expected_type: type) -> None:
         """Validate that prompt builder is configured and of correct type.

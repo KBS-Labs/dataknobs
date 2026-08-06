@@ -3445,7 +3445,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 "client_id": context.client_id,
                 "user_id": context.user_id,
                 "model": self.llm.config.model,
-                "provider": self.llm.config.provider,
+                # Canonical family key — see the matching note in
+                # ``ConversationManager._finalize_completion``. This metadata
+                # is persisted, so it must agree with the value the cost
+                # bucket and turn log carry for the same turn.
+                "provider": self.llm.provider_name,
                 "tools": self.tool_registry.get_tool_names(),
                 **context.session_metadata,
             }

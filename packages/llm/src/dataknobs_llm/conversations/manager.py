@@ -798,7 +798,12 @@ class ConversationManager:
         assistant_metadata.update({
             "usage": response.usage,
             "model": response.model,
-            "provider": self.llm.config.provider,
+            # The canonical family key, not ``config.provider`` — which is
+            # stored verbatim, so a ``provider: OpenAI`` deployment would
+            # persist a spelling that no other consumer of provider identity
+            # uses. This metadata is durable, so a mismatch here outlives the
+            # process and splits any join against cost or telemetry.
+            "provider": self.llm.provider_name,
             "finish_reason": response.finish_reason,
         })
 

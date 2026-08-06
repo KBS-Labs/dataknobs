@@ -7,7 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`LLMProvider.provider_name`** — the canonical provider *family* key
+  (`"openai"`, `"anthropic"`, …), inherited by every provider including
+  consumer-registered ones, and forwarded by `SyncProviderAdapter` (which
+  wraps rather than subclasses, so it inherits nothing — and is the object
+  the factory returns for `is_async=False`, there being no `SyncLLMProvider`
+  subclasses in tree). Lower-cased, so it matches the key the
+  provider registry resolved the class on regardless of how the config author
+  spelled it: `provider: OpenAI` and `provider: openai` both report
+  `"openai"`. This is the identifier to key rate tables, metrics labels, and
+  structured log fields on. The verbatim configured string remains available
+  as `provider.config.provider`.
+- **`LLMProvider.impl_name`** — the concrete provider *class* serving a call
+  (`"OpenAIProvider"`, `"CachingEmbedProvider"`), for diagnostics only. The
+  two accessors exist because a provider answers two different questions
+  about its identity: what it is billed as, and what object is in the path.
+  For a wrapped provider they diverge, and keying a lookup table on the
+  second is the defect the pair exists to prevent.
+
+- **`provider_name` is assignable**, for a provider whose family the config
+  cannot name — an OpenAI-compatible gateway configured as
+  `provider: openai-compatible` but billed as `acme`. The assignment is
+  canonicalized like a configured value, and `None` clears it. This also
+  keeps a pre-existing de-facto extension point working: consumers read the
+  attribute through `getattr`, so a consumer provider could already set it
+  before it became a property, and a read-only property would have revoked
+  that with an `AttributeError` at construction.
+
+- **`LLMProviderFactory.list_providers()`** — every registered family key,
+  sorted. The read-side counterpart to `register_provider`, and the supported
+  way to answer "what can `provider:` be set to?" for config validators,
+  schema generators, and interactive config builders. Reflects consumer
+  registrations, so those tools no longer have to transcribe a literal that
+  cannot include anything registered later.
+
+- **`CostCalculator.cost_from_tokens(pricing, input_tokens, output_tokens)`**
+  — the public entry point for callers holding **token counts** rather than
+  an `LLMResponse`: usage accumulated across a multi-call turn, a stored
+  usage record, an estimate. `calculate_cost` is the response-shaped
+  equivalent and now delegates to it. (Promoted from a private helper; there
+  was no public way to price raw token counts through the documented
+  arithmetic home.)
+
+### Changed
+
+- **`ConversationManager` persists the canonical provider family** on
+  assistant-node metadata. `metadata["provider"]` previously carried
+  `config.provider` verbatim, so a deployment configured `provider: OpenAI`
+  persisted `"OpenAI"` while the same turn's cost bucket and turn log
+  recorded `"openai"`. Node metadata is durable, so that disagreement
+  outlived the process that wrote it and split any analytics joining stored
+  conversations to cost or telemetry. Consumers reading this field for a
+  capitalized-config deployment will see the canonical key from now on;
+  historical rows are unchanged.
+
 ### Fixed
+
+- Schema extraction attributed records to a munged class name rather than to
+  the provider family. It read a private `_provider_name` attribute that no
+  provider sets, then fell back to lower-casing the class name and stripping
+  `"provider"` from it — correct for the built-in providers only by naming
+  convention, and wrong for any wrapper: a `CachingEmbedProvider` wrapping an
+  Ollama provider recorded `"cachingembed"`, which names no family. Records
+  now carry `provider_name`, so wrapped providers are attributed to the
+  family actually serving the call.
+
+- Schema extraction recorded `model_used=None` for every extraction that did
+  not pass `model=` explicitly. It read a private `_model` attribute that no
+  provider sets — the same defect as the class-name munging above, one line
+  away in the same expression. It now reads the provider's public
+  `config.model`.
 
 - Corrected install instructions that named extras this package does not
   declare: `dataknobs-llm[all-providers]` (the real roll-up is

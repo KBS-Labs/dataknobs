@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dataknobs_llm import LLMResponse, LLMStreamResponse
+    from dataknobs_llm.llm.model_profile import ModelPricing
 
     from .context import BotContext
+
+logger = logging.getLogger(__name__)
 
 
 class TurnMode(Enum):
@@ -94,7 +98,21 @@ class TurnState:
     # --- Usage / observability ---
     usage: dict[str, int] | None = None  # token usage from response
     model: str | None = None  # model that generated the response
-    provider_name: str | None = None  # provider name
+    # Canonical provider *family* key (e.g. "openai") — the value to key
+    # rate tables, metrics labels, and log fields on.
+    provider_name: str | None = None
+    # Concrete provider *class* (e.g. "CachingEmbedProvider") — diagnostic
+    # only.  Carried separately because ``provider_name`` deliberately no
+    # longer reports it, and ``TurnState`` discards the provider object after
+    # reading a name, so nothing downstream could recover it otherwise.
+    provider_impl: str | None = None
+    # Per-model USD pricing the provider resolved for this turn's model, or
+    # ``None`` when it sources none.  Captured for the same reason as
+    # ``provider_impl``: the provider object is in hand here and gone by the
+    # time any consumer wants it, so a rate not taken now has to be guessed
+    # from a second table later — which is how the middleware's hand-written
+    # duplicate came to exist and to drift.
+    pricing: ModelPricing | None = None
 
     # --- Tool tracking ---
     tool_executions: list[ToolExecution] = field(default_factory=list)
@@ -135,6 +153,7 @@ class TurnState:
         if hasattr(response, "model") and response.model:
             self.model = response.model
         self._extract_provider_name(provider)
+        self._capture_pricing(provider)
 
     def populate_from_final_stream_chunk(
         self, chunk: LLMStreamResponse, provider: Any
@@ -145,6 +164,7 @@ class TurnState:
         if chunk.model:
             self.model = chunk.model
         self._extract_provider_name(provider)
+        self._capture_pricing(provider)
 
     def accumulate_usage(self, response: Any) -> None:
         """Add usage from an intermediate LLM response to the running total.
@@ -184,11 +204,54 @@ class TurnState:
                 self.usage[key] = self.usage.get(key, 0) + new_usage[key]
 
     def _extract_provider_name(self, provider: Any) -> None:
-        """Set provider_name from a provider instance."""
+        """Capture both provider axes from a provider instance.
+
+        The two are captured independently so an explicit family key does not
+        suppress the diagnostic one.
+
+        ``provider_name`` is the canonical family key and is left ``None``
+        when the object cannot supply one. A class name is deliberately *not*
+        substituted: this field keys rate tables, metrics labels, and log
+        fields, and a class name in it is precisely the defect the accessor
+        pair exists to close — writing one here would re-open it one layer
+        down, and consumers read ``"unknown"`` plus a warning instead, which
+        is the truth. The class remains available on ``provider_impl``.
+        """
         if provider is None:
             return
         name = getattr(provider, "provider_name", None)
         if name:
             self.provider_name = name
-        elif hasattr(provider, "__class__"):
-            self.provider_name = type(provider).__name__
+        # ``impl_name`` before the class name: re-deriving it inline ignores a
+        # provider that has declared what it wants to be called, which is the
+        # same reconstruct-it-yourself pattern this contract replaced.
+        self.provider_impl = (
+            getattr(provider, "impl_name", None) or type(provider).__name__
+        )
+
+    def _capture_pricing(self, provider: Any) -> None:
+        """Resolve this turn's per-model pricing from the provider.
+
+        ``get_pricing`` reads an already-resolved model profile — no I/O, no
+        network — so this is safe on every turn.
+
+        Failures are swallowed deliberately. Pricing is observability: a
+        provider whose profile resolution raises must degrade to "unpriced"
+        (the consumer's own rate table then applies, and the miss warning
+        fires if it has nothing either) rather than fail the conversation it
+        is only measuring.
+        """
+        get_pricing = getattr(provider, "get_pricing", None)
+        if get_pricing is None:
+            return
+        try:
+            self.pricing = get_pricing(self.model) if self.model else get_pricing()
+        # Broad by intent: any failure resolving a rate must degrade to
+        # "unpriced" rather than propagate into the turn being measured.
+        except Exception:
+            logger.debug(
+                "Could not resolve pricing for %s/%s",
+                self.provider_name,
+                self.model,
+                exc_info=True,
+            )

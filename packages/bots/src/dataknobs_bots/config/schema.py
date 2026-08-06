@@ -10,9 +10,10 @@ Example:
 
     schema = DynaBotConfigSchema()
 
-    # Query available LLM providers
+    # Query available LLM providers (read live from the provider registry,
+    # so consumer-registered providers appear too)
     providers = schema.get_valid_options("llm", "provider")
-    # ["ollama", "openai", "anthropic", "huggingface", "echo"]
+    # ["anthropic", "bedrock", "echo", "huggingface", "ollama", "openai"]
 
     # Register consumer-specific extension
     schema.register_extension("educational", {
@@ -35,7 +36,11 @@ from typing import Any
 
 from dataknobs_common.structured_config import StructuredConfig
 
-from .validation import ValidationResult, _validate_against_schema
+from .validation import (
+    ValidationResult,
+    _validate_against_schema,
+    resolve_enum_options,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +72,7 @@ class ComponentSchema(StructuredConfig):
         """
         properties = self.schema.get("properties", {})
         prop = properties.get(field_name, {})
-        enum_values: list[str] = prop.get("enum", [])
-        return enum_values
+        return resolve_enum_options(prop) or []
 
 
 class DynaBotConfigSchema:
@@ -244,7 +248,7 @@ class DynaBotConfigSchema:
                 lines.append("")
                 for field_name, field_schema in props.items():
                     desc = field_schema.get("description", "")
-                    enum_values = field_schema.get("enum")
+                    enum_values = resolve_enum_options(field_schema)
                     line = f"- **{field_name}**"
                     if desc:
                         line += f": {desc}"
@@ -284,13 +288,17 @@ class DynaBotConfigSchema:
                     "provider": {
                         "type": "string",
                         "description": "LLM provider to use",
-                        "enum": [
-                            "ollama",
-                            "openai",
-                            "anthropic",
-                            "huggingface",
-                            "echo",
-                        ],
+                        # Registry-backed rather than a literal ``enum``: the
+                        # provider set is *open*. A consumer registers their
+                        # own family through
+                        # ``LLMProviderFactory.register_provider``, and no list
+                        # written here can contain a name invented later — so a
+                        # closed enum silently disables that extension point.
+                        # Asking the registry also means this cannot drift from
+                        # the families DK itself ships, which is how ``bedrock``
+                        # came to be rejected by the validator while being
+                        # supported by the runtime.
+                        "enum_registry": "llm_providers",
                     },
                     "model": {
                         "type": "string",

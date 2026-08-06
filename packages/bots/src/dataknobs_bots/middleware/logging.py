@@ -117,6 +117,11 @@ class LoggingMiddleware(Middleware):
             log_data["tokens_used"] = turn.usage
         if turn.provider_name:
             log_data["provider"] = turn.provider_name
+        if turn.provider_impl:
+            # The concrete class. ``provider`` is the canonical family key;
+            # this is what it used to contain, kept as a separate field so
+            # the diagnostic survives the redefinition.
+            log_data["provider_impl"] = turn.provider_impl
         if turn.model:
             log_data["model"] = turn.model
         if turn.tool_executions:

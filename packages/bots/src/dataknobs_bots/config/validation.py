@@ -19,6 +19,7 @@ Example:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -254,6 +255,88 @@ class ConfigValidator:
         return _validate_against_schema(component, config, schema)
 
 
+#: Schema fields whose valid values come from a live registry rather than a
+#: fixed list, keyed by the name a property's ``enum_registry`` declares.
+#:
+#: A field belongs here when its value set is *open* — extensible by consumers
+#: at runtime — so transcribing it into an ``enum`` would both drift from the
+#: registry and reject anything registered after the literal was written. A
+#: genuinely closed set (``memory.type``, ``reasoning.strategy``) keeps a plain
+#: ``enum``.
+#:
+#: Lives in this module rather than beside the schema definitions because
+#: ``schema`` already imports from ``validation``; putting it the other way
+#: round would make the two mutually dependent.
+_ENUM_REGISTRIES: dict[str, Callable[[], list[str]]] = {}
+
+
+def _llm_provider_families() -> list[str]:
+    """Registered LLM provider family keys.
+
+    Imported lazily: config validation is reachable without ever building a
+    provider, and a top-level import would pull the whole LLM provider package
+    in behind it.
+    """
+    from dataknobs_llm import LLMProviderFactory
+
+    return LLMProviderFactory.list_providers()
+
+
+_ENUM_REGISTRIES["llm_providers"] = _llm_provider_families
+
+
+def resolve_enum_options(prop_schema: dict[str, Any]) -> list[str] | None:
+    """Valid values for a property, or ``None`` when it is unconstrained.
+
+    Resolves ``enum_registry`` against the live registry first, then a literal
+    ``enum``. Shared by the validator and by the schema's query/documentation
+    surface so the two cannot disagree about what a field accepts — the failure
+    guarded against being a validator that rejects a value its own generated
+    documentation offers.
+
+    An unknown registry name yields ``None`` (unconstrained) rather than an
+    error: a consumer extension may name a registry this build does not have,
+    and declining to constrain the field beats rejecting every value for it.
+
+    That leniency is logged at WARNING, not DEBUG, because the outcome is a
+    validator quietly switching itself off for that field — indistinguishable,
+    from the outside, from a field that passed. A misspelled ``enum_registry``
+    would otherwise disable checking with no signal at any normal log level.
+    """
+    registry_name = prop_schema.get("enum_registry")
+    if registry_name is not None:
+        resolver = _ENUM_REGISTRIES.get(registry_name)
+        if resolver is None:
+            logger.warning(
+                "No enum registry named %r; leaving the field unconstrained. "
+                "Known registries: %s",
+                registry_name,
+                sorted(_ENUM_REGISTRIES),
+            )
+            return None
+        return resolver()
+    enum_values = prop_schema.get("enum")
+    return list(enum_values) if enum_values is not None else None
+
+
+def _matches_option(value: Any, options: list[str]) -> bool:
+    """Whether *value* is one of *options*, case-insensitively for strings.
+
+    Case folding is not leniency here — it is agreement with the runtime.
+    Provider and backend keys resolve through registries built with
+    ``canonicalize_keys=True``, so ``provider: OpenAI`` constructs an
+    ``OpenAIProvider`` without complaint. A validator that rejects it is
+    contradicting the code it validates, and points the author at a working
+    line.
+
+    Non-string values (a numeric or boolean enum) compare exactly.
+    """
+    if isinstance(value, str):
+        folded = {opt.lower() for opt in options if isinstance(opt, str)}
+        return value.lower() in folded
+    return value in options
+
+
 def _validate_against_schema(
     component: str,
     config: dict[str, Any],
@@ -289,8 +372,12 @@ def _validate_against_schema(
             continue
         if key in properties:
             prop_schema = properties[key]
-            enum_values = prop_schema.get("enum")
-            if enum_values is not None and value not in enum_values:
+            # Resolved through the schema module's helper so the validator and
+            # the documentation/query surface cannot disagree about what a
+            # field accepts, and so a registry-backed field is checked against
+            # the live registry rather than a snapshot.
+            enum_values = resolve_enum_options(prop_schema)
+            if enum_values is not None and not _matches_option(value, enum_values):
                 result = result.merge(
                     ValidationResult.error(
                         f"Component '{component}': field '{key}' has invalid value "
