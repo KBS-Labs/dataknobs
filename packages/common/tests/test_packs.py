@@ -10,10 +10,13 @@ ordering, warning, and conflict paths are covered against a single shape.
 
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import gc
+import pathlib
 import pickle
+import re
 import weakref
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -1179,3 +1182,124 @@ def test_unanimous_agreement_still_records_every_asserting_pack() -> None:
     # LAST_WINS on `mode` keeps full history: every pack did set it.
     mode_warnings = [w for w in resolution.warnings if w.field == "mode"]
     assert mode_warnings[-1].packs == ("a", "b", "c")
+
+
+# --------------------------------------------------------------------------
+# Contract surfaces: the public string vocabularies and the export list
+# --------------------------------------------------------------------------
+#
+# ``PackWarning.code`` and ``PackResolutionError.reason`` are documented as
+# machine-readable discriminators — the whole reason they are structured
+# rather than prose is so a deployment can branch on one. That makes each
+# emitted literal part of the public contract, and its docstring the place
+# consumers read it from. Both lists live in more than one place (the
+# emission sites, the class docstring, the guide's table), with nothing
+# tying them together, so the drift these guards catch has already happened
+# once: ``binding_override_ignored`` shipped emitted, tabled in the guide,
+# and absent from the docstring a consumer would build an escalation table
+# from.
+
+
+def _module_source() -> str:
+    import dataknobs_common.packs as packs_module
+
+    return pathlib.Path(packs_module.__file__).read_text()
+
+
+def _emitted_literals(keyword: str) -> set[str]:
+    """Every constant string passed as ``keyword=`` anywhere in the module."""
+    tree = ast.parse(_module_source())
+    return {
+        kw.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for kw in node.keywords
+        if kw.arg == keyword
+        and isinstance(kw.value, ast.Constant)
+        and isinstance(kw.value.value, str)
+    }
+
+
+@pytest.mark.parametrize(
+    ("keyword", "documented_by"),
+    [("code", PackWarning), ("reason", PackResolutionError)],
+)
+def test_every_emitted_discriminator_is_documented(keyword: str, documented_by: type) -> None:
+    """Each emitted ``code``/``reason`` appears in its class docstring.
+
+    A consumer escalating a specific value to a hard failure reads that
+    docstring. One emitted but undocumented is a value they will never
+    handle, and they get no signal that it exists.
+    """
+    emitted = _emitted_literals(keyword)
+    assert emitted, f"no {keyword}= literals found — the scan is broken"
+
+    doc = documented_by.__doc__ or ""
+    undocumented = sorted(value for value in emitted if f'"{value}"' not in doc)
+    assert not undocumented, (
+        f"{documented_by.__name__} emits {undocumented} but its docstring does not list them"
+    )
+
+
+@pytest.mark.parametrize(
+    ("keyword", "documented_by"),
+    [("code", PackWarning), ("reason", PackResolutionError)],
+)
+def test_no_documented_discriminator_is_stale(keyword: str, documented_by: type) -> None:
+    """The reverse drift: documented but no longer emitted.
+
+    Checked against the docstring's quoted values only, so surrounding
+    prose can be rewritten freely without tripping this.
+    """
+    emitted = _emitted_literals(keyword)
+    doc = documented_by.__doc__ or ""
+    quoted = set(re.findall(r'``"([a-z_]+)"``', doc))
+    assert quoted, f"no quoted values found in {documented_by.__name__} docstring"
+
+    stale = sorted(quoted - emitted)
+    assert not stale, f"{documented_by.__name__} documents {stale}, which nothing emits"
+
+
+def test_every_emitted_warning_code_is_in_the_guide() -> None:
+    """The third copy: the guide's warning-code table.
+
+    Containment only, not table parsing — the guide can be restructured
+    freely, but a new code must be described somewhere in it.
+    """
+    guide = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "packs.md"
+    if not guide.is_file():  # pragma: no cover - packaging layouts without docs
+        pytest.skip("package docs not present in this layout")
+
+    text = guide.read_text()
+    missing = sorted(code for code in _emitted_literals("code") if code not in text)
+    assert not missing, f"warning codes absent from the guide: {missing}"
+
+
+def test_all_lists_every_public_name_the_module_defines() -> None:
+    """``__all__`` is the module's own export list, not a partial one.
+
+    ``UNSET`` shipped importable, re-exported from ``dataknobs_common``, and
+    missing here — invisible to ``import *`` and to any tooling that reads
+    ``__all__`` to enumerate a module's surface.
+    """
+    import dataknobs_common.packs as packs_module
+
+    tree = ast.parse(_module_source())
+    defined: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            defined.add(node.name)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            # A TypeVar is a typing artifact, not an exported name.
+            if isinstance(node.value, ast.Call) and (
+                getattr(node.value.func, "id", "") == "TypeVar"
+            ):
+                continue
+            defined.update(target.id for target in node.targets if isinstance(target, ast.Name))
+
+    public = {name for name in defined if not name.startswith("_")}
+    assert not (public - set(packs_module.__all__)), (
+        f"public names missing from __all__: {sorted(public - set(packs_module.__all__))}"
+    )

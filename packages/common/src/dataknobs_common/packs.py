@@ -219,8 +219,13 @@ class PackWarning:
     specific ``code`` to a hard failure without pattern-matching prose.
 
     Attributes:
-        code: Stable machine-readable discriminator — ``"priority_tie"``,
-            ``"value_override"``, or ``"key_override"``.
+        code: Stable machine-readable discriminator — one of
+            ``"priority_tie"`` (selected packs share a priority *and*
+            contend for a field), ``"value_override"`` (``LAST_WINS`` /
+            ``FIRST_WINS`` discarded a differing value), ``"key_override"``
+            (``MERGE`` overrode keys another pack had set), or
+            ``"binding_override_ignored"`` (a binding named a field whose
+            declared rule then discarded the binding's value).
         message: Human-readable description.
         packs: Names of the packs involved, in fold order.
         field: The spec field the warning concerns, or ``None`` for
@@ -1368,6 +1373,7 @@ def _priority_tie_warnings(
 
 
 __all__ = [
+    "UNSET",
     "CompositionRule",
     "MergeKind",
     "PackRegistry",
