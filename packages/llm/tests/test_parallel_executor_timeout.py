@@ -66,7 +66,7 @@ async def test_per_task_timeout_returns_timeout_error(
     elapsed = time.monotonic() - start
 
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)
     # Resolved well before the 0.5s the provider would otherwise take.
     assert elapsed < 0.3
 
@@ -86,7 +86,7 @@ async def test_default_timeout_applies_when_per_task_unset(
     })
 
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)
 
 
 @pytest.mark.asyncio
@@ -104,7 +104,7 @@ async def test_per_task_timeout_overrides_default(provider: EchoProvider) -> Non
     elapsed = time.monotonic() - start
 
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)
     # The per-task 0.05s timeout should fire well before the 2s default.
     assert elapsed < 0.15
 
@@ -144,7 +144,7 @@ async def test_timeout_bounds_each_retry_attempt_not_total(
     })
 
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)
     # Each attempt timed out; provider was invoked 3 times.
     assert len(counter) == 3
 
@@ -183,7 +183,7 @@ async def test_fail_fast_with_timeouts_cancels_on_first_timeout(
     # Resolves shortly after the 50ms timeout, far below the 2s slow-task time.
     assert elapsed < 0.5, f"elapsed={elapsed}"
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)
     for tag in ("b", "c", "d"):
         assert results[tag].success is False
         assert isinstance(results[tag].error, asyncio.CancelledError)
@@ -203,4 +203,4 @@ async def test_deterministic_task_timeout(provider: EchoProvider) -> None:
     })
 
     assert results["a"].success is False
-    assert isinstance(results["a"].error, asyncio.TimeoutError)
+    assert isinstance(results["a"].error, TimeoutError)

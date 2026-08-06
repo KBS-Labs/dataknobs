@@ -1,6 +1,6 @@
 """Tests for registry models."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dataknobs_bots.registry import Registration
 
@@ -34,9 +34,9 @@ class TestRegistration:
 
     def test_create_with_timestamps(self):
         """Test creating Registration with custom timestamps."""
-        created = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        updated = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
-        accessed = datetime(2024, 12, 1, 12, 0, 0, tzinfo=timezone.utc)
+        created = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
+        updated = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
+        accessed = datetime(2024, 12, 1, 12, 0, 0, tzinfo=UTC)
 
         reg = Registration(
             bot_id="test-bot",

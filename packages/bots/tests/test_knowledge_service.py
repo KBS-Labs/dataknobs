@@ -8,7 +8,7 @@ This approach catches integration issues early and validates real behavior.
 """
 
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -314,9 +314,9 @@ class TestEnsureIngestionResult:
 
     def test_completed_at_populated_on_construction_skipped(self) -> None:
         """completed_at is populated on a skip construction (default factory)."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         result = EnsureIngestionResult(skipped=True, reason="already_populated")
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
         assert result.completed_at is not None
         assert before <= result.completed_at <= after
 
@@ -327,7 +327,7 @@ class TestEnsureIngestionResult:
 
     def test_completed_at_explicit_value_preserved(self) -> None:
         """Explicit completed_at at construction bypasses the default factory."""
-        explicit = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        explicit = datetime(2025, 1, 1, tzinfo=UTC)
         result = EnsureIngestionResult(skipped=True, completed_at=explicit)
         assert result.completed_at == explicit
 
@@ -359,7 +359,7 @@ class TestEnsureIngestionResult:
             files_skipped=1,
             errors=[{"file": "bad.md", "error": "Parse error"}],
         )
-        ingestion_result.completed_at = datetime.now(timezone.utc)
+        ingestion_result.completed_at = datetime.now(UTC)
 
         # Convert to EnsureIngestionResult
         ensure_result = EnsureIngestionResult.from_ingestion_result(ingestion_result)

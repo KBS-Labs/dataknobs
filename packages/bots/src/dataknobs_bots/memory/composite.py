@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -25,14 +24,13 @@ logger = logging.getLogger(__name__)
 #
 # DataknobsError covers the entire dataknobs exception hierarchy
 # (ResourceError, OperationError, RateLimitError, etc.) raised by
-# real backends.  asyncio.TimeoutError is included separately because
-# on Python 3.10 it does not inherit from builtins.TimeoutError.
+# real backends.  ConnectionError and TimeoutError are OSError
+# subclasses, listed for the reader rather than for the match.
 _STRATEGY_ERRORS = (
     RuntimeError,
     OSError,
     ConnectionError,
     TimeoutError,
-    asyncio.TimeoutError,
     DataknobsError,
 )
 

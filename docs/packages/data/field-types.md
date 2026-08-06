@@ -96,12 +96,12 @@ print(config["features"][0])  # "auth"
 DateTime fields handle temporal data:
 
 ```python
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 created_field = Field(
     name="created_at",
     type=FieldType.DATETIME,
-    value=datetime.now(timezone.utc)
+    value=datetime.now(UTC)
 )
 
 # Serialization handles ISO format

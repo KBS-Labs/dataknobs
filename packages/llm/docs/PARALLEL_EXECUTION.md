@@ -366,7 +366,7 @@ results = await executor.execute({
 Behavior:
 
 - A timed-out task returns `TaskResult(success=False,
-  error=asyncio.TimeoutError(...))`, distinguishable from cancellation and
+  error=TimeoutError(...))`, distinguishable from cancellation and
   other failures.
 - With `RetryConfig`, the timeout bounds **each retry attempt
   individually** — every attempt gets a fresh `asyncio.wait_for(...,

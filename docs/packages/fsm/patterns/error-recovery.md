@@ -350,7 +350,7 @@ async def deadline_execution():
             workflow.execute(long_running_task),
             timeout=30.0
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         result = handle_timeout()
 ```
 

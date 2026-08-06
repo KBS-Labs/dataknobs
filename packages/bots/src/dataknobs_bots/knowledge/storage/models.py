@@ -112,7 +112,7 @@ class KnowledgeFile:
             content_type="text/markdown",
             size_bytes=1234,
             checksum="abc123...",
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
             metadata={"author": "Jane Doe"}
         )
         ```
@@ -242,7 +242,7 @@ class KnowledgeBaseInfo:
             domain_id="cooking-assistant",
             file_count=42,
             total_size_bytes=123456,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             version="1",
             ingestion_status=IngestionStatus.READY,
         )

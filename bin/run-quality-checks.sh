@@ -615,7 +615,31 @@ if [ "$SKIP_TESTS" != "yes" ]; then
     
     # Build test command (skip service management — already handled above)
     TEST_CMD="$SCRIPT_DIR/test.sh -n"
-    
+
+    # Workspace-level guards check the root config, every package's config, and
+    # bin/ — so they belong to no package, and every test path below is keyed by
+    # package. Named once here because both modes have to run them: a guard the
+    # quick loop skips is one a developer only sees go red at PR time.
+    WORKSPACE_TEST_DIR="$PROJECT_ROOT/tests"
+
+    # The useful part of a pytest output file: the FAILED lines when there are
+    # any, otherwise the tail. A run can exit non-zero without producing a
+    # single FAILED line — a usage error, a collection error, an import error
+    # and an internal error all do — and a summary that reports a failure while
+    # naming nothing sends the reader to the artifacts to find out what broke.
+    # Echoes nothing when the file records no failure, so callers can test for
+    # emptiness before printing a header.
+    print_test_output_detail() {
+        local clean failed
+        clean=$(sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null)
+        failed=$(echo "$clean" | grep -E '^FAILED ' || true)
+        if [ -n "$failed" ]; then
+            echo "$failed" | sed 's/^/    /'
+        elif echo "$clean" | grep -qE '^ERROR: usage:|^INTERNALERROR|^ERROR |errors during collection'; then
+            echo "$clean" | tail -12 | sed 's/^/    /'
+        fi
+    }
+
     if [ "$PR_MODE" = "yes" ]; then
         # PR/All/Full mode: Run unit and integration tests separately with artifacts
 
@@ -734,6 +758,32 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             done
         fi
 
+        # Workspace guards (see WORKSPACE_TEST_DIR above). Folded into the unit
+        # status rather than given their own so a failure surfaces through the
+        # existing summary. Exit 5 is "no tests collected", not a failure.
+        if [ -d "$WORKSPACE_TEST_DIR" ]; then
+            print_status "Running workspace tests..."
+            workspace_exit=0
+            # No $TEST_FLAGS here: those are bin/test.sh flags (--parallel,
+            # --quiet), which test.sh translates into pytest's spelling. This
+            # run calls pytest directly — test.sh takes a package name and
+            # scans packages/*, so it cannot reach this directory — and pytest
+            # exits on an unrecognized argument, which the gate would count as
+            # a failing suite with no failing test. $PYTEST_ARGS is passed
+            # because it is already pytest's own.
+            uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
+                -p no:cacheprovider $PYTEST_ARGS --color=yes \
+                > "$ARTIFACTS_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
+
+            if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
+                UNIT_TEST_STATUS=$workspace_exit
+                print_error "Workspace tests failed"
+                print_test_output_detail "$ARTIFACTS_DIR/unit-test-output-workspace.txt"
+            else
+                print_success "Workspace tests passed"
+            fi
+        fi
+
         # Run integration tests (always sequential — shared external services)
         print_status "Running integration tests..."
         for pkg in $PACKAGES_TO_TEST; do
@@ -803,12 +853,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # Strip ANSI codes before matching since pytest uses colored output
             for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
                 if [ -f "$output_file" ]; then
-                    failed_lines=$(sed 's/\x1b\[[0-9;]*m//g' "$output_file" 2>/dev/null | grep -E '^FAILED ' || true)
-                    if [ -n "$failed_lines" ]; then
+                    detail=$(print_test_output_detail "$output_file")
+                    if [ -n "$detail" ]; then
                         pkg_label=$(basename "$output_file" .txt | sed 's/.*-output-//')
                         test_type=$(basename "$output_file" .txt | sed 's/-test-output-.*//')
                         echo -e "  ${YELLOW}$test_type ($pkg_label):${NC}"
-                        echo "$failed_lines" | sed 's/^/    /'
+                        echo "$detail"
                     fi
                 fi
             done
@@ -876,6 +926,23 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 print_success "All tests passed"
             else
                 print_error "Some tests failed"
+            fi
+        fi
+
+        # Workspace guards (see WORKSPACE_TEST_DIR above). The loop over
+        # $PACKAGES cannot reach them, and they run in under a second, so the
+        # quick loop carries them too. No artifacts in dev mode.
+        if [ -d "$WORKSPACE_TEST_DIR" ]; then
+            print_status "Running workspace tests..."
+            workspace_exit=0
+            uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
+                -p no:cacheprovider -q || workspace_exit=$?
+
+            if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
+                TEST_STATUS=$workspace_exit
+                print_error "Workspace tests failed"
+            else
+                print_success "Workspace tests passed"
             fi
         fi
     fi

@@ -282,7 +282,7 @@ class TestConnectionPool:
         conn2 = await pool.acquire()
         
         # Try to acquire one more (should timeout quickly in test)
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(TimeoutError):
             # This will retry for ~10 seconds then timeout
             await asyncio.wait_for(pool.acquire(), timeout=0.5)
         

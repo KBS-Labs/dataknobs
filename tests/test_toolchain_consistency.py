@@ -13,12 +13,16 @@ nothing goes red. These tests are the thing that goes red.
 Each test collects **every** violation before asserting, so one run reports the
 whole drift surface rather than the first item found.
 
-``ruff``'s ``target-version`` is deliberately **excluded** — see
-``test_ruff_target_version_is_deliberately_pinned``.
+These are workspace-level guards: they read the root config, every package's
+config, and ``bin/``. They belong to no package, so they live here — which puts
+them outside the per-package discovery every test entry point uses. See
+``test_workspace_tests_are_reachable``, which is the reason the rest of this
+file is worth writing.
 """
 
 from __future__ import annotations
 
+import configparser
 import re
 import tomllib
 from pathlib import Path
@@ -27,11 +31,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: ``ruff``'s target is knowingly held below the floor. Raising it surfaces a
-#: large modernization-lint surface across several rule families, most wanting a
-#: different public API rather than different syntax, so it lands separately.
-#: Pinned here so the hold stays a recorded decision rather than more drift.
-RUFF_PINNED_TARGET = "py310"
+#: Where the quality gate names the directory holding these tests. Extracted and
+#: resolved rather than searched for, so the guard cannot pass on a coincidence.
+GATE_TEST_DIR_RE = re.compile(r'^\s*WORKSPACE_TEST_DIR="\$PROJECT_ROOT/([^"]+)"', re.MULTILINE)
 
 
 def _pyprojects() -> list[Path]:
@@ -76,6 +78,105 @@ def floor() -> tuple[int, int]:
 def _fmt(violations: list[str], floor: tuple[int, int]) -> str:
     listed = "\n".join(f"  - {v}" for v in violations)
     return f"Declarations disagree with the >={floor[0]}.{floor[1]} floor:\n{listed}"
+
+
+# --------------------------------------------------------------------------
+# Reachability — whether anything runs these guards at all
+# --------------------------------------------------------------------------
+
+
+def test_workspace_tests_are_reachable():
+    """A guard nothing runs reports green in exactly the way a passing one does.
+
+    Every test entry point is keyed by package — ``pytest.ini`` declares
+    ``testpaths``, ``bin/test.sh`` takes a package name, and the quality gate
+    loops ``packages/*``. This directory is in none of those by construction,
+    so the guards here can go red and stay red without a single check turning
+    red with them.
+
+    Two mechanisms, because they cover different callers: ``testpaths`` covers
+    a bare ``pytest`` at the root, and the gate covers CI. Both are read for a
+    path and resolved, so neither can be satisfied by an unrelated mention of
+    the word "tests" — and the gate is checked for *running* that path, not
+    merely naming it, since a variable defined and never used would satisfy a
+    weaker check while running nothing.
+    """
+    here = Path(__file__).resolve().parent
+    violations = []
+
+    parser = configparser.ConfigParser()
+    parser.read(ROOT / "pytest.ini")
+    testpaths = parser.get("pytest", "testpaths", fallback="").split()
+    if not any((ROOT / p).resolve() == here for p in testpaths):
+        violations.append(f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}")
+
+    gate = ROOT / "bin" / "run-quality-checks.sh"
+    gate_text = gate.read_text()
+    named = [(ROOT / m.group(1)).resolve() for m in GATE_TEST_DIR_RE.finditer(gate_text)]
+    if here not in named:
+        found = ", ".join(_rel(p) for p in named) or "nothing"
+        violations.append(f"bin/run-quality-checks.sh: names {found}, not {_rel(here)}")
+    else:
+        # Naming the directory is not running it. Both modes are checked: the
+        # gate defines the variable once and each branch has its own test path,
+        # so dropping either leaves a mode that reports green without the
+        # guards — the failure this whole file exists to make impossible.
+        runs = len(re.findall(r'uv run pytest "\$WORKSPACE_TEST_DIR"', gate_text))
+        if runs < 2:
+            violations.append(
+                f"bin/run-quality-checks.sh: names {_rel(here)} but runs pytest against it "
+                f"{runs} time(s) — expected both the PR-mode and dev-mode paths"
+            )
+
+    assert not violations, "Workspace guards are unreachable:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
+
+
+#: Variables the gate may interpolate into a direct ``pytest`` call. Everything
+#: else in scope there holds ``bin/test.sh`` flags, which pytest rejects.
+PYTEST_SAFE_VARS = frozenset({"WORKSPACE_TEST_DIR", "PYTEST_ARGS", "ARTIFACTS_DIR"})
+
+
+def _gate_pytest_commands() -> list[str]:
+    """Every direct ``uv run pytest`` command in the gate, continuations joined."""
+    lines = (ROOT / "bin" / "run-quality-checks.sh").read_text().splitlines()
+    commands = []
+    for i, line in enumerate(lines):
+        if "uv run pytest" not in line:
+            continue
+        parts, j = [line], i
+        while j + 1 < len(lines) and lines[j].rstrip().endswith("\\"):
+            j += 1
+            parts.append(lines[j])
+        commands.append(" ".join(p.strip().rstrip("\\").strip() for p in parts))
+    return commands
+
+
+def test_the_gate_passes_only_pytest_arguments_to_pytest():
+    """``$TEST_FLAGS`` holds ``bin/test.sh`` flags, not pytest ones.
+
+    Every other test path in the gate goes through ``bin/test.sh``, which
+    translates ``--parallel`` / ``--quiet`` into pytest's own spelling. The
+    workspace step cannot: ``test.sh`` takes a package name and scans
+    ``packages/*``, so this one run calls pytest directly. Handing it a
+    variable holding ``--parallel`` makes pytest exit on a *usage* error —
+    which the gate counts as a failing test suite, while no test failed and
+    nothing in the summary says why.
+    """
+    commands = _gate_pytest_commands()
+    assert commands, "no direct pytest invocation found in bin/run-quality-checks.sh"
+
+    violations = [
+        f"bin/run-quality-checks.sh: pytest receives ${var}, not a pytest argument"
+        for cmd in commands
+        for var in re.findall(r"\$([A-Z_]+)", cmd)
+        if var not in PYTEST_SAFE_VARS
+    ]
+
+    assert not violations, "Non-pytest arguments reach pytest:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
 
 
 # --------------------------------------------------------------------------
@@ -148,25 +249,23 @@ def test_pylint_py_version_matches_floor(floor):
     assert not violations, _fmt(violations, floor)
 
 
-def test_ruff_target_version_is_deliberately_pinned():
-    """``ruff``'s target is knowingly held below the floor; pin that decision.
+def test_ruff_target_version_matches_floor(floor):
+    """A stale ruff target makes it decline modernizations that are available.
 
-    This is the one declaration that may lag. It is asserted rather than
-    skipped so that raising it is a deliberate edit here, not silent drift in
-    either direction.
+    This one used to be pinned below the floor while the modernization surface
+    it gates was worked through. That is done, so it is now asserted the same
+    way every other target is — against the floor rather than against a frozen
+    literal, which is strictly the stronger check.
     """
+    expected = f"py{floor[0]}{floor[1]}"
     violations = [
-        f"{_rel(path)}: [tool.ruff] target-version = {target!r}"
+        f"{_rel(path)}: [tool.ruff] target-version = {target!r} (want {expected!r})"
         for path in _pyprojects()
         if (target := _load(path).get("tool", {}).get("ruff", {}).get("target-version")) is not None
-        and target != RUFF_PINNED_TARGET
+        and target != expected
     ]
 
-    assert not violations, (
-        f"ruff target-version is pinned at {RUFF_PINNED_TARGET!r} pending a separate "
-        f"modernization pass; update RUFF_PINNED_TARGET when that lands:\n"
-        + "\n".join(f"  - {v}" for v in violations)
-    )
+    assert not violations, _fmt(violations, floor)
 
 
 # --------------------------------------------------------------------------

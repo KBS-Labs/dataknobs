@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -51,7 +51,7 @@ class TestKnowledgeFile:
 
     def test_to_dict_and_from_dict(self):
         """Test serialization and deserialization."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         file = KnowledgeFile(
             path="content/intro.md",
             content_type="text/markdown",
@@ -81,7 +81,7 @@ class TestKnowledgeBaseInfo:
 
     def test_to_dict_and_from_dict(self):
         """Test serialization and deserialization."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         info = KnowledgeBaseInfo(
             domain_id="test-domain",
             file_count=5,
@@ -108,7 +108,7 @@ class TestKnowledgeBaseInfo:
             domain_id="test",
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             version="1",
         )
 

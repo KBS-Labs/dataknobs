@@ -174,6 +174,25 @@ run_command() {
     "$@"
 }
 
+# For linters, which resolve *two* things against the working directory.
+#
+# Passing --config/--rcfile fixes only the first. The second is
+# per-file-ignores: its keys are repo-relative paths, so from anywhere but the
+# root they match nothing and every suppression silently lifts — the tool then
+# reports findings the quality gate does not have. Target globs are a third
+# case, and they must stay "$PROJECT_ROOT"-anchored at the call site, because
+# the shell expands them there, before this function runs.
+#
+# Subshell so the directory change cannot leak into a later command.
+run_from_root() {
+    local description="$1"
+    shift
+    echo -e "${BLUE}▶${NC} ${BOLD}$description${NC}"
+    echo -e "${DIM}  Running: $@${NC}"
+    echo ""
+    ( cd "$PROJECT_ROOT" && "$@" )
+}
+
 # Main command dispatcher
 main() {
     local cmd="${1:-help}"
@@ -235,12 +254,12 @@ main() {
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev
             ;;
         lint|l)
-            run_command "Running linting checks" \
-                uv run pylint packages/*/src --rcfile=.pylintrc "$@"
+            run_from_root "Running linting checks" \
+                uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         style|s)
-            run_command "Running style checks" \
-                uv run ruff check packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+            run_from_root "Running style checks" \
+                uv run ruff check "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
         validate-pkgs|validate-packages|vp)
             run_command "Validating package references" \
@@ -300,8 +319,8 @@ main() {
             
         # Fixing Issues
         fix|f)
-            run_command "Auto-fixing style issues" \
-                uv run ruff check --fix packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+            run_from_root "Auto-fixing style issues" \
+                uv run ruff check --fix "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             echo ""
             echo -e "${GREEN}✓${NC} Style issues fixed where possible"
             echo -e "${YELLOW}Tip:${NC} Run ${CYAN}dk check${NC} to verify fixes"
@@ -309,12 +328,12 @@ main() {
         fixlint|fl)
             echo -e "${YELLOW}Note:${NC} Most lint issues require manual fixes"
             echo -e "Opening lint report for review..."
-            run_command "Generating lint report" \
-                uv run pylint packages/*/src --rcfile=.pylintrc "$@"
+            run_from_root "Generating lint report" \
+                uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         format|fmt)
-            run_command "Formatting code" \
-                uv run ruff format packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+            run_from_root "Formatting code" \
+                uv run ruff format "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
             
         # Diagnostics

@@ -79,8 +79,8 @@ Timestamps are **backend-local** — compare within a store, not across:
 
 | Backend | Clock source |
 |---------|--------------|
-| `MemoryVectorStore` | Python `datetime.now(timezone.utc)` (aware UTC) |
-| `FaissVectorStore` | Python `datetime.now(timezone.utc)` (aware UTC) |
+| `MemoryVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
+| `FaissVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
 | `PgVectorStore` | Postgres server `NOW()` (naive `TIMESTAMP`) |
 
 In the `epoch` format, naive datetimes (pgvector) are converted using

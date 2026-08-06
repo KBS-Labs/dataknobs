@@ -141,7 +141,7 @@ class EnsureIngestionResult:
         ``IngestionResult.completed_at`` is ``datetime | None`` because
         the type models in-flight operations. ``EnsureIngestionResult``
         is terminal-state only, so when the source has not yet
-        completed we stamp ``datetime.now(timezone.utc)`` at the
+        completed we stamp ``datetime.now(UTC)`` at the
         boundary rather than weakening the invariant.
 
         Args:

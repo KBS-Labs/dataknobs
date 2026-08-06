@@ -257,10 +257,10 @@ wall-clock UTC; inject a `now` collaborator (a `Callable[[], datetime]`) to make
 retention deterministic in tests or drive it from an external clock:
 
 ```python
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 store = await AsyncUserStateStore.from_config(
-    config, now=lambda: datetime.now(timezone.utc),
+    config, now=lambda: datetime.now(UTC),
 )
 ```
 

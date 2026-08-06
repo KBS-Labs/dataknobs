@@ -10,7 +10,7 @@ helpers without requiring any backend runtime.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -30,14 +30,14 @@ class TestTimestampFormat:
 
     def test_format_iso(self):
         store = _ConcreteStore({"dimensions": 4, "timestamps": {"format": "iso"}})
-        dt = datetime(2026, 4, 22, 14, 23, 45, 123456, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, 14, 23, 45, 123456, tzinfo=UTC)
         assert store._format_timestamp(dt) == "2026-04-22T14:23:45.123456+00:00"
 
     def test_format_epoch(self):
         store = _ConcreteStore(
             {"dimensions": 4, "timestamps": {"format": "epoch"}}
         )
-        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         result = store._format_timestamp(dt)
         assert isinstance(result, float)
         assert result == dt.timestamp()
@@ -46,7 +46,7 @@ class TestTimestampFormat:
         store = _ConcreteStore(
             {"dimensions": 4, "timestamps": {"format": "datetime"}}
         )
-        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         assert store._format_timestamp(dt) is dt
 
     def test_format_none_returns_none(self):
@@ -68,7 +68,7 @@ class TestInjectTimestamps:
     def test_inject_creates_new_dict(self):
         store = _ConcreteStore({"dimensions": 4})
         original: dict[str, Any] = {"k": "v"}
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
         result = store._inject_timestamps(original, created=dt, updated=dt)
         assert result is not original
         assert original == {"k": "v"}, "input must not be mutated"
@@ -78,7 +78,7 @@ class TestInjectTimestamps:
 
     def test_inject_none_meta_yields_dict(self):
         store = _ConcreteStore({"dimensions": 4})
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
         result = store._inject_timestamps(None, created=dt, updated=dt)
         assert result == {
             "_created_at": dt.isoformat(),
@@ -94,7 +94,7 @@ class TestInjectTimestamps:
 
     def test_inject_collision_keeps_consumer_value(self, caplog):
         store = _ConcreteStore({"dimensions": 4})
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
         consumer_meta: dict[str, Any] = {"_created_at": "consumer-value"}
 
         with caplog.at_level(logging.WARNING):
@@ -112,7 +112,7 @@ class TestInjectTimestamps:
 
     def test_inject_collision_warns_once_per_key(self, caplog):
         store = _ConcreteStore({"dimensions": 4})
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
 
         with caplog.at_level(logging.WARNING):
             store._inject_timestamps(
@@ -143,7 +143,7 @@ class TestInjectTimestamps:
         """
         store_a = _ConcreteStore({"dimensions": 4})
         store_b = _ConcreteStore({"dimensions": 4})
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
 
         with caplog.at_level(logging.WARNING):
             store_a._inject_timestamps(
@@ -169,7 +169,7 @@ class TestInjectTimestamps:
                 "updated_key": "freshness.updated",
             },
         })
-        dt = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, tzinfo=UTC)
         result = store._inject_timestamps({}, created=dt, updated=dt)
         assert "freshness.created" in result
         assert "freshness.updated" in result
@@ -180,7 +180,7 @@ class TestInjectTimestamps:
         store = _ConcreteStore(
             {"dimensions": 4, "timestamps": {"format": "epoch"}}
         )
-        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=timezone.utc)
+        dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         result = store._inject_timestamps({}, created=dt, updated=dt)
         assert isinstance(result["_created_at"], float)
         assert isinstance(result["_updated_at"], float)

@@ -16,7 +16,6 @@ against HEAD (raw errors propagate) and pass after the fix.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -93,7 +92,7 @@ class TestVendorErrorTranslation:
         assert excinfo.value.__cause__ is exc
 
     async def test_timeout_becomes_operation_error(self) -> None:
-        exc = asyncio.TimeoutError()
+        exc = TimeoutError()
         session = FakeSession([FakeSession.failing(exc)])
         provider = _provider(session)
         with pytest.raises(OperationError):

@@ -224,8 +224,10 @@ ignore = [
                  # of this family (ASYNC210 / 230 / 240 / 251) stay enforced.
     "UP040",     # `type` statement: changes introspection of published aliases.
     "UP042",     # StrEnum: changes str()/f-string rendering of published enums.
-    "UP046",     # PEP 695 type parameters: infers variance where these
-    "UP047",     # Protocols declare it explicitly, and drops a TypeVar name.
+    "UP046",     # PEP 695 class type params: infers variance on Protocols that
+                 # declare it, and scopes an __all__-exported TypeVar.
+    "UP047",     # PEP 695 function type params: fragments a TypeVar shared by a
+                 # class and a function in one module.
 ]
 
 [tool.ruff.lint.per-file-ignores]
