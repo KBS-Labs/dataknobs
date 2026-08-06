@@ -255,7 +255,7 @@ class Bulkhead(StructuredConfigConsumer[BulkheadConfig]):
                 self.semaphore.acquire(),
                 timeout=self.config.queue_timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if self.metrics:
                 self.metrics['timeout'] += 1
             from ..core.exceptions import BulkheadTimeoutError

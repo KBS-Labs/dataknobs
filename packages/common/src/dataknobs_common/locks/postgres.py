@@ -231,7 +231,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
                             timeout,
                         )
                         got = True
-                    except (TimeoutError, asyncio.TimeoutError):
+                    except TimeoutError:
                         got = False
             if not got:
                 # Closing the connection is deliberate: it tears down

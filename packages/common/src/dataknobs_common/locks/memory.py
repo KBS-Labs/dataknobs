@@ -51,7 +51,7 @@ class InProcessLock:
             try:
                 await asyncio.wait_for(lk.acquire(), timeout)
                 return True
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return False
         finally:
             # Drop this caller's reference; evict the entry only when no

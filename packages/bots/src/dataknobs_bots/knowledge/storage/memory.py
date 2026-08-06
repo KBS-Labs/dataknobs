@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
@@ -184,14 +184,14 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             content_type=content_type,
             size_bytes=len(data),
             checksum=checksum,
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
             metadata=metadata or {},
         )
         self._file_metadata[domain_id][path] = file_info
 
         # Update KB info
         kb_info = self._kb_info[domain_id]
-        kb_info.last_updated = datetime.now(timezone.utc)
+        kb_info.last_updated = datetime.now(UTC)
         kb_info.increment_version()
         if is_new:
             kb_info.file_count += 1
@@ -239,7 +239,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = self._kb_info[domain_id]
-        kb_info.last_updated = datetime.now(timezone.utc)
+        kb_info.last_updated = datetime.now(UTC)
         kb_info.increment_version()
         kb_info.file_count = len(self._files[domain_id])
         kb_info.total_size_bytes = sum(len(f) for f in self._files[domain_id].values())
@@ -280,7 +280,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             domain_id=domain_id,
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             version="1",
             ingestion_status=IngestionStatus.PENDING,
             metadata=metadata or {},

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.lifecycle import close_if_owned
@@ -60,7 +60,7 @@ def _parse_datetime(val: Any) -> datetime:
         return val
     if isinstance(val, str):
         return datetime.fromisoformat(val)
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _registration_from_record(record: Record) -> Registration:
@@ -249,7 +249,7 @@ class DataKnobsRegistryAdapter:
             Registration object with metadata
         """
         store = self._require_store()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         existing = await store.get(bot_id)
         created_at = existing.created_at if existing else now
 
@@ -284,7 +284,7 @@ class DataKnobsRegistryAdapter:
         if reg is None:
             return None
 
-        reg.last_accessed_at = datetime.now(timezone.utc)
+        reg.last_accessed_at = datetime.now(UTC)
         await store.put(bot_id, reg)
         return reg
 
@@ -366,7 +366,7 @@ class DataKnobsRegistryAdapter:
             return False
 
         reg.status = "inactive"
-        reg.updated_at = datetime.now(timezone.utc)
+        reg.updated_at = datetime.now(UTC)
         await store.put(bot_id, reg)
         logger.debug("Deactivated bot %s", bot_id)
         return True

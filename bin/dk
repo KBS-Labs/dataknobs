@@ -240,7 +240,7 @@ main() {
             ;;
         style|s)
             run_command "Running style checks" \
-                uv run ruff check packages/*/src "$@"
+                uv run ruff check packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
         validate-pkgs|validate-packages|vp)
             run_command "Validating package references" \
@@ -301,7 +301,7 @@ main() {
         # Fixing Issues
         fix|f)
             run_command "Auto-fixing style issues" \
-                uv run ruff check --fix packages/*/src "$@"
+                uv run ruff check --fix packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             echo ""
             echo -e "${GREEN}✓${NC} Style issues fixed where possible"
             echo -e "${YELLOW}Tip:${NC} Run ${CYAN}dk check${NC} to verify fixes"
@@ -314,7 +314,7 @@ main() {
             ;;
         format|fmt)
             run_command "Formatting code" \
-                uv run ruff format packages/*/src "$@"
+                uv run ruff format packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
             
         # Diagnostics

@@ -11,7 +11,7 @@ import uuid
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -122,7 +122,7 @@ class IngestionResult:
     files_skipped: int = 0
     files_deleted: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
 
     def finish(self) -> IngestionResult:
@@ -132,7 +132,7 @@ class IngestionResult:
         from a ``finally`` block.
         """
         if self.completed_at is None:
-            self.completed_at = datetime.now(timezone.utc)
+            self.completed_at = datetime.now(UTC)
         return self
 
     @property
@@ -1202,7 +1202,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             files_deleted=result.files_deleted,
             status=status,
             completed_at=(
-                result.completed_at or datetime.now(timezone.utc)
+                result.completed_at or datetime.now(UTC)
             ).isoformat(),
         )
         await self.lifecycle_callbacks.fire_async(

@@ -274,7 +274,7 @@ class VectorTextSynchronizer:
                     logger.error(f"Embedding function returned unexpected type: {type(result)}")
                     return None
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Embedding timeout on attempt {attempt + 1}")
                 if attempt < self.config.max_retries - 1:
                     await asyncio.sleep(self.config.retry_delay)

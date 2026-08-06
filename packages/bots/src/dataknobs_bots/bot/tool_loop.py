@@ -164,7 +164,7 @@ class _BufferedDelivery(_ToolLoopDelivery):
                 turn.manager.complete(**self._recall_kwargs),
                 timeout=remaining,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 self.MSG_RECALL_TIMEOUT,
                 remaining,

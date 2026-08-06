@@ -160,7 +160,7 @@ allow_untyped_defs = true
 
 [tool.ruff]
 # Ruff configuration for the entire workspace
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 
 # Include/exclude patterns
@@ -298,6 +298,21 @@ ignore = [
     "RUF013", # PEP 484 prohibits implicit Optional
     "RUF022", # __all__ is not sorted
     "N802", # Function name should be lowercase
+
+    # Modernizations deliberately declined — each would change a public API,
+    # not just syntax. Revisit individually, not as a sweep.
+    "ASYNC109",  # `timeout` parameter on an async def. For a Protocol defining
+                 # a cross-backend contract the parameter *is* the interface,
+                 # and a DB-backed implementation forwards it rather than
+                 # timing out client-side. The blocking-I/O members of this
+                 # family (ASYNC210 / 230 / 240 / 251) remain enforced.
+    "UP040",     # `type` statement over `TypeAlias`: creates a lazy
+                 # TypeAliasType, changing introspection of published aliases.
+    "UP042",     # StrEnum over (str, Enum): changes str()/f-string rendering
+                 # of published enum members from `Class.MEMBER` to the value.
+    "UP046",     # PEP 695 type parameters: infers variance where these
+    "UP047",     # Protocols declare it explicitly, and drops an exported
+                 # TypeVar name.
 ]
 
 # Allow these names that would normally be flagged by N

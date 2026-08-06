@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import pickle
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -294,7 +294,7 @@ class FaissVectorStore(VectorStore):
         # original created_at across the internal-id change. Mirrors
         # MemoryVectorStore.add_vectors (preserve created, refresh
         # updated).
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         prior_created: dict[str, datetime] = {}
         for ext_id in ids:
             if ext_id in self.id_map:
@@ -510,7 +510,7 @@ class FaissVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = 0
         for ext_id, meta in zip(ids, metadata, strict=False):
             if ext_id in self.id_map:

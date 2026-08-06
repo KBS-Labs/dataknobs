@@ -766,7 +766,7 @@ class IncrementalVectorizer:
                         self._queue.get(),
                         timeout=1.0
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 # Process record
@@ -907,7 +907,7 @@ class IncrementalVectorizer:
                 asyncio.gather(*self._workers),
                 timeout=timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Workers did not stop gracefully, cancelling")
             for worker in self._workers:
                 worker.cancel()

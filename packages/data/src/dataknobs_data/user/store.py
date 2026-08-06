@@ -50,7 +50,7 @@ import hashlib
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 from dataknobs_common.callbacks import CallbackRegistry
@@ -497,7 +497,7 @@ class _UserStateStoreCommon:
         self._now = (
             injected_now
             if injected_now is not None
-            else (lambda: datetime.now(timezone.utc))
+            else (lambda: datetime.now(UTC))
         )
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")

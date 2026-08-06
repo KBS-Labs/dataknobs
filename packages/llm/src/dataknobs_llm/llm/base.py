@@ -75,7 +75,7 @@ from dataknobs_common.exceptions import (
 )
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_llm.exceptions import ContextLengthExceededError
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
@@ -1192,8 +1192,8 @@ class LLMProvider(ABC):
         if when is None:  # older Pythons return None instead of raising
             return None
         if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+            when = when.replace(tzinfo=UTC)
+        return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
     @abstractmethod
     def initialize(self) -> None:

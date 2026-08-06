@@ -396,7 +396,7 @@ class ParallelLLMExecutor:
             # explicit re-raise documents intent and guards against future
             # refactors broadening the catch (e.g., to BaseException).
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             duration = (time.monotonic() - start) * 1000
             logger.warning(
                 "LLM task '%s' timed out after %.1fms", tag, duration
@@ -454,7 +454,7 @@ class ParallelLLMExecutor:
         except asyncio.CancelledError:
             # Defensive: see note in _execute_single_llm.
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             duration = (time.monotonic() - start) * 1000
             logger.warning(
                 "Deterministic task '%s' timed out after %.1fms", tag, duration
