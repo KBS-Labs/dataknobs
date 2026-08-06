@@ -398,7 +398,7 @@ See module docstrings for detailed API documentation:
 
 ## Dependencies
 
-- Python 3.10+
+- Python 3.12+
 - No external dependencies (uses only standard library)
 
 ## License

@@ -391,7 +391,11 @@ def example_function(param1: str, param2: int = 0) -> bool:
 
 ### Type Hints
 
-**Important**: All files with type hints must include `from __future__ import annotations` for Python 3.9 compatibility. See the [Python Compatibility Guide](./python-compatibility.md) for details.
+**Important**: Use modern type hint syntax (`str | None`, `list[str]`). At the
+project's Python 3.12 floor, `from __future__ import annotations` is no longer
+required for that syntax, but it remains the convention here for forward
+references and to avoid runtime annotation evaluation. See the
+[Python Compatibility Guide](./python-compatibility.md) for details.
 
 ```python
 from __future__ import annotations

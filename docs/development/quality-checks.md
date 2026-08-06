@@ -232,11 +232,13 @@ uv run ruff format packages/*/src
 
 ### Type Checking and Python Compatibility
 
-DataKnobs maintains **Python 3.9+ compatibility** with modern type hints. See the [Python Compatibility Guide](python-compatibility.md) for important requirements.
+DataKnobs requires **Python 3.12+** and uses modern type hints. See the [Python Compatibility Guide](python-compatibility.md) for important requirements.
 
 **Key requirements:**
-- All Python files with type hints must include `from __future__ import annotations`
 - Use modern type hint syntax (`str | None` instead of `Optional[str]`)
+- `from __future__ import annotations` is no longer required for that syntax at the
+  3.12 floor, but remains useful for forward references and to avoid runtime
+  annotation evaluation
 - Run type checking with `uv run mypy` to use project dependencies
 
 To run type checking:
@@ -248,10 +250,10 @@ uv run mypy packages/data/src/dataknobs_data
 uv run mypy packages/data/src/dataknobs_data/validation/constraints.py
 ```
 
-Current status (August 31, 2025):
-- ✅ All tests pass on Python 3.9.6
-- ✅ 49 source files updated with future annotations
-- 📊 MyPy errors reduced from 774 to 767
+> **Historical note.** This page previously recorded a dated snapshot of test
+> and mypy-error counts taken against a Python 3.9 floor. Both the floor and the
+> counts have since changed; run the commands above for current numbers rather
+> than relying on a transcribed total.
 
 ### Environment Variables
 
