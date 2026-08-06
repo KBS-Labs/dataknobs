@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
 from dataknobs_common.bounded_cache import BoundedLRUCache
 from dataknobs_common.exceptions import ConfigurationError, NotFoundError
@@ -32,6 +32,11 @@ from dataknobs_llm.tools.context import ToolExecutionContext
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from ..middleware.base import Middleware
+from ..middleware.factory import (
+    build_conversation_middleware,
+    build_middleware,
+    resolve_middleware_from_spec,
+)
 from .config import DynaBotConfig
 from .context import BotContext
 from .tool_loop import _BufferedDelivery, _StreamingDelivery, _ToolLoopDelivery
@@ -1237,12 +1242,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if middleware_override is not None:
             middleware = list(middleware_override)
         else:
-            middleware = []
-            if self.config.middleware:
-                for mw_config in self.config.middleware:
-                    mw = self._create_bot_middleware(mw_config)
-                    if mw:
-                        middleware.append(mw)
+            middleware = build_middleware(self.config.middleware or ())
         # Platform middleware: additive — appended after the resolved list
         # (config path OR replace-override path). Runs LAST on every bot-turn
         # hook (its after_turn observes the fully-processed turn), never
@@ -1261,12 +1261,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 conversation_middleware_override
             )
         else:
-            conversation_middleware = []
-            if self.config.conversation_middleware:
-                for mw_config in self.config.conversation_middleware:
-                    mw = self._create_conversation_middleware(mw_config)
-                    if mw is not None:
-                        conversation_middleware.append(mw)
+            conversation_middleware = build_conversation_middleware(
+                self.config.conversation_middleware or ()
+            )
         # Platform conversation_middleware: additive — appended after the
         # resolved list. ConversationManager runs middleware onion-style
         # (process_request forward, process_response reversed), so appended
@@ -3786,6 +3783,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 return None
             raise ConfigurationError(msg) from e
 
+    # Middleware spec resolution lives in
+    # :mod:`dataknobs_bots.middleware.factory` so anything assembling
+    # middleware declaratively can reach it without going through the bot.
+    # These three stay as private aliases so an out-of-tree caller holding a
+    # reference to one keeps working; nothing in this repo calls them outside
+    # tests. The public functions are the supported entry points.
+
     @staticmethod
     def _resolve_middleware_from_spec(
         config: dict[str, Any],
@@ -3793,117 +3797,29 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         *,
         label: str,
     ) -> Any | None:
-        """Resolve a middleware spec to an instance, validating its class shape.
-
-        Shared resolution body behind :meth:`_create_bot_middleware`
-        (bot-turn :class:`~dataknobs_bots.middleware.Middleware`) and
-        :meth:`_create_conversation_middleware` (LLM-call
-        :class:`~dataknobs_llm.conversations.ConversationMiddleware`). The
-        two flavors are wired to different layers but share this
-        construction shape (``class`` + ``params`` + ``optional``).
-
-        The class-shape check uses ``issubclass`` BEFORE instantiation so
-        a wrong-shape spec never runs its ctor (avoiding network reads /
-        file opens / log writes a misplaced spec's initializer might
-        trigger). Type-mismatch errors raise unconditionally —
-        ``optional: true`` covers transient resolution failures (module /
-        class / params), NOT a class listed under the wrong field. A
-        misplaced spec (a turn-lifecycle ``Middleware`` listed under
-        ``conversation_middleware:``, or vice versa) is a programmer error
-        in the config layout, and the only safe response is to surface it
-        at config-load.
-
-        Args:
-            config: Middleware configuration dict with:
-                - class: Dotted import path to middleware class
-                - params: Optional constructor parameters
-                - optional: If True, log warning and skip on resolution
-                  failure (missing module / class / bad params) instead of
-                  raising (default: False). Does NOT apply to class-shape
-                  mismatches — those always raise.
-            expected_base: Class the resolved middleware must subclass
-                (``Middleware`` for bot turn-lifecycle hooks,
-                ``ConversationMiddleware`` for LLM-call wraps).
-            label: Human-readable label used in error / log messages
-                (e.g. ``"middleware"``, ``"conversation_middleware"``).
-
-        Returns:
-            Instantiated middleware, or ``None`` if resolution fails
-            (NOT a class-shape mismatch) and ``optional: true`` was set.
-
-        Raises:
-            ConfigurationError: If the class cannot be resolved or
-                instantiation fails, unless ``optional: true``; OR if the
-                resolved class is not a subclass of ``expected_base``
-                (always raises, regardless of ``optional``).
-        """
-        import importlib
-
-        optional = config.get("optional", False)
-        class_path = config.get("class", "<missing>")
-
-        try:
-            module_path, class_name = config["class"].rsplit(".", 1)
-            module = importlib.import_module(module_path)
-            middleware_class = getattr(module, class_name)
-        except Exception as e:
-            # Resolution failure (missing module / class / malformed spec)
-            # — covered by ``optional``.
-            msg = f"Failed to resolve {label} '{class_path}': {e}"
-            if optional:
-                logger.warning("Skipping optional %s: %s", label, msg)
-                return None
-            raise ConfigurationError(msg) from e
-
-        # Class-shape check BEFORE instantiation. Never optional: a class
-        # listed under the wrong field is a programmer error, not a
-        # transient environment failure.
-        if not (
-            isinstance(middleware_class, type)
-            and issubclass(middleware_class, expected_base)
-        ):
-            raise ConfigurationError(
-                f"{label} '{class_path}' must subclass "
-                f"{expected_base.__module__}.{expected_base.__qualname__} "
-                f"— check whether this spec belongs under 'middleware' "
-                f"(bot-turn hooks) or 'conversation_middleware' "
-                f"(LLM-call wraps)."
-            )
-
-        try:
-            return middleware_class(**dict(config.get("params", {})))
-        except Exception as e:
-            # Instantiation failure (bad params, ctor raised) — covered by
-            # ``optional``.
-            msg = f"Failed to instantiate {label} '{class_path}': {e}"
-            if optional:
-                logger.warning("Skipping optional %s: %s", label, msg)
-                return None
-            raise ConfigurationError(msg) from e
+        """Alias for :func:`~dataknobs_bots.middleware.factory.resolve_middleware_from_spec`."""
+        return resolve_middleware_from_spec(config, expected_base, label=label)
 
     @staticmethod
     def _create_bot_middleware(config: dict[str, Any]) -> Middleware | None:
-        """Resolve a bot-turn ``Middleware`` spec.
+        """Single-spec form of :func:`~dataknobs_bots.middleware.build_middleware`.
 
-        See :meth:`_resolve_middleware_from_spec` for the resolution,
-        class-shape validation, and ``optional`` semantics.
+        The public builders take an iterable; this keeps the historical
+        one-spec-in / one-instance-out shape for anything holding a
+        reference to it.
         """
-        return DynaBot._resolve_middleware_from_spec(
-            config, Middleware, label="middleware"
-        )
+        mw = resolve_middleware_from_spec(config, Middleware, label="middleware")
+        return cast("Middleware | None", mw)
 
     @staticmethod
     def _create_conversation_middleware(
         config: dict[str, Any],
     ) -> ConversationMiddleware | None:
-        """Resolve a ``ConversationMiddleware`` (LLM-call wrap) spec.
-
-        See :meth:`_resolve_middleware_from_spec` for the resolution,
-        class-shape validation, and ``optional`` semantics.
-        """
-        return DynaBot._resolve_middleware_from_spec(
+        """Single-spec form of :func:`~dataknobs_bots.middleware.build_conversation_middleware`."""
+        mw = resolve_middleware_from_spec(
             config, ConversationMiddleware, label="conversation_middleware"
         )
+        return cast("ConversationMiddleware | None", mw)
 
     # -----------------------------------------------------------------
     # Undo / Rewind

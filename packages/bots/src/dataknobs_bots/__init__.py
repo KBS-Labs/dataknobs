@@ -1,5 +1,10 @@
 """DataKnobs Bots - Configuration-driven AI agents."""
 
+from .behavior_packs import (
+    BehaviorPackRegistry,
+    BehaviorPackSpec,
+    verify_stage_synthesizers,
+)
 from .bot import (
     PROVIDER_ROLE_EXTRACTION,
     PROVIDER_ROLE_KB_EMBEDDING,
@@ -45,7 +50,14 @@ from .memory import (
     register_memory_backend,
 )
 from .prompts.resolver import PromptResolver
-from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
+from .middleware import (
+    CostTrackingMiddleware,
+    LoggingMiddleware,
+    Middleware,
+    build_conversation_middleware,
+    build_middleware,
+    resolve_middleware_from_spec,
+)
 from .reasoning import (
     PhasedReasoningProtocol,
     ProcessResult,
@@ -87,6 +99,8 @@ __version__ = "0.9.4"
 
 __all__ = [
     "AddKBResourceTool",
+    "BehaviorPackRegistry",
+    "BehaviorPackSpec",
     "BiDirectionalBridge",
     "BotContext",
     "BotManager",
@@ -148,6 +162,8 @@ __all__ = [
     "VectorMemory",
     "WizardConfigBuilder",
     "WizardReasoning",
+    "build_conversation_middleware",
+    "build_middleware",
     "create_default_catalog",
     "create_knowledge_base_from_config",
     "create_memory_from_config",
@@ -159,4 +175,6 @@ __all__ = [
     "register_memory_backend",
     "register_source_backend",
     "register_strategy",
+    "resolve_middleware_from_spec",
+    "verify_stage_synthesizers",
 ]

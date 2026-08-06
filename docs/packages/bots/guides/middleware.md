@@ -520,6 +520,114 @@ To exercise the additive channel in tests, route it through `from_config` via
 `BotTestHarness.create(..., platform_middleware=[...])` — distinct from the
 harness's `middleware=` param, which post-appends to the built bot.
 
+## Building middleware from specs
+
+`DynaBot` resolves its own configured `middleware:` and
+`conversation_middleware:` blocks through two free-standing factories.
+They are exported so anything that assembles middleware *declaratively* —
+a composed behavior pack, a deployment's policy bundle, a test fixture —
+can turn specs into live instances without reaching into bot internals or
+reimplementing the resolution rules.
+
+```python
+from dataknobs_bots import build_conversation_middleware, build_middleware
+
+turn_specs = [
+    {"class": "acme.mw.AuditMiddleware", "params": {"level": "info"}},
+    {"class": "acme.mw.OptionalTracer", "optional": True},
+]
+call_specs = [{"class": "acme.mw.PromptRedactor"}]
+
+bot = await DynaBot.from_config(
+    config,
+    platform_middleware=build_middleware(turn_specs),
+    platform_conversation_middleware=build_conversation_middleware(call_specs),
+)
+```
+
+Both take an **iterable** of specs and return a **list** of live instances —
+the shape both install channels want. Each is consumed once, so a
+one-shot generator is fine.
+
+| Function | Builds | For |
+|---|---|---|
+| `build_middleware` | `Middleware` | Bot-turn lifecycle hooks (`on_turn_start` / `after_turn` / ...) |
+| `build_conversation_middleware` | `ConversationMiddleware` | LLM-call wraps (`process_request` / `process_response`) |
+| `resolve_middleware_from_spec` | either | One spec at a time — see [Resolving a single spec](#resolving-a-single-spec) |
+
+Both wrappers delegate to `resolve_middleware_from_spec`, so there is
+exactly one resolution body and the two flavors cannot drift.
+
+> **Middleware specs are trusted configuration.** A spec's `class` is a
+> dotted path that gets imported and instantiated, so resolving one executes
+> whatever that module and constructor do — import *is* execution, and there
+> is no allow-list or sandbox here.
+>
+> Specs must come from the same trust domain as the application's own code:
+> a config file, a deployment's policy bundle, a pack a platform team
+> authored. Never build one from end-user input, a request body, or a
+> per-tenant blob the tenant supplies.
+
+### Spec shape
+
+```python
+{
+    "class": "my_pkg.mw.AuditMiddleware",   # dotted import path (required)
+    "params": {"level": "info"},            # constructor kwargs (optional)
+    "optional": False,                      # skip on failure (optional)
+}
+```
+
+### `optional` covers environment failures, not layout mistakes
+
+`optional: true` skips a spec whose **module or class cannot be resolved**,
+or whose **constructor fails** — a genuinely absent integration in this
+environment. A warning is logged and the spec is left out.
+
+It does **not** cover a class-shape mismatch. A class listed under the
+wrong field — a turn-lifecycle `Middleware` under
+`conversation_middleware:`, or the reverse — always raises
+`ConfigurationError`, regardless of `optional`. That is a programmer error
+in the config layout, and the only safe response is to surface it at
+config-load rather than silently run a bot missing behavior it declared.
+
+The shape check runs **before instantiation**, so a wrong-shape spec never
+executes its constructor — no network read, file open, or log write from a
+misplaced spec's initializer.
+
+### Skipped specs are absent, not `None`
+
+A skipped `optional` spec is **removed** from the result, so the returned
+list is directly usable as `platform_middleware`. Positional
+correspondence with the input specs is deliberately not preserved:
+
+```python
+specs = [good_spec, broken_optional_spec, another_good_spec]
+build_middleware(specs)     # -> [<good>, <another_good>]   (length 2)
+```
+
+If you need to know *which* spec was skipped, resolve them one at a time.
+
+### Resolving a single spec
+
+`resolve_middleware_from_spec` is the shared resolution body, exposed for
+per-spec handling and for middleware families neither wrapper covers:
+
+```python
+from dataknobs_bots import resolve_middleware_from_spec
+from dataknobs_bots.middleware import Middleware
+
+for spec in specs:
+    mw = resolve_middleware_from_spec(spec, Middleware, label="middleware")
+    if mw is None:
+        record_missing_integration(spec["class"])
+    else:
+        installed.append(mw)
+```
+
+For the two built-in flavors prefer the wrappers — they supply the correct
+`expected_base` and the `label` that appears in error messages.
+
 ## Best Practices
 
 1. **Use Unified Hooks**: Prefer `on_turn_start` and `after_turn` over legacy hooks.

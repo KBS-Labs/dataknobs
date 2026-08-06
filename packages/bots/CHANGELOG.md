@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_bots.behavior_packs`** — the bot-flavored vocabulary for
+  `dataknobs_common.packs`. `BehaviorPackSpec` is a `PackSpec` subclass
+  naming five optional fields and the rule each composes under:
+  `required_strategy` (`UNANIMOUS` — two packs demanding different
+  strategies is unsatisfiable rather than resolvable, so it raises),
+  `strategy_overrides` (`MERGE`), `middleware` and
+  `conversation_middleware` (`CONCAT` — order is behavior, and a repeated
+  spec is a deliberate second installation), and `stage_synthesizers`
+  (`CONCAT_UNIQUE` — these are names, and registration is idempotent, so a
+  duplicate is noise). The two middleware fields hold the **raw spec
+  mappings** the bot config already accepts rather than live instances, so
+  a pack stays serializable and cannot drift from `DynaBotConfig`; pair
+  them with `build_middleware` / `build_conversation_middleware` and the
+  additive `platform_middleware=` channel to install a composed pack.
+  `verify_stage_synthesizers(names)` closes the gap between a pack
+  *declaring* a synthesizer name and some module *registering* it, raising
+  `ConfigurationError` listing every missing name plus what is registered —
+  without which a typo would surface only as a wizard stage whose primitive
+  silently never expands. `BehaviorPackRegistry` is a type alias for
+  `PackRegistry[BehaviorPackSpec]` so consumer signatures can name the
+  concrete type. DataKnobs ships **zero** packs and no module-level
+  registry: pack content and binding are per-deployment policy, and a
+  process-global registry would be a multi-tenant hazard.
+  `BehaviorPackSpec`, `BehaviorPackRegistry`, and
+  `verify_stage_synthesizers` are exported from the top-level
+  `dataknobs_bots` namespace. See `docs/BEHAVIOR_PACKS.md`.
+
+- **`build_middleware()`, `build_conversation_middleware()`, and
+  `resolve_middleware_from_spec()`** in `dataknobs_bots.middleware`
+  (also exported from the top-level `dataknobs_bots` namespace) — the
+  spec-to-instance resolution `DynaBot` applies to its own configured
+  `middleware:` and `conversation_middleware:` blocks, now free-standing so
+  anything assembling middleware declaratively can produce instances to
+  hand to `from_config(..., platform_middleware=...)` without reaching into
+  bot internals. The two wrappers take an iterable of specs and return a
+  list of live instances; both delegate to `resolve_middleware_from_spec`,
+  so there is exactly one resolution body and the two flavors cannot drift.
+  Middleware specs are **trusted configuration**: a spec's `class` is a
+  dotted path that is imported and instantiated, so specs must never be
+  built from end-user or per-tenant input.
+  `optional: true` continues to cover only transient resolution failures
+  (missing module / class / bad constructor params) — a class-shape
+  mismatch, such as a turn-lifecycle `Middleware` listed under
+  `conversation_middleware:`, always raises `ConfigurationError`, and the
+  `issubclass` check runs *before* instantiation so a misplaced spec never
+  executes its constructor. A skipped optional spec is absent from the
+  result rather than a `None` hole, so the returned list is directly usable
+  as `platform_middleware`; resolve specs one at a time when you need to
+  know which was skipped.
+
+  Two observable consequences of the move, both intended. Resolution now
+  logs under `dataknobs_bots.middleware.factory` rather than
+  `dataknobs_bots.bot.base`, so anything filtering middleware-resolution
+  logs by logger name needs updating. And a configured bot-turn
+  `Middleware` whose class defines a falsy `__bool__` / `__len__` is now
+  installed rather than silently dropped: the bot-turn path tested
+  truthiness where the conversation path tested `is not None`, and the two
+  now agree on `is not None`.
+
 - **`dataknobs-bots[postgres]` and `dataknobs-bots[faiss]` extras.** Both
   were already documented in the README, user guide, and package index
   but never existed, so `pip install dataknobs-bots[postgres]` warned and

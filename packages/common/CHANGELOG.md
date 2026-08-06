@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs_common.packs`** — ordered, precedence-resolved composition of
+  named declaration bundles. A *pack* is a named, frozen, partial
+  declaration; a *binding* selects packs for one deployment and may tune
+  them; resolution folds the selection — lowest `priority` first — field by
+  field, under rules each field declares for itself. `PackSpec` (a frozen
+  `StructuredConfig` subclass) is the base a domain package subclasses to
+  name its fields, declaring a per-field rule for each in `_COMPOSITION`;
+  `PackRegistry` (a `Registry`, since packs are eagerly registered
+  declarations rather than lazily-constructed backends) holds specs keyed
+  by `spec.name` and provides the pure, synchronous `resolve(bindings)`;
+  `PackResolution` carries the applied specs in fold order, the composed
+  spec, and any diagnostics. `MergeKind` supplies six built-in rules
+  (`LAST_WINS`, `FIRST_WINS`, `UNANIMOUS`, `CONCAT`, `CONCAT_UNIQUE`,
+  `MERGE`), and a plain `Reducer` — `(acc, next) -> value` — is accepted
+  anywhere a `MergeKind` is, so semantics the vocabulary does not cover
+  (recursive merge via `dataknobs_config.inheritance.deep_merge`, which
+  matches the signature exactly) are reachable without this package
+  depending on `dataknobs-config`. A field from a *pack* participates in the
+  fold only when its contributed value differs from that field's declared
+  default, so a pack that does not mention a field cannot clobber one that
+  does — a spec is a frozen dataclass, so "did not mention this" is only
+  inferable from the value. A *binding* body is a partial mapping where
+  presence is unambiguous, so naming a field there is itself the
+  contribution, including naming one to clear it back to its default;
+  presence decides only participation, so a binding still cannot take back a
+  `FIRST_WINS` field or disagree with a `UNANIMOUS` one. Declaring the
+  exported `UNSET` sentinel as a field's default opts that field out of
+  default-comparison, which is how a *pack* contributes a value that happens
+  to be the default (at the cost of untouched fields reading back as
+  `UNSET`); it is falsy, identity-stable across copy/deepcopy/pickle, and
+  worth reaching for only on `LAST_WINS` / `FIRST_WINS` / `UNANIMOUS`.
+  Failures split into two deliberately distinct families: authoring bugs (a
+  field with no declared rule, a rule for a nonexistent field, a non-meta
+  field with no default, a spec class adding fields the registry's class
+  cannot compose, a *spec's* value whose shape contradicts its rule, a
+  custom reducer that raises) surface as `ConfigurationError`, while
+  problems in a *binding* raise `PackResolutionError` carrying a
+  machine-readable `reason` (`unknown_pack`, `unknown_binding_key`,
+  `locked_pack_disabled`, `field_conflict`, `invalid_binding`). The split
+  follows the value's origin rather than its symptom: the same malformed
+  value is a programmer error inside a spec and operator input inside a
+  binding, so a bad binding value is catchable by `reason` rather than by
+  matching prose. Most authoring checks run when the `PackRegistry` is
+  constructed or a spec registered; a value's shape and a reducer's
+  behavior are only knowable once there is a value, so those run at
+  `resolve()`. A registry holds exactly one spec class — registering a
+  subclass that adds its own fields is rejected, since the composed result
+  is an instance of the registry's class and such a field would have no
+  rule and nowhere to land. Non-fatal diagnostics are structured
+  `PackWarning`s with a stable `code` (`priority_tie` — raised only when
+  tied packs actually contend for a field, so the common
+  everything-at-`priority=0` case stays quiet; `value_override`;
+  `key_override`; `binding_override_ignored`, for a binding key whose
+  declared rule then discarded the binding's value) so a deployment can
+  escalate one class of collision without pattern-matching prose. A
+  warning's `packs` names the packs that *contributed* to the field's
+  current value, so a `FIRST_WINS` value that was discarded does not linger
+  in a later warning's source list. The composed shape is independent of how
+  many packs contributed — a `CONCAT` / `CONCAT_UNIQUE` field is always a
+  `tuple`, a `MERGE` field always a `dict`, even with a single participant.
+  `compose_packs` exposes the underlying fold for callers that already hold
+  specs in the order they want, and `merge_bindings` layers ordered binding
+  mappings (later layers winning per pack and per key), which is what makes
+  `locked` load-bearing: a platform baseline can assert a pack a per-tenant
+  overlay must not switch off. No module-level singleton is provided — a
+  pack binding is a per-deployment decision, and a process-global registry
+  would be a multi-tenant hazard. `MergeKind`, `UNSET`, `Reducer`,
+  `CompositionRule`, `PackSpec`, `PackWarning`, `PackResolution`,
+  `PackResolutionError`, `compose_packs`, `merge_bindings`, and
+  `PackRegistry` are exported from the top-level `dataknobs_common`
+  namespace. See `docs/guides/packs.md`.
+
 ## v1.6.3 - 2026-07-29
 
 ### Added

@@ -27,13 +27,29 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
   ``package_only``  Package doc with no site mirror.
   ``site_only``     Site-native page with no package source.
 
-Completeness: every top-level ``*.md`` in both trees MUST be classified. An
-unclassified file (or a manifest entry with no file on disk) fails the check
--- that is what makes silent drift impossible to introduce: a new doc forces
-a classification decision at PR time. A paired entry may point at a package
-*subdirectory* source (e.g. a transclusion of ``guides/events.md``); such a
-source is not a top-level package doc, so it is exempt from the top-level
-completeness set (its existence is still enforced by the per-class check).
+Completeness: every ``*.md`` **in scope** MUST be classified. An unclassified
+file (or a manifest entry with no file on disk) fails the check -- that is
+what makes silent drift impossible to introduce: a doc in scope forces a
+classification decision at PR time.
+
+Scope is per package, set by the manifest's ``recursive`` flag:
+
+  ``false`` (default)  Only *top-level* ``*.md``. A paired entry may still
+                       point at a subdirectory on either side -- a package
+                       source under ``guides/`` (a transclusion of
+                       ``guides/events.md``), or a site page under
+                       ``guides/`` (where every bots guide lives). Such a
+                       file is exempt from the completeness set, though its
+                       existence and the pair's invariant are still enforced
+                       by the per-class check. The gap: a *new* subdirectory
+                       doc is not required to be classified at all, so it
+                       gets no verification.
+  ``true``             Every ``*.md`` at any depth, keyed by its path
+                       relative to the tree root. Closes that gap.
+
+Opting a package in requires classifying everything already nested in it,
+which is per-package work -- hence the flag, so packages are reconciled one
+at a time rather than holding the guarantee hostage to one sweeping change.
 
 Modes:
 
@@ -334,7 +350,23 @@ def check_diverge(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> Non
 
 
 def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
-    """Every top-level *.md in both trees must be classified exactly once."""
+    """Every *.md in both trees must be classified exactly once.
+
+    Scope depends on the package's ``recursive`` flag:
+
+    * ``false`` (default) -- only *top-level* ``*.md`` must be classified.
+      Subdirectory files may be classified (as one side of a pair) but are
+      not required to be, so a new ``guides/whatever.md`` passes unnoticed.
+    * ``true`` -- every ``*.md`` at any depth must be classified, keyed by
+      its path relative to the tree root.
+
+    The flag exists because turning recursion on for a package demands
+    classifying everything already nested there, which is per-package work.
+    Making it opt-in lets packages be reconciled one at a time instead of
+    holding the guarantee hostage to a single sweeping change; a package
+    that has not opted in keeps exactly its previous behaviour.
+    """
+    recursive = bool(entry.get("recursive", False))
     pkg_classified: dict[str, str] = {}
     site_classified: dict[str, str] = {}
 
@@ -346,35 +378,43 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
             )
         store[name] = bucket
 
-    def _add_pkg(name: str, bucket: str) -> None:
-        # A paired entry may source from a package subdirectory (e.g. a
-        # transclusion of ``guides/events.md``). Such a source is not a
-        # top-level package doc, so it is not part of the top-level
-        # completeness set -- its existence is enforced by the per-class check
-        # instead. Only top-level sources participate here.
-        if "/" in name:
+    def _add_paired(store: dict[str, str], name: str, bucket: str, side: str) -> None:
+        # A paired entry may point at a *subdirectory* on either side: a
+        # package source under ``guides/`` (a transclusion of
+        # ``guides/events.md``), or a site page under ``guides/`` (where every
+        # bots guide lives). Under the default non-recursive scope such a file
+        # is not part of the completeness set -- its existence, and the pair's
+        # invariant, are enforced by the per-class check instead.
+        #
+        # Both sides must apply that rule. Exempting only the package side
+        # made a subdirectory site page inexpressible as a pair -- it would
+        # fail the "manifest references missing site doc" check below, since
+        # ``site_on_disk`` was a non-recursive glob of basenames -- which in
+        # turn forced genuine pairs to be recorded as ``package_only`` and
+        # silently opted them out of per-class verification.
+        #
+        # Under ``recursive`` the exemption is exactly what we are removing,
+        # so subdirectory paths participate like any other.
+        if not recursive and "/" in name:
             return
-        _add(pkg_classified, name, bucket, "package")
+        _add(store, name, bucket, side)
 
-    for pair in entry.get("symlink", []):
-        _add_pkg(pair["package"], "symlink")
-        _add(site_classified, pair["site"], "symlink", "site")
-    for pair in entry.get("mirror", []):
-        _add_pkg(pair["package"], "mirror")
-        _add(site_classified, pair["site"], "mirror", "site")
-    for pair in entry.get("transclude", []):
-        _add_pkg(pair["package"], "transclude")
-        _add(site_classified, pair["site"], "transclude", "site")
-    for pair in entry.get("diverge", []):
-        _add_pkg(pair["package"], "diverge")
-        _add(site_classified, pair["site"], "diverge", "site")
+    for kind in ("symlink", "mirror", "transclude", "diverge"):
+        for pair in entry.get(kind, []):
+            _add_paired(pkg_classified, pair["package"], kind, "package")
+            _add_paired(site_classified, pair["site"], kind, "site")
     for name in entry.get("package_only", []):
         _add(pkg_classified, name, "package_only", "package")
     for name in entry.get("site_only", []):
         _add(site_classified, name, "site_only", "site")
 
-    pkg_on_disk = {p.name for p in pkg_dir.glob("*.md")}
-    site_on_disk = {p.name for p in site_dir.glob("*.md")}
+    def _on_disk(root: Path) -> set[str]:
+        if recursive:
+            return {p.relative_to(root).as_posix() for p in root.rglob("*.md")}
+        return {p.name for p in root.glob("*.md")}
+
+    pkg_on_disk = _on_disk(pkg_dir)
+    site_on_disk = _on_disk(site_dir)
 
     for name in sorted(pkg_on_disk - set(pkg_classified)):
         res.fail(

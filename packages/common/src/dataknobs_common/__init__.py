@@ -134,6 +134,19 @@ from dataknobs_common.locks import (
     lock_backends,
 )
 from dataknobs_common.metadata import enforce_immutable_keys
+from dataknobs_common.packs import (
+    UNSET,
+    CompositionRule,
+    MergeKind,
+    PackRegistry,
+    PackResolution,
+    PackResolutionError,
+    PackSpec,
+    PackWarning,
+    Reducer,
+    compose_packs,
+    merge_bindings,
+)
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
 )
@@ -336,6 +349,18 @@ __all__ = [
     "InProcessLock",
     # Metadata helpers
     "enforce_immutable_keys",
+    # Pack composition
+    "UNSET",
+    "MergeKind",
+    "Reducer",
+    "CompositionRule",
+    "PackSpec",
+    "PackWarning",
+    "PackResolution",
+    "PackResolutionError",
+    "compose_packs",
+    "merge_bindings",
+    "PackRegistry",
     # Postgres config
     "normalize_postgres_connection_config",
     # Rate Limiting
