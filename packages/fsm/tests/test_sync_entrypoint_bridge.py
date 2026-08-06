@@ -24,12 +24,12 @@ Real constructs only — real FSM builds, a real async transform, the real bridg
 from __future__ import annotations
 
 import asyncio
-import threading
 import time
 from typing import Any
 
 import pytest
 
+from dataknobs_common.testing import assert_no_leaked_bridge_threads
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
@@ -43,22 +43,6 @@ from dataknobs_fsm.config.schema import (
 from dataknobs_fsm.execution.batch import BatchExecutor
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline
 from dataknobs_fsm.streaming.core import IStreamSource, StreamChunk
-
-_BRIDGE_THREAD_NAME = "dk-sync-loop-bridge"
-
-
-def _new_bridge_threads(before: set[threading.Thread]) -> list[str]:
-    """Bridge threads that appeared (and survived) since ``before`` was sampled.
-
-    Measured as a delta so a bridge leaked by an unrelated earlier test in the
-    same process never makes these assertions flaky.
-    """
-    return [
-        t.name
-        for t in threading.enumerate()
-        if t.name == _BRIDGE_THREAD_NAME and t not in before
-    ]
-
 
 def _trivial_fsm() -> Any:
     """A minimal start→end FSM (no transforms, no resources)."""
@@ -86,26 +70,26 @@ def _trivial_fsm() -> Any:
 
 
 def test_fsm_execute_leaves_no_bridge_thread() -> None:
-    """``FSM.execute`` scopes a throwaway bridge and leaves no thread behind."""
+    """``FSM.execute`` scopes a throwaway bridge and leaves no thread behind.
+
+    A one-shot sync execute must scope its bridge to the call
+    (``run_coro_sync``) rather than allocating the shared, process-lifetime
+    one that repeated stepping uses.
+    """
     fsm = _trivial_fsm()
-    before = set(threading.enumerate())
-    fsm.execute({"id": 1})
-    assert _new_bridge_threads(before) == [], (
-        "FSM.execute() left a process-lifetime bridge thread alive; a one-shot "
-        "sync execute must scope a throwaway bridge to the call (run_coro_sync)"
-    )
+    with assert_no_leaked_bridge_threads():
+        fsm.execute({"id": 1})
 
 
 def test_batch_executor_leaves_no_bridge_thread() -> None:
-    """The sync ``BatchExecutor`` tears down its operation-scoped bridge."""
+    """The sync ``BatchExecutor`` tears down its operation-scoped bridge.
+
+    Its bridge belongs to the batch operation, not to the process.
+    """
     fsm = _trivial_fsm()
     executor = BatchExecutor(fsm=fsm, parallelism=2)
-    before = set(threading.enumerate())
-    executor.execute_batch([{"id": 1}, {"id": 2}, {"id": 3}])
-    assert _new_bridge_threads(before) == [], (
-        "BatchExecutor.execute_batch() left a bridge thread alive; its bridge "
-        "must be scoped to the operation and torn down"
-    )
+    with assert_no_leaked_bridge_threads():
+        executor.execute_batch([{"id": 1}, {"id": 2}, {"id": 3}])
 
 
 class _ListSource(IStreamSource):
@@ -132,16 +116,15 @@ class _ListSource(IStreamSource):
 
 
 def test_stream_executor_leaves_no_bridge_thread() -> None:
-    """The sync ``StreamExecutor`` tears down its operation-scoped bridge."""
+    """The sync ``StreamExecutor`` tears down its operation-scoped bridge.
+
+    Its bridge belongs to the stream operation, not to the process.
+    """
     fsm = _trivial_fsm()
     executor = StreamExecutor(fsm=fsm)
     pipeline = StreamPipeline(source=_ListSource([[{"id": 1}, {"id": 2}]]))
-    before = set(threading.enumerate())
-    executor.execute_stream(pipeline)
-    assert _new_bridge_threads(before) == [], (
-        "StreamExecutor.execute_stream() left a bridge thread alive; its bridge "
-        "must be scoped to the operation and torn down"
-    )
+    with assert_no_leaked_bridge_threads():
+        executor.execute_stream(pipeline)
 
 
 # --------------------------------------------------------------------------- #

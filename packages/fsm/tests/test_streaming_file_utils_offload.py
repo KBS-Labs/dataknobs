@@ -25,6 +25,7 @@ from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 from dataknobs_fsm.streaming.core import StreamChunk
 from dataknobs_fsm.utils import streaming_file_utils as _module
+from dataknobs_common.testing import DK_AITER_PUMP_THREAD
 from dataknobs_fsm.utils.streaming_file_utils import (
     StreamingFileReader,
     StreamingFileWriter,
@@ -158,7 +159,7 @@ async def test_jsonl_chunks_open_on_worker_thread(
     await _read_all(reader)
     assert threads, "open() was never called"
     assert threading.current_thread().name not in threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_csv_chunks_open_on_worker_thread(
@@ -171,7 +172,7 @@ async def test_csv_chunks_open_on_worker_thread(
     reader = StreamingFileReader(path, chunk_size=10, input_format="csv")
     await _read_all(reader)
     assert threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_text_chunks_open_on_worker_thread(
@@ -184,7 +185,7 @@ async def test_text_chunks_open_on_worker_thread(
     reader = StreamingFileReader(path, chunk_size=2, input_format="text")
     await _read_all(reader)
     assert threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_streams_larger_than_one_chunk(tmp_path: Path) -> None:

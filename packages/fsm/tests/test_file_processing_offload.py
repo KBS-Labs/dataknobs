@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 from dataknobs_fsm.patterns import file_processing as _module
+from dataknobs_common.testing import DK_AITER_PUMP_THREAD
 from dataknobs_fsm.patterns.file_processing import (
     FileFormat,
     FileProcessingConfig,
@@ -186,7 +187,7 @@ async def test_read_batches_opens_on_worker_thread(
     await _read_batches(proc)
     assert threads, "open() was never called"
     assert threading.current_thread().name not in threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_read_batches_counts_json_errors(tmp_path: Path) -> None:

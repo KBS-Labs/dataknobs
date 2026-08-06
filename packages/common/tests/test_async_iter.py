@@ -18,12 +18,32 @@ from collections.abc import Iterator
 import pytest
 
 from dataknobs_common import aiter_sync_in_thread
-from dataknobs_common.async_iter import _THREAD_NAME
+from dataknobs_common.testing import (
+    DK_AITER_PUMP_THREAD,
+    live_dk_daemon_threads,
+)
+
+# Threads alive when the current test started — see the sibling comment in
+# ``test_sync_bridge.py``: measuring against zero rather than against a
+# per-test baseline turns another test's leak into this file's failure.
+_baseline: list[set[threading.Thread]] = [set()]
+
+
+@pytest.fixture(autouse=True)
+def _capture_thread_baseline() -> Iterator[None]:
+    """Scope each test's thread assertions to the threads it created."""
+    _baseline[0] = set(live_dk_daemon_threads({DK_AITER_PUMP_THREAD}))
+    yield
+    _baseline[0] = set()
 
 
 def _pump_threads_alive() -> list[str]:
-    """Names of any live pump threads (should be empty after teardown)."""
-    return [t.name for t in threading.enumerate() if t.name == _THREAD_NAME]
+    """Names of pump threads *this test* created that are still alive."""
+    return [
+        t.name
+        for t in live_dk_daemon_threads({DK_AITER_PUMP_THREAD})
+        if t not in _baseline[0]
+    ]
 
 
 async def test_happy_path_drains_all_items_in_order() -> None:

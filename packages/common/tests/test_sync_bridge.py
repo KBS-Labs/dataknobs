@@ -14,16 +14,43 @@ from __future__ import annotations
 import asyncio
 import threading
 import traceback
+from collections.abc import Iterator
 
 import pytest
 
 from dataknobs_common import SyncLoopBridge, run_coro_sync
-from dataknobs_common.sync_bridge import _THREAD_NAME
+from dataknobs_common.testing import (
+    DK_SYNC_BRIDGE_THREAD,
+    live_dk_daemon_threads,
+)
+
+# Threads alive when the current test started. Everything below is measured
+# against this rather than against zero.
+_baseline: list[set[threading.Thread]] = [set()]
+
+
+@pytest.fixture(autouse=True)
+def _capture_thread_baseline() -> Iterator[None]:
+    """Scope each test's thread assertions to the threads it created.
+
+    These assertions used to compare against an absolute zero, which made
+    them a report on the *whole process*: a bridge leaked by any other test
+    in a multi-package run turned them red, naming this file as the culprit
+    for someone else's defect. That is precisely how a wizard FSM leak in
+    another package surfaced here as nine failures.
+    """
+    _baseline[0] = set(live_dk_daemon_threads({DK_SYNC_BRIDGE_THREAD}))
+    yield
+    _baseline[0] = set()
 
 
 def _bridge_threads_alive() -> list[str]:
-    """Names of any live bridge loop threads (empty after teardown)."""
-    return [t.name for t in threading.enumerate() if t.name == _THREAD_NAME]
+    """Names of bridge threads *this test* created that are still alive."""
+    return [
+        t.name
+        for t in live_dk_daemon_threads({DK_SYNC_BRIDGE_THREAD})
+        if t not in _baseline[0]
+    ]
 
 
 def test_run_returns_coroutine_value() -> None:

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WizardFSM` lifecycle** — `close()`, `aclose()`, `__enter__`/`__exit__`,
+  and `__aenter__`/`__aexit__`, mirroring the wrapped `AdvancedFSM`
+  one for one. A synchronously-stepped wizard can now be released:
+
+  ```python
+  with WizardConfigLoader().load_from_dict(config) as fsm:
+      fsm.step({"name": "Alice"})
+  ```
+
+  Both close forms are idempotent and **non-terminal** — a closed FSM
+  stays usable and a later `step()` lazily rebuilds its bridge — so an
+  unconditional teardown is safe without tracking whether the FSM was ever
+  stepped. Prefer `aclose()` from async code: it awaits resource cleanup
+  the synchronous form skips.
+- **`WizardFSM.register_subflow(..., owns=True)`** — closing a wizard
+  cascades to the subflows it owns, error-isolated per child so one
+  failing subflow cannot orphan the siblings registered after it. Every
+  loader-built subflow is parent-owned, which covers the
+  configuration-driven case entirely. Pass `owns=False` to register a
+  subflow whose lifecycle belongs to its caller; re-registering a name
+  replaces both the subflow and its ownership.
 - **`dataknobs_bots.behavior_packs`** — the bot-flavored vocabulary for
   `dataknobs_common.packs`. `BehaviorPackSpec` is a `PackSpec` subclass
   naming five optional fields and the rule each composes under:
@@ -185,6 +206,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value for it — a consumer schema may name a registry a newer DK supplies.
 
 ### Fixed
+
+- **A synchronously-stepped wizard leaked a daemon thread with no way to
+  release it.** `WizardFSM` wraps an `AdvancedFSM`, which allocates a
+  process-lifetime event-loop thread on first synchronous `step()`, but the
+  wrapper exposed none of the six lifecycle members its wrapped object
+  provides — so nothing, including `DynaBot.close()`, could reach it. The
+  leak is silent by construction: the threads are daemons, the FSM behaves
+  correctly, and nothing raises. A full test run accumulated 32 of them,
+  noticed only because it made an *unrelated* package's teardown
+  assertions fail depending on test ordering. `WizardReasoning.close()`
+  now releases the FSM, and `DynaBot.close()` reaches it end to end.
+
+  Ownership is explicit and defaults to **not owned**. The FSM is a
+  *required* constructor parameter, so the common shape is a caller
+  handing over an FSM it built and may still be stepping; closing that
+  would be a use-after-close at every direct-construction site. Only
+  `from_config`, which builds the FSM itself, takes ownership. The two
+  errors are not symmetric — the default fails toward the pre-existing
+  leak rather than toward tearing down a live FSM.
 
 - **Cost tracking recorded `$0.00` for every paid provider.** Usage was keyed
   on the provider *class* name (`"OpenAIProvider"`), which matches no entry in

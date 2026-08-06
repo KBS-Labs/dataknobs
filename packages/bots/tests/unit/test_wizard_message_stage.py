@@ -23,7 +23,6 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
-from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
@@ -229,7 +228,7 @@ def conditional_message_config() -> dict[str, Any]:
 class TestCanAutoAdvanceMessageStage:
     """Tests that _can_auto_advance correctly handles schema-less stages."""
 
-    def test_message_stage_with_explicit_auto_advance(self) -> None:
+    def test_message_stage_with_explicit_auto_advance(self, wizard_loader) -> None:
         """A schema-less stage with auto_advance: true CAN auto-advance."""
         config = {
             "name": "test",
@@ -254,8 +253,7 @@ class TestCanAutoAdvanceMessageStage:
                 {"name": "end", "is_end": True},
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
 
         reasoning = WizardReasoning(wizard_fsm=fsm)
 
@@ -268,7 +266,7 @@ class TestCanAutoAdvanceMessageStage:
 
         assert reasoning._can_auto_advance(state, stage) is True
 
-    def test_schema_less_stage_without_auto_advance_cannot_advance(self) -> None:
+    def test_schema_less_stage_without_auto_advance_cannot_advance(self, wizard_loader) -> None:
         """A schema-less stage WITHOUT auto_advance: true cannot auto-advance."""
         config = {
             "name": "test",
@@ -283,8 +281,7 @@ class TestCanAutoAdvanceMessageStage:
                 {"name": "end", "is_end": True},
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
 
         reasoning = WizardReasoning(wizard_fsm=fsm)
         state = WizardState(current_stage="msg", data={})
@@ -292,7 +289,7 @@ class TestCanAutoAdvanceMessageStage:
 
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_global_auto_advance_does_not_affect_schema_less_stages(self) -> None:
+    def test_global_auto_advance_does_not_affect_schema_less_stages(self, wizard_loader) -> None:
         """Global auto_advance_filled_stages alone does NOT enable schema-less advance.
 
         The global setting means "skip stages whose required fields are filled."
@@ -314,8 +311,7 @@ class TestCanAutoAdvanceMessageStage:
                 {"name": "end", "is_end": True},
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
 
         reasoning = WizardReasoning(
             wizard_fsm=fsm, auto_advance_filled_stages=True
@@ -325,7 +321,7 @@ class TestCanAutoAdvanceMessageStage:
 
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_message_stage_end_stage_cannot_auto_advance(self) -> None:
+    def test_message_stage_end_stage_cannot_auto_advance(self, wizard_loader) -> None:
         """End stages cannot auto-advance even with auto_advance: true."""
         config = {
             "name": "test",
@@ -339,8 +335,7 @@ class TestCanAutoAdvanceMessageStage:
                 },
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
 
         reasoning = WizardReasoning(wizard_fsm=fsm)
         state = WizardState(current_stage="end", data={})
@@ -364,10 +359,10 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_message_stage_auto_advances_with_template_in_response(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """After transition to a message stage, the response includes its
-        template AND the wizard lands on the next data-collection stage."""
+        template AND the wizard lands on the next data-collection stage.
+        """
         manager, provider = conversation_manager_pair
 
         config: dict[str, Any] = {
@@ -415,8 +410,7 @@ class TestMessageStageGenerate:
                 },
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(
             wizard_fsm=fsm,
             strict_validation=False,
@@ -452,8 +446,7 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_chained_message_stages(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """Two consecutive message stages both render and auto-advance."""
         manager, provider = conversation_manager_pair
 
@@ -510,8 +503,7 @@ class TestMessageStageGenerate:
                 },
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(
             wizard_fsm=fsm,
             strict_validation=False,
@@ -542,8 +534,7 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_conditional_message_stage_routes_correctly(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """Message stage evaluates conditions based on collected data."""
         manager, provider = conversation_manager_pair
 
@@ -593,8 +584,7 @@ class TestMessageStageGenerate:
                 },
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(
             wizard_fsm=fsm,
             strict_validation=False,
@@ -624,10 +614,10 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_message_stage_records_transition(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """Auto-advance through a message stage records transition with
-        trigger='auto_advance'."""
+        trigger='auto_advance'.
+        """
         manager, provider = conversation_manager_pair
 
         config: dict[str, Any] = {
@@ -675,8 +665,7 @@ class TestMessageStageGenerate:
                 },
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
+        fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(
             wizard_fsm=fsm,
             strict_validation=False,
@@ -727,13 +716,12 @@ class TestMessageStageGreet:
     async def test_greet_auto_advances_through_message_start_stage(
         self,
         greeting_message_config: dict[str, Any],
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """greet() on a message start stage renders its template and
-        auto-advances to the next stage."""
+        auto-advances to the next stage.
+        """
         manager, _provider = conversation_manager_pair
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(greeting_message_config)
+        fsm = wizard_loader.load_from_dict(greeting_message_config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         response = await reasoning.greet(manager, llm=None)
@@ -751,13 +739,12 @@ class TestMessageStageGreet:
     async def test_greet_message_stage_includes_next_stage_prompt(
         self,
         greeting_message_config: dict[str, Any],
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
         """greet() renders both the message stage template and the
-        landing stage's template (if any)."""
+        landing stage's template (if any).
+        """
         manager, _provider = conversation_manager_pair
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(greeting_message_config)
+        fsm = wizard_loader.load_from_dict(greeting_message_config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         response = await reasoning.greet(manager, llm=None)

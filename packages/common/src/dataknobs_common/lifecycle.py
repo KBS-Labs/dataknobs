@@ -16,15 +16,32 @@ The settled idiom across dataknobs records that distinction in an
         await self._db.close()
 
 These helpers encapsulate that guard in one place so the dozen-plus
-sites carrying it stay consistent. Both an async and a sync variant are
-provided because some collaborators (a sync database connection) expose
-a synchronous ``close()``.
+sites carrying it stay consistent. Three variants are provided, and
+which one to reach for is decided by the *collaborator's* interface, not
+by the caller's:
 
-Error isolation is offered as an opt-in: at a teardown *cascade* (a bot
-closing knowledge base, then memory, then storage) one failing subsystem
-must not abort the others. Pass ``on_error`` to catch the exception and
-hand it to a callback (typically a logger) instead of letting it
-propagate.
+============================  ==========================
+The collaborator exposes      Use
+============================  ==========================
+a synchronous ``close()``     :func:`close_if_owned_sync`
+an ``async def close()``      :func:`close_if_owned`
+both ``close()`` and          :func:`aclose_if_owned`
+``aclose()``, closed from
+async
+============================  ==========================
+
+The third row is the one worth stating explicitly: for a collaborator
+that mirrors the sync/async lifecycle pair (a synchronous ``close()``
+alongside an ``aclose()`` that awaits coroutine cleanup the sync form
+skips), neither sibling is correct. :func:`close_if_owned` would
+``await`` a ``None`` return, and :func:`close_if_owned_sync` would call
+the lossy half.
+
+Error isolation is offered as an opt-in on all three: at a teardown
+*cascade* (a bot closing knowledge base, then memory, then storage) one
+failing subsystem must not abort the others. Pass ``on_error`` to catch
+the exception and hand it to a callback (typically a logger) instead of
+letting it propagate.
 """
 
 from __future__ import annotations
@@ -36,6 +53,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "aclose_if_owned",
     "close_if_owned",
     "close_if_owned_sync",
 ]
@@ -108,5 +126,53 @@ def close_if_owned_sync(
         else:
             try:
                 resource.close()
+            except Exception as exc:  # error isolation is the contract
+                on_error(exc)
+
+
+async def aclose_if_owned(
+    resource: Any,
+    owns: bool,
+    *,
+    on_error: Callable[[Exception], None] | None = None,
+) -> None:
+    """Close ``resource`` via ``aclose()`` iff this holder owns it (async).
+
+    The counterpart of :func:`close_if_owned` for collaborators that
+    mirror the sync/async lifecycle pair — a synchronous ``close()``
+    alongside an ``aclose()``. For those, neither sibling is correct:
+    :func:`close_if_owned` would ``await`` what ``close()`` returns
+    (``None``, raising ``TypeError``), and :func:`close_if_owned_sync`
+    would call ``close()``, skipping the coroutine cleanup ``aclose()``
+    exists to perform.
+
+    The ownership guard, the ``on_error`` contract, and the set of
+    exceptions isolated are identical to :func:`close_if_owned`; only the
+    probed method differs. That makes the ``hasattr`` check meaningful
+    rather than decorative here — it is what discriminates a dual-method
+    collaborator from a plain one.
+
+    Args:
+        resource: The collaborator to (maybe) close. May be None. Left
+            untouched when it exposes no ``aclose()``.
+        owns: Whether this holder owns ``resource``'s lifecycle. When
+            False, ``resource`` is left untouched.
+        on_error: Optional callback invoked with the exception when
+            ``aclose()`` raises. When provided, the close is
+            *error-isolated* — the ``Exception`` is caught and passed to
+            ``on_error`` rather than propagating, so one failing subsystem
+            in a teardown cascade does not abort the rest. When None (the
+            default), exceptions propagate. Only ``Exception`` subclasses
+            are isolated; ``asyncio.CancelledError`` and the other
+            ``BaseException`` subclasses (``KeyboardInterrupt``,
+            ``SystemExit``) always propagate regardless, so cancellation
+            and interpreter shutdown are never swallowed.
+    """
+    if owns and resource is not None and hasattr(resource, "aclose"):
+        if on_error is None:
+            await resource.aclose()
+        else:
+            try:
+                await resource.aclose()
             except Exception as exc:  # error isolation is the contract
                 on_error(exc)

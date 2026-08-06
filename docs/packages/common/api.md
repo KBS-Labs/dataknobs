@@ -1449,6 +1449,54 @@ class MemoryBank:
         close_if_owned_sync(self._db, self._owns_db)
 ```
 
+### `aclose_if_owned`
+
+```python
+async def aclose_if_owned(
+    resource: Any,
+    owns: bool,
+    *,
+    on_error: Callable[[BaseException], None] | None = None,
+) -> None
+```
+
+For a collaborator that mirrors the sync/async lifecycle pair — a
+*synchronous* `close()` alongside an `aclose()` that awaits coroutine
+cleanup the sync form skips. Same ownership guard and same optional error
+isolation as its siblings; only the probed method differs, so the
+`hasattr` check is what discriminates a dual-method collaborator from a
+plain one.
+
+```python
+from dataknobs_common import aclose_if_owned
+
+class WizardReasoning:
+    async def close(self) -> None:
+        # WizardFSM mirrors AdvancedFSM's sync close() / async aclose();
+        # only the latter awaits the resource manager's cleanup.
+        await aclose_if_owned(
+            self._fsm,
+            self._owns_fsm,
+            on_error=lambda exc: logger.exception("Error closing FSM: %s", exc),
+        )
+```
+
+### Choosing between the three
+
+The collaborator's interface decides, not the caller's:
+
+| The collaborator exposes | Use |
+|---|---|
+| a synchronous `close()` | `close_if_owned_sync` |
+| an `async def close()` | `close_if_owned` |
+| both `close()` and `aclose()`, closed from async | `aclose_if_owned` |
+
+The third row is the one worth stating explicitly, because for that shape
+neither sibling is correct rather than merely suboptimal: `close_if_owned`
+would `await` a synchronous `close()`'s `None` return and raise
+`TypeError`, while `close_if_owned_sync` would succeed silently through
+the lossy half, skipping the cleanup `aclose()` exists to perform.
+
 ---
 
 ## Package Information

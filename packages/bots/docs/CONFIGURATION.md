@@ -1886,6 +1886,39 @@ reasoning:
 - Branching conversational flows
 - Complex wizards with conditional logic
 
+**Wizard FSM Lifecycle:**
+
+A `WizardFSM` driven through its **synchronous** `step()` lazily allocates
+a daemon event-loop thread, so a synchronously-stepped wizard holds an OS
+resource that outlives the call. It must be released.
+
+Through a bot, this is automatic: `DynaBot.close()` closes the reasoning
+strategy, which closes the FSM it built. Nothing extra is required.
+
+Building an FSM directly — in a script, a tool, or a test — makes you the
+owner. `with` / `async with` is the form that cannot be forgotten:
+
+```python
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+with WizardConfigLoader().load_from_dict(wizard_config) as fsm:
+    fsm.step({"name": "Alice"})
+# bridge thread released here, along with every owned subflow's
+```
+
+`close()` and `aclose()` are also available directly. Both are idempotent
+and **non-terminal** — a closed FSM stays usable, and a later `step()`
+lazily rebuilds the bridge — so an unconditional teardown is safe without
+tracking whether the FSM was ever stepped. Prefer `aclose()` from async
+code: it awaits resource cleanup that the synchronous `close()` skips.
+
+Ownership is explicit and defaults to *not owned*. `WizardReasoning`
+closes the FSM only when it built one itself (via `from_config`); an FSM
+handed to its constructor belongs to the caller, who may still be stepping
+it, and is left open. See
+[Wizard Subflows](wizard-subflows.md#subflow-lifecycle-and-ownership) for
+how the same rule applies one level down.
+
 **Wizard Configuration File Format:**
 
 ```yaml

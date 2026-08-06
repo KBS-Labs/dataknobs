@@ -24,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.lifecycle import aclose_if_owned
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
@@ -304,6 +305,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         prompt_resolver: PromptResolver | None = None,
         *,
         config: WizardReasoningConfig | None = None,
+        _owns_fsm: bool = False,
         _forwarded_components: Mapping[str, Any] | None = None,
         **config_overrides: Any,
     ):
@@ -457,6 +459,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 pre-built-FSM path (the 174 existing call sites), where a thin
                 inert envelope is synthesized instead (see
                 :data:`_INJECTED_FSM_SENTINEL`).
+            _owns_fsm: Whether this strategy owns ``wizard_fsm``'s
+                lifecycle, and therefore closes it in :meth:`close`.
+                Default ``False``, because ``wizard_fsm`` is a required
+                parameter: the direct-ctor path receives an FSM its caller
+                built and may still be stepping, so closing it would be a
+                use-after-close. Only :meth:`from_config`, which builds the
+                FSM itself via :class:`WizardConfigLoader`, passes ``True``.
+                Private because that is the only legitimate setter today.
             _forwarded_components: Opaque collaborator mapping (typically
                 captured by :meth:`from_config` from its own ``**kwargs``)
                 routed into the mixin's ``self.components`` channel alongside
@@ -515,6 +525,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             components_for_mixin.update(_forwarded_components)
         super().__init__(config, _components=components_for_mixin)
         self._fsm = wizard_fsm
+        # Ownership of the FSM's lifecycle. Default False: ``wizard_fsm`` is
+        # a *required* parameter, so the overwhelmingly common shape is a
+        # caller handing over an FSM it built and still holds. Only
+        # ``from_config`` — which builds the FSM itself via the loader —
+        # sets this True. Both errors are possible and they are not
+        # symmetric: closing a caller's live FSM is a use-after-close, while
+        # failing to close one we built leaks a thread. Fail toward the
+        # leak, which is the pre-existing behaviour.
+        self._owns_fsm = _owns_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
         self._hooks = hooks
@@ -1571,10 +1590,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Cancels any in-flight asyncio tasks stored in ephemeral keys (for
         **every** resident conversation), closes the SchemaExtractor's LLM
-        provider if present (releasing HTTP connections), and closes every
+        provider if present (releasing HTTP connections), closes the wizard
+        FSM **iff this strategy built it** (releasing the daemon event-loop
+        thread a synchronously-stepped FSM allocates), and closes every
         resident conversation's memory bank database connections and artifact
         catalog. Should be called when the reasoning strategy is no longer
         needed (typically via DynaBot.close()).
+
+        An FSM handed to the constructor is *caller-owned* and left open —
+        see ``_owns_fsm``. Every subsystem's teardown is error-isolated, so
+        one failure cannot orphan the resources released after it.
 
         Banks / artifact / catalog and ``_last_wizard_state`` are scoped per
         conversation, so this tears down all conversations still resident —
@@ -1607,6 +1632,21 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 logger.debug("Closed WizardReasoning extractor")
             except Exception:
                 logger.exception("Error closing WizardReasoning extractor")
+
+        # Release the wizard FSM's daemon event-loop thread — but only if
+        # this strategy built it (``from_config``). An injected FSM belongs
+        # to its caller, who may still be stepping it.
+        #
+        # ``aclose_if_owned``, not ``close_if_owned``: WizardFSM mirrors
+        # AdvancedFSM's sync ``close()`` / async ``aclose()`` pair, and only
+        # the latter awaits the resource manager's coroutine cleanup.
+        await aclose_if_owned(
+            self._fsm,
+            self._owns_fsm,
+            on_error=lambda exc: logger.exception(
+                "Error closing WizardReasoning wizard FSM: %s", exc
+            ),
+        )
 
         # Close every resident conversation's banks + catalog. Each slot's
         # teardown is error-isolated (per :meth:`_close_conversation_slot`), so
@@ -1996,6 +2036,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # (``wizard_fsm``) is filtered at forwarding time.
             prompt_resolver=kwargs.get("prompt_resolver"),
             config=typed,
+            # This path built the FSM above (via WizardConfigLoader), so
+            # this strategy owns it and close() releases it. The direct
+            # ctor's default of False leaves an injected FSM to its caller.
+            _owns_fsm=True,
             # Opaque pass-through of from_config's kwargs into the
             # mixin's _components channel. self.components then exposes
             # the union (plus wizard_fsm); forwardable_components()

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`aclose_if_owned`** (`dataknobs_common.lifecycle`, re-exported from the
+  top-level namespace) — the third member of the owned-vs-injected close
+  guard family, for a collaborator that mirrors the sync/async lifecycle
+  pair: a synchronous `close()` alongside an `aclose()` that awaits
+  coroutine cleanup the sync form skips. For that shape neither existing
+  sibling is correct rather than merely suboptimal — `close_if_owned`
+  would `await` a synchronous `close()`'s `None` return and raise
+  `TypeError`, while `close_if_owned_sync` would succeed *silently*
+  through the lossy half. The ownership guard, the `on_error` isolation
+  contract, and the set of exceptions never swallowed (`CancelledError`,
+  `KeyboardInterrupt`, `SystemExit`) are identical to its siblings; only
+  the probed method differs, which is what makes the `hasattr` check the
+  discriminator between a dual-method collaborator and a plain one. The
+  selection rule is now stated once in the module docstring and in the API
+  reference: sync `close()` → `close_if_owned_sync`; async `close()` →
+  `close_if_owned`; both, closed from async → `aclose_if_owned`.
+  `close_if_owned` is deliberately **not** taught to prefer `aclose` —
+  that would change behavior at every shipped call site to serve a case
+  none of them has.
+- **`assert_no_leaked_bridge_threads`** (`dataknobs_common.testing`), with
+  `live_dk_daemon_threads`, `DK_DAEMON_THREAD_NAMES`,
+  `DK_SYNC_BRIDGE_THREAD`, and `DK_AITER_PUMP_THREAD` — a context manager
+  that fails when the block leaks a dataknobs daemon thread (a
+  `SyncLoopBridge` event loop or an `aiter_sync_in_thread` producer). It
+  measures a **delta**, so a thread leaked by an unrelated earlier test
+  cannot fail a later, well-behaved one and name the wrong culprit. The
+  covered names are read from the modules that create them, so a rename
+  cannot leave the guard watching for a thread that no longer exists. It
+  covers both names deliberately: a bridge-only helper would have
+  guaranteed a fresh copy of the idiom the first time anyone needed the
+  pump, which is how three near-identical copies came to exist across
+  packages.
 - **`dataknobs_common.packs`** — ordered, precedence-resolved composition of
   named declaration bundles. A *pack* is a named, frozen, partial
   declaration; a *binding* selects packs for one deployment and may tune

@@ -75,6 +75,7 @@ from dataknobs_common.sync_bridge import (
     run_coro_sync,
 )
 from dataknobs_common.lifecycle import (
+    aclose_if_owned,
     close_if_owned,
     close_if_owned_sync,
 )
@@ -310,6 +311,7 @@ __all__ = [
     "SyncLoopBridge",
     "run_coro_sync",
     # Lifecycle
+    "aclose_if_owned",
     "close_if_owned",
     "close_if_owned_sync",
     # Bounded cache
