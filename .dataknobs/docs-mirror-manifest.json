@@ -1,12 +1,13 @@
 {
-  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. A paired entry may point at a subdirectory on either side — a package source under guides/ (e.g. a transclusion of guides/events.md), or a site page under guides/ (where every bots guide lives); such a file is not a top-level doc and is exempt from the top-level completeness set, but its existence and the pair's invariant are still enforced by the per-class check. See the guard's module docstring for the full model.",
+  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every *.md in scope for a package MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. Scope is per-package: by default only TOP-LEVEL *.md must be classified, and a paired entry may still point at a subdirectory on either side (a package source under guides/, or a site page under guides/ where every bots guide lives) \u2014 such a file is exempt from the completeness set but its existence and the pair's invariant are still enforced by the per-class check. Set \"recursive\": true on a package to require every *.md at any depth to be classified, keyed by path relative to the tree root. Opting in demands classifying everything already nested in that package, so it is done per package as each is reconciled. See the guard's module docstring for the full model.",
   "_schema": {
     "symlink": "Site page is a symlink to the package source; drift is structurally impossible. The guard verifies the site path is a symlink resolving to the package source. Used when the source has no intra-doc links that need site-form rewriting. Each entry: {package, site}.",
     "transclude": "Site page is a pymdownx `--8<--` include of the package source; drift is structurally impossible. The guard only verifies the include still points at the source. Each entry: {package, site}.",
-    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence — make the surrounding line unique or drop the exception.",
+    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence \u2014 make the surrounding line unique or drop the exception.",
     "diverge": "Intentional content divergence (structural landing page, faithful condensation, independent elaboration). Recorded, not content-checked; both files must exist. Each entry: {package, site, reason}.",
     "package_only": "Package doc with no site mirror. Listed by package filename.",
-    "site_only": "Site-native page with no package source. Listed by site filename."
+    "site_only": "Site-native page with no package source. Listed by site filename.",
+    "recursive": "Per-package boolean (default false). false: only top-level *.md must be classified, so a new doc added under a subdirectory passes unclassified. true: every *.md at any depth must be classified, keyed by its path relative to the tree root. Opted in: common, config, structures, utils. Not yet opted in (nested docs remain unenforced; classifying them is tracked follow-up work): bots, data, fsm, llm, xization."
   },
   "packages": {
     "common": {
@@ -60,10 +61,25 @@
       ],
       "site_only": [
         "api.md",
-        "config-loading.md",
-        "expressions.md",
         "index.md"
-      ]
+      ],
+      "mirror": [
+        {
+          "package": "guides/expressions.md",
+          "site": "expressions.md"
+        }
+      ],
+      "diverge": [
+        {
+          "package": "guides/config-loading.md",
+          "site": "config-loading.md",
+          "reason": "Independently written: the package guide leads with the helper API for library authors, the site page with the file-format chain for config authors. Reconciling them is its own task."
+        }
+      ],
+      "package_only": [
+        "design/common-components-migration-summary.md"
+      ],
+      "recursive": true
     },
     "config": {
       "package_dir": "packages/config/docs",
@@ -93,7 +109,8 @@
         "factory-registration.md",
         "index.md",
         "inheritance.md"
-      ]
+      ],
+      "recursive": true
     },
     "data": {
       "package_dir": "packages/data/docs",
@@ -260,7 +277,6 @@
         "CONFIGURATION.md",
         "CONFIG_TOOLKIT.md",
         "CONTEXT_AWARE_WIZARDS.md",
-        "MIDDLEWARE.md",
         "MIGRATION.md",
         "MULTI_TENANT.md",
         "PROMPT_CUSTOMIZATION.md",
@@ -278,6 +294,13 @@
       "site_only": [
         "index.md",
         "quickstart.md"
+      ],
+      "diverge": [
+        {
+          "package": "MIDDLEWARE.md",
+          "site": "guides/middleware.md",
+          "reason": "Long-drifted hand-authored copies (~15 hunks) that nonetheless document the same subsystem and are edited together. Recorded as a pair so both files are existence-checked and the relationship is visible; reconciling the content is its own task."
+        }
       ]
     },
     "fsm": {
@@ -305,7 +328,8 @@
         "index.md",
         "record-store.md",
         "tree.md"
-      ]
+      ],
+      "recursive": true
     },
     "utils": {
       "_note": "No package-local docs tree (packages/utils/docs does not exist); every site page is site-native. Listed so new site docs here still force a classification decision.",
@@ -319,7 +343,8 @@
         "json-utils.md",
         "llm-utils.md",
         "sql-utils.md"
-      ]
+      ],
+      "recursive": true
     },
     "xization": {
       "package_dir": "packages/xization/docs",

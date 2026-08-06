@@ -52,10 +52,27 @@ When updating documentation for any package:
    ```bash
    python3 bin/docs-mirror-check.py
    ```
-   Every top-level `*.md` in both trees must be classified in
-   `.dataknobs/docs-mirror-manifest.json`, so a **new doc fails this guard
-   until you classify it**. `mkdocs build --strict` will NOT catch that —
-   run the guard too (or `bin/run-quality-checks.sh`, which invokes it).
+   Docs in scope must be classified in
+   `.dataknobs/docs-mirror-manifest.json`, and an unclassified one fails
+   the guard. `mkdocs build --strict` will NOT catch that — run the guard
+   too (or `bin/run-quality-checks.sh`, which invokes it).
+
+   **Scope is per package, and not yet complete everywhere.** A package
+   with `"recursive": true` requires every `*.md` at any depth to be
+   classified, so a new doc there fails until you do. A package without it
+   requires only *top-level* `*.md` — a new doc under a subdirectory (every
+   bots guide, for instance) passes unclassified and gets no verification
+   at all.
+
+   | Scope | Packages |
+   |---|---|
+   | `recursive: true` — a new doc at any depth is caught | common, config, structures, utils |
+   | top-level only — a new nested doc is **not** caught | bots, data, fsm, llm, xization |
+
+   So classify a new nested doc in one of the right-hand packages even
+   though nothing forces you to. Opting a package in means classifying
+   everything already nested there, which is why it is being done one
+   package at a time.
 
    Pick the class by how the two copies are kept in agreement:
 
