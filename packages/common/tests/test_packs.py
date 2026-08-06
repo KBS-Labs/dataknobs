@@ -10,7 +10,9 @@ ordering, warning, and conflict paths are covered against a single shape.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import pickle
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -19,6 +21,7 @@ import pytest
 
 from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_common.packs import (
+    UNSET,
     MergeKind,
     PackRegistry,
     PackResolution,
@@ -260,6 +263,49 @@ def test_binding_may_reassert_but_not_change_a_unanimous_field(
 def test_binding_overrides_do_not_emit_warnings(registry: PackRegistry[DemoPack]) -> None:
     """A deployment overriding its own pack is intentional, not a diagnostic."""
     assert registry.resolve({"base": {"limits": {"rps": 1}}}).warnings == ()
+
+
+def test_binding_can_reset_a_field_to_its_default() -> None:
+    """A binding names fields explicitly, so naming one IS the contribution.
+
+    A spec is a frozen dataclass — every field is always present, so "unset"
+    can only be inferred from the value. A binding body is a partial mapping
+    where presence is unambiguous, and discarding that in favour of the same
+    default-comparison silently ignored an explicit operator instruction.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("reset", DemoPack)
+    reg.register_pack(DemoPack(name="p", mode="strict"))
+
+    assert reg.resolve({"p": {}}).spec.mode == "strict"
+    assert reg.resolve({"p": {"mode": None}}).spec.mode is None
+
+
+def test_binding_reset_still_obeys_the_fields_declared_rule() -> None:
+    """Presence decides *participation*, not the outcome — the rule decides that.
+
+    ``FIRST_WINS`` and ``UNANIMOUS`` exist precisely to stop a later
+    contribution from changing a value, and a binding is a later
+    contribution like any other.
+    """
+    reg: PackRegistry[DemoPack] = PackRegistry("reset_rules", DemoPack)
+    reg.register_pack(DemoPack(name="p", pinned="held", tier="std"))
+
+    # FIRST_WINS: the pack's value came first and keeps winning.
+    assert reg.resolve({"p": {"pinned": None}}).spec.pinned == "held"
+
+    # UNANIMOUS: clearing is a disagreement, which is unsatisfiable.
+    with pytest.raises(PackResolutionError) as excinfo:
+        reg.resolve({"p": {"tier": None}})
+    assert excinfo.value.reason == "field_conflict"
+
+
+def test_a_pack_leaving_a_field_at_its_default_still_does_not_participate() -> None:
+    """The spec-side rule is unchanged: a pack cannot clobber by omission."""
+    reg: PackRegistry[DemoPack] = PackRegistry("omission", DemoPack)
+    reg.register_pack(DemoPack(name="low", priority=0, mode="strict"))
+    reg.register_pack(DemoPack(name="high", priority=10))  # mode left at default
+
+    assert reg.resolve({"low": {}, "high": {}}).spec.mode == "strict"
 
 
 # --------------------------------------------------------------------------
@@ -631,3 +677,65 @@ def test_compose_packs_of_nothing_is_the_default_spec() -> None:
 
     assert composed == DemoPack(name="composed")
     assert warnings == ()
+
+
+# --------------------------------------------------------------------------
+# 21. the UNSET sentinel
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SentinelPack(PackSpec):
+    """A spec whose scalar fields use ``UNSET`` rather than ``None``.
+
+    Declaring the sentinel as the default is what makes ``None`` an ordinary
+    participating value: participation compares against *the declared
+    default*, so with ``UNSET`` there the domain's own values — ``None``
+    included — all differ from it.
+    """
+
+    mode: str | None = UNSET
+    tier: str | None = UNSET
+
+    _COMPOSITION = MappingProxyType(
+        {"mode": MergeKind.LAST_WINS, "tier": MergeKind.UNANIMOUS}
+    )
+
+
+def test_unset_default_lets_a_higher_pack_contribute_none() -> None:
+    """The recipe the guide documents, exercised end to end."""
+    reg: PackRegistry[SentinelPack] = PackRegistry("sentinel", SentinelPack)
+    reg.register_pack(SentinelPack(name="base", priority=0, mode="strict"))
+    reg.register_pack(SentinelPack(name="off", priority=10, mode=None))
+    reg.register_pack(SentinelPack(name="quiet", priority=10))
+
+    # An explicit None now outranks a lower pack's value...
+    assert reg.resolve({"base": {}, "off": {}}).spec.mode is None
+    # ...while genuine silence still does not.
+    assert reg.resolve({"base": {}, "quiet": {}}).spec.mode == "strict"
+
+
+def test_unset_survives_a_field_nothing_ever_set() -> None:
+    """The cost of the recipe: untouched fields read back as ``UNSET``."""
+    reg: PackRegistry[SentinelPack] = PackRegistry("sentinel_gap", SentinelPack)
+    reg.register_pack(SentinelPack(name="only", mode="strict"))
+
+    assert reg.resolve({"only": {}}).spec.tier is UNSET
+
+
+def test_unset_is_falsy_so_or_default_idioms_work() -> None:
+    assert not UNSET
+    assert (UNSET or "fallback") == "fallback"
+    assert repr(UNSET) == "UNSET"
+
+
+def test_unset_is_identity_stable_across_copy_and_pickle() -> None:
+    """Identity is the whole contract — ``is UNSET`` must survive round-trips."""
+    assert copy.copy(UNSET) is UNSET
+    assert copy.deepcopy(UNSET) is UNSET
+    assert pickle.loads(pickle.dumps(UNSET)) is UNSET
+    assert dataclasses.replace(SentinelPack(name="s")).tier is UNSET
+
+
+def test_unset_spec_round_trips_through_dict() -> None:
+    assert_structured_config_roundtrip(SentinelPack(name="s", mode="strict"))

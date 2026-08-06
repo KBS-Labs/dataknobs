@@ -135,6 +135,7 @@ from dataknobs_common.locks import (
 )
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.packs import (
+    UNSET,
     CompositionRule,
     MergeKind,
     PackRegistry,
@@ -348,6 +349,7 @@ __all__ = [
     # Metadata helpers
     "enforce_immutable_keys",
     # Pack composition
+    "UNSET",
     "MergeKind",
     "Reducer",
     "CompositionRule",

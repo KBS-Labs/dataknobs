@@ -133,10 +133,66 @@ This is what makes `LAST_WINS` and `UNANIMOUS` behave: a pack that does not
 mention a field must not clobber a pack that does. `CONCAT` and `MERGE` are
 unaffected — an empty contribution is already a no-op.
 
-The practical consequence: **you cannot use a pack to reset a field to its
-default.** A pack declaring `chunker=None` (where `None` is the default)
-contributes nothing. If "explicitly off" must be expressible, make it a
-distinct value (`chunker="none"`) rather than the default.
+The rule exists because a spec is a frozen dataclass: every field is always
+present, so "did not mention this" is not recoverable from the object and has
+to be inferred from the value. The consequence is that **a pack cannot reset
+a field to its default** — a pack declaring `chunker=None`, where `None` is
+the default, contributes nothing.
+
+Bindings are the exception, and deliberately so. A binding body is a partial
+mapping you write by hand, so naming a field *is* the contribution:
+
+```yaml
+packs:
+  ingest_fast:
+    chunker: null      # explicitly clears it, even though null is the default
+```
+
+Participation is all that presence decides — the field's declared rule still
+governs the outcome. A binding cannot take back a `FIRST_WINS` field its own
+pack already pinned, and disagreeing with a `UNANIMOUS` field raises
+`field_conflict` rather than clearing it.
+
+#### Making "explicitly the default" expressible in a pack
+
+When a *pack* needs to contribute a value that happens to be the field's
+default, declare `UNSET` as the default instead. Participation compares
+against the declared default, so moving the "absent" marker off the domain's
+own value space makes `None` an ordinary value:
+
+```python
+from dataknobs_common import UNSET
+
+@dataclass(frozen=True)
+class IngestPack(PackSpec):
+    chunker: str | None = UNSET
+
+    _COMPOSITION = MappingProxyType({"chunker": MergeKind.LAST_WINS})
+```
+
+```python
+registry.register_pack(IngestPack(name="base", priority=0, chunker="fast"))
+registry.register_pack(IngestPack(name="off", priority=10, chunker=None))
+registry.register_pack(IngestPack(name="quiet", priority=10))
+
+registry.resolve({"base": {}, "off": {}}).spec.chunker      # None  — explicit
+registry.resolve({"base": {}, "quiet": {}}).spec.chunker    # 'fast' — silence
+registry.resolve({"quiet": {}}).spec.chunker                # UNSET — untouched
+```
+
+The cost is that last line: a field no pack ever set reads back as `UNSET`
+rather than a natural empty value, so consumers handle one extra case at the
+point of use. `UNSET` is falsy, so `spec.chunker or fallback` still reads the
+way it would with `None`.
+
+Reach for this only on `LAST_WINS` / `FIRST_WINS` / `UNANIMOUS`, where a
+default-valued contribution is meaningful. It buys nothing on `CONCAT` /
+`CONCAT_UNIQUE` / `MERGE`, where an empty contribution is already a no-op.
+Test it with `is UNSET` — identity is the contract, and it survives copy,
+deepcopy, and pickle. It is an object rather than a string, so it does not
+survive a JSON round-trip; a spec that must serialize to JSON should keep a
+natural default and encode "explicitly off" as a domain value
+(`chunker="none"`).
 
 ### Value shapes are checked
 
@@ -349,6 +405,7 @@ registry is a multi-tenant hazard. Construct one and own it.
 |---|---|
 | `PackSpec` | Frozen base a consumer subclasses to name its fields |
 | `MergeKind` | The six built-in per-field composition rules |
+| `UNSET` | Sentinel default letting a pack contribute a default-valued field |
 | `Reducer` | `(acc, next) -> value` — the custom-rule escape hatch |
 | `CompositionRule` | `MergeKind \| Reducer` — what `_COMPOSITION` values may be |
 | `PackRegistry` | Registry of specs keyed by `spec.name`, plus `resolve()` |

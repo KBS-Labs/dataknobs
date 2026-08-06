@@ -26,9 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anywhere a `MergeKind` is, so semantics the vocabulary does not cover
   (recursive merge via `dataknobs_config.inheritance.deep_merge`, which
   matches the signature exactly) are reachable without this package
-  depending on `dataknobs-config`. A field participates in the fold only
-  when its contributed value differs from that field's declared default, so
-  a pack that does not mention a field cannot clobber one that does.
+  depending on `dataknobs-config`. A field from a *pack* participates in the
+  fold only when its contributed value differs from that field's declared
+  default, so a pack that does not mention a field cannot clobber one that
+  does — a spec is a frozen dataclass, so "did not mention this" is only
+  inferable from the value. A *binding* body is a partial mapping where
+  presence is unambiguous, so naming a field there is itself the
+  contribution, including naming one to clear it back to its default;
+  presence decides only participation, so a binding still cannot take back a
+  `FIRST_WINS` field or disagree with a `UNANIMOUS` one. Declaring the
+  exported `UNSET` sentinel as a field's default opts that field out of
+  default-comparison, which is how a *pack* contributes a value that happens
+  to be the default (at the cost of untouched fields reading back as
+  `UNSET`); it is falsy, identity-stable across copy/deepcopy/pickle, and
+  worth reaching for only on `LAST_WINS` / `FIRST_WINS` / `UNANIMOUS`.
   Failures split into two deliberately distinct families: authoring bugs (a
   field with no declared rule, a rule for a nonexistent field, a non-meta
   field with no default, a value whose shape contradicts its rule) raise
@@ -42,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fold for callers that already hold specs in the order they want. No
   module-level singleton is provided — a pack binding is a per-deployment
   decision, and a process-global registry would be a multi-tenant hazard.
-  `MergeKind`, `Reducer`, `CompositionRule`, `PackSpec`, `PackWarning`,
+  `MergeKind`, `UNSET`, `Reducer`, `CompositionRule`, `PackSpec`, `PackWarning`,
   `PackResolution`, `PackResolutionError`, `compose_packs`, and
   `PackRegistry` are exported from the top-level `dataknobs_common`
   namespace. See `docs/guides/packs.md`.

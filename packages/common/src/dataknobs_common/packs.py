@@ -115,6 +115,58 @@ SpecT = TypeVar("SpecT", bound="PackSpec")
 _BINDING_FLAGS: frozenset[str] = frozenset({"enabled", "locked"})
 
 
+class _Unset:
+    """The type of :data:`UNSET`. Not for instantiation by consumers."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+    def __bool__(self) -> bool:
+        """Falsy, so ``spec.field or fallback`` reads the way ``None`` does."""
+        return False
+
+    def __copy__(self) -> _Unset:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _Unset:
+        return self
+
+    def __reduce__(self) -> str:
+        return "UNSET"
+
+
+#: Sentinel default marking a field as *not contributed*.
+#:
+#: Participation compares a contributed value against that field's **declared
+#: default** (see :func:`_fold`), so a field defaulting to ``None`` cannot
+#: distinguish "did not mention this" from "explicitly none". Declaring
+#: ``UNSET`` as the default moves the "absent" marker off the domain's own
+#: value space, making ``None`` — and every other domain value — an ordinary
+#: participating contribution::
+#:
+#:     @dataclass(frozen=True)
+#:     class IngestPack(PackSpec):
+#:         chunker: str | None = UNSET
+#:         _COMPOSITION = MappingProxyType({"chunker": MergeKind.LAST_WINS})
+#:
+#: The cost is local and visible: a field no pack ever set reads back as
+#: ``UNSET`` rather than a natural empty value, so consumers handle one extra
+#: case at the point of use. Worth it for ``LAST_WINS`` / ``FIRST_WINS`` /
+#: ``UNANIMOUS``, where a default-valued contribution is meaningful; pointless
+#: for ``CONCAT`` / ``CONCAT_UNIQUE`` / ``MERGE``, where an empty contribution
+#: is already a no-op.
+#:
+#: Typed ``Any`` so it can stand as the default of a narrowly-typed field
+#: without a per-field ``type: ignore``. Identity is the contract — it is a
+#: module-level singleton preserved across copy, deepcopy, and pickle — so
+#: test it with ``is UNSET``. Being an object rather than a string, it does
+#: not survive a JSON round-trip; a spec that must serialize to JSON should
+#: keep a natural default and encode "explicitly off" as a domain value.
+UNSET: Any = _Unset()
+
+
 class MergeKind(Enum):
     """Built-in per-field composition rules.
 
@@ -545,19 +597,48 @@ def _reduce_field(
     )
 
 
+@dataclass(frozen=True)
+class _Contribution:
+    """One labelled set of field values entering the fold.
+
+    ``explicit`` records whether *presence of a key* is meaningful for this
+    contribution — which depends on where it came from, not on its content:
+
+    - A **spec** is a frozen dataclass, so every field is always present and
+      "did not mention it" is unrecoverable from the mapping alone. Absence
+      has to be inferred by comparing against the declared default.
+    - A **binding body** is a partial mapping written by hand, so naming a
+      field *is* the contribution. Comparing against the default there would
+      discard information the mapping actually carries, and would silently
+      ignore an operator explicitly clearing a field.
+    """
+
+    label: str
+    values: Mapping[str, Any]
+    explicit: bool = False
+
+
 def _fold(
     plan: _CompositionPlan,
-    contributions: Sequence[tuple[str, Mapping[str, Any]]],
+    contributions: Sequence[_Contribution],
 ) -> tuple[dict[str, Any], tuple[PackWarning, ...]]:
     """Left-fold labelled field contributions under the plan's declared rules.
 
-    A field **participates** only when its contributed value differs from
-    that field's declared default — "unset" is "still at the default". That
-    is what makes ``LAST_WINS``/``UNANIMOUS`` behave: a pack that does not
-    mention a field must not clobber a pack that does. (The same family as
-    the first-non-``None``-per-facet rule in the LLM profile resolver,
-    generalized from ``None`` to the declared default.) ``CONCAT``/``MERGE``
-    are unaffected — an empty contribution is already a no-op.
+    A field from a non-``explicit`` contribution **participates** only when
+    its value differs from that field's declared default — "unset" is "still
+    at the default". That is what makes ``LAST_WINS``/``UNANIMOUS`` behave: a
+    pack that does not mention a field must not clobber a pack that does.
+    (The same family as the first-non-``None``-per-facet rule in the LLM
+    profile resolver, generalized from ``None`` to the declared default.)
+    ``CONCAT``/``MERGE`` are unaffected — an empty contribution is already a
+    no-op. Declare :data:`UNSET` as a field's default to opt that field out
+    of default-comparison entirely.
+
+    An ``explicit`` contribution participates on presence alone. Note this
+    decides *participation*, not the outcome: the field's declared rule still
+    applies, so an explicit contribution cannot change a ``FIRST_WINS`` field
+    already pinned by an earlier one, and disagreeing with a ``UNANIMOUS``
+    field still raises.
 
     Shared by :func:`compose_packs` (spec after spec) and by binding
     application (spec first, binding second), so the two cannot drift.
@@ -566,12 +647,14 @@ def _fold(
     sources: dict[str, list[str]] = {}
     warnings: list[PackWarning] = []
 
-    for label, contributed in contributions:
+    for contribution in contributions:
+        label = contribution.label
+        contributed = contribution.values
         for field_name, rule in plan.rules.items():
             if field_name not in contributed:
                 continue
             value = _normalize_value(contributed[field_name])
-            if value == plan.defaults[field_name]:
+            if not contribution.explicit and value == plan.defaults[field_name]:
                 continue
             _check_value_shape(rule, field_name, value, label)
             if field_name not in values:
@@ -623,7 +706,7 @@ def compose_packs(
         PackResolutionError: On a ``UNANIMOUS`` field conflict.
     """
     plan = _composition_plan(spec_cls)
-    contributions: list[tuple[str, Mapping[str, Any]]] = []
+    contributions: list[_Contribution] = []
     for spec in specs:
         if not isinstance(spec, spec_cls):
             raise ConfigurationError(
@@ -632,7 +715,9 @@ def compose_packs(
                 context={"spec_cls": spec_cls.__qualname__, "got": type(spec).__qualname__},
             )
         contributions.append(
-            (spec.name, {name: getattr(spec, name) for name in plan.rules})
+            _Contribution(
+                spec.name, {name: getattr(spec, name) for name in plan.rules}
+            )
         )
     values, warnings = _fold(plan, contributions)
     return spec_cls(name=composed_name, **values), warnings
@@ -886,7 +971,15 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             return spec
 
         spec_values = {name: getattr(spec, name) for name in plan.rules}
-        values, _ = _fold(plan, [(spec.name, spec_values), (f"{spec.name}[binding]", overrides)])
+        values, _ = _fold(
+            plan,
+            [
+                _Contribution(spec.name, spec_values),
+                # A binding names its fields, so presence is the contribution
+                # — including naming one to clear it back to its default.
+                _Contribution(f"{spec.name}[binding]", overrides, explicit=True),
+            ],
+        )
         applied = type(spec)(name=spec.name, priority=priority, **values)
         return applied
 
