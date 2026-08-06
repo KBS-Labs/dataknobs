@@ -99,6 +99,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a `pip install 'dataknobs-bots[http]'` hint (previously an
   unqualified `pip install aiohttp`).
 
+- **`bedrock` rate family in `CostTrackingMiddleware.DEFAULT_RATES`**, priced
+  against the Anthropic models Bedrock resells. Listed separately from
+  `anthropic` rather than aliased, so the two can diverge when Bedrock's
+  pricing does and so a `cost_rates={"bedrock": …}` override cannot rewrite
+  Anthropic's. Bedrock's fully-qualified model IDs
+  (`anthropic.claude-3-5-sonnet-20241022-v2:0`) resolve through the existing
+  partial-match fallback. An `echo` entry is priced at zero — a test double
+  performs no inference, so zero is its true price.
+
+- **A WARNING when cost tracking cannot price a request.** A rate-table miss
+  recorded `$0.00` silently, which is what let the provider-key defect below
+  survive for the life of the feature. Misses now log once per
+  `(provider, model)` pair, naming whether the family or the model was
+  unknown and pointing at `CostTrackingMiddleware(cost_rates=…)`. Providers
+  with a genuine zero price (`ollama`, `echo`) do not warn. `huggingface` is
+  deliberately left unpriced rather than defaulted to zero: it covers both
+  free local inference and the paid Inference API, so a zero entry would
+  assert that paid traffic is free.
+
+- **`TurnState.provider_impl`** and a matching `provider_impl` field on the
+  `turn_complete` structured log payload, carrying the concrete provider
+  class. See the `### Changed` note below — this is the field that preserves
+  what `provider` used to contain.
+
+### Changed
+
+- **The `provider` value in turn logs and in `after_message` middleware
+  kwargs is now the canonical provider family key rather than the provider
+  class name** — `"openai"` where it previously read `"OpenAIProvider"`. A
+  dashboard, alert, or middleware keyed on the old string will stop matching.
+  The class name has not been dropped: it moved to `TurnState.provider_impl`
+  and to the `provider_impl` log field, so both identities remain available
+  and each now has a name that says which one it is.
+
+### Fixed
+
+- **Cost tracking recorded `$0.00` for every paid provider.** Usage was keyed
+  on the provider *class* name (`"OpenAIProvider"`), which matches no entry in
+  a rate table keyed by family (`"openai"`), so every lookup missed and every
+  request priced at zero. Turns are now keyed on the family, and spend is no
+  longer split across two buckets when a config author capitalizes the
+  provider name. The lookup key comes from the provider itself rather than
+  being reconstructed, so the four consumers of provider identity agree.
+
+- **Per-instance `cost_rates=` overrides permanently rewrote the class-level
+  defaults.** `DEFAULT_RATES` was shallow-copied, so each instance shared the
+  same nested per-family dicts as the class attribute, and the merge mutated
+  them in place. One middleware instance's custom rates therefore changed
+  pricing for every instance constructed afterwards in the same process —
+  including instances belonging to other tenants. The defaults are now
+  deep-copied per instance.
+
 ### Security
 
 - Put `HTTPRegistryBackend`'s aiohttp transport under a declared version

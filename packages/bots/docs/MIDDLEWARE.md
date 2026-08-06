@@ -172,9 +172,60 @@ The middleware includes current rates (as of Dec 2024) for:
 | OpenAI | gpt-4-turbo | $0.01 | $0.03 |
 | Anthropic | claude-3-5-sonnet | $0.003 | $0.015 |
 | Anthropic | claude-3-5-haiku | $0.0008 | $0.004 |
+| Bedrock | claude-3-5-sonnet | $0.003 | $0.015 |
+| Bedrock | claude-3-5-haiku | $0.0008 | $0.004 |
 | Google | gemini-1.5-pro | $0.00125 | $0.005 |
 | Google | gemini-2.0-flash | $0.0001 | $0.0004 |
 | Ollama | * | $0.00 | $0.00 |
+| Echo | * | $0.00 | $0.00 |
+
+Bedrock is listed separately from Anthropic even though it resells the same
+models, so the two can diverge when Bedrock's pricing does. Its fully-qualified
+model IDs (`anthropic.claude-3-5-sonnet-20241022-v2:0`) resolve through the
+partial-match fallback.
+
+#### The rate table is keyed by provider family
+
+The first key is the **canonical family key** — the same value
+`LLMProvider.provider_name` reports, which is what `TurnState.provider_name`
+carries into the middleware. It is lower-cased, so `provider: OpenAI` and
+`provider: openai` both price against the `openai` row.
+
+Do not key rates on a provider *class* name. `OpenAIProvider` resembles its
+family key by naming convention only, and the resemblance breaks for wrapped
+providers — a rate table keyed that way matches nothing and silently prices
+every request at $0.00.
+
+#### Unpriced traffic warns
+
+When no rate entry matches, the middleware records $0.00 **and logs a
+WARNING**, once per `(provider, model)` pair:
+
+```
+Cost tracking: no rate entry for unknown provider family
+(provider='huggingface', model='meta-llama/Llama-3-8b'); this traffic is
+being recorded at $0.00. Supply rates via
+CostTrackingMiddleware(cost_rates=...) to price it.
+```
+
+Cost tracking is opt-in, so an operator who enabled it asked for real numbers
+and needs to know when they are not. Providers with a genuine zero price
+(`ollama`, `echo`) do not warn — a real zero is not a miss.
+
+`huggingface` is deliberately **not** given a default rate: it covers both free
+local inference and the paid Inference API, so a zero entry would assert "this
+traffic is free" for the paid case. Supply rates explicitly:
+
+```python
+cost_tracker = CostTrackingMiddleware(
+    cost_rates={
+        "huggingface": {"input": 0.0006, "output": 0.0006},
+    }
+)
+```
+
+Custom rates are merged over a private copy of the defaults, so one
+middleware instance's overrides never affect another's.
 
 ---
 
@@ -222,6 +273,23 @@ INFO:dataknobs_bots.middleware.logging.ConversationLogger:User message: {'timest
 ```json
 {"timestamp": "2024-12-08T10:30:00+00:00", "event": "user_message", "client_id": "my-app", "user_id": "user-123", "conversation_id": "conv-1", "message_length": 45, "session_metadata": {}, "request_metadata": {}}
 ```
+
+**Turn completion (JSON):**
+```json
+{"timestamp": "2024-12-08T10:30:02+00:00", "event": "turn_complete", "mode": "chat", "client_id": "my-app", "user_id": "user-123", "conversation_id": "conv-1", "response_length": 25, "tokens_used": {"input": 120, "output": 45}, "provider": "openai", "provider_impl": "OpenAIProvider", "model": "gpt-4o-mini", "session_metadata": {}, "request_metadata": {}}
+```
+
+The payload carries **two** provider fields, and they answer different
+questions:
+
+| Field | Value | Meaning |
+|---|---|---|
+| `provider` | `"openai"` | Canonical family key — the stable label to group, filter, and aggregate on |
+| `provider_impl` | `"OpenAIProvider"` | Concrete class that served the call, including wrappers — diagnostic |
+
+For a wrapped provider these diverge (`provider: "openai"`,
+`provider_impl: "CachingEmbedProvider"`), which is what makes the second field
+worth having: it is the only place the wrapper is visible.
 
 ---
 

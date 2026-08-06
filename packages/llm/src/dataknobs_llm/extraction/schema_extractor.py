@@ -460,9 +460,13 @@ class SchemaExtractor:
 
         # Determine model being used
         model_used = model or getattr(self._provider, "_model", None)
-        provider_name = getattr(self._provider, "_provider_name", None) or getattr(
-            self._provider.__class__, "__name__", "unknown"
-        ).lower().replace("provider", "")
+        # ``provider_name`` is the canonical family key every LLMProvider
+        # exposes.  The fallback covers test doubles that implement only
+        # ``complete()`` and are not LLMProvider subclasses, so the attribute
+        # cannot be assumed present.
+        provider_name = getattr(self._provider, "provider_name", None) or type(
+            self._provider
+        ).__name__
 
         # Call LLM
         config_overrides = {}

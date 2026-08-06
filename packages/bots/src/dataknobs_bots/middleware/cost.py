@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -68,11 +69,26 @@ class CostTrackingMiddleware(Middleware):
             "claude-3-sonnet": {"input": 0.003, "output": 0.015},
             "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
         },
+        # Bedrock resells the Anthropic models priced above.  Spelled out
+        # separately rather than aliasing the ``anthropic`` dict so the two
+        # can diverge when Bedrock's pricing does — and so a per-instance
+        # ``cost_rates={"bedrock": ...}`` override cannot rewrite Anthropic's.
+        "bedrock": {
+            "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
+            "claude-3-5-haiku": {"input": 0.0008, "output": 0.004},
+            "claude-3-opus": {"input": 0.015, "output": 0.075},
+            "claude-3-sonnet": {"input": 0.003, "output": 0.015},
+            "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
+        },
         "google": {
             "gemini-1.5-pro": {"input": 0.00125, "output": 0.005},
             "gemini-1.5-flash": {"input": 0.000075, "output": 0.0003},
             "gemini-2.0-flash": {"input": 0.0001, "output": 0.0004},
         },
+        # Echo performs no inference, so zero is its true price rather than a
+        # placeholder — and it keeps the miss warning silent for the provider
+        # DK's own test suite defaults to.
+        "echo": {"input": 0.0, "output": 0.0},
     }
 
     def __init__(
@@ -87,8 +103,12 @@ class CostTrackingMiddleware(Middleware):
             cost_rates: Optional custom cost rates (merged with defaults)
         """
         self.track_tokens = track_tokens
-        # Merge custom rates with defaults
-        self.cost_rates = self.DEFAULT_RATES.copy()
+        # Merge custom rates with defaults.  Deep-copied: the merge below
+        # mutates the per-family dicts in place, and a shallow copy would
+        # share them with the class attribute — so one instance's
+        # ``cost_rates=`` would rewrite pricing for every instance built
+        # afterwards in the process, including other tenants'.
+        self.cost_rates = copy.deepcopy(self.DEFAULT_RATES)
         if cost_rates:
             for provider, rates in cost_rates.items():
                 if provider in self.cost_rates:
@@ -102,6 +122,7 @@ class CostTrackingMiddleware(Middleware):
                     self.cost_rates[provider] = rates
 
         self._usage_stats: dict[str, dict[str, Any]] = {}
+        self._warned_misses: set[tuple[str, str]] = set()
         self._logger = logging.getLogger(f"{__name__}.CostTracker")
 
     @staticmethod
@@ -334,8 +355,10 @@ class CostTrackingMiddleware(Middleware):
                             rates = provider_rates[model_key]
                             break
                     else:
+                        self._warn_miss(provider, model, "unknown model")
                         return 0.0
             else:
+                self._warn_miss(provider, model, "malformed rate entry")
                 return 0.0
 
             # Calculate cost (rates are per 1K tokens)
@@ -343,7 +366,32 @@ class CostTrackingMiddleware(Middleware):
             output_cost = (output_tokens / 1000) * float(rates.get("output", 0.0))
             return float(input_cost + output_cost)
 
+        self._warn_miss(provider, model, "unknown provider family")
         return 0.0
+
+    def _warn_miss(self, provider: str, model: str, reason: str) -> None:
+        """Warn once per ``(provider, model)`` that traffic is priced at zero.
+
+        Cost tracking is opt-in, so an operator who enabled it asked for these
+        numbers and needs to know when they are not real. A silent ``0.0`` is
+        what hid the provider-key defect for the life of the feature.
+
+        Deduplicated because an undeduplicated per-turn warning is a log flood
+        that gets filtered out, which restores exactly the silence this exists
+        to break. The set is unbounded in principle and bounded in practice by
+        a deployment's ``(provider, model)`` cardinality; an LRU would
+        re-warn on eviction, reintroducing the flood it would be capping.
+        """
+        key = (provider, model)
+        if key in self._warned_misses:
+            return
+        self._warned_misses.add(key)
+        self._logger.warning(
+            "Cost tracking: no rate entry for %s (provider=%r, model=%r); "
+            "this traffic is being recorded at $0.00. Supply rates via "
+            "CostTrackingMiddleware(cost_rates=...) to price it.",
+            reason, provider, model,
+        )
 
     def get_client_stats(self, client_id: str) -> dict[str, Any] | None:
         """Get usage statistics for a client.

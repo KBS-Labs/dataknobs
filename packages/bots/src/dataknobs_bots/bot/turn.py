@@ -94,7 +94,14 @@ class TurnState:
     # --- Usage / observability ---
     usage: dict[str, int] | None = None  # token usage from response
     model: str | None = None  # model that generated the response
-    provider_name: str | None = None  # provider name
+    # Canonical provider *family* key (e.g. "openai") — the value to key
+    # rate tables, metrics labels, and log fields on.
+    provider_name: str | None = None
+    # Concrete provider *class* (e.g. "CachingEmbedProvider") — diagnostic
+    # only.  Carried separately because ``provider_name`` deliberately no
+    # longer reports it, and ``TurnState`` discards the provider object after
+    # reading a name, so nothing downstream could recover it otherwise.
+    provider_impl: str | None = None
 
     # --- Tool tracking ---
     tool_executions: list[ToolExecution] = field(default_factory=list)
@@ -184,7 +191,14 @@ class TurnState:
                 self.usage[key] = self.usage.get(key, 0) + new_usage[key]
 
     def _extract_provider_name(self, provider: Any) -> None:
-        """Set provider_name from a provider instance."""
+        """Capture both provider axes from a provider instance.
+
+        ``provider_name`` prefers the provider's declared family key and
+        falls back to the class name for objects that are not
+        ``LLMProvider`` subclasses. ``provider_impl`` is always the concrete
+        class — the two are captured independently so an explicit family key
+        does not suppress the diagnostic one.
+        """
         if provider is None:
             return
         name = getattr(provider, "provider_name", None)
@@ -192,3 +206,4 @@ class TurnState:
             self.provider_name = name
         elif hasattr(provider, "__class__"):
             self.provider_name = type(provider).__name__
+        self.provider_impl = type(provider).__name__

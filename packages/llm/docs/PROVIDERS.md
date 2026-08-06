@@ -195,6 +195,59 @@ Both factory functions support all registered providers:
 | HuggingFace | `"huggingface"` | Built-in |
 | Echo | `"echo"` | Built-in (testing) |
 
+## Identifying a provider
+
+A provider object answers two different questions about its identity, and
+conflating them is a real defect source — a cost table keyed on the wrong one
+silently prices every request at zero.
+
+| Question | Accessor | Kind of answer |
+|---|---|---|
+| *What am I being billed by?* | `provider.provider_name` | Canonical **family** key — a closed set, lower-cased to match the key the registry resolved on |
+| *What object is actually serving this call?* | `provider.impl_name` | Concrete **class** — an open set, including wrappers and consumer-registered providers |
+| *What did the config author literally type?* | `provider.config.provider` | The verbatim configured string, untouched |
+
+**Key lookup tables, metrics labels, and structured log fields on
+`provider_name`.** `impl_name` is for diagnostics — log lines, error messages,
+debugging output — and must never be a lookup key.
+
+```python
+from dataknobs_llm import LLMProviderFactory
+
+provider = LLMProviderFactory(is_async=True).create(
+    {"provider": "OpenAI", "model": "gpt-4o-mini"}
+)
+
+provider.provider_name      # 'openai'  — canonical, keyed on
+provider.impl_name          # 'OpenAIProvider' — diagnostic only
+provider.config.provider    # 'OpenAI'  — verbatim, as configured
+```
+
+`provider_name` is lower-cased deliberately. The provider registry resolves
+classes case-insensitively but stores the config verbatim, so `provider: OpenAI`
+and `provider: openai` select the same class while recording different strings.
+Canonicalizing on read means a config author's shift key cannot split one
+family's traffic across two rate-table rows or two metrics series.
+
+The Python class name is **not** the identifier. It happens to resemble the
+family key for the built-in providers (`OpenAIProvider` → `openai`) purely by
+naming convention, and the resemblance breaks for wrappers:
+
+```python
+from dataknobs_llm.llm.providers.caching import (
+    CachingEmbedProvider, MemoryEmbeddingCache,
+)
+
+wrapper = CachingEmbedProvider(provider, MemoryEmbeddingCache())
+
+wrapper.provider_name   # 'openai' — still billed by OpenAI
+wrapper.impl_name       # 'CachingEmbedProvider' — what handled the call
+```
+
+Both accessors are defined on `LLMProvider`, so every provider — sync, async,
+built-in, or consumer-registered — inherits them, and neither needs a
+wrapper-side override.
+
 ## Model constraints (request-shape rules)
 
 Some model families reject request parameters that others accept. The **Claude

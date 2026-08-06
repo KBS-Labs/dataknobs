@@ -417,6 +417,48 @@ class TestLoggingMiddleware:
         await middleware.after_turn(turn)
 
     @pytest.mark.asyncio
+    async def test_after_turn_logs_both_provider_axes(
+        self, bot_context: BotContext, caplog
+    ):
+        """The structured payload carries the family *and* the implementation.
+
+        ``provider`` was redefined by the provider-identity contract: it used
+        to hold the provider class name and now holds the canonical family
+        key. ``provider_impl`` carries the class name that would otherwise
+        have been dropped, so an operator's dashboard keyed on the old value
+        has a field to move to.
+
+        Anti-regression guard for that compensation — it fails if someone
+        later "simplifies" by removing the second field.
+        """
+        import json as _json
+
+        middleware = LoggingMiddleware(json_format=True)
+        turn = _make_turn(
+            bot_context,
+            response_content="Hi there!",
+            usage={"input": 10, "output": 15},
+            provider_name="echo",
+            model="test",
+        )
+        turn.provider_impl = "EchoProvider"
+
+        with caplog.at_level("INFO"):
+            await middleware.after_turn(turn)
+
+        payloads = [
+            _json.loads(r.getMessage())
+            for r in caplog.records
+            if r.getMessage().startswith("{")
+        ]
+        completions = [p for p in payloads if p.get("event") == "turn_complete"]
+        assert completions, "no turn_complete payload was logged"
+
+        payload = completions[0]
+        assert payload["provider"] == "echo"
+        assert payload["provider_impl"] == "EchoProvider"
+
+    @pytest.mark.asyncio
     async def test_on_error(self, bot_context: BotContext):
         """on_error logs without error."""
         middleware = LoggingMiddleware()

@@ -99,6 +99,10 @@ class TestTurnStateDataclass:
         assert turn.usage == {"prompt_tokens": 5, "completion_tokens": 10}
         assert turn.model == "test-model"
         assert turn.provider_name == "test-provider"
+        # The two captures are independent: an explicit ``provider_name``
+        # takes precedence for the family axis, while the implementation axis
+        # is always the concrete class.
+        assert turn.provider_impl == "FakeProvider"
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +214,16 @@ class TestAfterTurnUsageData:
 
     @pytest.mark.asyncio
     async def test_chat_turn_has_provider_name(self) -> None:
-        """Chat turns populate provider_name from the LLM."""
+        """Chat turns carry both provider axes: family and implementation.
+
+        ``provider_name`` is the canonical family key consumers key on;
+        ``provider_impl`` is the concrete class, kept for diagnostics because
+        the family key deliberately no longer carries it.
+
+        Asserting the exact values rather than ``is not None`` is the point:
+        the loose form passed against the class-name fallback, so it tolerated
+        the absence of the contract it was written to describe.
+        """
         from dataknobs_bots.testing import BotTestHarness
 
         tracker = TurnTrackingMiddleware()
@@ -225,8 +238,8 @@ class TestAfterTurnUsageData:
             await harness.chat("Hello")
 
         turn = tracker.turns[0]
-        # EchoProvider sets provider_name
-        assert turn.provider_name is not None
+        assert turn.provider_name == "echo"
+        assert turn.provider_impl == "EchoProvider"
         assert turn.model is not None
 
 

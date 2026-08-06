@@ -987,6 +987,41 @@ class LLMProvider(ABC):
         self._is_closing = False
         self._in_flight: set[asyncio.Task[Any]] = set()
 
+    @property
+    def provider_name(self) -> str:
+        """Canonical family key identifying this provider (e.g. ``"openai"``).
+
+        Lower-cased so it matches the key the provider registry resolves on
+        (``PluginRegistry(canonicalize_keys=True)``) regardless of how the
+        config author spelled it — ``provider: OpenAI`` and
+        ``provider: openai`` both report ``"openai"``.
+
+        **This is the identifier to key on** for cost tables, metrics labels,
+        and structured log fields. The Python class name is an implementation
+        detail and is deliberately not used; see :attr:`impl_name`.
+
+        The verbatim configured string remains available as
+        ``provider.config.provider`` for the rare consumer that wants to echo
+        back exactly what the config author typed.
+        """
+        return self.config.provider.lower()
+
+    @property
+    def impl_name(self) -> str:
+        """Concrete provider class serving this call — for diagnostics only.
+
+        Unlike :attr:`provider_name`, this is an **open** set: it is whatever
+        class is in the path, including wrappers such as
+        ``CachingEmbedProvider``, and consumer-registered providers DK has
+        never heard of. Use it in log lines, error messages, and debugging
+        output to answer "what object actually handled this?".
+
+        **Never key a lookup table on it.** Rate tables, metrics labels, and
+        routing decisions belong on :attr:`provider_name`; keying on the class
+        name is precisely the defect this pair of accessors exists to close.
+        """
+        return type(self).__name__
+
     def _validate_prompt_builder(self, expected_type: type) -> None:
         """Validate that prompt builder is configured and of correct type.
 

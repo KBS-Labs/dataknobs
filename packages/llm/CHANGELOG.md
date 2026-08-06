@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`LLMProvider.provider_name`** — the canonical provider *family* key
+  (`"openai"`, `"anthropic"`, …), inherited by every sync and async provider
+  including consumer-registered ones. Lower-cased, so it matches the key the
+  provider registry resolved the class on regardless of how the config author
+  spelled it: `provider: OpenAI` and `provider: openai` both report
+  `"openai"`. This is the identifier to key rate tables, metrics labels, and
+  structured log fields on. The verbatim configured string remains available
+  as `provider.config.provider`.
+- **`LLMProvider.impl_name`** — the concrete provider *class* serving a call
+  (`"OpenAIProvider"`, `"CachingEmbedProvider"`), for diagnostics only. The
+  two accessors exist because a provider answers two different questions
+  about its identity: what it is billed as, and what object is in the path.
+  For a wrapped provider they diverge, and keying a lookup table on the
+  second is the defect the pair exists to prevent.
+
 ### Fixed
+
+- Schema extraction attributed records to a munged class name rather than to
+  the provider family. It read a private `_provider_name` attribute that no
+  provider sets, then fell back to lower-casing the class name and stripping
+  `"provider"` from it — correct for the built-in providers only by naming
+  convention, and wrong for any wrapper: a `CachingEmbedProvider` wrapping an
+  Ollama provider recorded `"cachingembed"`, which names no family. Records
+  now carry `provider_name`, so wrapped providers are attributed to the
+  family actually serving the call.
 
 - Corrected install instructions that named extras this package does not
   declare: `dataknobs-llm[all-providers]` (the real roll-up is
