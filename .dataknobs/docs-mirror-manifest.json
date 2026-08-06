@@ -216,7 +216,6 @@
         "LLM_ARCHITECTURE_EXPLORATION.md",
         "PARALLEL_EXECUTION.md",
         "PROMPT_REFERENCE.md",
-        "PROVIDERS.md",
         "RAG_CACHING.md",
         "README.md",
         "SCHEMA_VERSIONING.md",
@@ -226,6 +225,13 @@
       "site_only": [
         "index.md",
         "quickstart.md"
+      ],
+      "diverge": [
+        {
+          "package": "PROVIDERS.md",
+          "site": "guides/providers.md",
+          "reason": "Hand-authored copies of the same guide that have drifted in prose (rewrapped paragraphs, plus a passage each copy carries and the other does not). Classified so the pair is recorded and both files are existence-checked: as 'package_only' the site copy was invisible to this guard entirely -- it lives under guides/, and llm is not recursive -- so an edit to one copy had nothing at all checking the other. Reconciling the content, and classifying llm's remaining guides/ pairs, is its own task."
+        }
       ]
     },
     "bots": {

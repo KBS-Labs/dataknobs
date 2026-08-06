@@ -189,7 +189,9 @@ CostTrackingMiddleware(cost_rates=...) to price it.
 
 Cost tracking is opt-in, so an operator who enabled it asked for real numbers
 and needs to know when they are not. Providers with a genuine zero price
-(`ollama`, `echo`) do not warn — a real zero is not a miss.
+(`ollama`, `echo`) do not warn — a real zero is not a miss. `ollama` qualifies
+because it is self-hosted, so there is no per-token charge to record; the
+infrastructure cost is real but is not a function of tokens.
 
 `huggingface` is deliberately **not** given a default rate: it covers both free
 local inference and the paid Inference API, so a zero entry would assert "this
@@ -203,8 +205,31 @@ cost_tracker = CostTrackingMiddleware(
 )
 ```
 
-Custom rates are merged over a private copy of the defaults, so one
-middleware instance's overrides never affect another's.
+Both the defaults and the dict you pass are deep-copied, so one middleware
+instance's overrides never affect another's — and a shared module-level rate
+constant handed to several per-tenant instances is neither aliased between
+them nor mutated in place.
+
+#### Where a rate comes from
+
+Rates resolve in this order, most authoritative first:
+
+1. **A rate you supplied** via `cost_rates=`. You have stated the price you
+   are billed; nothing derived outranks it.
+2. **The provider's own pricing**, resolved through `dataknobs-llm`'s model
+   profiles — dated catalogs, overridable per config, isolated per provider.
+   `TurnState` captures it while the provider is still in hand and hands it to
+   the middleware on the turn.
+3. **The middleware's built-in table**, for a family or model the catalogs do
+   not cover: a consumer's out-of-tree provider, a self-hosted gateway.
+4. Otherwise $0.00, with the warning above.
+
+The built-in table sits *below* the provider's catalog deliberately. It is a
+hand-maintained copy of the same numbers and has drifted from them, so it is a
+fallback rather than a source of truth. Within it, a model id that is not an
+exact key matches the **longest** table key it contains — `gpt-4o` is a prefix
+of `gpt-4o-mini-2024-07-18`, and taking the first match instead bills the mini
+model at the full model's rate.
 
 ### LoggingMiddleware
 
@@ -421,7 +446,9 @@ middleware via `on_turn_start` and `after_turn`.
 | `response_content` | `str` | Final response text (populated after generation) |
 | `usage` | `dict[str, int] \| None` | Token usage: `{"input": N, "output": M}` |
 | `model` | `str \| None` | Model that generated the response |
-| `provider_name` | `str \| None` | Provider name (e.g., `"OpenAIProvider"`) |
+| `provider_name` | `str \| None` | Canonical provider **family** key (e.g. `"openai"`) — key rate tables, metrics labels, and log fields on this. `None` when the object served the turn but declared no family |
+| `provider_impl` | `str \| None` | Concrete provider **class** (e.g. `"CachingEmbedProvider"`) — diagnostics only, never a lookup key |
+| `pricing` | `ModelPricing \| None` | Per-model USD rates the provider resolved for this turn's model, or `None` when it sources none |
 | `tool_executions` | `list[ToolExecution]` | Tool executions recorded during the turn |
 | `plugin_data` | `dict[str, Any]` | Cross-middleware communication dict |
 

@@ -243,6 +243,88 @@ class TestAfterTurnUsageData:
         assert turn.model is not None
 
 
+class TestProviderAxesAreReadFromTheProvider:
+    """Both axes are asked of the provider, not reconstructed here.
+
+    ``TurnState`` is one of the consumers whose independent reconstruction of
+    provider identity was the root cause the accessor pair replaced. It must
+    not reintroduce the pattern for the second axis.
+    """
+
+    def _populate(self, provider: object) -> TurnState:
+        from dataknobs_llm import LLMResponse
+
+        turn = TurnState(
+            mode=TurnMode.CHAT,
+            message="hi",
+            context=None,  # type: ignore[arg-type]
+        )
+        turn.populate_from_response(
+            LLMResponse(content="ok", model="test-model"), provider
+        )
+        return turn
+
+    def test_a_declared_implementation_name_is_honored(self) -> None:
+        """Re-deriving ``type(p).__name__`` inline ignores the accessor.
+
+        A wrapper that reports the stack it fronts, or a gateway naming the
+        upstream it proxies, has stated what it wants to be called. Deriving
+        the class name locally silently overrules it.
+        """
+        from dataknobs_llm import EchoProvider
+
+        class RelabelledProvider(EchoProvider):
+            @property
+            def impl_name(self) -> str:
+                return "AcmeGateway(EchoProvider)"
+
+        turn = self._populate(
+            RelabelledProvider({"provider": "echo", "model": "test-model"})
+        )
+
+        assert turn.provider_impl == "AcmeGateway(EchoProvider)"
+
+    def test_a_non_provider_leaves_the_family_key_empty(self) -> None:
+        """A class name must never be substituted for a family key.
+
+        ``provider_name`` keys rate tables, metrics labels, and log fields.
+        Writing ``"AcmeDouble"`` there re-creates, one layer down, exactly the
+        defect the two accessors exist to close — and it is *worse* than an
+        empty value, because a rate-table miss on a plausible-looking key is
+        silent while ``"unknown"`` is reported and warned about.
+        """
+
+        class AcmeDouble:
+            pass
+
+        turn = self._populate(AcmeDouble())
+
+        assert turn.provider_name is None
+        assert turn.provider_impl == "AcmeDouble"
+
+    def test_a_non_provider_does_not_break_pricing_capture(self) -> None:
+        """An object with no ``get_pricing`` is unpriced, not an error."""
+
+        class AcmeDouble:
+            pass
+
+        assert self._populate(AcmeDouble()).pricing is None
+
+    def test_a_failing_pricing_resolver_degrades_to_unpriced(self) -> None:
+        """Observability must not be able to fail the turn it measures."""
+
+        class ExplodingProvider:
+            provider_name = "acme"
+
+            def get_pricing(self, model: str | None = None) -> object:
+                raise RuntimeError("profile source unavailable")
+
+        turn = self._populate(ExplodingProvider())
+
+        assert turn.pricing is None
+        assert turn.provider_name == "acme"
+
+
 # ---------------------------------------------------------------------------
 # on_tool_executed tests (Gap 9 fix)
 # ---------------------------------------------------------------------------

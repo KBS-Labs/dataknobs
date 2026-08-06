@@ -524,12 +524,27 @@ class CostCalculator:
         return None
 
     @staticmethod
-    def _cost_from_pricing(
+    def cost_from_tokens(
         pricing: ModelPricing, input_tokens: int, output_tokens: int
     ) -> float:
         """Compute USD cost from a :class:`ModelPricing` (per-Mtok) + token counts.
 
+        The public entry point for callers that hold **token counts** rather
+        than an :class:`~dataknobs_llm.llm.base.LLMResponse` — usage totals
+        accumulated across a multi-call turn, a stored usage record, an
+        estimate. :meth:`calculate_cost` is the response-shaped equivalent and
+        delegates here.
+
         A ``None`` rate contributes nothing (an embedding model prices input only).
+
+        Args:
+            pricing: Per-million-token rates, typically resolved through
+                :meth:`~dataknobs_llm.llm.base.LLMProvider.get_pricing`.
+            input_tokens: Prompt token count.
+            output_tokens: Completion token count.
+
+        Returns:
+            Cost in USD.
         """
         cost = 0.0
         if pricing.input_per_mtok is not None:
@@ -568,7 +583,7 @@ class CostCalculator:
             pricing = cls._fallback_pricing(model or response.model)
         if pricing is None:
             return None
-        return cls._cost_from_pricing(
+        return cls.cost_from_tokens(
             pricing,
             response.usage.get('prompt_tokens', 0),
             response.usage.get('completion_tokens', 0),
@@ -596,7 +611,7 @@ class CostCalculator:
         if pricing is None:
             return None
         input_tokens = TokenCounter.estimate_tokens(text, model)
-        return cls._cost_from_pricing(pricing, input_tokens, expected_output_tokens)
+        return cls.cost_from_tokens(pricing, input_tokens, expected_output_tokens)
 
 
 def chain_prompts(

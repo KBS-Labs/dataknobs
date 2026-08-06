@@ -50,6 +50,24 @@ def _echo(provider: str = "echo") -> EchoProvider:
 # ---------------------------------------------------------------------------
 
 
+#: What each built-in provider *class* must report, independent of any config.
+#: The registry-driven test below feeds the key in and asserts it comes back,
+#: which ``config.provider.lower()`` satisfies by construction — it proves the
+#: accessor exists on every registered class but cannot catch one that
+#: overrides it wrongly. Pinning the built-ins against a written-down mapping
+#: is what closes that: a provider that starts reporting someone else's family
+#: fails here, and the registry-driven test keeps a *new* provider from landing
+#: without an accessor at all. Neither test subsumes the other.
+BUILTIN_FAMILIES = {
+    "OpenAIProvider": "openai",
+    "AnthropicProvider": "anthropic",
+    "BedrockProvider": "bedrock",
+    "OllamaProvider": "ollama",
+    "HuggingFaceProvider": "huggingface",
+    "EchoProvider": "echo",
+}
+
+
 class TestProviderName:
     """``provider_name`` reports the canonical family key."""
 
@@ -62,6 +80,20 @@ class TestProviderName:
         provider = factory.create({"provider": family, "model": "test-model"})
 
         assert provider.provider_name == family
+
+    def test_every_builtin_class_maps_to_its_expected_family(self) -> None:
+        """The written-down mapping, checked class-by-class.
+
+        Also guards the mapping itself against going stale: it must name every
+        registered built-in, so adding a provider without a row here fails.
+        """
+        factory = LLMProviderFactory(is_async=True)
+        actual = {}
+        for family in _registered_families():
+            provider = factory.create({"provider": family, "model": "test-model"})
+            actual[type(provider).__name__] = provider.provider_name
+
+        assert actual == BUILTIN_FAMILIES
 
     def test_canonicalizes_a_capitalized_config(self) -> None:
         """``provider: OpenAI`` and ``provider: openai`` report the same family.
@@ -266,6 +298,150 @@ class TestSchemaExtractorUsesTheContract:
         )
 
         assert recorded == "AcmeDouble"
+
+    @pytest.mark.asyncio
+    async def test_class_name_fallback_routes_through_impl_name(
+        self, schema: dict
+    ) -> None:
+        """Even the fallback asks the object rather than re-deriving its class.
+
+        Narrow by construction — every ``LLMProvider`` answers
+        ``provider_name``, so this branch is reached only by a duck-typed
+        object. It is still the right shape: re-deriving ``type(p).__name__``
+        inline is the pattern this contract exists to end, and a double that
+        declares ``impl_name`` has stated what it wants to be called.
+        """
+        from dataknobs_llm import LLMResponse
+
+        class AcmeDouble:
+            impl_name = "AcmeGateway"
+
+            async def complete(self, *args: object, **kwargs: object) -> LLMResponse:
+                return LLMResponse(content="{}", model="test-model")
+
+        recorded = await self._extract_and_get_recorded_provider(
+            AcmeDouble(), schema
+        )
+
+        assert recorded == "AcmeGateway"
+
+    @pytest.mark.asyncio
+    async def test_records_the_model_the_provider_is_configured_with(
+        self, schema: dict
+    ) -> None:
+        """``model_used`` must come from the config, not a private attribute.
+
+        The original read ``provider._model``, which **no provider sets** — so
+        every extraction that did not pass ``model=`` explicitly recorded
+        ``None``. That is the same defect as the class-name munging one line
+        below it: an observability field silently degraded by reaching for a
+        private attribute instead of the public contract.
+        """
+        from dataknobs_llm.extraction.observability import ExtractionTracker
+        from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
+
+        provider = EchoProvider(
+            {
+                "provider": "echo",
+                "model": "llama3.2:3b",
+                "options": {"echo_prefix": ""},
+            }
+        )
+        tracker = ExtractionTracker()
+        await SchemaExtractor(provider=provider).extract(
+            "some text", schema, tracker=tracker
+        )
+
+        assert tracker.query()[0].model_used == "llama3.2:3b"
+
+
+# ---------------------------------------------------------------------------
+# The sync half of the contract
+# ---------------------------------------------------------------------------
+
+
+class TestSyncProviderAdapter:
+    """The only sync provider object DK actually ships must honor the contract.
+
+    There are no ``SyncLLMProvider`` subclasses in-tree, so
+    ``create_llm_provider(..., is_async=False)`` returns a
+    ``SyncProviderAdapter`` wrapping an async provider. Declaring the accessors
+    on ``LLMProvider`` therefore does *not* reach the sync path on its own,
+    despite that being exactly what the docs promise — and an adapter with no
+    ``provider_name`` degrades to the class name at every consumer, which is
+    the original defect surviving on the sync half.
+    """
+
+    def _sync_provider(self, spelling: str = "echo") -> object:
+        from dataknobs_llm.llm.providers import create_llm_provider
+
+        return create_llm_provider(
+            {"provider": spelling, "model": "test-model"}, is_async=False
+        )
+
+    def test_reports_the_wrapped_family(self) -> None:
+        assert self._sync_provider().provider_name == "echo"
+
+    def test_canonicalizes_a_capitalized_config(self) -> None:
+        assert self._sync_provider("Echo").provider_name == "echo"
+
+    def test_reports_its_own_class_as_the_implementation(self) -> None:
+        """It *is* the object serving the call, so it names itself.
+
+        Same split as every other wrapper: billed as the family it wraps,
+        diagnosed as the class that actually ran.
+        """
+        provider = self._sync_provider()
+
+        assert provider.impl_name == "SyncProviderAdapter"
+        assert provider.provider_name != provider.impl_name
+
+
+# ---------------------------------------------------------------------------
+# The family key stays consumer-overridable
+# ---------------------------------------------------------------------------
+
+
+class TestProviderNameOverride:
+    """A consumer provider can still declare its own family key.
+
+    ``TurnState`` has read ``getattr(provider, "provider_name", None)`` since
+    before the accessor existed — an open invitation for a consumer's provider
+    to set ``self.provider_name`` in ``__init__`` and get correct attribution.
+    Turning that name into a read-only property revokes the invitation with an
+    ``AttributeError`` at construction, so the setter is what keeps the
+    pre-existing extension point working.
+    """
+
+    def test_a_provider_can_assign_its_family_key(self) -> None:
+        class AcmeProvider(EchoProvider):
+            def __init__(self, config: object) -> None:
+                super().__init__(config)
+                self.provider_name = "acme"
+
+        provider = AcmeProvider(LLMConfig(provider="openai-compatible", model="m"))
+
+        assert provider.provider_name == "acme"
+
+    def test_an_override_is_canonicalized_like_a_configured_one(self) -> None:
+        """The override is a family key, so it obeys the same closed-set rule."""
+        provider = _echo("echo")
+        provider.provider_name = "ACME"
+
+        assert provider.provider_name == "acme"
+
+    def test_clearing_the_override_restores_the_configured_family(self) -> None:
+        provider = _echo("openai")
+        provider.provider_name = "acme"
+        provider.provider_name = None
+
+        assert provider.provider_name == "openai"
+
+    def test_an_override_does_not_disturb_the_implementation_axis(self) -> None:
+        provider = _echo("echo")
+        provider.provider_name = "acme"
+
+        assert provider.impl_name == "EchoProvider"
 
 
 # ---------------------------------------------------------------------------

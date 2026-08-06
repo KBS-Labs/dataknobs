@@ -458,15 +458,28 @@ class SchemaExtractor:
         # Build extraction prompt
         prompt = self._build_prompt(text, schema, context, track_assumptions)
 
-        # Determine model being used
-        model_used = model or getattr(self._provider, "_model", None)
-        # ``provider_name`` is the canonical family key every LLMProvider
-        # exposes.  The fallback covers test doubles that implement only
-        # ``complete()`` and are not LLMProvider subclasses, so the attribute
-        # cannot be assumed present.
-        provider_name = getattr(self._provider, "provider_name", None) or type(
-            self._provider
-        ).__name__
+        # Determine model being used.  Read off the provider's public config:
+        # the private ``_model`` this used to reach for is set by no provider
+        # in the tree, so every extraction that did not pass ``model=``
+        # explicitly recorded ``None``.
+        model_used = model or getattr(
+            getattr(self._provider, "config", None), "model", None
+        )
+        # A *label* for the tracked record, deliberately not named
+        # ``provider_name``: it prefers the canonical family key but falls back
+        # to the class name, which the strict contract forbids.  That is sound
+        # only because this value is recorded for diagnosis and is never a
+        # lookup or aggregation key — do not adopt it as one without first
+        # dropping the class-name fallback.  The fallbacks cover test doubles
+        # implementing only ``complete()`` that are not LLMProvider subclasses,
+        # so neither attribute can be assumed present; ``impl_name`` is asked
+        # before deriving the class name so a double that declares what it
+        # wants to be called is honored rather than overridden.
+        provider_label = (
+            getattr(self._provider, "provider_name", None)
+            or getattr(self._provider, "impl_name", None)
+            or type(self._provider).__name__
+        )
 
         # Call LLM
         config_overrides = {}
@@ -500,7 +513,7 @@ class SchemaExtractor:
                     result=result,
                     duration_ms=(time.time() - start_time) * 1000,
                     model_used=model_used,
-                    provider=provider_name,
+                    provider=provider_label,
                     context=context,
                 )
 
@@ -561,7 +574,7 @@ class SchemaExtractor:
                 result=result,
                 duration_ms=(time.time() - start_time) * 1000,
                 model_used=model_used,
-                provider=provider_name,
+                provider=provider_label,
                 context=context,
             )
 

@@ -969,6 +969,11 @@ class _ShapedRequest(NamedTuple):
 class LLMProvider(ABC):
     """Base LLM provider interface."""
 
+    #: Consumer-declared family key, or ``None`` to derive it from the config.
+    #: A class-level default so :attr:`provider_name`'s getter works before any
+    #: assignment; an instance assignment shadows it.
+    _provider_name_override: str | None = None
+
     def __init__(
         self,
         config: Union[LLMConfig, Config, Dict[str, Any]],
@@ -1003,8 +1008,30 @@ class LLMProvider(ABC):
         The verbatim configured string remains available as
         ``provider.config.provider`` for the rare consumer that wants to echo
         back exactly what the config author typed.
+
+        Assignable: a provider fronting an endpoint whose family the config
+        cannot name — an OpenAI-compatible gateway configured as
+        ``provider: openai-compatible`` but billed as ``acme`` — declares its
+        own key by assigning to this attribute. See the setter.
         """
-        return self.config.provider.lower()
+        return self._provider_name_override or self.config.provider.lower()
+
+    @provider_name.setter
+    def provider_name(self, value: str | None) -> None:
+        """Declare this provider's family key, overriding the configured one.
+
+        Canonicalized on the way in, so a declared key obeys the same
+        closed-set rule as a configured one and the two cannot disagree about
+        spelling. Assign ``None`` to clear the override and fall back to the
+        config.
+
+        This setter exists because the attribute was already a de-facto
+        extension point: consumers reach it through
+        ``getattr(provider, "provider_name", None)``, so a consumer provider
+        could set it directly long before it became a property. A read-only
+        property would revoke that with an ``AttributeError`` at construction.
+        """
+        self._provider_name_override = value.lower() if value else None
 
     @property
     def impl_name(self) -> str:

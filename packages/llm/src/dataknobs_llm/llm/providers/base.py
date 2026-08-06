@@ -19,6 +19,38 @@ class SyncProviderAdapter:
         """
         self.async_provider = async_provider
 
+    @property
+    def config(self) -> Any:
+        """The wrapped provider's configuration.
+
+        Forwarded because this adapter is the object a sync consumer holds, and
+        ``provider.config.provider`` is the documented way to recover the
+        verbatim configured spelling.
+        """
+        return self.async_provider.config
+
+    @property
+    def provider_name(self) -> str:
+        """Canonical family key of the provider this adapter wraps.
+
+        This adapter is not an ``LLMProvider``, so it inherits nothing from
+        that base — and it is the only sync provider object the factory
+        actually returns (there are no ``SyncLLMProvider`` subclasses in
+        tree). Without this forward, every sync consumer degrades to the
+        adapter's *class* name, which is the exact defect the family/impl
+        split exists to prevent, surviving on the sync half.
+        """
+        return self.async_provider.provider_name
+
+    @property
+    def impl_name(self) -> str:
+        """This adapter's own class — it is what served the call.
+
+        The same split every wrapper reports: billed as the family it wraps,
+        diagnosed as the class that actually ran.
+        """
+        return type(self).__name__
+
     def initialize(self) -> None:
         """Initialize the provider synchronously."""
         import asyncio

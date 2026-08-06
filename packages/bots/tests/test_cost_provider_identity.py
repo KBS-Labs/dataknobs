@@ -277,3 +277,32 @@ class TestCustomRatesDoNotLeak:
         assert mw._calculate_cost("huggingface", "any-model", 1000, 1000) == (
             pytest.approx(0.003)
         )
+
+    def test_instances_built_from_one_shared_dict_do_not_alias(self) -> None:
+        """The caller's dict is the other half of the isolation problem.
+
+        Deep-copying the *defaults* stops one instance rewriting the class
+        attribute, but the merge then inserts the **caller's** nested dicts by
+        reference. The realistic shape is a module-level rate constant reused
+        across per-tenant middleware instances, which puts every tenant back
+        on one shared dict — the same cross-tenant corruption, arriving
+        through the parameter instead of through the class.
+        """
+        shared = {"openai": {"gpt-4o": {"input": 0.0025, "output": 0.01}}}
+
+        first = CostTrackingMiddleware(cost_rates=shared)
+        second = CostTrackingMiddleware(cost_rates=shared)
+
+        assert (
+            first.cost_rates["openai"]["gpt-4o"]
+            is not second.cost_rates["openai"]["gpt-4o"]
+        )
+
+    def test_the_callers_own_dict_is_never_mutated(self) -> None:
+        """A config constant handed in must come back out unchanged."""
+        shared = {"openai": {"gpt-4o": {"input": 0.0025, "output": 0.01}}}
+
+        mw = CostTrackingMiddleware(cost_rates=shared)
+        mw.cost_rates["openai"]["gpt-4o"]["input"] = 99.0
+
+        assert shared["openai"]["gpt-4o"]["input"] == pytest.approx(0.0025)

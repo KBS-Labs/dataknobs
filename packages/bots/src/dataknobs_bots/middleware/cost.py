@@ -7,9 +7,13 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_llm.llm.utils import CostCalculator
+
 from .base import Middleware
 
 if TYPE_CHECKING:
+    from dataknobs_llm.llm.model_profile import ModelPricing
+
     from dataknobs_bots.bot.context import BotContext
     from dataknobs_bots.bot.turn import TurnState
 
@@ -86,8 +90,7 @@ class CostTrackingMiddleware(Middleware):
             "gemini-2.0-flash": {"input": 0.0001, "output": 0.0004},
         },
         # Echo performs no inference, so zero is its true price rather than a
-        # placeholder — and it keeps the miss warning silent for the provider
-        # DK's own test suite defaults to.
+        # placeholder.
         "echo": {"input": 0.0, "output": 0.0},
     }
 
@@ -103,23 +106,29 @@ class CostTrackingMiddleware(Middleware):
             cost_rates: Optional custom cost rates (merged with defaults)
         """
         self.track_tokens = track_tokens
-        # Merge custom rates with defaults.  Deep-copied: the merge below
-        # mutates the per-family dicts in place, and a shallow copy would
-        # share them with the class attribute — so one instance's
-        # ``cost_rates=`` would rewrite pricing for every instance built
-        # afterwards in the process, including other tenants'.
+        # Both sides are deep-copied, because both are shared by default.
+        #
+        # The class attribute is shared across every instance in the process,
+        # so merging into a shallow copy of it rewrites pricing for every
+        # instance built afterwards — including other tenants'.
+        #
+        # The caller's dict is shared just as readily: the realistic shape is
+        # a module-level rate constant handed to one middleware per tenant.
+        # Inserting its nested dicts by reference puts every tenant back on
+        # one object, and lets this class mutate a constant it was only given
+        # to read.
         self.cost_rates = copy.deepcopy(self.DEFAULT_RATES)
-        if cost_rates:
-            for provider, rates in cost_rates.items():
-                if provider in self.cost_rates:
-                    if isinstance(rates, dict) and isinstance(
-                        self.cost_rates[provider], dict
-                    ):
-                        self.cost_rates[provider].update(rates)
-                    else:
-                        self.cost_rates[provider] = rates
-                else:
-                    self.cost_rates[provider] = rates
+        # Kept separate as well as merged: an explicitly supplied rate is a
+        # price the consumer says they are billed, so it must outrank pricing
+        # resolved from a provider's catalog.  ``cost_rates`` stays the merged
+        # view because consumers read it.
+        self._explicit_rates: dict[str, Any] = copy.deepcopy(cost_rates or {})
+        for provider, rates in self._explicit_rates.items():
+            existing = self.cost_rates.get(provider)
+            if isinstance(rates, dict) and isinstance(existing, dict):
+                existing.update(copy.deepcopy(rates))
+            else:
+                self.cost_rates[provider] = copy.deepcopy(rates)
 
         self._usage_stats: dict[str, dict[str, Any]] = {}
         self._warned_misses: set[tuple[str, str]] = set()
@@ -149,6 +158,7 @@ class CostTrackingMiddleware(Middleware):
         model: str,
         input_tokens: int,
         output_tokens: int,
+        pricing: ModelPricing | None = None,
     ) -> float:
         """Record token usage and cost for a request.
 
@@ -162,11 +172,14 @@ class CostTrackingMiddleware(Middleware):
             model: Model identifier
             input_tokens: Number of input tokens
             output_tokens: Number of output tokens
+            pricing: Per-model pricing the provider resolved for this turn.
 
         Returns:
             Calculated cost in USD.
         """
-        cost = self._calculate_cost(provider, model, input_tokens, output_tokens)
+        cost = self._calculate_cost(
+            provider, model, input_tokens, output_tokens, pricing=pricing
+        )
 
         if client_id not in self._usage_stats:
             self._usage_stats[client_id] = self._new_client_stats(client_id)
@@ -272,6 +285,7 @@ class CostTrackingMiddleware(Middleware):
         cost = self._record_usage(
             client_id, hook_counter,
             provider, model, input_tokens, output_tokens,
+            pricing=turn.pricing,
         )
 
         total = self._usage_stats[client_id]["total_cost_usd"]
@@ -323,51 +337,105 @@ class CostTrackingMiddleware(Middleware):
             hook_name, client_id, error,
         )
 
+    @staticmethod
+    def _lookup_rates(
+        table: dict[str, Any], provider: str, model: str
+    ) -> dict[str, Any] | None:
+        """Resolve a per-1K rate entry from *table*, or ``None`` if absent.
+
+        The model lookup is exact, then flat-family (``{"input": …}`` for a
+        provider priced the same for every model), then **longest matching
+        key first**.
+
+        The ordering is load-bearing. ``gpt-4o`` is a prefix of
+        ``gpt-4o-mini-2024-07-18``, and OpenAI returns the dated snapshot id
+        rather than the alias that was requested — so a scan that stops at the
+        first hit bills the mini model at the full model's rate, ~16x. Taking
+        the longest key makes the answer the most specific entry that applies
+        instead of an artifact of how the table happens to be written.
+
+        Containment is also checked in one direction only. The reverse
+        (``model in model_key``) let a request for ``gpt-4`` be priced as
+        ``gpt-4o`` — a different model — purely because one id is a substring
+        of the other. Absent a real entry the right answer is a miss.
+        """
+        provider_rates = table.get(provider)
+        if not isinstance(provider_rates, dict):
+            return None
+        if isinstance(provider_rates.get(model), dict):
+            return provider_rates[model]
+        if "input" in provider_rates:
+            return provider_rates
+        for model_key in sorted(provider_rates, key=len, reverse=True):
+            if model_key in model and isinstance(provider_rates[model_key], dict):
+                return provider_rates[model_key]
+        return None
+
     def _calculate_cost(
-        self, provider: str, model: str, input_tokens: int, output_tokens: int
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        pricing: ModelPricing | None = None,
     ) -> float:
         """Calculate cost for token usage.
 
+        Resolution order, most authoritative first:
+
+        1. **An explicitly supplied rate** (``cost_rates=``) — the consumer
+           has stated the price they are billed; nothing derived outranks it.
+        2. **The provider's own pricing** (``pricing``), resolved from
+           ``dataknobs-llm``'s model-profile catalogs. Dated, config-
+           overridable, and per-provider isolated.
+        3. **The built-in table**, for a family or model the catalogs do not
+           cover — a consumer's out-of-tree provider, a self-hosted gateway.
+        4. Otherwise: warn, and price at zero.
+
+        The built-in table sits *below* the provider's catalog because it is a
+        hand-maintained duplicate of the same numbers and has drifted from
+        them; it is a fallback, not a source of truth.
+
         Args:
-            provider: LLM provider name
-            model: Model name
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
+            provider: Canonical provider family key.
+            model: Model identifier.
+            input_tokens: Number of input tokens.
+            output_tokens: Number of output tokens.
+            pricing: Per-model pricing the provider resolved for this turn,
+                when it sources any.
 
         Returns:
-            Cost in USD
+            Cost in USD.
         """
-        # Get rates for provider/model
-        if provider in self.cost_rates:
-            provider_rates = self.cost_rates[provider]
+        explicit = self._lookup_rates(self._explicit_rates, provider, model)
+        if explicit is not None:
+            return self._cost_from_per_1k(explicit, input_tokens, output_tokens)
 
-            if isinstance(provider_rates, dict):
-                # Check if model-specific rates exist
-                if model in provider_rates:
-                    rates = provider_rates[model]
-                elif "input" in provider_rates:
-                    # Use generic rates for provider (e.g., ollama)
-                    rates = provider_rates
-                else:
-                    # Try partial model name match
-                    for model_key in provider_rates:
-                        if model_key in model or model in model_key:
-                            rates = provider_rates[model_key]
-                            break
-                    else:
-                        self._warn_miss(provider, model, "unknown model")
-                        return 0.0
-            else:
-                self._warn_miss(provider, model, "malformed rate entry")
-                return 0.0
+        if pricing is not None:
+            return CostCalculator.cost_from_tokens(
+                pricing, input_tokens, output_tokens
+            )
 
-            # Calculate cost (rates are per 1K tokens)
-            input_cost = (input_tokens / 1000) * float(rates.get("input", 0.0))
-            output_cost = (output_tokens / 1000) * float(rates.get("output", 0.0))
-            return float(input_cost + output_cost)
+        fallback = self._lookup_rates(self.cost_rates, provider, model)
+        if fallback is not None:
+            return self._cost_from_per_1k(fallback, input_tokens, output_tokens)
 
-        self._warn_miss(provider, model, "unknown provider family")
+        if provider not in self.cost_rates:
+            self._warn_miss(provider, model, "unknown provider family")
+        elif not isinstance(self.cost_rates.get(provider), dict):
+            self._warn_miss(provider, model, "malformed rate entry")
+        else:
+            self._warn_miss(provider, model, "unknown model")
         return 0.0
+
+    @staticmethod
+    def _cost_from_per_1k(
+        rates: dict[str, Any], input_tokens: int, output_tokens: int
+    ) -> float:
+        """Compute USD cost from a per-1K-token rate entry."""
+        input_cost = (input_tokens / 1000) * float(rates.get("input", 0.0))
+        output_cost = (output_tokens / 1000) * float(rates.get("output", 0.0))
+        return float(input_cost + output_cost)
 
     def _warn_miss(self, provider: str, model: str, reason: str) -> None:
         """Warn once per ``(provider, model)`` that traffic is priced at zero.

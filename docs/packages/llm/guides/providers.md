@@ -247,9 +247,32 @@ wrapper.provider_name   # 'openai' — still billed by OpenAI
 wrapper.impl_name       # 'CachingEmbedProvider' — what handled the call
 ```
 
-Both accessors are defined on `LLMProvider`, so every provider — sync, async,
+Both accessors are defined on `LLMProvider`, so every provider — async,
 built-in, or consumer-registered — inherits them, and neither needs a
 wrapper-side override.
+
+`SyncProviderAdapter` is the exception, and it is the object
+`create_llm_provider(..., is_async=False)` actually returns: it wraps an async
+provider rather than subclassing `LLMProvider`, so it inherits nothing and
+forwards both accessors explicitly. It reports the wrapped provider's family
+and its own class, like any other wrapper.
+
+### Declaring a family key
+
+`provider_name` is assignable, for a provider whose family the config cannot
+name — an OpenAI-compatible gateway configured as
+`provider: openai-compatible` but billed as `acme`:
+
+```python
+class AcmeProvider(OpenAIProvider):
+    def __init__(self, config):
+        super().__init__(config)
+        self.provider_name = "acme"
+```
+
+The assignment is canonicalized the same way a configured value is, so a
+declared key obeys the same closed-set rule. Assign `None` to clear it and
+fall back to the config.
 
 ## Model constraints (request-shape rules)
 
