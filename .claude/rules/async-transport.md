@@ -32,7 +32,13 @@ catastrophic under concurrency.
   `per-file-ignores` for IDE / hierarchical invocations; `config` and `llm`
   have no per-package ruff config and inherit the root. It flags blocking
   `open()` (`ASYNC230`), `Path`/`os` calls (`ASYNC240`), `time.sleep`
-  (`ASYNC251`), and blocking HTTP clients (`ASYNC210`) inside `async def`.
+  (`ASYNC251`), blocking HTTP clients (`ASYNC210`/`ASYNC212`), and subprocess
+  calls (`ASYNC220`/`ASYNC221`/`ASYNC222`) inside `async def`, plus the
+  `ASYNC1xx` style checks such as `ASYNC110` (async busy-wait).
+
+  > **Mirror both layers.** The root `select` and any `per-file-ignores` must
+  > be mirrored into each package that defines its own `[tool.ruff]`, or the
+  > guard has a hole on hierarchical / IDE invocations.
 
   > **ASYNC240 blind spot:** ruff reliably flags a `Path`/`os` method only
   > when it can see the receiver is a `Path` — typically a directly-
@@ -54,17 +60,36 @@ catastrophic under concurrency.
 
 ## Suppressing a Finding
 
-**This section governs the blocking-I/O members of the family** — `ASYNC210`
-(blocking HTTP client), `ASYNC230` (blocking `open()`), `ASYNC240` (blocking
-`Path`/`os` call), `ASYNC251` (`time.sleep`). Those are the checks that detect
-a stalled event loop, which is what this rule exists to prevent.
+**This section governs every blocking-I/O check in the family — the whole
+`ASYNC2xx` series.** That series exists to detect exactly one defect:
+synchronous work running on the event loop. That is what this rule exists to
+prevent, so every member of it is in scope.
+
+The series currently comprises:
+
+| Code | Blocking call detected |
+|---|---|
+| `ASYNC210` / `ASYNC212` | blocking HTTP client (generic / `httpx`) |
+| `ASYNC220` / `ASYNC221` / `ASYNC222` | subprocess create / run / wait |
+| `ASYNC230` | blocking `open()` |
+| `ASYNC240` | blocking `Path` / `os` call |
+| `ASYNC250` | blocking `input()` |
+| `ASYNC251` | `time.sleep` |
+
+**The table is illustrative; the definition is the `ASYNC2xx` series.** Scope
+this section by that definition, not by the list — a check ruff adds later is
+governed the day it ships, with no edit here. The subprocess members deserve
+particular note: `subprocess.run(...)` inside an `async def` blocks the loop
+for the child process's entire lifetime, which is the most severe form of the
+defect this rule addresses.
 
 A genuine blocking call is **fixed (offloaded), not ignored**. A per-file
 `ASYNC` ignore is permitted ONLY for a verified false positive — a cheap,
 one-shot, setup-time stat that is not on a hot loop, or a call also reachable
 from sync contexts — and MUST carry a one-line justification. Never a blanket
-ignore of a blocking-I/O check, and never an ignore on a true-positive
-blocking site.
+ignore of an `ASYNC2xx` check, and never an ignore on a true-positive blocking
+site. **A guard that ignores the defects it exists to catch is worse than no
+guard**, because it also reports green.
 
 > **Do NOT add `anyio` / `trio` to satisfy `ASYNC240`.** The dependency-free
 > fix is `asyncio.to_thread` around the stat/open; adding an async-filesystem
@@ -72,20 +97,28 @@ blocking site.
 
 ### Members with no blocking semantics
 
-`flake8-async` also ships checks that are not about blocking the loop —
-notably `ASYNC109`, which objects to a `timeout` parameter on an `async def`
-and prefers `asyncio.timeout` at the call site. A finding there is a
-signature-shape opinion, not a stalled loop: the flagged code performs no I/O
-on the event loop, and "fixing" it changes a public signature. Every such site
-in this repo is a contract method (`DistributedLock.acquire`,
-`RateLimiter.acquire`) or a graceful-shutdown method, where the parameter *is*
-the interface and an implementation forwards it rather than timing out
-client-side.
+`flake8-async` also ships the `ASYNC1xx` series, which is about async *style*
+rather than blocking the loop. Two come up in practice:
+
+- **`ASYNC109`** objects to a `timeout` parameter on an `async def`, preferring
+  `asyncio.timeout` at the call site. A finding is a signature-shape opinion,
+  not a stalled loop: the flagged code performs no I/O on the event loop, and
+  "fixing" it changes a public signature. The usual shape is a contract method
+  (`DistributedLock.acquire`, `RateLimiter.acquire`) or a graceful-shutdown
+  method, where the parameter *is* the published interface and an
+  implementation forwards it rather than timing out client-side.
+- **`ASYNC110`** objects to an `await asyncio.sleep(...)` poll loop, preferring
+  an event/queue primitive. `asyncio.sleep` yields to the loop, so the loop is
+  not stalled; the finding is about idiom, not a blocking call.
 
 These are outside this rule. Silencing one — including family-wide — is an
 ordinary API decision, made on its own merits and recorded with its rationale
 beside the `ignore`. It is not the blanket suppression prohibited above, and
-it leaves the blocking-I/O members fully enforced.
+it leaves the `ASYNC2xx` members fully enforced.
+
+**Do not extend this carve-out by analogy.** It covers the `ASYNC1xx` style
+checks. If a check detects synchronous work on the loop, it belongs to the
+section above regardless of which number it carries.
 
 ## References
 

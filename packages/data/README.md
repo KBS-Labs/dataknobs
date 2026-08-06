@@ -4,7 +4,7 @@ A unified data abstraction layer that provides consistent database operations ac
 
 **Version**: 0.1.0  
 **Status**: Released ([PyPI](https://pypi.org/project/dataknobs-data/))  
-**Python**: 3.10+  
+**Python**: 3.12+  
 **License**: MIT  
 
 ## Overview

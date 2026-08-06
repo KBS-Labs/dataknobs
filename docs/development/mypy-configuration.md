@@ -213,11 +213,15 @@ If you encounter import-untyped errors for third-party libraries:
 
 ## Current Status
 
-As of August 31, 2025:
-- **Critical errors (focused with mypy.ini)**: 141
-- **Total errors (comprehensive with pyproject.toml)**: 587
-- **Python 3.9 compatibility**: ✅ Fully compatible
+- **Python floor**: 3.12 (`requires-python = ">=3.12"`; mypy's `python_version`
+  matches it, so the checker evaluates against the same interpreter the project
+  runs on)
 - **Type stub dependencies**: ✅ Installed
+
+> **Historical note.** This section previously carried dated error counts taken
+> against a Python 3.9 floor. Both the floor and the counts have since changed;
+> run the commands above for current numbers rather than relying on a
+> transcribed total.
 
 Note: MyPy automatically uses `mypy.ini` when present in the project root, which is why the default command shows focused results.
 

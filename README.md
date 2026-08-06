@@ -127,7 +127,7 @@ This project uses [uv](https://github.com/astral-sh/uv) for fast Python package 
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - [uv](https://github.com/astral-sh/uv) package manager
 - Docker (optional, for containerized development)
 

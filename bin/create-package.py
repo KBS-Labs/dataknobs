@@ -462,7 +462,7 @@ name = "dataknobs-{name}"
 version = "{version}"
 description = "{description}"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common>=1.0.0",
 ]

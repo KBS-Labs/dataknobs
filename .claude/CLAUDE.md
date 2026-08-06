@@ -32,7 +32,7 @@ When working in dataknobs, remember:
 
 ## Project Structure
 
-UV workspace monorepo (Python 3.10+):
+UV workspace monorepo (Python 3.12+):
 
 ```
 dataknobs/

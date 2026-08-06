@@ -525,7 +525,13 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         """Get a dataframe with the unique values from the column and the given
         column name.
         """
+        # ``pd.unique`` is typed ``np_1darray | ExtensionArray``; ``np.asarray``
+        # narrows that union for the type checker. Runtime behaviour is
+        # unchanged — the call already returned an ndarray for every dtype.
         data = np.sort(np.asarray(pd.unique(col.dropna())))
+        # ``pd.api.types.is_integer_dtype`` rather than ``np.issubdtype``: the
+        # latter raises ``TypeError`` on every pandas ExtensionDtype, and
+        # reports ``timedelta64`` as integer (it subclasses ``np.signedinteger``).
         if pd.api.types.is_integer_dtype(col.dtype):
             # IDs for an integer column are the integers themselves
             col_df = pd.DataFrame({name: data}, index=data)
