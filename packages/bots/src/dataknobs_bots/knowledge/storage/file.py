@@ -14,7 +14,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
@@ -412,7 +412,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             content_type=content_type,
             size_bytes=len(data),
             checksum=checksum,
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
             metadata=metadata or {},
         )
 
@@ -425,7 +425,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(timezone.utc)
+        kb_info.last_updated = datetime.now(UTC)
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -495,7 +495,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(timezone.utc)
+        kb_info.last_updated = datetime.now(UTC)
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -569,7 +569,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             domain_id=domain_id,
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             version="1",
             ingestion_status=IngestionStatus.PENDING,
             metadata=metadata or {},

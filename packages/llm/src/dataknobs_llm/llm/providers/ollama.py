@@ -1063,7 +1063,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         Lets consumers catch by a dataknobs exception type instead of coupling
         to ``aiohttp``. Ollama has no SDK — it speaks HTTP over
         ``aiohttp``, so the gate is aiohttp's error hierarchy plus
-        ``asyncio.TimeoutError``. Extracts the status (from a
+        ``TimeoutError``. Extracts the status (from a
         ``ClientResponseError`` raised by ``raise_for_status()``; ``None`` for a
         connection error or timeout) and defers the status→type policy to
         :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
@@ -1088,7 +1088,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             return self._dataknobs_error_for_status(
                 exc.status, f"Ollama API error: {exc}", retry_after=retry_after
             )
-        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
+        if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
             return self._dataknobs_error_for_status(
                 None, f"Ollama API error: {exc}"
             )

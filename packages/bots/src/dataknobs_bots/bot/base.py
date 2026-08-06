@@ -1697,7 +1697,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                             "result_length": len(str(result)),
                         },
                     )
-                except (TimeoutError, asyncio.TimeoutError):
+                except TimeoutError:
                     duration_ms = (time.monotonic() - t0) * 1000
                     observation = (
                         f"Error: tool timed out after "
@@ -1921,7 +1921,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 strategy.finalize_turn(handle, tool_results),  # type: ignore[union-attr]
                 timeout=budget,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 "Phased finalize synthesis exceeded remaining tool loop "
                 "budget (%.1fs) — returning graceful fallback",
@@ -2201,7 +2201,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     )
                 except StopAsyncIteration:
                     return
-                except (TimeoutError, asyncio.TimeoutError):
+                except TimeoutError:
                     yield self._log_and_build_finalize_timeout_chunk(
                         budget, turn
                     )
@@ -2229,7 +2229,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             await asyncio.wait_for(
                 aclose(), timeout=_FINALIZE_SOURCE_CLOSE_TIMEOUT
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 "Finalize source close exceeded %.1fs — abandoning teardown to "
                 "keep the turn bounded",

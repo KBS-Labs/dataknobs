@@ -726,27 +726,34 @@ class TestCompositeMemoryNarrowedExceptions:
 
     @pytest.mark.asyncio
     async def test_asyncio_timeout_error_still_caught(self):
-        """asyncio.TimeoutError is caught (important for Python 3.10)."""
+        """A strategy raising ``asyncio``'s timeout alias degrades, it does not propagate.
+
+        ``_STRATEGY_ERRORS`` lists ``TimeoutError`` only. That covers this
+        because the two names are the same class on the declared floor — which
+        is the whole reason the separate entry could be dropped. Raising
+        through the ``asyncio`` spelling is what makes that a checked claim
+        rather than an assumed one, so the spelling here is deliberate.
+        """
         import asyncio
 
         class _AsyncTimeoutMemory(Memory):
             async def add_message(self, content, role, metadata=None):  # type: ignore[override]
-                raise asyncio.TimeoutError()
+                raise asyncio.TimeoutError()  # noqa: UP041  # sweep-exempt: subject under test
 
             async def get_context(self, current_message):  # type: ignore[override]
-                raise asyncio.TimeoutError()
+                raise asyncio.TimeoutError()  # noqa: UP041  # sweep-exempt: subject under test
 
             async def clear(self):
-                raise asyncio.TimeoutError()
+                raise asyncio.TimeoutError()  # noqa: UP041  # sweep-exempt: subject under test
 
             async def close(self):
-                raise asyncio.TimeoutError()
+                raise asyncio.TimeoutError()  # noqa: UP041  # sweep-exempt: subject under test
 
         buf = BufferMemory(max_messages=10)
         failing = _AsyncTimeoutMemory()
         composite = CompositeMemory.from_components(strategies=[buf, failing])
 
-        # Should NOT raise — asyncio.TimeoutError is in the caught set
+        # Should NOT raise — TimeoutError is in the caught set
         await composite.add_message("hello", "user")
         await composite.clear()
         await composite.close()

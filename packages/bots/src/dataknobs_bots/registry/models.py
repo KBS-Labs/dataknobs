@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -48,9 +48,9 @@ class Registration:
     config: dict[str, Any]
     status: str = "active"
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization.
@@ -88,17 +88,17 @@ class Registration:
             created_at=(
                 datetime.fromisoformat(data["created_at"])
                 if data.get("created_at")
-                else datetime.now(timezone.utc)
+                else datetime.now(UTC)
             ),
             updated_at=(
                 datetime.fromisoformat(data["updated_at"])
                 if data.get("updated_at")
-                else datetime.now(timezone.utc)
+                else datetime.now(UTC)
             ),
             last_accessed_at=(
                 datetime.fromisoformat(data["last_accessed_at"])
                 if data.get("last_accessed_at")
-                else datetime.now(timezone.utc)
+                else datetime.now(UTC)
             ),
         )
 

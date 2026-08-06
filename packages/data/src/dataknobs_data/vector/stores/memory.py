@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import pickle
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -161,7 +161,7 @@ class MemoryVectorStore(VectorStore):
         # fresh per-row dicts (config-level domain_id defaulted in,
         # caller's dicts never aliased — see Items #8 / 131).
         rows = self._apply_domain_default(metadata, len(ids))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
             self.metadata_store[vector_id] = rows[i]
@@ -296,7 +296,7 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = 0
         for vector_id, meta in zip(ids, metadata, strict=False):
             if vector_id in self.vectors:

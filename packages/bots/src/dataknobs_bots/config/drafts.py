@@ -31,7 +31,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +147,7 @@ class ConfigDraftManager:
             The generated draft ID.
         """
         draft_id = uuid.uuid4().hex[:8]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         metadata = DraftMetadata(
             draft_id=draft_id,
@@ -189,7 +189,7 @@ class ConfigDraftManager:
 
         existing = self._read_file(draft_path)
         existing_meta = existing.get(self._metadata_key, {})
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         metadata = DraftMetadata(
             draft_id=draft_id,

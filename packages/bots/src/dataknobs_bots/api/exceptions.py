@@ -26,7 +26,7 @@ Example:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.exceptions import (
@@ -95,7 +95,7 @@ class APIError(DataknobsError):
             "error": self.error_code,
             "message": str(self),
             "detail": self.context,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
 
@@ -225,7 +225,7 @@ async def http_exception_handler(
             "error": "HTTPException",
             "message": str(exc.detail),
             "detail": {},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         },
     )
 
@@ -260,7 +260,7 @@ async def general_exception_handler(
             "error": "InternalServerError",
             "message": "An unexpected error occurred",
             "detail": {"exception_type": type(exc).__name__},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         },
     )
 

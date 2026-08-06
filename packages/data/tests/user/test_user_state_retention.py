@@ -11,7 +11,7 @@ config-load time. Real constructs only (``AsyncMemoryDatabase`` /
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -34,7 +34,7 @@ _SECTIONS = [
     {"name": "notes", "kind": "collection"},
 ]
 
-_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _Clock:
@@ -255,7 +255,7 @@ def test_non_positive_retention_days_rejected(bad: int) -> None:
 
 
 def test_is_expired_tz_mismatch_is_not_expired() -> None:
-    aware = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    aware = datetime(2026, 1, 1, tzinfo=UTC)
     naive = datetime(2099, 1, 1)  # far future — WOULD expire if comparable
 
     aware_stamp = Record({"_written_at": aware.isoformat()})

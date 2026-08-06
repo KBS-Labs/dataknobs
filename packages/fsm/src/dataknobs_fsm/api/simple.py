@@ -203,7 +203,6 @@ See Also:
     - :mod:`dataknobs_fsm.patterns.file_processing`: File processing patterns
 """
 
-import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -588,7 +587,7 @@ class SimpleFSM:
                     success=success,
                     result=result
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Return error result instead of raising
                 return ResultFormatter.format_error_result(
                     context=context,

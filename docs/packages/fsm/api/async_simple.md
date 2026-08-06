@@ -391,7 +391,7 @@ async def main():
         result = await fsm.process({"input": "data"}, timeout=5.0)
         if not result["success"]:
             print(f"Processing failed: {result.get('error')}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print("Processing timed out")
     except Exception as e:
         print(f"Unexpected error: {e}")

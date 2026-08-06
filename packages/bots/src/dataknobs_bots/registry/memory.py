@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_data import SortOrder
@@ -131,7 +131,7 @@ class InMemoryBackend:
             Registration object with metadata
         """
         async with self._lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             meta = dict(metadata or {})
 
             if bot_id in self._registrations:
@@ -181,7 +181,7 @@ class InMemoryBackend:
                     metadata=reg.metadata,
                     created_at=reg.created_at,
                     updated_at=reg.updated_at,
-                    last_accessed_at=datetime.now(timezone.utc),
+                    last_accessed_at=datetime.now(UTC),
                 )
                 return self._registrations[bot_id]
             return None
@@ -274,7 +274,7 @@ class InMemoryBackend:
                     status="inactive",
                     metadata=reg.metadata,
                     created_at=reg.created_at,
-                    updated_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(UTC),
                     last_accessed_at=reg.last_accessed_at,
                 )
                 return True

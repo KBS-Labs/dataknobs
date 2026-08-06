@@ -5,7 +5,7 @@ import logging
 import os
 import pickle
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -288,7 +288,7 @@ class TestMemoryVectorStoreTimestamps:
         created, updated = store.timestamps["t1"]
         assert isinstance(created, datetime)
         assert isinstance(updated, datetime)
-        assert created.tzinfo is timezone.utc
+        assert created.tzinfo is UTC
         # Fresh add: created == updated (same now() call).
         assert created == updated
 

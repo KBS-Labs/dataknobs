@@ -253,7 +253,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         Lets consumers catch by a dataknobs exception type instead of coupling
         to ``aiohttp``. The HuggingFace Inference API is spoken over ``aiohttp``
         (no vendor SDK), so the gate is aiohttp's error hierarchy plus
-        ``asyncio.TimeoutError``. Extracts the status (from a
+        ``TimeoutError``. Extracts the status (from a
         ``ClientResponseError`` raised by ``raise_for_status()``; ``None`` for a
         connection error or timeout) and defers the status→type policy to
         :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`
@@ -274,7 +274,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 f"HuggingFace API error: {exc}",
                 retry_after=retry_after,
             )
-        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
+        if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
             return self._dataknobs_error_for_status(
                 None, f"HuggingFace API error: {exc}"
             )

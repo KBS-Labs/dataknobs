@@ -35,7 +35,7 @@ import inspect
 import os
 from dataclasses import dataclass
 from datetime import datetime as _datetime
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -462,7 +462,7 @@ def main(
 
     if args.update:
         assert binding.render is not None  # supports_update gate above
-        stamp = verified_date or _datetime.now(timezone.utc).date().isoformat()
+        stamp = verified_date or _datetime.now(UTC).date().isoformat()
         path.write_text(binding.render(live, stamp), encoding="utf-8")
         print(f"model_limits: updated {path} ({len(live)} models).")
         return 0

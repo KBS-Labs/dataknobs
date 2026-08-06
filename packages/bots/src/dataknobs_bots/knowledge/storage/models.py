@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -112,7 +112,7 @@ class KnowledgeFile:
             content_type="text/markdown",
             size_bytes=1234,
             checksum="abc123...",
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
             metadata={"author": "Jane Doe"}
         )
         ```
@@ -143,7 +143,7 @@ class KnowledgeFile:
         if isinstance(uploaded_at, str):
             uploaded_at = datetime.fromisoformat(uploaded_at)
         elif uploaded_at is None:
-            uploaded_at = datetime.now(timezone.utc)
+            uploaded_at = datetime.now(UTC)
 
         return cls(
             path=data["path"],
@@ -242,7 +242,7 @@ class KnowledgeBaseInfo:
             domain_id="cooking-assistant",
             file_count=42,
             total_size_bytes=123456,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             version="1",
             ingestion_status=IngestionStatus.READY,
         )
@@ -282,7 +282,7 @@ class KnowledgeBaseInfo:
         if isinstance(last_updated, str):
             last_updated = datetime.fromisoformat(last_updated)
         elif last_updated is None:
-            last_updated = datetime.now(timezone.utc)
+            last_updated = datetime.now(UTC)
 
         status = data.get("ingestion_status", "pending")
         if isinstance(status, str):
@@ -307,4 +307,4 @@ class KnowledgeBaseInfo:
             self.version = str(int(self.version) + 1)
         except ValueError:
             # If version is not numeric, append a timestamp
-            self.version = f"{self.version}.{int(datetime.now(timezone.utc).timestamp())}"
+            self.version = f"{self.version}.{int(datetime.now(UTC).timestamp())}"

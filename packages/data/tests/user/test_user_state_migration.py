@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -49,7 +49,7 @@ from dataknobs_data.user.migration import (
 )
 from dataknobs_data.user.store import SECTION_WRITTEN_TOPIC
 
-_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _Clock:

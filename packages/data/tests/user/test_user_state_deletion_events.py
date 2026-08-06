@@ -14,7 +14,7 @@ deterministic with no ``sleep``.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -39,7 +39,7 @@ _SECTIONS = [
     {"name": "activity", "kind": "collection", "retention_days": 30},
 ]
 
-_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _Clock:

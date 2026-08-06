@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from .base import Middleware
@@ -75,7 +75,7 @@ class LoggingMiddleware(Middleware):
             None (no message transform).
         """
         log_data: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": "user_message",
             "mode": turn.mode.value,
             "client_id": turn.context.client_id,
@@ -104,7 +104,7 @@ class LoggingMiddleware(Middleware):
             turn: Completed turn state.
         """
         log_data: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": "turn_complete",
             "mode": turn.mode.value,
             "client_id": turn.context.client_id,
@@ -145,7 +145,7 @@ class LoggingMiddleware(Middleware):
             context: Bot context
         """
         log_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": "error",
             "client_id": context.client_id,
             "user_id": context.user_id,
@@ -172,7 +172,7 @@ class LoggingMiddleware(Middleware):
             context: Bot context
         """
         log_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": "hook_error",
             "hook_name": hook_name,
             "client_id": context.client_id,

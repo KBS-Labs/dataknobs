@@ -453,7 +453,7 @@ class ChangeTracker:
                         self._shutdown_event.wait(),
                         timeout=self.process_interval
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
             except Exception as e:
@@ -475,7 +475,7 @@ class ChangeTracker:
 
         try:
             await asyncio.wait_for(self._processing_task, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Processing task did not stop gracefully, cancelling")
             self._processing_task.cancel()
             try:

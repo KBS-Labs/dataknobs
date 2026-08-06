@@ -190,7 +190,7 @@ module = "numpy.*"
 ignore_missing_imports = true
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
 
@@ -216,6 +216,18 @@ ignore = [
     "D104", # Missing docstring in public package
     "D203", # 1 blank line required before class docstring
     "D213", # Multi-line docstring summary should start at the second line
+
+    # Modernizations deliberately declined — each would change a public API,
+    # not just syntax. Full rationale in the root pyproject.toml ignore list.
+    "ASYNC109",  # `timeout` parameter on an async def; for a contract method
+                 # the parameter *is* the interface. The blocking-I/O members
+                 # of this family (ASYNC210 / 230 / 240 / 251) stay enforced.
+    "UP040",     # `type` statement: changes introspection of published aliases.
+    "UP042",     # StrEnum: changes str()/f-string rendering of published enums.
+    "UP046",     # PEP 695 class type params: infers variance on Protocols that
+                 # declare it, and scopes an __all__-exported TypeVar.
+    "UP047",     # PEP 695 function type params: fragments a TypeVar shared by a
+                 # class and a function in one module.
 ]
 
 [tool.ruff.lint.per-file-ignores]

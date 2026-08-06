@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -408,7 +408,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         Returns the number of rows whose metadata was merged.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = 0
         for key, meta in metadata_items:
             if filter is not None and not self._match_metadata_filter(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -210,7 +210,7 @@ class TestConfigDraftManager:
         draft_path = tmp_path / f"_draft-{draft_id}.yaml"
         with open(draft_path) as f:
             data = yaml.safe_load(f)
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+        old_time = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
         data["_draft"]["last_updated"] = old_time
         with open(draft_path, "w") as f:
             yaml.dump(data, f)
@@ -228,7 +228,7 @@ class TestConfigDraftManager:
         named_path = tmp_path / "named-bot.yaml"
         with open(named_path) as f:
             data = yaml.safe_load(f)
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+        old_time = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
         data["_draft"]["last_updated"] = old_time
         with open(named_path, "w") as f:
             yaml.dump(data, f)
