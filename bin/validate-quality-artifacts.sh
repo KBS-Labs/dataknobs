@@ -87,11 +87,17 @@ if [ -n "$HASH_RESULT" ]; then
 
     HASH_WARNING=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('warning', ''))")
 
+    # Printed additively, not as a branch. A warning describes what could not be
+    # checked; it says nothing about whether what *was* checked passed. Chaining
+    # it ahead of the verdict means any result carrying both reports the warning
+    # and silently skips the failure — which is a green gate on stale artifacts.
+    if [ -n "$HASH_WARNING" ]; then
+        print_info "$HASH_WARNING"
+    fi
+
     if [ -n "$HASH_ERROR" ]; then
         print_fail "Hash validation error: $HASH_ERROR"
         VALIDATION_FAILED=1
-    elif [ -n "$HASH_WARNING" ]; then
-        print_info "$HASH_WARNING"
     elif [ "$HASH_VALID" = "True" ]; then
         DIRTY_COUNT=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('dirty_packages', [])))")
         if [ "$DIRTY_COUNT" = "0" ]; then
@@ -102,12 +108,19 @@ if [ -n "$HASH_RESULT" ]; then
     else
         CHANGED=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_packages', [])))")
         DIRTY=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('dirty_packages', [])))")
+        SCOPES=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_scopes', [])))")
         print_fail "Package content has changed since quality checks were run"
         if [ -n "$CHANGED" ]; then
             print_info "Changed packages: $CHANGED"
         fi
         if [ -n "$DIRTY" ]; then
             print_fail "Packages needing re-validation: $DIRTY"
+        fi
+        # A workspace-only scope dirties no package by design, so without this
+        # line that case fails with every other field empty — the artifacts are
+        # stale and the report names nothing that changed.
+        if [ -n "$SCOPES" ]; then
+            print_info "Changed workspace scopes: $SCOPES"
         fi
         print_fail "Please run: ./bin/run-quality-checks.sh"
         VALIDATION_FAILED=1

@@ -890,6 +890,33 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             echo -e "$skip_summary"
             echo -e "${YELLOW}───────────────────${NC}"
         fi
+
+        # Surface warnings the same way. A test that reports a known divergence
+        # rather than failing on it — lint policy drift, an unprobed config —
+        # writes to an output file that is only printed when the run fails, so
+        # on a green run the number it exists to publish reached nobody.
+        warning_summary=""
+        for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+            if [ -f "$output_file" ]; then
+                # pytest's warnings summary spells each entry
+                #   "  <file>:<line>: <Category>: <message>"
+                # and wraps the message across the lines beneath it. The header
+                # line is what carries the category and the headline number.
+                warns=$(sed 's/\x1b\[[0-9;]*m//g' "$output_file" 2>/dev/null \
+                    | grep -E '^[[:space:]]+.*:[0-9]+: [A-Za-z_.]*Warning: ' || true)
+                if [ -n "$warns" ]; then
+                    pkg_label=$(basename "$output_file" .txt | sed 's/.*-output-//')
+                    warning_summary="${warning_summary}\n  ${YELLOW}${pkg_label}:${NC}\n$(echo "$warns" | sed 's/^ */    /')\n"
+                fi
+            fi
+        done
+
+        if [ -n "$warning_summary" ]; then
+            echo ""
+            echo -e "${YELLOW}── Warnings ──${NC}"
+            echo -e "$warning_summary"
+            echo -e "${YELLOW}──────────────${NC}"
+        fi
     else
         # Dev mode: Run combined tests without polluting artifacts
         if [ -n "$PACKAGES" ]; then
@@ -1014,6 +1041,11 @@ if [ "$PR_MODE" = "yes" ]; then
     # delayed by the slower per-package coverage reporting that follows.
     print_status "Computing per-package content hashes..."
     PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
+    # Workspace-level inputs (toolchain config, workspace guards) are hashed
+    # separately: they carry their own blast radius and never enter the
+    # package dependency graph. Without them a change to mypy.ini or a guard
+    # left every stored hash intact and CI validated a stale artifact.
+    WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
 
     print_status "Generating quality summary..."
     OVERALL_STATUS=$(compute_overall_status)
@@ -1027,6 +1059,7 @@ if [ "$PR_MODE" = "yes" ]; then
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
   "tested_packages": $TESTED_PACKAGES_JSON,
   "package_hashes": $PACKAGE_HASHES_JSON,
+  "workspace_hashes": $WORKSPACE_HASHES_JSON,
   "checks": {
     "documentation": {
       "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),

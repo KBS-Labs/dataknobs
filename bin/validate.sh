@@ -101,6 +101,12 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
             VALIDATE_TARGETS+=("packages/$package/src")
         fi
     done
+    # The workspace guards belong to no package, so a loop over packages/*
+    # never reached them. They are the code that asserts the toolchain is
+    # coherent, and until now nothing checked theirs.
+    if [[ -d "$ROOT_DIR/tests" ]]; then
+        VALIDATE_TARGETS+=("tests")
+    fi
 else
     # Process specified targets
     for target in "${TARGETS[@]}"; do

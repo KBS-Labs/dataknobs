@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-06T17:58:36Z",
+  "timestamp": "2026-08-06T20:20:58Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.1 (Homebrew 2026-07-31 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/ruff-target-version-py312",
-  "git_commit": "04cfadf5bec507f3653765f886b2967656a85624",
+  "git_branch": "sbk/toolchain-guard-coverage",
+  "git_commit": "c0616b6ee0b6967afb12e7711fa654a98ae630c4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -56,12 +56,56 @@ DEPENDENCIES = discover_dependencies()
 # All valid package names
 ALL_PACKAGES = sorted(DEPENDENCIES.keys())
 
-# Files/dirs that trigger testing all packages
-GLOBAL_TRIGGERS = [
-    "pyproject.toml",
-    "uv.lock",
-    "conftest.py",
+# ---------------------------------------------------------------------------
+# Workspace-level quality inputs
+# ---------------------------------------------------------------------------
+#
+# Every file outside packages/ that can change a quality result, declared once
+# with the blast radius it carries. Four things read this: change detection
+# below, artifact freshness (bin/package-hashes.py), the CI path filter
+# (.github/workflows/quality-validation.yml — bridged by a guard, since Actions
+# cannot import Python), and tests/test_toolchain_consistency.py.
+#
+# They used to be four hand-maintained lists, and they disagreed. That is how a
+# change to mypy.ini could match no CI pattern, leave every artifact hash
+# untouched, and report green through both mechanisms meant to catch it.
+#
+# Splitting by blast radius is what keeps the fix from overcorrecting. Marking
+# everything global would re-run ten package suites because someone fixed a
+# typo in a guard's docstring; marking nothing global is the hole above.
+_GLOBAL_QUALITY_INPUTS = [
+    "pyproject.toml",  # root ruff + mypy config, and the dependency set
+    "uv.lock",  # the resolved versions every package is tested against
+    "conftest.py",  # root fixtures, on the path of every test run
+    "mypy.ini",  # bin/validate.sh type-checks against it on one branch
+    "pytest.ini",  # testpaths, addopts, and asyncio_mode for every run
+    ".python-version",  # the interpreter itself
 ]
+
+# Reachable only by the workspace guards, so a change here cannot move any
+# package's result. .pylintrc qualifies because no gate step runs pylint —
+# it is read by `bin/dk lint`, tox, and the guard that asserts its py-version.
+_WORKSPACE_ONLY_QUALITY_INPUTS = [
+    ".pylintrc",
+    "tests/",
+]
+
+# Files that trigger testing all packages. Only the global tier: a workspace-only
+# input still invalidates the artifacts, but through the workspace hash scope
+# rather than by dirtying every package. See bin/package-hashes.py.
+GLOBAL_TRIGGERS = list(_GLOBAL_QUALITY_INPUTS)
+
+#: Every workspace-level input, by scope name. Consumed by package-hashes.py to
+#: hash each scope separately and by the toolchain guards to assert that CI
+#: triggers on all of them. Directory entries end in "/" and cover *.py beneath.
+WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
+    "toolchain": _GLOBAL_QUALITY_INPUTS,
+    "workspace_tests": _WORKSPACE_ONLY_QUALITY_INPUTS,
+}
+
+#: Scopes whose change invalidates every package's result rather than only the
+#: workspace guard suite. package-hashes.py reads this to size the dirty set.
+GLOBAL_SCOPES = frozenset({"toolchain"})
 
 # Patterns that indicate docs changes
 DOCS_PATTERNS = [

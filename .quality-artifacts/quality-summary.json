@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-06T17:58:36Z",
+  "timestamp": "2026-08-06T20:20:58Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -17,6 +17,10 @@
   "utils": "563b413c4a5b401405a558c31d1136fd1167ba8aea6afcb4d007ae517a303365",
   "xization": "4264ec515ebdf1db4c8a3d44c17efac66483b9e94895c03b01b747f010aa7049",
   "_algorithm_version": 3
+},
+  "workspace_hashes": {
+  "toolchain": "829a04918283971340f6fd465acf46f5a94006f7ebf6a8ec6846f40370ce8a60",
+  "workspace_tests": "153865a9d67d0a505a5246d3be9cf411e3f06dfb9bbee40cbc8f52d55954e391"
 },
   "checks": {
     "documentation": {

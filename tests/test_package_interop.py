@@ -1,6 +1,15 @@
-"""Integration tests to verify interoperability between dataknobs packages."""
+"""Cross-package interoperability guards.
 
-import pytest
+Each package's own suite proves that package works. These prove the workspace
+composes: that the public exports resolve, that objects handed from one package
+to another are accepted, and that the deprecated aggregate package still
+re-exports what it promises. Nothing here needs an external service.
+
+They live beside the other workspace guards rather than under ``integration/``
+because that directory means "needs a running service" to every entry point
+that reads it — the quality gate skips it in the unit step, and ``bin/test.sh``
+scans packages only. Filed there, these ran nowhere.
+"""
 
 
 def test_structures_package_imports():
@@ -18,7 +27,7 @@ def test_structures_package_imports():
     assert doc.text == "test"
     
     # cdict requires a callable accept function
-    cd = cdict(lambda d, k, v: True, {"key": "value"})
+    cd = cdict(lambda _d, _k, _v: True, {"key": "value"})
     assert cd["key"] == "value"
 
 
@@ -161,7 +170,7 @@ def test_complex_workflow():
     
     # Create a tree structure
     tree = Tree({"text": doc.text, "normalized": normalized})
-    child = tree.add_child({"features": {"text_length": len(doc.text)}})
+    tree.add_child({"features": {"text_length": len(doc.text)}})
     
     # Use json utils to navigate the tree data
     tree_data = tree.data
