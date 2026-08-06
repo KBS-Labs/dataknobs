@@ -1220,12 +1220,36 @@ def _emitted_literals(keyword: str) -> set[str]:
     }
 
 
+#: How a docstring declares one member of a machine-readable vocabulary.
+#: Anchored on the RST literal markup deliberately: a bare ``"x"`` match
+#: would also pick up quoted strings that are *examples* rather than
+#: vocabulary — ``PackResolutionError`` documents ``context["reason"]``,
+#: whose ``"reason"`` is a dict key, not a reason value.
+_DOCUMENTED_VALUE = re.compile(r'``"([^"]+)"``')
+
+
+def _documented_literals(documented_by: type) -> set[str]:
+    """Every vocabulary value declared in a class's docstring.
+
+    The single definition of "documented", shared by both drift
+    directions. When the two used different rules — containment one way,
+    pattern extraction the other — they disagreed about what counted, and
+    a value could satisfy one while being invisible to the other.
+    """
+    documented = set(_DOCUMENTED_VALUE.findall(documented_by.__doc__ or ""))
+    assert documented, (
+        f'no ``"..."`` values found in the {documented_by.__name__} docstring '
+        f"— the extraction pattern is broken, not the docstring"
+    )
+    return documented
+
+
 @pytest.mark.parametrize(
     ("keyword", "documented_by"),
     [("code", PackWarning), ("reason", PackResolutionError)],
 )
 def test_every_emitted_discriminator_is_documented(keyword: str, documented_by: type) -> None:
-    """Each emitted ``code``/``reason`` appears in its class docstring.
+    """Each emitted ``code``/``reason`` is declared in its class docstring.
 
     A consumer escalating a specific value to a hard failure reads that
     docstring. One emitted but undocumented is a value they will never
@@ -1234,10 +1258,11 @@ def test_every_emitted_discriminator_is_documented(keyword: str, documented_by: 
     emitted = _emitted_literals(keyword)
     assert emitted, f"no {keyword}= literals found — the scan is broken"
 
-    doc = documented_by.__doc__ or ""
-    undocumented = sorted(value for value in emitted if f'"{value}"' not in doc)
+    undocumented = sorted(emitted - _documented_literals(documented_by))
     assert not undocumented, (
-        f"{documented_by.__name__} emits {undocumented} but its docstring does not list them"
+        f"{documented_by.__name__} emits {undocumented}, absent from its "
+        f'docstring. Declare each as ``"value"`` — the literal markup is '
+        f"what separates a vocabulary member from a quoted example."
     )
 
 
@@ -1246,17 +1271,14 @@ def test_every_emitted_discriminator_is_documented(keyword: str, documented_by: 
     [("code", PackWarning), ("reason", PackResolutionError)],
 )
 def test_no_documented_discriminator_is_stale(keyword: str, documented_by: type) -> None:
-    """The reverse drift: documented but no longer emitted.
+    """The reverse drift: declared but no longer emitted.
 
-    Checked against the docstring's quoted values only, so surrounding
-    prose can be rewritten freely without tripping this.
+    The mirror of the test above — same two sets, opposite difference — so
+    neither direction can drift from the other's notion of "documented".
+    Only the declared values are compared, so surrounding prose stays free
+    to be rewritten.
     """
-    emitted = _emitted_literals(keyword)
-    doc = documented_by.__doc__ or ""
-    quoted = set(re.findall(r'``"([a-z_]+)"``', doc))
-    assert quoted, f"no quoted values found in {documented_by.__name__} docstring"
-
-    stale = sorted(quoted - emitted)
+    stale = sorted(_documented_literals(documented_by) - _emitted_literals(keyword))
     assert not stale, f"{documented_by.__name__} documents {stale}, which nothing emits"
 
 
