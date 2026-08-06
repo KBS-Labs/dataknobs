@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-08-06T17:58:36Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-08-06T18:22:12Z",
+  "overall_status": "PASS_WITH_SKIPS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
+  "packages": "all",
+  "tested_packages": [],
   "package_hashes": {
   "bots": "84084188b1cf59df17154828824d0a70af13e329ec33ca2f5faa7e079a22d0e6",
   "common": "b3e41627b3a9144b7248c7eaad80c52b7913d5474310f22f587f64af9aa7c19e",
@@ -22,7 +22,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -38,18 +38,18 @@
     "validation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "validate.sh"
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false
+      "skipped": true
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false
+      "skipped": true
     }
   }
 }
