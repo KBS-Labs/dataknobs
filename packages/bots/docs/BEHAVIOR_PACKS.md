@@ -297,7 +297,7 @@ resolution.spec.required_strategy
 # 'wizard'                       ^ only one pack set it
 
 resolution.warnings
-# (PackWarning(code='key_override', ...),)   ^ the contested key, reported
+# one PackWarning, code 'key_override'       ^ the contested key, reported
 ```
 
 ## Failure modes

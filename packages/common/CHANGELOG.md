@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot compose, a *spec's* value whose shape contradicts its rule, a
   custom reducer that raises) surface as `ConfigurationError`, while
   problems in a *binding* raise `PackResolutionError` carrying a
-  machine-readable `reason` (`unknown_pack`, `unknown_binding_key`,
-  `locked_pack_disabled`, `field_conflict`, `invalid_binding`). The split
+  machine-readable `reason` — one of `PackResolutionReason`
+  (`unknown_pack`, `unknown_binding_key`, `locked_pack_disabled`,
+  `field_conflict`, `invalid_binding`). The split
   follows the value's origin rather than its symptom: the same malformed
   value is a programmer error inside a spec and operator input inside a
   binding, so a bad binding value is catchable by `reason` rather than by
@@ -58,12 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subclass that adds its own fields is rejected, since the composed result
   is an instance of the registry's class and such a field would have no
   rule and nowhere to land. Non-fatal diagnostics are structured
-  `PackWarning`s with a stable `code` (`priority_tie` — raised only when
-  tied packs actually contend for a field, so the common
-  everything-at-`priority=0` case stays quiet; `value_override`;
-  `key_override`; `binding_override_ignored`, for a binding key whose
-  declared rule then discarded the binding's value) so a deployment can
-  escalate one class of collision without pattern-matching prose. A
+  `PackWarning`s with a stable `code` — one of `PackWarningCode`
+  (`priority_tie` — raised only when tied packs actually contend for a
+  field, so the common everything-at-`priority=0` case stays quiet;
+  `value_override`; `key_override`; `binding_override_ignored`, for a
+  binding key whose declared rule then discarded the binding's value) so a
+  deployment can escalate one class of collision without pattern-matching
+  prose. Both vocabularies are `str` enums: each member compares equal to
+  its plain string and renders as that string when logged, so an escalation
+  table may be keyed by either, and each enum is the vocabulary's single
+  definition rather than one copy among several. A
   warning's `packs` names the packs that *contributed* to the field's
   current value, so a `FIRST_WINS` value that was discarded does not linger
   in a later warning's source list. The composed shape is independent of how
@@ -75,11 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `locked` load-bearing: a platform baseline can assert a pack a per-tenant
   overlay must not switch off. No module-level singleton is provided — a
   pack binding is a per-deployment decision, and a process-global registry
-  would be a multi-tenant hazard. `MergeKind`, `UNSET`, `Reducer`,
-  `CompositionRule`, `PackSpec`, `PackWarning`, `PackResolution`,
-  `PackResolutionError`, `compose_packs`, `merge_bindings`, and
-  `PackRegistry` are exported from the top-level `dataknobs_common`
-  namespace. See `docs/guides/packs.md`.
+  would be a multi-tenant hazard. A `code` or `reason` supplied as its
+  plain string is normalized to its member, and one that names neither is
+  rejected, so what a consumer reads off a warning or an error is always a
+  member. `MergeKind`, `UNSET`, `Reducer`,
+  `CompositionRule`, `PackSpec`, `PackWarning`, `PackWarningCode`,
+  `PackResolution`, `PackResolutionError`, `PackResolutionReason`,
+  `compose_packs`, `merge_bindings`, and `PackRegistry` are exported from
+  the top-level `dataknobs_common` namespace. See `docs/guides/packs.md`.
 
 ## v1.6.3 - 2026-07-29
 

@@ -59,10 +59,8 @@ Failure posture — two error families, deliberately distinct:
   a value's shape and a reducer's behaviour are only knowable once there is
   a value, so those surface at :meth:`PackRegistry.resolve`.
 - **Resolution errors** raise :class:`PackResolutionError` (a
-  ``ConfigurationError`` subclass) carrying ``context["reason"]``: an unknown
-  pack name, an unknown binding key, a locked-but-disabled pack, a conflict
-  under ``UNANIMOUS``, a malformed binding, or a *binding's* value whose
-  shape contradicts its rule.
+  ``ConfigurationError`` subclass) carrying ``context["reason"]`` — one of
+  :class:`PackResolutionReason`, which names every case.
 
 The split follows the value's **origin**, not its symptom: the same
 malformed value is a programmer error inside a spec and operator input
@@ -109,7 +107,7 @@ import dataclasses
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, NamedTuple, TypeAlias, TypeVar
 
@@ -211,6 +209,55 @@ Reducer: TypeAlias = Callable[[Any, Any], Any]
 CompositionRule: TypeAlias = MergeKind | Reducer
 
 
+class PackWarningCode(StrEnum):
+    """The complete :attr:`PackWarning.code` vocabulary.
+
+    One definition. The members below are what resolution emits, what a
+    consumer branches on, and what every documented table is checked
+    against — no hand-maintained copy can drift from them unnoticed.
+
+    :class:`~enum.StrEnum` rather than the ``(str, Enum)`` spelling used
+    elsewhere in the tree: a diagnostic code is read by machines *and*
+    written to logs, and only ``StrEnum`` gives both. Comparison, hashing,
+    set membership and JSON behave as the plain string either way, but
+    ``(str, Enum)`` inherits ``Enum.__str__``, so an f-string or ``%s``
+    would render ``PackWarningCode.KEY_OVERRIDE`` where the documented
+    contract says ``key_override``.
+    """
+
+    #: Selected packs share a priority *and* contend for a field, so
+    #: composition order fell back to registration order.
+    PRIORITY_TIE = "priority_tie"
+    #: ``LAST_WINS`` / ``FIRST_WINS`` discarded a differing value.
+    VALUE_OVERRIDE = "value_override"
+    #: ``MERGE`` overrode keys another pack had set.
+    KEY_OVERRIDE = "key_override"
+    #: A binding named a field whose declared rule then discarded the
+    #: binding's value — an operator typed a key that did nothing.
+    BINDING_OVERRIDE_IGNORED = "binding_override_ignored"
+
+
+class PackResolutionReason(StrEnum):
+    """The complete :attr:`PackResolutionError.reason` vocabulary.
+
+    The counterpart to :class:`PackWarningCode`, one severity up: every
+    member marks a fail-closed rejection of operator input.
+    """
+
+    #: A binding names a pack that is not registered.
+    UNKNOWN_PACK = "unknown_pack"
+    #: A binding body carries a key that is neither a flag nor a
+    #: composable field.
+    UNKNOWN_BINDING_KEY = "unknown_binding_key"
+    #: ``locked: true`` alongside ``enabled: false``.
+    LOCKED_PACK_DISABLED = "locked_pack_disabled"
+    #: Two packs disagree on a ``UNANIMOUS`` field.
+    FIELD_CONFLICT = "field_conflict"
+    #: Malformed body, a non-boolean flag / non-integer priority, or a
+    #: *binding's* value whose shape contradicts its rule.
+    INVALID_BINDING = "invalid_binding"
+
+
 @dataclass(frozen=True)
 class PackWarning:
     """A non-fatal resolution diagnostic.
@@ -219,18 +266,26 @@ class PackWarning:
     specific ``code`` to a hard failure without pattern-matching prose.
 
     Attributes:
-        code: Stable machine-readable discriminator — ``"priority_tie"``,
-            ``"value_override"``, or ``"key_override"``.
+        code: Stable machine-readable discriminator. One of
+            :class:`PackWarningCode`, which is the vocabulary's single
+            definition — each member carries what emits it.
         message: Human-readable description.
         packs: Names of the packs involved, in fold order.
         field: The spec field the warning concerns, or ``None`` for
             whole-resolution diagnostics such as a priority tie.
     """
 
-    code: str
+    code: PackWarningCode
     message: str
     packs: tuple[str, ...] = ()
     field: str | None = None
+
+    def __post_init__(self) -> None:
+        # The plain string is accepted — that is the documented equivalence
+        # — but normalized, so the declared type is what is stored rather
+        # than what was intended, and an unknown code fails closed here in
+        # the same way every other value this module accepts does.
+        object.__setattr__(self, "code", PackWarningCode(self.code))
 
     def __str__(self) -> str:
         return self.message
@@ -240,8 +295,8 @@ class PackResolutionError(ConfigurationError):
     """Raised for every fail-closed rejection during resolution.
 
     ``context["reason"]`` (also available as :attr:`reason`) is one of
-    ``"unknown_pack"``, ``"unknown_binding_key"``, ``"locked_pack_disabled"``,
-    ``"field_conflict"``, ``"invalid_binding"``.
+    :class:`PackResolutionReason`, which is the vocabulary's single
+    definition — each member carries what raises it.
 
     Distinct from a plain :class:`ConfigurationError`, which this module
     raises for *declaration* problems (a spec class whose composition plan
@@ -249,7 +304,14 @@ class PackResolutionError(ConfigurationError):
     be honoured).
     """
 
-    def __init__(self, message: str, *, reason: str, **context: Any) -> None:
+    def __init__(
+        self, message: str, *, reason: PackResolutionReason, **context: Any
+    ) -> None:
+        # Normalized for the same reason as ``PackWarning.code``: a plain
+        # string stays acceptable, but an unrecognized one is a typo, not a
+        # new vocabulary member, and this is the only public constructor
+        # through which one could reach a consumer's ``except`` clause.
+        reason = PackResolutionReason(reason)
         super().__init__(message, context={"reason": reason, **context})
         self.reason = reason
 
@@ -606,7 +668,7 @@ def _shape_error(
     """
     context = {"field": field_name, "source": source, "rule": _rule_label(rule)}
     if from_binding:
-        return PackResolutionError(message, reason="invalid_binding", **context)
+        return PackResolutionError(message, reason=PackResolutionReason.INVALID_BINDING, **context)
     return ConfigurationError(message, context=context)
 
 
@@ -733,7 +795,7 @@ def _reduce_field(
                 f"Packs disagree on '{field_name}': "
                 f"{acc_packs} declare {acc!r} but '{next_pack}' declares {nxt!r}. "
                 "The field is declared UNANIMOUS — every pack that sets it must agree.",
-                reason="field_conflict",
+                reason=PackResolutionReason.FIELD_CONFLICT,
                 field=field_name,
                 packs=[*acc_packs, next_pack],
                 values=[repr(acc), repr(nxt)],
@@ -753,7 +815,7 @@ def _reduce_field(
             winner,
             (
                 PackWarning(
-                    code="value_override",
+                    code=PackWarningCode.VALUE_OVERRIDE,
                     message=(
                         f"'{field_name}' set by multiple packs "
                         f"({[*acc_packs, next_pack]}); "
@@ -781,7 +843,7 @@ def _reduce_field(
         merged,
         (
             PackWarning(
-                code="key_override",
+                code=PackWarningCode.KEY_OVERRIDE,
                 message=(
                     f"'{next_pack}' overrides keys {overridden} of '{field_name}' "
                     f"previously set by {list(acc_packs)}"
@@ -954,7 +1016,7 @@ def merge_bindings(*layers: Mapping[str, Any]) -> dict[str, Any]:
         platform = {"audit": {"locked": True}}
         tenant = {"audit": {"enabled": False}}
         registry.resolve(merge_bindings(platform, tenant))
-        # PackResolutionError(reason="locked_pack_disabled")
+        # PackResolutionError(reason=PackResolutionReason.LOCKED_PACK_DISABLED)
 
     Merging is per pack and *shallow* within a body: a later layer replaces
     the keys it names and leaves the rest. Field overrides are values in
@@ -976,7 +1038,7 @@ def merge_bindings(*layers: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(layer, Mapping):
             raise PackResolutionError(
                 f"Each binding layer must be a mapping; got {type(layer).__name__}",
-                reason="invalid_binding",
+                reason=PackResolutionReason.INVALID_BINDING,
             )
         for pack_name, body in layer.items():
             if not isinstance(body, Mapping):
@@ -1128,7 +1190,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             raise PackResolutionError(
                 f"Bindings must be a mapping of pack name to binding body; got "
                 f"{type(bindings).__name__}",
-                reason="invalid_binding",
+                reason=PackResolutionReason.INVALID_BINDING,
                 registry=self.name,
             )
 
@@ -1144,7 +1206,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             if spec is None:
                 raise PackResolutionError(
                     f"Unknown pack '{pack_name}' in {self.name} bindings",
-                    reason="unknown_pack",
+                    reason=PackResolutionReason.UNKNOWN_PACK,
                     registry=self.name,
                     pack=pack_name,
                     available=sorted(registered),
@@ -1182,7 +1244,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             raise PackResolutionError(
                 f"Binding for pack '{pack_name}' must be a mapping (use '{{}}' to "
                 f"enable with no overrides); got {type(binding).__name__}",
-                reason="invalid_binding",
+                reason=PackResolutionReason.INVALID_BINDING,
                 registry=self.name,
                 pack=pack_name,
             )
@@ -1192,7 +1254,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             raise PackResolutionError(
                 f"Unknown binding key(s) {unknown} for pack '{pack_name}'; "
                 f"allowed: {sorted(plan.binding_keys)}",
-                reason="unknown_binding_key",
+                reason=PackResolutionReason.UNKNOWN_BINDING_KEY,
                 registry=self.name,
                 pack=pack_name,
                 keys=unknown,
@@ -1203,7 +1265,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
                 raise PackResolutionError(
                     f"Binding key '{flag}' for pack '{pack_name}' must be a boolean; "
                     f"got {binding[flag]!r}",
-                    reason="invalid_binding",
+                    reason=PackResolutionReason.INVALID_BINDING,
                     registry=self.name,
                     pack=pack_name,
                     key=flag,
@@ -1215,7 +1277,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             raise PackResolutionError(
                 f"Pack '{pack_name}' is locked but the binding disables it; a locked "
                 "pack cannot be turned off",
-                reason="locked_pack_disabled",
+                reason=PackResolutionReason.LOCKED_PACK_DISABLED,
                 registry=self.name,
                 pack=pack_name,
             )
@@ -1287,7 +1349,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
         ]
         return tuple(
             PackWarning(
-                code="binding_override_ignored",
+                code=PackWarningCode.BINDING_OVERRIDE_IGNORED,
                 message=(
                     f"Binding for '{spec.name}' sets '{key}' to "
                     f"{overrides[key]!r}, but the field's declared "
@@ -1309,7 +1371,7 @@ class PackRegistry(Registry[SpecT], Generic[SpecT]):
             raise PackResolutionError(
                 f"Binding key 'priority' for pack '{spec.name}' must be an integer; "
                 f"got {priority!r}",
-                reason="invalid_binding",
+                reason=PackResolutionReason.INVALID_BINDING,
                 registry=self.name,
                 pack=spec.name,
                 key="priority",
@@ -1357,7 +1419,7 @@ def _priority_tie_warnings(
             continue
         names = [spec.name for spec in specs]
         yield PackWarning(
-            code="priority_tie",
+            code=PackWarningCode.PRIORITY_TIE,
             message=(
                 f"Packs {names} share priority {priority} and both set "
                 f"{sorted(contended)}; composition order falls back to "
@@ -1368,13 +1430,16 @@ def _priority_tie_warnings(
 
 
 __all__ = [
+    "UNSET",
     "CompositionRule",
     "MergeKind",
     "PackRegistry",
     "PackResolution",
     "PackResolutionError",
+    "PackResolutionReason",
     "PackSpec",
     "PackWarning",
+    "PackWarningCode",
     "Reducer",
     "compose_packs",
     "merge_bindings",

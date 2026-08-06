@@ -68,7 +68,7 @@ resolution = registry.resolve({"base": {}, "regulated": {"locked": True}})
 resolution.packs           # ('base', 'regulated')
 resolution.spec.filters    # ('dedupe', 'pii-redact')  — deduped concat
 resolution.spec.limits     # {'max_mb': 10}  — highest priority wins the key
-resolution.warnings        # (PackWarning(code='key_override', ...),)
+resolution.warnings        # one PackWarning, code 'key_override'
 ```
 
 ## Declaring a spec
@@ -187,7 +187,7 @@ pinned.register_pack(PinPack(name="base", engine="v1"))
 
 resolution = pinned.resolve({"base": {"engine": "v2"}})
 resolution.spec.engine                        # 'v1' — the pack pinned it
-[w.code for w in resolution.warnings]         # ['binding_override_ignored']
+[str(w.code) for w in resolution.warnings]    # ['binding_override_ignored']
 ```
 
 #### Making "explicitly the default" expressible in a pack
@@ -332,7 +332,7 @@ platform = {"regulated": {"locked": True}}
 tenant = {"regulated": {"enabled": False}}
 
 registry.resolve(merge_bindings(platform, tenant))
-# PackResolutionError(reason="locked_pack_disabled")
+# PackResolutionError(reason=PackResolutionReason.LOCKED_PACK_DISABLED)
 ```
 
 Later layers win, per pack and per key. This is also what makes `locked`
@@ -395,18 +395,26 @@ for.
 bare strings, so a deployment can escalate a specific `code` to a hard
 failure without pattern-matching prose:
 
-| `code` | Emitted when |
-|---|---|
-| `priority_tie` | Two or more selected packs share a priority **and contend for a field** |
-| `value_override` | `LAST_WINS` / `FIRST_WINS` discarded a differing value |
-| `key_override` | `MERGE` overrode keys another pack had set |
-| `binding_override_ignored` | A binding named a field whose declared rule then discarded the binding's value |
+The vocabulary is `PackWarningCode`, and it is the single definition — the
+table below is checked against it, so the two cannot drift:
+
+| `PackWarningCode` | `code` | Emitted when |
+|---|---|---|
+| `PRIORITY_TIE` | `priority_tie` | Two or more selected packs share a priority **and contend for a field** |
+| `VALUE_OVERRIDE` | `value_override` | `LAST_WINS` / `FIRST_WINS` discarded a differing value |
+| `KEY_OVERRIDE` | `key_override` | `MERGE` overrode keys another pack had set |
+| `BINDING_OVERRIDE_IGNORED` | `binding_override_ignored` | A binding named a field whose declared rule then discarded the binding's value |
+
+Members are `str`-typed, so an escalation table may be keyed by either the
+member or the plain string, and a code renders as its value when logged:
 
 ```python
+from dataknobs_common import PackWarningCode
+
 for warning in resolution.warnings:
-    if warning.code == "key_override":
+    if warning.code == PackWarningCode.KEY_OVERRIDE:   # `== "key_override"` also works
         raise MyDeploymentError(str(warning))
-    logger.warning("pack composition: %s", warning)
+    logger.warning("pack composition [%s]: %s", warning.code, warning)
 ```
 
 `PackWarning.packs` names the packs that **contributed** to the field's
@@ -436,13 +444,16 @@ knowable once there is a value to check, so those surface at `resolve()`.
 subclass) carrying a machine-readable `reason`. These are operator input —
 a binding a deployment supplied:
 
-| `reason` | Cause |
-|---|---|
-| `unknown_pack` | A binding names a pack that is not registered |
-| `unknown_binding_key` | A binding body carries a key that is neither a flag nor a composable field |
-| `locked_pack_disabled` | `locked: true` with `enabled: false` |
-| `field_conflict` | Two packs disagree on a `UNANIMOUS` field |
-| `invalid_binding` | Malformed body, a non-boolean flag / non-integer priority, or a *binding's* value whose shape contradicts its rule |
+The vocabulary is `PackResolutionReason`, the counterpart to
+`PackWarningCode` one severity up, and likewise the single definition:
+
+| `PackResolutionReason` | `reason` | Cause |
+|---|---|---|
+| `UNKNOWN_PACK` | `unknown_pack` | A binding names a pack that is not registered |
+| `UNKNOWN_BINDING_KEY` | `unknown_binding_key` | A binding body carries a key that is neither a flag nor a composable field |
+| `LOCKED_PACK_DISABLED` | `locked_pack_disabled` | `locked: true` with `enabled: false` |
+| `FIELD_CONFLICT` | `field_conflict` | Two packs disagree on a `UNANIMOUS` field |
+| `INVALID_BINDING` | `invalid_binding` | Malformed body, a non-boolean flag / non-integer priority, or a *binding's* value whose shape contradicts its rule |
 
 The split follows the value's **origin**, not its symptom: the same bad
 shape is an authoring bug inside a spec (written in code) and operator
