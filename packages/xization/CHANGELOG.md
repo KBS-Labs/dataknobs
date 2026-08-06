@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MultiAuthorityData.get_unique_vals_df` raised `TypeError` for columns with
+  a pandas extension dtype (nullable `Int64`/`Float64`/`boolean`, `category`,
+  `string`). Integer detection moved from `np.issubdtype` to
+  `pd.api.types.is_integer_dtype`, so these columns produce a unique-value
+  frame like any other — integer columns indexed by value, others by position.
+
+  **Behaviour change for `timedelta64` columns.** `np.timedelta64` subclasses
+  `np.signedinteger`, so the old check treated a timedelta column as integer
+  and used the raw timedelta values as row IDs. It is now treated as
+  non-integer and gets a positional 0..n-1 index. This is the only column type
+  whose branch changed without previously raising; `datetime64`, `bool`, and
+  the signed/unsigned numpy integer and float dtypes are unaffected.
 - Raised the `nltk` floor to `>=3.10.2`, excluding the broken 3.10.1
   release. 3.10.1 shipped an import-security hook (`nltk/inisec.py`) that
   blocked any module whose install path resolved under the current working

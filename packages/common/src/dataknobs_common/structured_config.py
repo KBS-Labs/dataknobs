@@ -52,10 +52,10 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import (
-    TYPE_CHECKING,
     Any,
     ClassVar,
     Generic,
+    Self,
     TypeVar,
     Union,
     cast,
@@ -67,15 +67,6 @@ from typing import (
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.registry import Registry
 from dataknobs_common.serialization import jsonify
-
-if TYPE_CHECKING:
-    # ``Self`` is referenced only in (lazy, ``from __future__``-stringized)
-    # annotations, so it is never evaluated at runtime. Guarding the import
-    # keeps this zero-dependency package from importing ``typing_extensions``
-    # at module load. ``typing_extensions`` (not ``typing``) is the source
-    # because mypy's ``python_version = "3.10"`` target predates
-    # ``typing.Self``; mypy resolves the guarded import regardless.
-    from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
