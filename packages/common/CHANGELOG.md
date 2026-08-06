@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot compose, a *spec's* value whose shape contradicts its rule, a
   custom reducer that raises) surface as `ConfigurationError`, while
   problems in a *binding* raise `PackResolutionError` carrying a
-  machine-readable `reason` (`unknown_pack`, `unknown_binding_key`,
-  `locked_pack_disabled`, `field_conflict`, `invalid_binding`). The split
+  machine-readable `reason` — one of `PackResolutionReason`
+  (`unknown_pack`, `unknown_binding_key`, `locked_pack_disabled`,
+  `field_conflict`, `invalid_binding`). The split
   follows the value's origin rather than its symptom: the same malformed
   value is a programmer error inside a spec and operator input inside a
   binding, so a bad binding value is catchable by `reason` rather than by
@@ -58,12 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subclass that adds its own fields is rejected, since the composed result
   is an instance of the registry's class and such a field would have no
   rule and nowhere to land. Non-fatal diagnostics are structured
-  `PackWarning`s with a stable `code` (`priority_tie` — raised only when
-  tied packs actually contend for a field, so the common
-  everything-at-`priority=0` case stays quiet; `value_override`;
-  `key_override`; `binding_override_ignored`, for a binding key whose
-  declared rule then discarded the binding's value) so a deployment can
-  escalate one class of collision without pattern-matching prose. A
+  `PackWarning`s with a stable `code` — one of `PackWarningCode`
+  (`priority_tie` — raised only when tied packs actually contend for a
+  field, so the common everything-at-`priority=0` case stays quiet;
+  `value_override`; `key_override`; `binding_override_ignored`, for a
+  binding key whose declared rule then discarded the binding's value) so a
+  deployment can escalate one class of collision without pattern-matching
+  prose. Both vocabularies are `str` enums: each member compares equal to
+  its plain string and renders as that string when logged, so an escalation
+  table may be keyed by either, and each enum is the vocabulary's single
+  definition rather than one copy among several. A
   warning's `packs` names the packs that *contributed* to the field's
   current value, so a `FIRST_WINS` value that was discarded does not linger
   in a later warning's source list. The composed shape is independent of how

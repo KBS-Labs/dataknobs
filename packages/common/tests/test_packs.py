@@ -16,9 +16,10 @@ import dataclasses
 import gc
 import pathlib
 import pickle
-import re
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
@@ -31,8 +32,10 @@ from dataknobs_common.packs import (
     PackRegistry,
     PackResolution,
     PackResolutionError,
+    PackResolutionReason,
     PackSpec,
     PackWarning,
+    PackWarningCode,
     compose_packs,
     merge_bindings,
 )
@@ -96,7 +99,7 @@ def registry() -> PackRegistry[DemoPack]:
     return reg
 
 
-def _codes(resolution: PackResolution[Any]) -> list[str]:
+def _codes(resolution: PackResolution[Any]) -> list[PackWarningCode]:
     return [warning.code for warning in resolution.warnings]
 
 
@@ -545,9 +548,9 @@ def test_differing_values_emit_override_warnings() -> None:
     assert resolution.spec.mode == "slow"
     assert sorted(_codes(resolution)) == ["key_override", "value_override"]
     by_code = {warning.code: warning for warning in resolution.warnings}
-    assert by_code["value_override"].field == "mode"
-    assert by_code["key_override"].field == "limits"
-    assert by_code["value_override"].packs == ("a", "b")
+    assert by_code[PackWarningCode.VALUE_OVERRIDE].field == "mode"
+    assert by_code[PackWarningCode.KEY_OVERRIDE].field == "limits"
+    assert by_code[PackWarningCode.VALUE_OVERRIDE].packs == ("a", "b")
 
 
 def test_equal_values_emit_no_warning() -> None:
@@ -559,7 +562,31 @@ def test_equal_values_emit_no_warning() -> None:
 
 
 def test_pack_warning_str_is_the_message() -> None:
-    assert str(PackWarning(code="c", message="hello")) == "hello"
+    assert str(PackWarning(code=PackWarningCode.PRIORITY_TIE, message="hello")) == "hello"
+
+
+def test_vocabulary_members_render_as_their_value() -> None:
+    """A code is read by machines *and* written to logs; both must work.
+
+    ``(str, Enum)`` renders as ``Class.MEMBER`` under ``str()`` / f-string,
+    which would put ``PackWarningCode.KEY_OVERRIDE`` in a log line where the
+    contract says ``key_override``. Comparison and JSON are unaffected either
+    way, so nothing else in the suite would notice the regression.
+    """
+    code = PackWarningCode.KEY_OVERRIDE
+    assert str(code) == "key_override"
+    assert f"{code}" == "key_override"
+    # Percent-formatting is the subject here, not a style choice: it is what
+    # ``logger.warning("%s", code)`` does internally, and it renders through a
+    # different path than ``str()`` or an f-string. Hence the suppression.
+    assert "%s" % code == "key_override"  # noqa: UP031
+    # The plain-string contract the guide documents, unchanged.
+    assert code == "key_override"
+    assert code in {"key_override"}
+
+    reason = PackResolutionReason.UNKNOWN_PACK
+    assert f"{reason}" == "unknown_pack"
+    assert reason == "unknown_pack"
 
 
 # --------------------------------------------------------------------------
@@ -1185,116 +1212,118 @@ def test_unanimous_agreement_still_records_every_asserting_pack() -> None:
 
 
 # --------------------------------------------------------------------------
-# Contract surfaces: the public string vocabularies and the export list
+# Contract surfaces: the public vocabularies and the export list
 # --------------------------------------------------------------------------
 #
-# ``PackWarning.code`` and ``PackResolutionError.reason`` are documented as
-# machine-readable discriminators — the whole reason they are structured
-# rather than prose is so a deployment can branch on one. That makes each
-# emitted literal part of the public contract, and its docstring the place
-# consumers read it from. Both lists live in more than one place (the
-# emission sites, the class docstring, the guide's table), with nothing
-# tying them together, so the drift these guards catch has already happened
-# once: ``binding_override_ignored`` shipped emitted, tabled in the guide,
-# and absent from the docstring a consumer would build an escalation table
-# from.
+# ``PackWarning.code`` and ``PackResolutionError.reason`` are machine-readable
+# discriminators — the reason they are structured rather than prose is so a
+# deployment can branch on one. Each has exactly one definition,
+# ``PackWarningCode`` / ``PackResolutionReason``, and every emission site
+# passes a member of it. "Emitted but outside the vocabulary" is therefore a
+# type error rather than something a test has to notice.
+#
+# Two properties a single definition still cannot pin, so they are tested
+# here: that every declared member is still *reachable*, and that the guide
+# still describes it. The drift this replaces was real — a fourth warning
+# code shipped emitted and tabled in the guide, but absent from the
+# hand-maintained list in a class docstring, which is where a consumer builds
+# an escalation table from. That list is now the enum itself.
 
 
-def _module_source() -> str:
-    import dataknobs_common.packs as packs_module
+def _observed_warning_codes() -> set[Enum]:
+    """Warning codes collected from real resolutions, one per emitting path."""
+    seen: set[Enum] = set()
 
-    return pathlib.Path(packs_module.__file__).read_text()
+    # priority_tie: equal priority *and* a contended field.
+    tie: PackRegistry[DemoPack] = PackRegistry("tie", DemoPack)
+    tie.register_pack(DemoPack(name="a", mode="strict"))
+    tie.register_pack(DemoPack(name="b", mode="lax"))
+    seen.update(w.code for w in tie.resolve({"a": {}, "b": {}}).warnings)
 
+    # value_override: LAST_WINS discards. key_override: MERGE overwrites a key.
+    over: PackRegistry[DemoPack] = PackRegistry("over", DemoPack)
+    over.register_pack(DemoPack(name="a", priority=0, mode="m1", limits={"rps": 10}))
+    over.register_pack(DemoPack(name="b", priority=1, mode="m2", limits={"rps": 2}))
+    seen.update(w.code for w in over.resolve({"a": {}, "b": {}}).warnings)
 
-def _emitted_literals(keyword: str) -> set[str]:
-    """Every constant string passed as ``keyword=`` anywhere in the module."""
-    tree = ast.parse(_module_source())
-    return {
-        kw.value.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        for kw in node.keywords
-        if kw.arg == keyword
-        and isinstance(kw.value, ast.Constant)
-        and isinstance(kw.value.value, str)
-    }
+    # binding_override_ignored: FIRST_WINS already pinned by the pack itself.
+    pin: PackRegistry[DemoPack] = PackRegistry("pin", DemoPack)
+    pin.register_pack(DemoPack(name="base", pinned="a"))
+    seen.update(w.code for w in pin.resolve({"base": {"pinned": "b"}}).warnings)
 
-
-#: How a docstring declares one member of a machine-readable vocabulary.
-#: Anchored on the RST literal markup deliberately: a bare ``"x"`` match
-#: would also pick up quoted strings that are *examples* rather than
-#: vocabulary — ``PackResolutionError`` documents ``context["reason"]``,
-#: whose ``"reason"`` is a dict key, not a reason value.
-_DOCUMENTED_VALUE = re.compile(r'``"([^"]+)"``')
+    return seen
 
 
-def _documented_literals(documented_by: type) -> set[str]:
-    """Every vocabulary value declared in a class's docstring.
+def _observed_resolution_reasons() -> set[Enum]:
+    """Reasons collected by provoking each fail-closed rejection."""
+    reg: PackRegistry[DemoPack] = PackRegistry("bad", DemoPack)
+    reg.register_pack(DemoPack(name="a", tier="std"))
+    reg.register_pack(DemoPack(name="b", priority=1, tier="pro"))
 
-    The single definition of "documented", shared by both drift
-    directions. When the two used different rules — containment one way,
-    pattern extraction the other — they disagreed about what counted, and
-    a value could satisfy one while being invisible to the other.
+    provocations: list[dict[str, Any]] = [
+        {"nope": {}},                               # unknown_pack
+        {"a": {"lockd": True}},                     # unknown_binding_key
+        {"a": {"locked": True, "enabled": False}},  # locked_pack_disabled
+        {"a": {}, "b": {}},                         # field_conflict on UNANIMOUS tier
+        {"a": {"enabled": "yes"}},                  # invalid_binding
+    ]
+
+    seen: set[Enum] = set()
+    for binding in provocations:
+        with pytest.raises(PackResolutionError) as excinfo:
+            reg.resolve(binding)
+        seen.add(excinfo.value.reason)
+    return seen
+
+
+_VOCABULARIES = [
+    pytest.param(PackWarningCode, _observed_warning_codes, id="PackWarningCode"),
+    pytest.param(
+        PackResolutionReason, _observed_resolution_reasons, id="PackResolutionReason"
+    ),
+]
+
+
+@pytest.mark.parametrize(("vocabulary", "observe"), _VOCABULARIES)
+def test_every_declared_member_is_still_reachable(
+    vocabulary: type[Enum], observe: Callable[[], set[Enum]]
+) -> None:
+    """No member is stale: each is still produced by a real resolution.
+
+    The reverse drift direction, and the one the type checker cannot cover.
+    A member left behind after its emission site was removed reads to a
+    consumer as a case they must handle and will never see. Proving
+    reachability through the real fold is also strictly stronger than
+    proving the literal appears somewhere in the source.
     """
-    documented = set(_DOCUMENTED_VALUE.findall(documented_by.__doc__ or ""))
-    assert documented, (
-        f'no ``"..."`` values found in the {documented_by.__name__} docstring '
-        f"— the extraction pattern is broken, not the docstring"
+    unreachable = sorted(set(vocabulary) - observe(), key=str)
+    assert not unreachable, (
+        f"{vocabulary.__name__} declares {unreachable}, which no resolution "
+        f"produced. Either the member is stale and should be removed, or its "
+        f"emitting path needs a provocation adding above."
     )
-    return documented
 
 
-@pytest.mark.parametrize(
-    ("keyword", "documented_by"),
-    [("code", PackWarning), ("reason", PackResolutionError)],
-)
-def test_every_emitted_discriminator_is_documented(keyword: str, documented_by: type) -> None:
-    """Each emitted ``code``/``reason`` is declared in its class docstring.
+@pytest.mark.parametrize(("vocabulary", "observe"), _VOCABULARIES)
+def test_every_declared_member_is_described_in_the_guide(
+    vocabulary: type[Enum], observe: Callable[[], set[Enum]]
+) -> None:
+    """The one remaining copy of each vocabulary: the guide's table.
 
-    A consumer escalating a specific value to a hard failure reads that
-    docstring. One emitted but undocumented is a value they will never
-    handle, and they get no signal that it exists.
-    """
-    emitted = _emitted_literals(keyword)
-    assert emitted, f"no {keyword}= literals found — the scan is broken"
-
-    undocumented = sorted(emitted - _documented_literals(documented_by))
-    assert not undocumented, (
-        f"{documented_by.__name__} emits {undocumented}, absent from its "
-        f'docstring. Declare each as ``"value"`` — the literal markup is '
-        f"what separates a vocabulary member from a quoted example."
-    )
-
-
-@pytest.mark.parametrize(
-    ("keyword", "documented_by"),
-    [("code", PackWarning), ("reason", PackResolutionError)],
-)
-def test_no_documented_discriminator_is_stale(keyword: str, documented_by: type) -> None:
-    """The reverse drift: declared but no longer emitted.
-
-    The mirror of the test above — same two sets, opposite difference — so
-    neither direction can drift from the other's notion of "documented".
-    Only the declared values are compared, so surrounding prose stays free
-    to be rewritten.
-    """
-    stale = sorted(_documented_literals(documented_by) - _emitted_literals(keyword))
-    assert not stale, f"{documented_by.__name__} documents {stale}, which nothing emits"
-
-
-def test_every_emitted_warning_code_is_in_the_guide() -> None:
-    """The third copy: the guide's warning-code table.
-
-    Containment only, not table parsing — the guide can be restructured
-    freely, but a new code must be described somewhere in it.
+    Containment rather than table parsing, so the guide stays free to be
+    restructured. Only this direction is checked: extracting candidate
+    values back out of prose would collect every inline-code span in the
+    document, and a guard that fires on a legitimate edit is worse than no
+    guard. A stale row is a documentation bug; an *undocumented* member is
+    a contract a consumer cannot discover.
     """
     guide = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "packs.md"
     if not guide.is_file():  # pragma: no cover - packaging layouts without docs
         pytest.skip("package docs not present in this layout")
 
     text = guide.read_text()
-    missing = sorted(code for code in _emitted_literals("code") if code not in text)
-    assert not missing, f"warning codes absent from the guide: {missing}"
+    missing = sorted((m for m in vocabulary if m.value not in text), key=str)
+    assert not missing, f"{vocabulary.__name__} members absent from the guide: {missing}"
 
 
 def test_all_lists_every_public_name_the_module_defines() -> None:
@@ -1303,10 +1332,16 @@ def test_all_lists_every_public_name_the_module_defines() -> None:
     ``UNSET`` shipped importable, re-exported from ``dataknobs_common``, and
     missing here — invisible to ``import *`` and to any tooling that reads
     ``__all__`` to enumerate a module's surface.
+
+    Only this direction needs a test: an ``__all__`` entry naming a symbol
+    the module does not define is ruff's F822, which is already enforced.
     """
     import dataknobs_common.packs as packs_module
 
-    tree = ast.parse(_module_source())
+    # Typing artifacts are declarations, not exported surface.
+    typing_artifacts = {"TypeVar", "ParamSpec", "TypeVarTuple", "NewType"}
+
+    tree = ast.parse(pathlib.Path(packs_module.__file__).read_text())
     defined: set[str] = set()
     for node in tree.body:
         if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
@@ -1314,12 +1349,12 @@ def test_all_lists_every_public_name_the_module_defines() -> None:
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             defined.add(node.target.id)
         elif isinstance(node, ast.Assign):
-            # A TypeVar is a typing artifact, not an exported name.
-            if isinstance(node.value, ast.Call) and (
-                getattr(node.value.func, "id", "") == "TypeVar"
-            ):
+            called = node.value.func if isinstance(node.value, ast.Call) else None
+            # Matches both the bare ``TypeVar(...)`` and ``typing.TypeVar(...)``.
+            name = getattr(called, "attr", None) or getattr(called, "id", None)
+            if name in typing_artifacts:
                 continue
-            defined.update(target.id for target in node.targets if isinstance(target, ast.Name))
+            defined.update(t.id for t in node.targets if isinstance(t, ast.Name))
 
     public = {name for name in defined if not name.startswith("_")}
     assert not (public - set(packs_module.__all__)), (
