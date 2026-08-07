@@ -81,13 +81,45 @@ When updating documentation for any package:
    | `transclude` | Site page is a `--8<--` include of the package source (**preferred for new docs** — drift is structurally impossible) |
    | `symlink` | Site page symlinks the source; no intra-doc links need site-form rewriting |
    | `mirror` | Hand-authored copy, content-guarded; `--fix` regenerates it |
-   | `diverge` | Intentional divergence; recorded, not content-checked |
+   | `diverge` | Intentional divergence; recorded, not content-checked. Add `shared_sections` for any block that must still stay identical |
    | `package_only` / `site_only` | Genuinely unpaired — **not** a fallback for a pair you did not want to classify |
 
    A paired entry may point at a subdirectory on either side (a package
    source under `guides/`, or a site page under `guides/` as every bots
    guide is), so prefer a real pair over `package_only`/`site_only`:
    an unpaired classification opts the file out of per-class verification.
+
+   **Two documents that differ overall but share one block.** Neither
+   `mirror` (whole file must match) nor `transclude` (whole file is an
+   include) can express this, so the block gets hand-copied into both
+   sides and is verified by nothing. Use `diverge` with `shared_sections`:
+   wrap the block in the package source with pymdownx section markers
+   inside HTML comments, so they stay invisible when the doc is read on
+   GitHub —
+
+   ```markdown
+   <!-- --8<-- [start:catching-api-errors] -->
+   #### Catching these errors
+   ...
+   <!-- --8<-- [end:catching-api-errors] -->
+   ```
+
+   — and pull it into the site page where the copy used to be:
+
+   ```markdown
+   --8<-- "packages/bots/docs/MULTI_TENANT.md:catching-api-errors"
+   ```
+
+   Then declare it, so replacing the include with a fresh copy fails the
+   guard rather than silently restoring the drift:
+
+   ```json
+   { "package": "MULTI_TENANT.md", "site": "guides/bot-manager.md",
+     "reason": "...", "shared_sections": ["catching-api-errors"] }
+   ```
+
+   Deleting a marker breaks `mkdocs build --strict` too — a missing
+   section raises `SnippetMissingError` rather than including nothing.
 
 ## Package-to-MkDocs Mapping
 

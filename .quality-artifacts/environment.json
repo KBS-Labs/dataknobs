@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-07T03:36:54Z",
+  "timestamp": "2026-08-07T13:14:11Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.1 (Homebrew 2026-07-31 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-fsm-lifecycle",
-  "git_commit": "e480027217b6eb2e0ebf70dfe0c526308f266983",
+  "git_branch": "sbk/api-rate-limit-error-hierarchy",
+  "git_commit": "a5883249c9a2a3c08d5e9e4ce51958dfa3d62da5",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

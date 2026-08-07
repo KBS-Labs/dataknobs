@@ -26,6 +26,8 @@ Example:
 
 from __future__ import annotations
 
+import logging
+import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -39,12 +41,20 @@ from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
+    OperationError as CommonOperationError,
+)
+from dataknobs_common.exceptions import (
+    RateLimitError as CommonRateLimitError,
+)
+from dataknobs_common.exceptions import (
     ValidationError as CommonValidationError,
 )
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 class APIError(DataknobsError):
@@ -111,11 +121,20 @@ class BotNotFoundError(APIError, CommonNotFoundError):
         )
 
 
-class BotCreationError(APIError):
-    """Exception raised when bot creation fails."""
+class BotCreationError(APIError, CommonOperationError):
+    """Exception raised when bot creation fails.
+
+    Subclasses the common ``OperationError`` for the same reason the API
+    ``RateLimitError`` subclasses the common one: creating a bot is an
+    operation, and failing to create it is an operation failure. There is no
+    same-named counterpart to reach for, so a consumer catching
+    ``OperationError`` has no way to discover that this particular failure is
+    excluded from it.
+    """
 
     def __init__(self, bot_id: str, reason: str):
-        super().__init__(
+        APIError.__init__(
+            self,
             message=f"Failed to create bot '{bot_id}': {reason}",
             status_code=500,
             detail={"bot_id": bot_id, "reason": reason},
@@ -161,26 +180,63 @@ class ConfigurationError(APIError, CommonConfigurationError):
         )
 
 
-class RateLimitError(APIError):
-    """Exception raised when rate limit is exceeded."""
+class RateLimitError(APIError, CommonRateLimitError):
+    """Exception raised when rate limit is exceeded.
+
+    Subclasses the common ``RateLimitError`` so that
+    ``except dataknobs_common.exceptions.RateLimitError`` catches both this
+    API-layer variant and the one
+    ``dataknobs_llm.conversations.middleware.RateLimitMiddleware`` raises —
+    matching every other twinned pair in this module.
+    """
 
     def __init__(
         self,
         message: str = "Rate limit exceeded",
-        retry_after: int | None = None,
+        retry_after: float | None = None,
     ):
-        detail = {}
-        if retry_after:
+        detail: dict[str, Any] = {}
+        # `is not None`, not truthiness: zero is a legitimate retry hint
+        # ("try again now"), and rate limiters do report it — a drained
+        # window yields `reset_after=0.0`. Under a truthiness test the
+        # attribute keeps the zero while the response body loses the field
+        # entirely, so the two views of one value disagree.
+        if retry_after is not None:
             detail["retry_after"] = retry_after
-        super().__init__(
+        APIError.__init__(
+            self,
             message=message,
             status_code=429,
             detail=detail,
         )
+        # Must follow APIError.__init__: with the widened base list, that
+        # call reaches CommonRateLimitError.__init__ through the MRO, which
+        # sets self.retry_after = None (its own default). Assigning before
+        # the call would be silently clobbered.
+        self.retry_after = retry_after
 
 
 # Exception Handlers
 # Note: These use TYPE_CHECKING imports to avoid requiring FastAPI at import time
+
+
+def _retry_after_headers(exc: APIError) -> dict[str, str] | None:
+    """Build the ``Retry-After`` header for an error that carries a hint.
+
+    Returns ``None`` when the exception has no hint, so the header is omitted
+    rather than defaulted — emitting a made-up wait would assert something
+    the server never computed.
+
+    RFC 7231 defines the value as delay-seconds: a non-negative integer. The
+    rate limiters report a float, so a fractional wait rounds *up* (rounding
+    down returns the client while it is still throttled) and a negative wait
+    clamps to zero (``Retry-After: -5`` is unparseable, and a client that
+    gives up on parsing may simply retry at once).
+    """
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is None:
+        return None
+    return {"Retry-After": str(max(0, math.ceil(retry_after)))}
 
 
 async def api_error_handler(
@@ -195,12 +251,20 @@ async def api_error_handler(
 
     Returns:
         JSON response with error details
+
+    Note:
+        An exception carrying a ``retry_after`` hint also gets a
+        ``Retry-After`` header. ``detail.retry_after`` is this project's own
+        JSON shape and nothing outside it knows to look there, whereas the
+        header is what HTTP clients, proxies, and SDK retry policies already
+        act on — and RFC 6585 says a 429 SHOULD carry one.
     """
     from fastapi.responses import JSONResponse
 
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_dict(),
+        headers=_retry_after_headers(exc),
     )
 
 
@@ -247,12 +311,12 @@ async def general_exception_handler(
         This handler logs the full exception but returns a generic
         message to avoid leaking internal details.
     """
-    import logging
-
     from fastapi.responses import JSONResponse
 
-    logger = logging.getLogger(__name__)
-    logger.exception(f"Unhandled exception: {exc}")
+    # Lazy `%s`, not an f-string: the interpolated form is evaluated before
+    # the logging call and discards the exception object, which is what
+    # carries the traceback `logger.exception` is here to record.
+    logger.exception("Unhandled exception: %s", exc)
 
     return JSONResponse(
         status_code=500,
@@ -284,6 +348,6 @@ def register_exception_handlers(
     """
     from fastapi import HTTPException
 
-    app.add_exception_handler(APIError, api_error_handler)  # type: ignore
-    app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore
+    app.add_exception_handler(APIError, api_error_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(Exception, general_exception_handler)

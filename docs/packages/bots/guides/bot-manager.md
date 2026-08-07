@@ -219,6 +219,8 @@ async def get_bot(bot_id: str, manager: BotManagerDep):
 }
 ```
 
+--8<-- "packages/bots/docs/MULTI_TENANT.md:catching-api-errors"
+
 ### Complete FastAPI Example
 
 ```python
