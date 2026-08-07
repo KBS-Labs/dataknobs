@@ -5,6 +5,15 @@ This module provides the EnvironmentAwareConfig class that supports:
 - Late-binding of environment variables (at instantiation time, not load time)
 - Separation of portable app config from infrastructure bindings
 
+Substitution rule: **substitute each source exactly once, at the latest point
+that source is still separable.** For the environment that is its load; for
+the app config it is entry to :meth:`EnvironmentAwareConfig.resolve_for_build`,
+which is still before resource refs are spliced in. Once spliced, the two are
+merged beyond distinguishing, and a pass over the result would expand
+environment values a second time — reinterpreting the *content* of a value as
+a template. :attr:`EnvironmentConfig.substituted` is what makes the
+environment's provenance knowable rather than guessed.
+
 Example:
     ```python
     # Load with auto-detected environment
@@ -265,17 +274,32 @@ class EnvironmentAwareConfig:
         else:
             config = copy.deepcopy(self._config)
 
-        # Resolve logical resource references
-        if resolve_resources:
-            config = self._resolve_resource_refs(config)
-
-        # Resolve environment variables (late binding)
+        # Late-bind app-authored ${VAR} refs BEFORE splicing in environment
+        # values. Environment values were already substituted when the
+        # environment was loaded (or are substituted exactly once, below,
+        # when it was not) -- substituting after the splice would expand
+        # them a second time, reinterpreting the *content* of a value as a
+        # template. See the module docstring.
         if resolve_env_vars:
             config = substitute_env_vars(config)
 
+        # Resolve logical resource references
+        if resolve_resources:
+            environment = self._environment
+            if resolve_env_vars:
+                # No-op when the environment was already substituted at load;
+                # non-mutating either way, so the caller's own config is
+                # never changed underneath them.
+                environment = environment.substituted_view()
+            config = self._resolve_resource_refs(config, environment)
+
         return config
 
-    def _resolve_resource_refs(self, config: Any) -> Any:
+    def _resolve_resource_refs(
+        self,
+        config: Any,
+        environment: EnvironmentConfig | None = None,
+    ) -> Any:
         """Resolve logical resource references in configuration.
 
         Finds resource references in the config and replaces them
@@ -291,10 +315,17 @@ class EnvironmentAwareConfig:
 
         Args:
             config: Configuration to process
+            environment: Environment to resolve against. Defaults to this
+                config's own environment. ``resolve_for_build`` passes a
+                substituted view so the whole recursive walk — including
+                nested refs — reads values that were expanded exactly once.
 
         Returns:
             Configuration with resource references resolved
         """
+        if environment is None:
+            environment = self._environment
+
         if isinstance(config, dict):
             if "$resource" in config:
                 # This is a resource reference
@@ -309,47 +340,61 @@ class EnvironmentAwareConfig:
                 }
                 requires = config.get("$requires", [])
 
-                try:
-                    resolved = self._environment.get_resource(
-                        resource_type, resource_name, defaults
-                    )
-
-                    # Validate $requires against capabilities metadata
-                    if requires and isinstance(resolved, dict):
-                        declared = resolved.get("capabilities")
-                        if declared is not None:
-                            missing = set(requires) - set(declared)
-                            if missing:
-                                from dataknobs_config.exceptions import (
-                                    ConfigError,
-                                )
-
-                                raise ConfigError(
-                                    f"Resource '{resource_name}' missing "
-                                    f"required capabilities: {sorted(missing)}. "
-                                    f"Declared: {declared}"
-                                )
-
-                    # Recursively resolve any nested references in the resolved config
-                    return self._resolve_resource_refs(resolved)
-                except KeyError:
-                    # Resource not found - return config with defaults only
-                    # This allows graceful degradation
+                if not environment.has_resource(resource_type, resource_name):
+                    # Resource not found - degrade to the reference's inline
+                    # defaults. Membership is tested explicitly rather than
+                    # caught: get_resource returns the supplied defaults
+                    # instead of raising whenever a defaults dict is passed,
+                    # and the dict comprehension above always produces one
+                    # (possibly empty). Relying on ResourceNotFoundError here
+                    # made this branch unreachable, so a mistyped $resource
+                    # name degraded to an empty config in total silence.
                     logger.warning(
                         f"Resource '{resource_name}' of type '{resource_type}' "
-                        f"not found in environment '{self._environment.name}', "
+                        f"not found in environment '{environment.name}', "
                         f"using defaults"
                     )
-                    return defaults if defaults else config
+                    # Return the inline defaults only -- matching what
+                    # get_resource returned on this path all along. The
+                    # unreachable branch this replaced fell back to the
+                    # reference dict itself when there were no defaults,
+                    # which would put the `$resource` / `type` marker keys
+                    # into the resolved config and hand them to a factory as
+                    # keyword arguments. Making the branch reachable must not
+                    # also make its never-exercised return value live.
+                    return defaults
+
+                resolved = environment.get_resource(
+                    resource_type, resource_name, defaults
+                )
+
+                # Validate $requires against capabilities metadata
+                if requires and isinstance(resolved, dict):
+                    declared = resolved.get("capabilities")
+                    if declared is not None:
+                        missing = set(requires) - set(declared)
+                        if missing:
+                            from dataknobs_config.exceptions import (
+                                ConfigError,
+                            )
+
+                            raise ConfigError(
+                                f"Resource '{resource_name}' missing "
+                                f"required capabilities: {sorted(missing)}. "
+                                f"Declared: {declared}"
+                            )
+
+                # Recursively resolve any nested references in the resolved config
+                return self._resolve_resource_refs(resolved, environment)
             else:
                 # Regular dict - recurse into values
                 return {
-                    key: self._resolve_resource_refs(value)
+                    key: self._resolve_resource_refs(value, environment)
                     for key, value in config.items()
                 }
         elif isinstance(config, list):
             # Recurse into list items
-            return [self._resolve_resource_refs(item) for item in config]
+            return [self._resolve_resource_refs(item, environment) for item in config]
         else:
             # Return other types unchanged
             return config

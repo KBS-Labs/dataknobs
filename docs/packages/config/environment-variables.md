@@ -173,6 +173,8 @@ result = substitute_env_vars(data, expand_user_paths=False)
 result = substitute_env_vars(data, type_coerce=True, substitute_keys=False)
 ```
 
+--8<-- "packages/config/docs/environment-variable-substitution.md:substitute-once"
+
 ### Migrating from ``VariableSubstitution``
 
 The class :class:`VariableSubstitution` is a deprecated thin shim over

@@ -218,6 +218,39 @@ bot_config = config.resolve_for_build("bot")
 portable = config.get_portable_config()
 ```
 
+#### Resolution order
+
+`resolve_for_build` substitutes the **app config first**, then splices in
+resource references:
+
+1. `${VAR}` refs authored in the app config are expanded (late binding).
+2. `$resource` references are resolved against the environment, whose own
+   values were already expanded when it loaded.
+
+The order matters. Once resource values are spliced in, they are
+indistinguishable from app-authored ones, and a substitution pass over the
+merged result would expand the environment's values a **second** time —
+re-reading the content of a value as a template. See
+[Substitution runs once per source](environment-variables.md#substitution-runs-once-per-source).
+
+An environment built directly (`EnvironmentConfig(name=..., resources=...)`)
+or loaded with `substitute_vars=False` has not been expanded, so
+`resolve_for_build` expands it — once — before resolving against it. Your own
+`EnvironmentConfig` is never mutated by this.
+
+Because step 1 runs first, the `$resource` and `type` values are themselves
+substituted, so resource *selection* can be bound to an environment variable:
+
+```yaml
+llm:
+  $resource: ${LLM_BINDING}    # expands, then resolves
+  type: llm_providers
+```
+
+Before this ordering, the literal text `${LLM_BINDING}` was looked up as a
+resource name, matched nothing, and silently fell back to the reference's
+inline defaults.
+
 #### Application Config Format
 
 ```yaml

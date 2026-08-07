@@ -4,6 +4,9 @@ import warnings
 
 import pytest
 
+from dataknobs_config.binding_resolver import ConfigBindingResolver
+from dataknobs_config.environment_aware import EnvironmentAwareConfig
+from dataknobs_config.environment_config import EnvironmentConfig
 from dataknobs_config.substitution import VariableSubstitution
 
 
@@ -226,3 +229,226 @@ class TestVariableSubstitution:
             match=r"^Required environment variable not set: FOO$",
         ):
             substitution.substitute("${FOO:?}")
+
+
+# ---------------------------------------------------------------------------
+# Substitute-once-per-source (the item-199 defect class)
+# ---------------------------------------------------------------------------
+
+#: A secret whose *value* contains a ``${...}`` sequence. Nothing about this
+#: is exotic — generated passwords routinely contain ``$`` and ``{``.
+SECRET_WITH_VAR_SYNTAX = "p${GUARD_INNER}ss"
+
+#: The value ``GUARD_INNER`` would expand to if the secret's own text were
+#: ever re-interpreted as a template. Its presence in a result is the defect.
+INNER_VALUE = "INJECTED"
+
+
+def _environment(*, substitute_vars: bool = True) -> EnvironmentConfig:
+    """An environment whose ``password`` is read from ``${GUARD_PW}``."""
+    return EnvironmentConfig.from_dict(
+        {
+            "name": "test",
+            "resources": {
+                "databases": {
+                    "main": {
+                        "backend": "postgres",
+                        "password": "${GUARD_PW}",
+                    }
+                }
+            },
+        },
+        substitute_vars=substitute_vars,
+    )
+
+
+def _via_direct_read(env: EnvironmentConfig) -> str:
+    """Access path: ``EnvironmentConfig.get_resource`` directly."""
+    return str(env.get_resource("databases", "main")["password"])
+
+
+def _via_resource_ref(env: EnvironmentConfig) -> str:
+    """Access path: a ``$resource`` ref through ``resolve_for_build``."""
+    app = EnvironmentAwareConfig(
+        config={"db": {"$resource": "main", "type": "databases"}},
+        environment=env,
+    )
+    return str(app.resolve_for_build()["db"]["password"])
+
+
+def _via_binding_resolver(env: EnvironmentConfig) -> str:
+    """Access path: ``ConfigBindingResolver``, read **at the factory**.
+
+    The value asserted here is the one a live resource is actually
+    constructed from — there is no intermediate config artifact on this
+    path for anyone to inspect.
+    """
+    built: dict[str, object] = {}
+
+    def factory(**config: object) -> object:
+        built.update(config)
+        return object()
+
+    resolver = ConfigBindingResolver(env)
+    resolver.register_factory("databases", factory)
+    resolver.resolve("databases", "main")
+    return str(built["password"])
+
+
+#: The two paths that run substitution *themselves*, downstream of the
+#: environment. These are the compositions a caller cannot avoid, and the
+#: ones the double expansion lived in.
+RESOLUTION_PATHS = [
+    pytest.param(_via_resource_ref, id="resource-ref"),
+    pytest.param(_via_binding_resolver, id="binding-resolver"),
+]
+
+#: Every path, including the direct read that performs no substitution of
+#: its own and simply returns what the environment holds.
+ACCESS_PATHS = [pytest.param(_via_direct_read, id="direct"), *RESOLUTION_PATHS]
+
+
+class TestSubstituteOncePerSource:
+    """A value's *content* is never re-interpreted as a template.
+
+    ``${VAR}`` substitution used to run in two layers that did not know
+    about each other, so a value pulled from an already-substituted
+    ``EnvironmentConfig`` was substituted a **second** time. The second
+    pass expanded the *output* of the first, which means the content of a
+    secret was read as a template and replaced with the value of whatever
+    unrelated variable that content happened to name.
+
+    The property below is the whole item, stated once: whatever access path
+    a config value travels, it is substituted exactly once.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _guard_vars(self, monkeypatch):
+        monkeypatch.setenv("GUARD_PW", SECRET_WITH_VAR_SYNTAX)
+        monkeypatch.setenv("GUARD_INNER", INNER_VALUE)
+
+    @pytest.mark.parametrize("access_path", ACCESS_PATHS)
+    def test_value_containing_var_syntax_is_substituted_exactly_once(
+        self, access_path
+    ):
+        """The literal value of ``$GUARD_PW`` arrives intact on every path."""
+        resolved = access_path(_environment())
+
+        assert resolved == SECRET_WITH_VAR_SYNTAX
+        assert INNER_VALUE not in resolved, (
+            "the secret's own text was re-expanded as a template — "
+            f"an unrelated variable's value leaked into it: {resolved!r}"
+        )
+
+    @pytest.mark.parametrize("access_path", RESOLUTION_PATHS)
+    def test_unsubstituted_environment_still_substitutes_exactly_once(
+        self, access_path
+    ):
+        """``substitute_vars=False`` keeps the downstream pass load-bearing.
+
+        A directly-constructed (or explicitly unsubstituted) environment has
+        never had substitution applied, so the resolution layers must still
+        run it — exactly once. This cell was already correct before the fix
+        and is the one most at risk from a naive "just skip the second pass"
+        change, which is why it is asserted rather than assumed.
+        """
+        resolved = access_path(_environment(substitute_vars=False))
+
+        assert resolved == SECRET_WITH_VAR_SYNTAX
+        assert INNER_VALUE not in resolved
+
+    def test_direct_read_of_unsubstituted_environment_stays_raw(self):
+        """The one cell that is *meant* to stay raw stays raw.
+
+        Reading straight off an environment built with
+        ``substitute_vars=False`` yields the unexpanded ref: the caller
+        asked for raw refs and holds a config with none applied. The fix
+        must not start substituting on this path — ``substituted_view()``
+        is non-mutating precisely so it cannot, and a caller holding an
+        unsubstituted config keeps the config it asked for even after a
+        resolution layer has read through it.
+        """
+        env = _environment(substitute_vars=False)
+
+        assert env.get_resource("databases", "main")["password"] == "${GUARD_PW}"
+
+        # Reading through a resolution layer must not have mutated it.
+        _via_resource_ref(env)
+        _via_binding_resolver(env)
+
+        assert env.get_resource("databases", "main")["password"] == "${GUARD_PW}"
+        assert env.substituted is False
+
+    def test_ordinary_values_are_unaffected(self):
+        """A value with no ``${`` in it behaves identically to before.
+
+        The second pass was always a no-op for these; removing it must be
+        observable only for the defect class.
+        """
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {
+                        "main": {
+                            "backend": "postgres",
+                            "dsn": "postgresql://u:p@h/db",
+                            "port": "${GUARD_PORT:5432}",
+                        }
+                    }
+                },
+            }
+        )
+
+        built = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        ).resolve_for_build()["db"]
+
+        assert built["dsn"] == "postgresql://u:p@h/db"
+        assert built["port"] == "5432"
+        assert env.get_resource("databases", "main")["dsn"] == (
+            "postgresql://u:p@h/db"
+        )
+
+
+class TestToDictRoundTripHazard:
+    """``from_dict(to_dict(x))`` re-expands — characterized, not endorsed.
+
+    This is **not** a specification. ``to_dict()`` emits already-substituted
+    values and ``from_dict()`` substitutes by default, so composing them
+    double-expands any value containing ``${``. Unlike the resolution
+    layers, this composition is one the *caller* performs and can spell
+    correctly today, which is why it is documented rather than fixed
+    (D-199-5). The correct spelling is asserted alongside the wrong one.
+
+    Revisit under **199-FU3** if callers round-trip configs often enough
+    that documenting this stops being sufficient.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _guard_vars(self, monkeypatch):
+        monkeypatch.setenv("GUARD_PW", SECRET_WITH_VAR_SYNTAX)
+        monkeypatch.setenv("GUARD_INNER", INNER_VALUE)
+
+    def test_round_trip_through_to_dict_re_expands_and_needs_substitute_vars_false(
+        self,
+    ):
+        original = _environment()
+        assert original.get_resource("databases", "main")["password"] == (
+            SECRET_WITH_VAR_SYNTAX
+        )
+
+        # The naive round-trip: WRONG. Pinned so it cannot silently worsen.
+        naive = EnvironmentConfig.from_dict(original.to_dict())
+        assert naive.get_resource("databases", "main")["password"] == (
+            f"p{INNER_VALUE}ss"
+        )
+
+        # The correct spelling, available today.
+        correct = EnvironmentConfig.from_dict(
+            original.to_dict(), substitute_vars=False
+        )
+        assert correct.get_resource("databases", "main")["password"] == (
+            SECRET_WITH_VAR_SYNTAX
+        )

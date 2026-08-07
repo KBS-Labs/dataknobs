@@ -96,16 +96,24 @@
           "site": "configurable-base.md"
         }
       ],
+      "diverge": [
+        {
+          "package": "environment-variable-substitution.md",
+          "site": "environment-variables.md",
+          "reason": "Two documents on overlapping subjects that are not the same document: the package doc is a reference for the substitute_env_vars helper itself, while the site page is a broader guide covering DATAKNOBS_-prefixed config overrides, named/indexed access, and container usage, with in-file substitution as one section of many. Reconciling them is its own task. The substitute-once-per-source rule is the part that must not drift -- it states a package-wide invariant and names the correct to_dict/from_dict round-trip spelling -- so it is transcluded rather than copied; see shared_sections.",
+          "shared_sections": [
+            "substitute-once"
+          ]
+        }
+      ],
       "package_only": [
         "DESIGN_PLAN.md",
-        "PROGRESS_CHECKLIST.md",
-        "environment-variable-substitution.md"
+        "PROGRESS_CHECKLIST.md"
       ],
       "site_only": [
         "api.md",
         "configuration-system.md",
         "environment-aware.md",
-        "environment-variables.md",
         "factory-registration.md",
         "index.md",
         "inheritance.md"

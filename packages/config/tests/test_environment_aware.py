@@ -1,5 +1,6 @@
 """Tests for EnvironmentAwareConfig class."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -552,3 +553,231 @@ class TestResourcesInLists:
 
         assert resolved["connectors"][0]["database"]["host"] == "main.db"
         assert resolved["connectors"][1]["database"]["host"] == "backup.db"
+
+
+class TestMissingResourceIsObservable:
+    """A ``$resource`` name that matches nothing must say so.
+
+    ``_resolve_resource_refs`` degrades to the reference's inline defaults
+    when a resource is missing, which is deliberate. What was not deliberate
+    is that the degrade was **silent**: the warning lived in an
+    ``except KeyError`` branch that could never run, because
+    ``_resolve_resource_refs`` always passes a (possibly empty) defaults dict
+    and ``get_resource`` returns those defaults rather than raising whenever
+    one is supplied. A typo'd binding name therefore produced an empty config
+    and no log line anywhere.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {"databases": {"main": {"backend": "postgres"}}},
+            }
+        )
+
+    def test_missing_resource_warns_with_no_inline_defaults(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "typo", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {}
+        assert "typo" in caplog.text
+        assert "not found" in caplog.text
+
+    def test_missing_resource_warns_with_inline_defaults(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "typo", "type": "databases", "timeout": 5}
+            },
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {"timeout": 5}
+        assert "typo" in caplog.text
+
+    def test_found_resource_does_not_warn(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {"backend": "postgres"}
+        assert "not found" not in caplog.text
+
+
+class TestResolveForBuildSubstitutionOrder:
+    """``resolve_for_build`` substitutes each source exactly once.
+
+    The app config is loaded *without* substitution (late binding), so its
+    ``${VAR}`` refs must still be expanded here. Environment values were
+    expanded at load. Both are true simultaneously only if the app config is
+    substituted **before** resource refs are spliced in — afterwards the two
+    are merged beyond distinguishing.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("ORDER_PW", "p${ORDER_INNER}ss")
+        monkeypatch.setenv("ORDER_INNER", "INJECTED")
+        monkeypatch.setenv("ORDER_TEMP", "0.9")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"main": {"password": "${ORDER_PW}"}}
+                },
+            }
+        )
+
+    @pytest.fixture
+    def app(self, env):
+        return EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "main", "type": "databases"},
+                "temperature": "${ORDER_TEMP}",
+            },
+            environment=env,
+        )
+
+    def test_late_binding_still_works(self, app):
+        """The headline feature: app-authored refs resolve at build time."""
+        assert app.resolve_for_build()["temperature"] == "0.9"
+
+    def test_environment_value_is_not_re_expanded(self, app):
+        assert app.resolve_for_build()["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_both_at_once(self, app):
+        """Neither provenance is served at the other's expense."""
+        resolved = app.resolve_for_build()
+
+        assert resolved["temperature"] == "0.9"
+        assert resolved["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_resolve_env_vars_false_substitutes_nothing(self, app):
+        resolved = app.resolve_for_build(resolve_env_vars=False)
+
+        assert resolved["temperature"] == "${ORDER_TEMP}"
+        # The environment was substituted at load, so its values arrive
+        # expanded once regardless -- this flag governs *this* layer only.
+        assert resolved["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_resolve_resources_false_is_unchanged_by_the_reorder(self, app):
+        """With no splice, ordering is unobservable."""
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["temperature"] == "0.9"
+        assert resolved["db"] == {"$resource": "main", "type": "databases"}
+
+    def test_nested_refs_read_the_same_environment_view(self):
+        """The substituted view covers the whole recursive walk.
+
+        A resource whose own config contains another ``$resource`` ref is
+        resolved through the same environment object, so a value reached at
+        any depth is expanded exactly once.
+        """
+        env = EnvironmentConfig(
+            name="test",
+            resources={
+                "databases": {
+                    "outer": {"inner": {"$resource": "leaf", "type": "secrets"}}
+                },
+                "secrets": {"leaf": {"password": "${ORDER_PW}"}},
+            },
+        )
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "outer", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["inner"]["password"] == "p${ORDER_INNER}ss"
+
+
+class TestResourceNameFromEnvVar:
+    """``$resource: ${VAR}`` resolves (behaviour change, D-199-2).
+
+    Substituting the app config before the splice means the ``$resource``
+    and ``type`` values are themselves expanded, so binding resource
+    *selection* to an environment variable now works. Previously the literal
+    ``${VAR}`` text was looked up, matched nothing, and degraded to the
+    reference's inline defaults.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("BINDING_NAME", "primary")
+        monkeypatch.setenv("BINDING_TYPE", "databases")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"primary": {"backend": "postgres"}}
+                },
+            }
+        )
+
+    def test_resource_name_from_env_var(self, env):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "${BINDING_NAME}", "type": "databases"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["backend"] == "postgres"
+
+    def test_resource_type_from_env_var(self, env):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "primary", "type": "${BINDING_TYPE}"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["backend"] == "postgres"
+
+    def test_still_degrades_when_the_expansion_names_nothing(self, env, caplog):
+        """Expanding first does not remove the not-found path, only moves it.
+
+        The name is now resolved before lookup, so the warning names the
+        expanded value -- which is the one an operator needs to see.
+        """
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "${BINDING_TYPE}", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {}
+        assert "databases" in caplog.text
+        assert "${BINDING_TYPE}" not in caplog.text
+
+    def test_unset_var_in_resource_name_is_unchanged(self, env, monkeypatch):
+        """An unset ref without a default still raises, as it does anywhere."""
+        monkeypatch.delenv("MISSING_BINDING", raising=False)
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "${MISSING_BINDING}", "type": "databases"}
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="MISSING_BINDING"):
+            app.resolve_for_build()

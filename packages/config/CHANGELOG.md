@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A configuration value whose own text contains `${...}` was expanded
+  twice, replacing it with the value of an unrelated environment variable.**
+  Substitution ran in two layers that did not know about each other — once
+  when an `EnvironmentConfig` loaded, and again when a resolution layer read
+  through it — and the second pass expanded the *output* of the first. A
+  generated password of `p${x}ss` therefore arrived as `pINJECTEDss` if some
+  variable `x` happened to be set. Nothing warned; the value was simply
+  wrong, and wrong in a way that depends on the rest of the process
+  environment.
+
+  Two paths carried it. `EnvironmentAwareConfig.resolve_for_build` corrupted
+  the resolved config dict a reviewer could at least diff.
+  `ConfigBindingResolver` is the more serious one: it hands the value
+  straight to a factory that builds a live resource, so a mangled DSN or API
+  key produced a connection failure with no artifact anywhere showing the
+  value that was actually used. Beyond corruption, the expansion reads the
+  process environment using text taken from a secret — a value that happens
+  to contain `${AWS_SECRET_ACCESS_KEY}` would have pulled that variable's
+  contents into wherever the first value was headed.
+
+  `EnvironmentConfig` now records whether its values have been substituted,
+  and both layers substitute a source exactly once. Configs built directly
+  via the dataclass constructor, or loaded with `substitute_vars=False`, are
+  unchanged: they carry raw refs, and the resolution layers still expand
+  them.
+
+- **A `$resource` reference naming a resource that does not exist now logs a
+  warning.** The warning existed but was unreachable — it sat in an
+  `except KeyError` branch, while the call it guarded returns the supplied
+  defaults instead of raising whenever a defaults dict is passed, which that
+  call site always does. A mistyped binding name therefore degraded to an
+  empty config in complete silence. The fallback behaviour itself is
+  unchanged.
+
+### Added
+
+- **`EnvironmentConfig.substituted`** — whether `${VAR}` substitution has
+  been applied to the values held. Set by `load()` / `from_dict()` from their
+  `substitute_vars` argument; `False` for direct dataclass construction.
+  Excluded from equality, so two configs holding the same values remain
+  equal regardless of which layer expanded them.
+
+- **`EnvironmentConfig.substituted_view()`** — an equivalent config with
+  substitution applied, or `self` when it already is. Never mutates the
+  receiver, so a caller holding raw refs on purpose keeps them even after a
+  resolution layer reads through the config.
+
+### Changed
+
+- **A `$resource` name or `type` containing `${VAR}` now resolves.**
+  `resolve_for_build` substitutes the app config before splicing in resource
+  references, which means the reference's own values are expanded too, so
+  resource *selection* can be bound to an environment variable
+  (`$resource: ${LLM_BINDING}`). Previously the literal text was looked up,
+  matched nothing, and fell back to the reference's inline defaults.
+
+  That fallback was silent (see `### Fixed`), so a deployment cannot find it
+  in existing logs. To check whether you were relying on it, search your app
+  configs for `$resource:` or `type:` values containing `${`; those are
+  exactly the references whose behaviour changes. After upgrading, the
+  now-reachable *"Resource '...' not found in environment ..., using
+  defaults"* warning reports any that still fail to match.
+
+- **`EnvironmentConfig.merge()` normalizes mixed substitution provenance.**
+  Merging a substituted config with an unsubstituted one expands the
+  unsubstituted side during the merge and returns a substituted result,
+  rather than producing a config whose single flag is wrong for half its
+  values. Merging two configs that agree is unchanged.
+
 ### Security
 
 - **`ObjectBuilder._load_class` no longer puts an arbitrary import failure's

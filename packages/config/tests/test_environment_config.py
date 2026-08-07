@@ -472,3 +472,198 @@ class TestEnvironmentConfigEnvVarSubstitution:
 
         instance = resolver.resolve("databases", "primary")
         assert instance.host == "rds.example.com"
+
+
+class TestSubstitutionProvenance:
+    """``substituted`` records whether values have already been expanded.
+
+    Downstream resolution layers read this so each source is substituted
+    exactly once. Without it they can only guess, and the guess that shipped
+    ("run it again, it's idempotent") is wrong for any value whose own text
+    contains ``${...}``.
+    """
+
+    PAYLOAD = {
+        "name": "test",
+        "resources": {"databases": {"main": {"password": "${PROV_PW}"}}},
+        "settings": {"note": "${PROV_PW}"},
+    }
+
+    @pytest.fixture(autouse=True)
+    def _prov_env(self, monkeypatch):
+        monkeypatch.setenv("PROV_PW", "s3cret")
+
+    def test_from_dict_records_substitution(self):
+        assert EnvironmentConfig.from_dict(self.PAYLOAD).substituted is True
+
+    def test_from_dict_records_opt_out(self):
+        env = EnvironmentConfig.from_dict(self.PAYLOAD, substitute_vars=False)
+        assert env.substituted is False
+
+    def test_load_records_substitution(self, tmp_path):
+        (tmp_path / "test.yaml").write_text(yaml.dump(self.PAYLOAD))
+
+        assert EnvironmentConfig.load("test", tmp_path).substituted is True
+        assert (
+            EnvironmentConfig.load(
+                "test", tmp_path, substitute_vars=False
+            ).substituted
+            is False
+        )
+
+    def test_load_of_absent_file_is_unsubstituted(self, tmp_path):
+        """An empty config holds no values, so nothing has been expanded.
+
+        Reporting ``True`` here would be defensible but pointless, and would
+        make the flag mean "a substitution pass ran" rather than "these
+        values are expanded" — the latter is what callers act on.
+        """
+        assert EnvironmentConfig.load("absent", tmp_path).substituted is False
+
+    def test_direct_construction_is_unsubstituted(self):
+        """The path that keeps the downstream passes load-bearing."""
+        env = EnvironmentConfig(
+            name="test",
+            resources={"databases": {"main": {"password": "${PROV_PW}"}}},
+        )
+
+        assert env.substituted is False
+
+    def test_excluded_from_equality(self):
+        """Two configs with the same values are the same environment.
+
+        Including provenance would break the natural assertion
+        ``assert loaded == EnvironmentConfig.from_dict(expected)``, which is
+        about values and never about which layer expanded them.
+        """
+        substituted = EnvironmentConfig.from_dict(
+            {"name": "test", "settings": {"note": "s3cret"}}
+        )
+        constructed = EnvironmentConfig(
+            name="test", settings={"note": "s3cret"}
+        )
+
+        assert substituted.substituted is not constructed.substituted
+        assert substituted == constructed
+
+
+class TestSubstitutedView:
+    """``substituted_view()`` is idempotent and never mutates."""
+
+    @pytest.fixture(autouse=True)
+    def _prov_env(self, monkeypatch):
+        monkeypatch.setenv("PROV_PW", "s3cret")
+
+    @pytest.fixture
+    def raw(self):
+        return EnvironmentConfig(
+            name="test",
+            resources={"databases": {"main": {"password": "${PROV_PW}"}}},
+            settings={"note": "${PROV_PW}"},
+        )
+
+    def test_returns_self_when_already_substituted(self):
+        env = EnvironmentConfig.from_dict(
+            {"name": "test", "settings": {"note": "${PROV_PW}"}}
+        )
+
+        assert env.substituted_view() is env
+
+    def test_returns_substituted_copy_when_not(self, raw):
+        view = raw.substituted_view()
+
+        assert view is not raw
+        assert view.substituted is True
+        assert view.get_resource("databases", "main")["password"] == "s3cret"
+        assert view.get_setting("note") == "s3cret"
+
+    def test_never_mutates_the_receiver(self, raw):
+        raw.substituted_view()
+
+        assert raw.substituted is False
+        assert raw.get_resource("databases", "main")["password"] == "${PROV_PW}"
+        assert raw.get_setting("note") == "${PROV_PW}"
+
+    def test_view_does_not_alias_the_receiver(self, raw):
+        view = raw.substituted_view()
+        view.resources["databases"]["main"]["password"] = "mutated"
+
+        assert raw.get_resource("databases", "main")["password"] == "${PROV_PW}"
+
+    def test_is_idempotent(self, raw):
+        once = raw.substituted_view()
+
+        assert once.substituted_view() is once
+
+
+class TestMergeProvenance:
+    """``merge()`` keeps provenance uniform across the result.
+
+    ``substituted`` describes the whole config, so a merge of two configs
+    that disagree must resolve the disagreement rather than pick a side.
+    Degrading to ``False`` would leave the already-substituted half exposed
+    to a second pass downstream — the very defect the flag prevents.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _prov_env(self, monkeypatch):
+        # A value whose own text contains ${...}: re-expanding it is visible.
+        monkeypatch.setenv("MERGE_PW", "p${MERGE_INNER}ss")
+        monkeypatch.setenv("MERGE_INNER", "INJECTED")
+
+    @staticmethod
+    def _config(name, key, *, substitute):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": name,
+                "resources": {"databases": {key: {"password": "${MERGE_PW}"}}},
+            },
+            substitute_vars=substitute,
+        )
+
+    @pytest.mark.parametrize("left", [True, False])
+    @pytest.mark.parametrize("right", [True, False])
+    def test_values_are_substituted_exactly_once(self, left, right):
+        """One expansion in total, wherever it happens to land.
+
+        For a mixed merge that is at merge time; when neither side was
+        substituted the merged config is still raw and the single expansion
+        is owed downstream. ``substituted_view()`` is what a resolution layer
+        applies, and it is a no-op on an already-substituted config — so
+        applying it here asks the question uniformly across all four cells:
+        after the one pass anyone is entitled to, is the value correct?
+        """
+        merged = self._config("a", "one", substitute=left).merge(
+            self._config("b", "two", substitute=right)
+        )
+        resolved = merged.substituted_view()
+
+        for key in ("one", "two"):
+            password = resolved.get_resource("databases", key)["password"]
+            assert password == "p${MERGE_INNER}ss", (
+                f"'{key}' (from the {'substituted' if left else 'raw'}/"
+                f"{'substituted' if right else 'raw'} merge) was expanded "
+                f"the wrong number of times: {password!r}"
+            )
+            assert "INJECTED" not in password
+
+    @pytest.mark.parametrize("left", [True, False])
+    @pytest.mark.parametrize("right", [True, False])
+    def test_result_provenance_is_uniform(self, left, right):
+        merged = self._config("a", "one", substitute=left).merge(
+            self._config("b", "two", substitute=right)
+        )
+
+        # Substituted unless *neither* side was: only then is the result
+        # still carrying raw refs that a downstream pass must expand.
+        assert merged.substituted is (left or right)
+
+    def test_normalizing_merge_does_not_mutate_either_side(self):
+        left = self._config("a", "one", substitute=False)
+        right = self._config("b", "two", substitute=True)
+
+        left.merge(right)
+
+        assert left.substituted is False
+        assert left.get_resource("databases", "one")["password"] == "${MERGE_PW}"
+        assert right.substituted is True

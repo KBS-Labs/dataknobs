@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -108,12 +108,32 @@ class EnvironmentConfig:
         resources: Nested dict of {resource_type: {logical_name: config}}
         settings: Environment-wide settings (log levels, feature flags, etc.)
         description: Optional description of the environment
+        substituted: Whether ``${VAR}`` substitution has already been applied
+            to the values held here. See below.
     """
 
     name: str
     resources: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     settings: dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    substituted: bool = field(default=False, compare=False)
+    """Whether ``${VAR}`` substitution has already been applied to the values
+    in this config.
+
+    :meth:`load` and :meth:`from_dict` set this when they substitute. It stays
+    ``False`` for direct dataclass construction, which is what keeps the
+    downstream substitution passes in :class:`EnvironmentAwareConfig` and
+    :class:`ConfigBindingResolver` load-bearing for that path.
+
+    Downstream layers read this so they substitute each source **exactly
+    once**. Substituting a second time re-expands the *output* of the first,
+    which reinterprets the content of a value as a template — so a secret
+    whose own text contains ``${...}`` is replaced by the value of whatever
+    unrelated variable that text happens to name.
+
+    Excluded from equality: two configs holding the same values are the same
+    environment regardless of which layer expanded them.
+    """
 
     @classmethod
     def detect_environment(cls) -> str:
@@ -219,6 +239,7 @@ class EnvironmentConfig:
             resources=data.get("resources", {}),
             settings=data.get("settings", {}),
             description=data.get("description", ""),
+            substituted=substitute_vars,
         )
 
     @classmethod
@@ -254,6 +275,7 @@ class EnvironmentConfig:
             resources=data.get("resources", {}),
             settings=data.get("settings", {}),
             description=data.get("description", ""),
+            substituted=substitute_vars,
         )
 
     @classmethod
@@ -373,8 +395,45 @@ class EnvironmentConfig:
         """
         return list(self.resources.get(resource_type, {}).keys())
 
+    def substituted_view(self) -> EnvironmentConfig:
+        """Return an equivalent config with ``${VAR}`` substitution applied.
+
+        Returns ``self`` when substitution has already been applied, so
+        calling this is always safe and never expands a value twice.
+
+        Never mutates: a caller holding an unsubstituted config for direct
+        :meth:`get_resource` reads keeps the config it asked for, even when
+        a resolution layer reads through it.
+
+        Returns:
+            ``self`` if already substituted, otherwise a substituted copy.
+
+        Raises:
+            ValueError: If a required ``${VAR}`` ref has no default and no
+                value in the environment.
+        """
+        if self.substituted:
+            return self
+
+        from .inheritance import substitute_env_vars
+
+        return replace(
+            self,
+            resources=substitute_env_vars(self.resources),
+            settings=substitute_env_vars(self.settings),
+            substituted=True,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation.
+
+        Values are emitted as held — already substituted for a config built
+        by :meth:`load` or :meth:`from_dict` with the default
+        ``substitute_vars=True``. Provenance is deliberately **not** emitted,
+        so feeding the result back through :meth:`from_dict` substitutes a
+        second time. Round-trip with
+        ``EnvironmentConfig.from_dict(cfg.to_dict(), substitute_vars=False)``
+        to preserve values whose own text contains ``${...}``.
 
         Returns:
             Dictionary representation of environment config
@@ -400,12 +459,25 @@ class EnvironmentConfig:
 
         The other config's values take precedence.
 
+        When the two sides disagree on :attr:`substituted`, the unsubstituted
+        side is substituted **during** the merge and the result is marked
+        substituted. ``substituted`` is a single flag describing the whole
+        config, so it is only sound if provenance is uniform within one
+        instance; degrading the result to ``False`` instead would leave the
+        already-substituted half exposed to a second pass downstream, which
+        is the exact defect the flag exists to prevent.
+
         Args:
             other: Environment config to merge
 
         Returns:
             New merged EnvironmentConfig
         """
+        # Normalize mixed provenance before merging so the result's single
+        # ``substituted`` flag is true of every value in it.
+        if self.substituted != other.substituted:
+            return self.substituted_view().merge(other.substituted_view())
+
         # Deep merge resources
         merged_resources: dict[str, dict[str, dict[str, Any]]] = {}
 
@@ -435,4 +507,5 @@ class EnvironmentConfig:
             resources=merged_resources,
             settings=merged_settings,
             description=other.description or self.description,
+            substituted=self.substituted,
         )

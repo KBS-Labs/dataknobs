@@ -11,9 +11,14 @@ It is invoked by every loader in the package:
 |---|---|
 | `InheritableConfigLoader.load` | defaults (string out, tilde expansion on, keys substituted) |
 | `EnvironmentConfig.load` / `from_dict` | defaults (controlled via `substitute_vars=True`) |
-| `EnvironmentAwareConfig.resolve_for_build` | defaults |
-| `ConfigBindingResolver._get_resolved_config` | defaults |
+| `EnvironmentAwareConfig.resolve_for_build` | defaults, applied to the **app config** and to an environment that was not substituted at load |
+| `ConfigBindingResolver._get_resolved_config` | defaults, applied to **overrides** and to an environment that was not substituted at load |
 | `Config._load_dict` | `type_coerce=True, expand_user_paths=False, substitute_keys=False` |
+
+Several of these compose — an app config resolves against an environment,
+and the environment was substituted when it loaded. See
+[Substitution runs once per source](#substitution-runs-once-per-source) for
+the rule that keeps a value from being expanded twice.
 
 ## Syntax
 
@@ -56,6 +61,94 @@ substitute_env_vars(
 | `type_coerce` | `False` | When an entire string is a single `${VAR}` placeholder, coerce the value to `int` / `float` / `bool` when it looks like one. Mixed-content strings (`"port=${PORT}"`) remain strings. |
 | `expand_user_paths` | `True` | Apply `os.path.expanduser` to substituted strings. Leaves URLs and connection strings (`postgresql://host:5432/db`) intact because `os.path.expanduser` only touches strings that begin with `~`. Set to `False` for strict no-touch substitution. |
 | `substitute_keys` | `True` | Substitute `${VAR}` in dict keys as well as values. Keys are never type-coerced even when `type_coerce=True`. |
+
+<!-- --8<-- [start:substitute-once] -->
+## Substitution runs once per source
+
+Substitution is **not idempotent**. Running it twice over the same data
+expands the *output* of the first pass, so a value whose own text contains
+`${...}` is re-read as a template and replaced by whatever unrelated
+variable that text happens to name:
+
+```python
+os.environ["DB_PASSWORD"] = "p${x}ss"   # a perfectly ordinary password
+os.environ["x"] = "INJECTED"
+
+substitute_env_vars({"password": "${DB_PASSWORD}"})
+# -> {"password": "p${x}ss"}          correct
+
+substitute_env_vars(substitute_env_vars({"password": "${DB_PASSWORD}"}))
+# -> {"password": "pINJECTEDss"}      the secret is now a different string
+```
+
+Generated passwords routinely contain `$` and `{`, so this is not exotic.
+The rule the package follows is:
+
+> **Substitute each source exactly once, at the latest point that source is
+> still separable.**
+
+For an environment that point is its load; for an app config it is entry to
+`EnvironmentAwareConfig.resolve_for_build`, which is still before resource
+references are spliced in. Once spliced, the two sources are merged beyond
+telling apart, and any pass over the result would expand the environment's
+values a second time.
+
+### `EnvironmentConfig.substituted`
+
+`EnvironmentConfig` records whether its values have been expanded, so
+downstream layers can ask instead of guessing:
+
+| How the config was built | `substituted` |
+|---|---|
+| `EnvironmentConfig.load(...)` / `.from_dict(...)` (default) | `True` |
+| the same with `substitute_vars=False` | `False` |
+| direct dataclass construction — `EnvironmentConfig(name=..., resources=...)` | `False` |
+
+`EnvironmentAwareConfig` and `ConfigBindingResolver` read this and skip
+their own pass when the environment has already been expanded. A
+directly-constructed environment still gets substituted by them, so that
+path is unchanged.
+
+`substituted` is excluded from equality: two configs holding the same values
+are the same environment regardless of which layer expanded them.
+
+Call `substituted_view()` to get an expanded equivalent. It returns `self`
+when the config is already substituted, and it never mutates the receiver —
+so a caller holding raw refs on purpose keeps them even after a resolution
+layer has read through the config.
+
+```python
+env = EnvironmentConfig.load("production")     # substituted=True
+env.substituted_view() is env                  # True -- no second pass
+
+raw = EnvironmentConfig(name="test", resources={...})   # substituted=False
+view = raw.substituted_view()                  # a substituted copy
+raw.substituted                                # still False
+```
+
+`merge()` keeps this uniform: merging a substituted config with an
+unsubstituted one expands the unsubstituted side during the merge, rather
+than producing a config whose single flag is wrong for half its values.
+
+### Serializing: `to_dict()` / `from_dict()`
+
+`to_dict()` emits values as held — already expanded for a config built the
+default way — and deliberately does **not** emit provenance, which would put
+a hand-editable metadata key into what is otherwise a serialized environment
+file. So the naive round-trip substitutes a second time:
+
+```python
+# WRONG for any value whose text contains ${...}
+EnvironmentConfig.from_dict(env.to_dict())
+
+# Correct
+EnvironmentConfig.from_dict(env.to_dict(), substitute_vars=False)
+```
+
+Unlike the resolution layers, this composition is one the caller performs
+and can spell correctly, which is why it is documented rather than
+worked around.
+<!-- --8<-- [end:substitute-once] -->
 
 ## Migrating from `VariableSubstitution`
 
