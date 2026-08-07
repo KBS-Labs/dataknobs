@@ -1,12 +1,11 @@
 """Tests for configuration inheritance utilities."""
 
-import json
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 
+from dataknobs_common import CallableResolver, MappingResolver
 from dataknobs_config import (
     InheritableConfigLoader,
     InheritanceError,
@@ -1003,3 +1002,302 @@ class TestClearingAParentClearsWhatInheritedFromIt:
         loader.clear_cache("a")
 
         assert loader._cache == {}
+
+
+class TestNameResolution:
+    """A deployment governs how a config *name* maps to a location.
+
+    The mapping has to reach ``extends:`` targets too. Those names are written
+    inside config files, so a consumer who can only intercept the entry point
+    cannot express a layout convention at all -- the recursion into parents
+    happens entirely inside the loader.
+    """
+
+    @pytest.fixture
+    def domains(self, tmp_path):
+        """A `domains/` layout: parents named bare inside the child."""
+        (tmp_path / "domains").mkdir()
+        (tmp_path / "domains" / "parent.yaml").write_text(
+            yaml.dump({"a": 1, "shared": {"x": 1}})
+        )
+        (tmp_path / "domains" / "child.yaml").write_text(
+            yaml.dump({"extends": "parent", "b": 2})
+        )
+        return tmp_path
+
+    def test_extends_resolves_through_resolver(self, domains):
+        loader = InheritableConfigLoader(
+            domains, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+
+        assert loader.load("child") == {"a": 1, "shared": {"x": 1}, "b": 2}
+
+    def test_without_a_resolver_the_same_layout_fails(self, domains):
+        """What the seam exists for: the parent is unreachable without it."""
+        loader = InheritableConfigLoader(domains)
+
+        with pytest.raises(InheritanceError, match=r"parent\.yaml"):
+            loader.load("domains/child")
+
+    def test_resolve_name_default_is_identity(self, tmp_path):
+        """No resolver: a flat layout behaves exactly as before."""
+        (tmp_path / "flat.yaml").write_text(yaml.dump({"k": "v"}))
+        loader = InheritableConfigLoader(tmp_path)
+
+        assert loader.resolve_name("flat") == "flat"
+        assert loader.load("flat") == {"k": "v"}
+
+    def test_resolver_returning_none_falls_back_to_identity(self, tmp_path):
+        """``None`` is the ResourceResolver contract for "no mapping"."""
+        (tmp_path / "known.yaml").write_text(yaml.dump({"k": 1}))
+        (tmp_path / "unmapped.yaml").write_text(yaml.dump({"k": 2}))
+        loader = InheritableConfigLoader(
+            tmp_path, resolver=MappingResolver({"known": "known"})
+        )
+
+        assert loader.resolve_name("unmapped") == "unmapped"
+        assert loader.load("unmapped") == {"k": 2}
+
+    def test_mapping_resolver_covers_an_alias(self, domains):
+        """A shipped resolver, no consumer class: an alias to a real file."""
+        loader = InheritableConfigLoader(
+            domains,
+            resolver=MappingResolver(
+                {"tutor": "domains/child", "parent": "domains/parent"}
+            ),
+        )
+
+        assert loader.load("tutor") == {"a": 1, "shared": {"x": 1}, "b": 2}
+
+    def test_subclass_resolve_name_override(self, domains):
+        """The second access mode: override the public method."""
+
+        class DomainAware(InheritableConfigLoader):
+            def resolve_name(self, name):
+                return f"domains/{name}"
+
+        assert DomainAware(domains).load("child") == {
+            "a": 1,
+            "shared": {"x": 1},
+            "b": 2,
+        }
+
+    def test_an_override_replaces_the_injected_resolver(self, domains):
+        """The two modes are alternatives; using both is not additive.
+
+        An override replaces the default implementation, so the resolver is
+        never consulted -- silently, which is why it is documented rather
+        than left to be discovered.
+        """
+
+        class DomainAware(InheritableConfigLoader):
+            def resolve_name(self, name):
+                return f"domains/{name}"
+
+        loader = DomainAware(
+            domains, resolver=MappingResolver({"child": "somewhere-else"})
+        )
+
+        assert loader.resolve_name("child") == "domains/child"
+
+    def test_an_override_delegating_to_super_applies_both(self, tmp_path):
+        """The other half of the same trap, and the noisier one."""
+
+        class Stacked(InheritableConfigLoader):
+            def resolve_name(self, name):
+                return f"domains/{super().resolve_name(name)}"
+
+        loader = Stacked(
+            tmp_path, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+
+        assert loader.resolve_name("child") == "domains/domains/child"
+
+
+class TestResolvedNameIsTheOneIdentity:
+    """Everything the loader keys on a name keys on the *resolved* one.
+
+    Two spellings of one config that shared a cache but not a cycle set -- or
+    a cache but not an invalidation edge -- would be two configs to one
+    structure and one config to another. That incoherence is worse than the
+    duplication it would replace.
+    """
+
+    @pytest.fixture
+    def aliased(self, tmp_path):
+        """`c` and `child` both name domains/child.yaml."""
+        (tmp_path / "domains").mkdir()
+        (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"t": 30}))
+        (tmp_path / "domains" / "child.yaml").write_text(
+            yaml.dump({"extends": "parent", "b": 2})
+        )
+        return tmp_path
+
+    def _loader(self, root):
+        return InheritableConfigLoader(
+            root,
+            resolver=MappingResolver(
+                {
+                    "c": "domains/child",
+                    "child": "domains/child",
+                    "parent": "domains/parent",
+                }
+            ),
+        )
+
+    def test_cache_keyed_on_resolved_name(self, aliased):
+        loader = self._loader(aliased)
+
+        loader.load("c")
+        loader.load("child")
+
+        # Both spellings, one entry -- asserting on the name half only, since
+        # the other half is the substitution mode.
+        names = {key[0] for key in loader._cache}
+        assert names == {"domains/child", "domains/parent"}
+
+    def test_two_spellings_return_the_same_object(self, aliased):
+        loader = self._loader(aliased)
+
+        assert loader.load("c") is loader.load("child")
+
+    def test_clear_cache_resolves_name(self, aliased):
+        """``clear_cache("c")`` clears what ``load("child")`` stored."""
+        loader = self._loader(aliased)
+        loader.load("child")
+
+        (aliased / "domains" / "child.yaml").write_text(
+            yaml.dump({"extends": "parent", "b": 99})
+        )
+        loader.clear_cache("c")
+
+        assert loader.load("child")["b"] == 99
+
+    def test_inheritance_edges_use_resolved_names(self, aliased):
+        """Clearing a parent must still reach a child cached under an alias.
+
+        The edges are walked against the cache's own keys, so recording them
+        under the names the consumer happened to write would make the walk
+        compute names the cache cannot match -- and the child would keep
+        answering with the parent's old content.
+        """
+        loader = self._loader(aliased)
+        assert loader.load("c")["t"] == 30
+
+        (aliased / "domains" / "parent.yaml").write_text(yaml.dump({"t": 60}))
+        loader.clear_cache("parent")
+
+        assert loader.load("c")["t"] == 60
+
+    def test_cycle_detection_uses_resolved_name(self, tmp_path):
+        """Two spellings of one config are one node in the cycle graph.
+
+        A cycle is caught either way -- ``extends:`` is single-valued, so a
+        repeated *config* eventually repeats a *spelling* too. What the
+        resolved keying buys is catching it at the first repeat: a raw cycle
+        set walks the whole cycle again before it recognizes one, so the
+        config is read twice, and a longer alias chain is re-read in full.
+        """
+        (tmp_path / "domains").mkdir()
+        (tmp_path / "domains" / "a.yaml").write_text(
+            yaml.dump({"extends": "alias-of-a", "v": 1})
+        )
+
+        class Counting(InheritableConfigLoader):
+            reads = 0
+
+            def _load_file(self, name):
+                self.reads += 1
+                return super()._load_file(name)
+
+        loader = Counting(
+            tmp_path,
+            resolver=MappingResolver(
+                {"a": "domains/a", "alias-of-a": "domains/a"}
+            ),
+        )
+
+        with pytest.raises(InheritanceError, match="domains/a"):
+            loader.load("a")
+
+        assert loader.reads == 1
+
+
+class TestLoadFromFileIgnoresResolution:
+    """``load_from_file`` rebinds ``config_dir``; a mapping defined against
+    the configured directory cannot be correct against that one.
+
+    Suppression covers the whole subtree, not just the entry file -- the
+    rebinding applies to every ``extends:`` target below it too.
+    """
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        (tmp_path / "domains").mkdir()
+        (tmp_path / "domains" / "parent.yaml").write_text(
+            yaml.dump({"a": 1, "shared": {"x": 1}})
+        )
+        (tmp_path / "domains" / "child.yaml").write_text(
+            yaml.dump({"extends": "parent", "b": 2})
+        )
+        return tmp_path
+
+    def _prefixing(self, root):
+        return InheritableConfigLoader(
+            root, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+
+    def test_load_from_file_ignores_resolver(self, tree):
+        loader = self._prefixing(tree)
+
+        assert loader.load_from_file(tree / "domains" / "child.yaml") == {
+            "a": 1,
+            "shared": {"x": 1},
+            "b": 2,
+        }
+
+    def test_load_from_file_extends_ignores_resolver(self, tmp_path):
+        """The subtree, not just the entry file.
+
+        The parent here exists ONLY beside the child, so a resolver applied
+        one level down would look for it under a nested `domains/` that does
+        not exist.
+        """
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "base.yaml").write_text(yaml.dump({"t": 30}))
+        (tmp_path / "elsewhere" / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 8080})
+        )
+        loader = self._prefixing(tmp_path)
+
+        result = loader.load_from_file(tmp_path / "elsewhere" / "svc.yaml")
+
+        assert result == {"t": 30, "port": 8080}
+
+    def test_a_subclass_override_cannot_defeat_the_suppression(self, tree):
+        """The flag is read where resolution is invoked, so the override is
+        not called at all -- a suppression a subclass can accidentally break
+        is not a suppression.
+        """
+
+        class DomainAware(InheritableConfigLoader):
+            def resolve_name(self, name):
+                return f"domains/{name}"
+
+        loader = DomainAware(tree)
+
+        assert loader.load_from_file(tree / "domains" / "child.yaml")["b"] == 2
+
+    def test_resolution_is_restored_after_load_from_file(self, tree):
+        loader = self._prefixing(tree)
+        loader.load_from_file(tree / "domains" / "child.yaml")
+
+        assert loader.load("child")["b"] == 2
+
+    def test_resolution_is_restored_after_a_failure(self, tree):
+        loader = self._prefixing(tree)
+
+        with pytest.raises(InheritanceError):
+            loader.load_from_file(tree / "domains" / "missing.yaml")
+
+        assert loader.load("child")["b"] == 2

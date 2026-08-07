@@ -44,6 +44,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from dataknobs_common import ResourceResolver
 from dataknobs_common.config_loading import (
     ConfigLoadError,
     find_config_file,
@@ -342,28 +343,102 @@ class InheritableConfigLoader:
     inheritance via an `extends` field. Child configurations override
     parent values through deep merge.
 
+    Configuration *names* are mapped to locations under ``config_dir`` by
+    :meth:`resolve_name`, which a deployment can govern -- see that method
+    and the ``resolver`` argument.
+
+    A loader mutates instance state while :meth:`load_from_file` runs
+    (``config_dir`` and resolution suppression are saved and restored around
+    the call), so one loader is not safe to share across threads.
+
     Attributes:
         config_dir: Directory containing configuration files
+        _cache: Resolved configurations, keyed by (resolved name,
+            substitution mode)
+        _resolver: Optional name->location mapping consulted by
+            :meth:`resolve_name`
     """
 
-    def __init__(self, config_dir: str | Path | None = None):
+    def __init__(
+        self,
+        config_dir: str | Path | None = None,
+        *,
+        resolver: ResourceResolver[str, str] | None = None,
+    ):
         """Initialize configuration loader.
 
         Args:
             config_dir: Directory containing configuration files.
                        If None, uses ./configs
+            resolver: Optional name->location mapping consulted by
+                     :meth:`resolve_name`. ``MappingResolver`` and
+                     ``CallableResolver`` from ``dataknobs_common`` cover the
+                     common layout conventions without a consumer class.
         """
         self.config_dir = Path(config_dir) if config_dir else Path("./configs")
-        # Keyed by (name, substitute_vars). Resolving `extends:` recurses with
-        # substitute_vars=False, so one config can be produced in two forms; the
-        # key records which. See `load` for why storing both under one key makes
-        # a config's value depend on load order.
+        self._resolver = resolver
+        # Suppresses name resolution for the duration of `load_from_file`,
+        # which rebinds config_dir out from under any layout convention.
+        self._bypass_resolution = False
+        # Keyed by (resolved name, substitute_vars). Resolving `extends:`
+        # recurses with substitute_vars=False, so one config can be produced in
+        # two forms; the key records which. See `load` for why storing both
+        # under one key makes a config's value depend on load order.
+        #
+        # The name half is the *resolved* name, so two spellings of one config
+        # are one entry rather than two copies that can disagree.
         self._cache: dict[tuple[str, bool], dict[str, Any]] = {}
+        # Resolved names, so two spellings of one config are one node in the
+        # cycle graph rather than two.
         self._loading: set[str] = set()  # Track configs being loaded to detect cycles
-        # parent name -> names that reached it through `extends:`. A cached
-        # child holds its parent's content merged in, so clearing the parent
-        # has to reach the children or the stale copy keeps answering.
+        # resolved parent name -> resolved names that reached it through
+        # `extends:`. A cached child holds its parent's content merged in, so
+        # clearing the parent has to reach the children or the stale copy keeps
+        # answering. Resolved on both sides to stay in the cache's namespace --
+        # raw keys here would make the walk compute names `_cache` cannot match.
         self._dependents: dict[str, set[str]] = {}
+
+    def resolve_name(self, name: str) -> str:
+        """Map a configuration name to a name/path relative to ``config_dir``.
+
+        Applied to the requested configuration AND to every ``extends:``
+        target, so a layout convention governs inheritance as well as entry
+        points -- a parent named bare inside a child still resolves.
+
+        Default: consult the injected ``resolver``; fall back to identity when
+        there is none or when it returns ``None`` (the ``ResourceResolver``
+        contract for "no mapping").
+
+        Subclasses may override this method instead of injecting a resolver.
+        The two modes are **alternatives, not layers** -- an override replaces
+        this implementation, so a loader given both ignores the injected
+        resolver entirely, silently, unless the override delegates to
+        ``super().resolve_name(...)``, in which case both mappings apply in
+        sequence. Neither is likely to be what was meant; pick one mode.
+
+        Not applied under :meth:`load_from_file`, which rebinds ``config_dir``
+        to the file's own directory; a ``config_dir``-relative convention
+        cannot be correct against a ``config_dir`` the caller did not choose.
+
+        Args:
+            name: Configuration name as written by the caller or in ``extends:``
+
+        Returns:
+            The name to look up under ``config_dir``
+
+        Example:
+            ```python
+            from dataknobs_common import CallableResolver
+
+            loader = InheritableConfigLoader(
+                root, resolver=CallableResolver(lambda n: f"domains/{n}")
+            )
+            ```
+        """
+        if self._resolver is None:
+            return name
+        resolved = self._resolver.resolve(name)
+        return name if resolved is None else resolved
 
     def load(
         self,
@@ -373,11 +448,15 @@ class InheritableConfigLoader:
     ) -> dict[str, Any]:
         """Load and resolve configuration with inheritance.
 
-        The cache is keyed by name **and** substitution mode. Resolving
-        `extends:` recurses with ``substitute_vars=False``, so the same config
-        can be produced in two forms; a shared key would let one serve a
-        request for the other, in both directions -- returning raw ``${VAR}``
-        placeholders where expansion was asked for, or expanding an
+        ``name`` is mapped through :meth:`resolve_name` once, at the top, and
+        the result is what keys the cache, the cycle-detection set and the
+        inheritance edges, and what names the file to read.
+
+        The cache is keyed by that resolved name **and** substitution mode.
+        Resolving `extends:` recurses with ``substitute_vars=False``, so the
+        same config can be produced in two forms; a shared key would let one
+        serve a request for the other, in both directions -- returning raw
+        ``${VAR}`` placeholders where expansion was asked for, or expanding an
         already-expanded value a second time.
 
         Args:
@@ -397,27 +476,28 @@ class InheritableConfigLoader:
             config = loader.load("my-domain")
             ```
         """
-        cache_key = (name, substitute_vars)
+        resolved = name if self._bypass_resolution else self.resolve_name(name)
+        cache_key = (resolved, substitute_vars)
 
         # Check cache
         if use_cache and cache_key in self._cache:
-            logger.debug("Using cached config: %s", name)
+            logger.debug("Using cached config: %s", resolved)
             return self._cache[cache_key]
 
         # Detect circular inheritance
-        if name in self._loading:
-            raise InheritanceError(f"Circular inheritance detected: {name}")
+        if resolved in self._loading:
+            raise InheritanceError(f"Circular inheritance detected: {resolved}")
 
-        self._loading.add(name)
+        self._loading.add(resolved)
 
         try:
             # Load raw configuration
-            raw_config = self._load_file(name)
+            raw_config = self._load_file(resolved)
 
             # Handle inheritance
             if raw_config.get("extends"):
                 parent_name = raw_config["extends"]
-                logger.debug("Config '%s' extends '%s'", name, parent_name)
+                logger.debug("Config '%s' extends '%s'", resolved, parent_name)
 
                 # Load parent configuration (recursively handles inheritance)
                 parent_config = self.load(parent_name, use_cache=use_cache, substitute_vars=False)
@@ -435,8 +515,20 @@ class InheritableConfigLoader:
                 # under-clears -- the cost is a cache miss, and the next load
                 # is correct -- which is the safe direction for an
                 # invalidation graph to be imprecise in.
+                #
+                # Keyed on the *resolved* parent, to stay in `_cache`'s
+                # namespace. That means resolving `parent_name` here as well
+                # as in the recursion below -- two invocations on the same
+                # input, which a `ResourceResolver` is required to answer
+                # identically, and not the same thing as applying the mapping
+                # to an already-mapped name.
                 if use_cache:
-                    self._dependents.setdefault(parent_name, set()).add(name)
+                    resolved_parent = (
+                        parent_name
+                        if self._bypass_resolution
+                        else self.resolve_name(parent_name)
+                    )
+                    self._dependents.setdefault(resolved_parent, set()).add(resolved)
 
                 # Deep merge: child overrides parent
                 raw_config = deep_merge(parent_config, raw_config)
@@ -455,12 +547,12 @@ class InheritableConfigLoader:
             # from there would answer later reads for the configured one.
             if use_cache:
                 self._cache[cache_key] = raw_config
-            logger.info("Loaded configuration: %s", name)
+            logger.info("Loaded configuration: %s", resolved)
 
             return raw_config
 
         finally:
-            self._loading.discard(name)
+            self._loading.discard(resolved)
 
     def load_from_file(
         self,
@@ -471,6 +563,13 @@ class InheritableConfigLoader:
 
         This method bypasses the config_dir and loads directly from the path.
         Inheritance is resolved relative to the file's directory.
+
+        :meth:`resolve_name` is **suppressed for the whole subtree** -- the
+        entry file and every ``extends:`` target below it. A name mapping is
+        defined relative to ``config_dir``, and this method rebinds
+        ``config_dir`` to the file's own directory, so applying the mapping
+        here would look for the convention's location underneath a directory
+        the caller chose instead.
 
         Args:
             filepath: Path to configuration file
@@ -487,20 +586,35 @@ class InheritableConfigLoader:
         if not filepath.exists():
             raise InheritanceError(f"Configuration file not found: {filepath}")
 
-        # Temporarily change config_dir to file's directory for inheritance
+        # Temporarily change config_dir to file's directory for inheritance,
+        # and suppress name resolution for as long as it is rebound. The flag
+        # is honored at the single site `load` resolves from, so a subclass
+        # overriding `resolve_name` cannot defeat it -- the override is simply
+        # not called.
         old_config_dir = self.config_dir
         self.config_dir = filepath.parent
+        self._bypass_resolution = True
 
         try:
             return self.load(filepath.stem, use_cache=False, substitute_vars=substitute_vars)
         finally:
             self.config_dir = old_config_dir
+            self._bypass_resolution = False
 
     def _load_file(self, name: str) -> dict[str, Any]:
         """Load raw configuration file.
 
+        ``name`` is the final name :meth:`load` settled on -- resolved, or
+        deliberately left alone under :meth:`load_from_file`. This method does
+        not resolve it.
+
+        The name is joined to ``config_dir``, so one containing ``..`` --
+        including an ``extends:`` value -- addresses a file outside that
+        directory. Names come from the deployment's own config tree, the same
+        trust domain as its code.
+
         Args:
-            name: Configuration name (without extension)
+            name: Resolved configuration name (without extension)
 
         Returns:
             Parsed configuration dictionary
@@ -527,6 +641,9 @@ class InheritableConfigLoader:
     def clear_cache(self, name: str | None = None) -> None:
         """Clear configuration cache.
 
+        The name is mapped through :meth:`resolve_name` first, so clearing a
+        config clears what loading it stored -- under either spelling.
+
         Clearing a name clears every substitution variant cached under it --
         the config, not one of the two forms it may have been stored in.
         Leaving a variant behind would re-create the load-order dependence the
@@ -547,7 +664,7 @@ class InheritableConfigLoader:
             # recorded across loads, so a config edited to extend its own
             # descendant between two loads would otherwise loop here.
             stale: set[str] = set()
-            pending = [name]
+            pending = [self.resolve_name(name)]
             while pending:
                 current = pending.pop()
                 if current in stale:

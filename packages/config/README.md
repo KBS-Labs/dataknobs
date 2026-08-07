@@ -434,7 +434,17 @@ paths:
 
 ```python
 class InheritableConfigLoader:
-    def __init__(self, config_dir: str | Path | None = None)
+    def __init__(
+        self,
+        config_dir: str | Path | None = None,
+        *,
+        resolver: ResourceResolver[str, str] | None = None,
+    )
+
+    # Map a config name to a location under config_dir. Applied to the
+    # requested config AND to every `extends:` target; identity by default.
+    # Not applied under load_from_file.
+    def resolve_name(self, name: str) -> str
 
     # Load configuration with inheritance
     def load(
@@ -460,6 +470,36 @@ class InheritableConfigLoader:
     # Clear cache
     def clear_cache(self, name: str | None = None) -> None
 ```
+
+### Name Resolution
+
+`resolve_name` governs how a config *name* maps to a location, including for
+`extends:` targets — so a tree whose children name their parents bare still
+loads. Two modes, which are **alternatives, not layers**: an override
+replaces the default, so a loader given both silently ignores the injected
+resolver (or applies both mappings, if the override calls `super()`).
+
+```python
+from dataknobs_common import CallableResolver, MappingResolver
+
+# Inject a shipped resolver -- no consumer class needed
+loader = InheritableConfigLoader(
+    "./configs", resolver=CallableResolver(lambda n: f"domains/{n}")
+)
+loader = InheritableConfigLoader(
+    "./configs", resolver=MappingResolver({"tutor": "domains/bio-tutor"})
+)
+
+# Or override the method, when the mapping needs loader state
+class DomainAwareLoader(InheritableConfigLoader):
+    def resolve_name(self, name: str) -> str:
+        return f"{self.domain_root}/{name}"
+```
+
+The resolved name is what keys the cache, the cycle-detection set, the
+`extends:` invalidation edges, and `clear_cache`, so two spellings of one
+config are one entry. `load_from_file` suppresses resolution for the file and
+its whole `extends:` subtree, since it rebinds `config_dir`.
 
 ### Convenience Function
 

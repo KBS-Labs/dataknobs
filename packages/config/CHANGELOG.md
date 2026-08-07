@@ -113,6 +113,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver, so a caller holding raw refs on purpose keeps them even after a
   resolution layer reads through the config.
 
+- **`InheritableConfigLoader.resolve_name()`, and a `resolver=` argument to
+  go with it** — a public seam for how a configuration *name* maps to a
+  location under `config_dir`. It applies to every `extends:` target as well
+  as to the requested config, which is the point: parents are named inside
+  config files and the recursion into them happens entirely inside the
+  loader, so a deployment that could only intercept the entry point could not
+  express a layout convention at all. A config tree under `domains/` whose
+  children say `extends: parent` was unloadable without overriding a private
+  method.
+
+  Two ways to use it, and they are **alternatives, not layers.** An override
+  replaces the default implementation, so a loader given both silently
+  ignores the injected resolver — unless the override delegates to
+  `super().resolve_name(...)`, in which case both mappings apply in sequence
+  and a prefixing pair looks for `domains/domains/x.yaml`. Pick one:
+
+  ```python
+  from dataknobs_common import CallableResolver, MappingResolver
+
+  # Inject a resolver — no consumer class needed for either common layout.
+  InheritableConfigLoader(root, resolver=CallableResolver(lambda n: f"domains/{n}"))
+  InheritableConfigLoader(root, resolver=MappingResolver({"tutor": "domains/bio-tutor"}))
+
+  # Or override the public method, when the mapping needs loader state.
+  class DomainAware(InheritableConfigLoader):
+      def resolve_name(self, name: str) -> str:
+          return f"domains/{name}"
+  ```
+
+  A resolver returning `None` means "no mapping" and falls back to identity,
+  per the `ResourceResolver` contract. With no resolver and no override,
+  `resolve_name` is identity and nothing about a flat layout changes.
+
+  The resolved name is what the loader keys on throughout — the cache, the
+  cycle-detection set, the `extends:` invalidation edges, and `clear_cache`
+  — so two spellings of one config are one cache entry, one node, and one
+  thing to clear, rather than a config that is two to one structure and one
+  to another.
+
+  `load_from_file` suppresses resolution for the file **and** its `extends:`
+  subtree. A mapping is defined relative to `config_dir`, and that method
+  rebinds `config_dir` to the file's own directory, so a convention applied
+  there would look for its location beneath a directory the caller chose
+  instead. The suppression is honored where resolution is invoked, so
+  overriding `resolve_name` does not defeat it.
+
 ### Changed
 
 - **A `$resource` name or `type` containing `${VAR}` now resolves.**

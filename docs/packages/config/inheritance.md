@@ -199,17 +199,117 @@ paths:
 config = loader.load("config", substitute_vars=False)
 ```
 
+## Name Resolution
+
+By default a configuration name is a file name directly under `config_dir`.
+`resolve_name()` is the seam for changing that, and it applies to every
+`extends:` target as well as to the config you asked for — which is what
+makes it useful. Parents are named *inside* config files, and the recursion
+into them happens inside the loader, so intercepting only the entry point
+cannot express a layout convention.
+
+Given a tree whose children name their parents bare:
+
+```
+configs/
+  domains/
+    parent.yaml      # a: 1
+    child.yaml       # extends: parent
+```
+
+`load("domains/child")` fails without a resolver — the loader looks for
+`parent.yaml` at the top level, not beside the child.
+
+### Injecting a resolver
+
+`ResourceResolver` implementations ship in `dataknobs_common`, so neither
+common convention needs a class of your own:
+
+```python
+from dataknobs_common import CallableResolver, MappingResolver
+from dataknobs_config import InheritableConfigLoader
+
+# A layout rule
+loader = InheritableConfigLoader(
+    "./configs", resolver=CallableResolver(lambda n: f"domains/{n}")
+)
+loader.load("child")   # {"a": 1, ...} -- `extends: parent` resolved too
+
+# Or a table of aliases
+loader = InheritableConfigLoader(
+    "./configs", resolver=MappingResolver({"tutor": "domains/bio-tutor"})
+)
+```
+
+A resolver returning `None` means "no mapping" and falls back to identity,
+so a partial mapping leaves every other name alone.
+
+### Overriding the method
+
+When the mapping needs loader state, override the public method instead:
+
+```python
+class DomainAwareLoader(InheritableConfigLoader):
+    def resolve_name(self, name: str) -> str:
+        return f"{self.domain_root}/{name}"
+```
+
+The two modes are **alternatives, not layers.** An override replaces the
+default implementation, so a loader given both silently ignores the injected
+resolver:
+
+```python
+class DomainAwareLoader(InheritableConfigLoader):
+    def resolve_name(self, name: str) -> str:
+        return f"domains/{name}"
+
+# The resolver here is dead code -- the override never consults it.
+loader = DomainAwareLoader("./configs", resolver=MappingResolver({"tutor": "x"}))
+loader.resolve_name("tutor")   # "domains/tutor", not "x"
+```
+
+Delegating to `super()` inside the override is the other half of the same
+trap: both mappings then apply in sequence, and a prefixing pair looks for
+`domains/domains/child.yaml`. Pick one mode.
+
+### What resolution does not cover
+
+`load_from_file` suppresses resolution for the file **and** its `extends:`
+subtree. A mapping is defined relative to `config_dir`, and that method
+rebinds `config_dir` to the file's own directory, so applying a convention
+there would look for its location beneath a directory you did not choose:
+
+```python
+# Resolution off for this whole tree -- `extends:` targets are found
+# beside the file, which is what "loads directly from the path" means.
+loader.load_from_file("./somewhere-else/svc.yaml")
+```
+
 ## API Reference
 
 ### InheritableConfigLoader
 
 ```python
 class InheritableConfigLoader:
-    def __init__(self, config_dir: str | Path | None = None):
+    def __init__(
+        self,
+        config_dir: str | Path | None = None,
+        *,
+        resolver: ResourceResolver[str, str] | None = None,
+    ):
         """Initialize loader.
 
         Args:
             config_dir: Directory containing configs (default: ./configs)
+            resolver: Optional name->location mapping (see Name Resolution)
+        """
+
+    def resolve_name(self, name: str) -> str:
+        """Map a config name to a name/path relative to config_dir.
+
+        Applied to the requested config AND every `extends:` target.
+        Default: consult `resolver`, falling back to identity.
+        Not applied under `load_from_file`.
         """
 
     def load(
@@ -239,7 +339,8 @@ class InheritableConfigLoader:
     ) -> dict[str, Any]:
         """Load from specific file path.
 
-        Inheritance is resolved relative to the file's directory.
+        Inheritance is resolved relative to the file's directory, and
+        `resolve_name` is suppressed for the whole subtree.
         """
 
     def list_available(self) -> list[str]:
@@ -359,6 +460,38 @@ See
 [Substitution runs once per source](environment-variables.md#substitution-runs-once-per-source).
 
 `clear_cache(name)` clears every variant stored under that name.
+
+### The name half of the key is the resolved name
+
+Everything the loader keys on a name keys on the one that came out of
+[`resolve_name`](#name-resolution) — the cache, the cycle-detection set, the
+`extends:` invalidation edges, and `clear_cache`. Two spellings of one config
+are therefore one entry, one node, and one thing to clear:
+
+```python
+loader = InheritableConfigLoader(
+    "./configs",
+    resolver=MappingResolver({
+        "tutor": "domains/child",
+        "child": "domains/child",
+        "parent": "domains/parent",   # `extends:` targets need mapping too
+    }),
+)
+loader.load("tutor") is loader.load("child")   # True -- one entry
+loader.clear_cache("tutor")                    # clears what load("child") stored
+```
+
+A table-style resolver has to cover the `extends:` targets as well as the
+entry points — an unmapped name falls back to identity, so a bare `parent`
+would be looked for at the top level. `CallableResolver` with a layout rule
+sidesteps that, since the rule applies to every name.
+
+Splitting these would be worse than the duplication it replaces: a config
+that is two things to the cache and one to the cycle detector, or a
+`clear_cache("child")` that does not clear what `load("child")` cached.
+
+`load_from_file` bypasses resolution (above) — but it also bypasses the cache
+entirely, so it never stores an entry under an unresolved name.
 
 ## Error Handling
 
