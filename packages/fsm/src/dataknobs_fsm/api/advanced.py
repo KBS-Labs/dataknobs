@@ -270,6 +270,7 @@ See Also:
     - :mod:`dataknobs_fsm.execution.history`: Execution history tracking
 """
 
+import asyncio
 import inspect
 import logging
 import time
@@ -1734,9 +1735,17 @@ class AdvancedFSM:
         Awaits the resource manager's async cleanup (so providers exposing an
         ``aclose`` / ``cleanup`` coroutine are awaited), then stops and joins
         the shared bridge thread.
+
+        The join is offloaded rather than run inline: :meth:`FSM.close` stops
+        the bridge loop and *joins* its thread, which waits for the in-flight
+        step and the loop's async-generator shutdown to finish. Inline, that
+        would stall the caller's event loop — freezing every other task on it
+        for the whole shutdown, on the very path this class recommends for
+        async callers. Awaiting the offload keeps the guarantee that the
+        thread is gone when this returns.
         """
         await self._resource_manager.cleanup()
-        self.fsm.close()
+        await asyncio.to_thread(self.fsm.close)
 
     def __enter__(self) -> Self:
         return self

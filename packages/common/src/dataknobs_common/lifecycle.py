@@ -25,17 +25,29 @@ The collaborator exposes      Use
 ============================  ==========================
 a synchronous ``close()``     :func:`close_if_owned_sync`
 an ``async def close()``      :func:`close_if_owned`
-both ``close()`` and          :func:`aclose_if_owned`
-``aclose()``, closed from
-async
+an ``aclose()``, closed       :func:`aclose_if_owned`
+from async
 ============================  ==========================
 
-The third row is the one worth stating explicitly: for a collaborator
-that mirrors the sync/async lifecycle pair (a synchronous ``close()``
-alongside an ``aclose()`` that awaits coroutine cleanup the sync form
-skips), neither sibling is correct. :func:`close_if_owned` would
-``await`` a ``None`` return, and :func:`close_if_owned_sync` would call
-the lossy half.
+The third row is the one worth stating explicitly, because it is the one
+where picking by the *caller's* context rather than the collaborator's
+interface goes wrong. Take a collaborator that mirrors the sync/async
+lifecycle pair — a synchronous ``close()`` alongside an ``aclose()`` that
+awaits coroutine cleanup the sync form skips. From async code, neither
+sibling is merely suboptimal for it: :func:`close_if_owned` would
+``await`` a ``None`` return (``TypeError``), and
+:func:`close_if_owned_sync` would silently take the lossy half.
+
+The row is stated as "an ``aclose()``" rather than "both ``close()`` and
+``aclose()``" because the probe is what decides. A collaborator whose
+``close()`` is itself ``async`` and whose ``aclose()`` is an alias for it
+(``AsyncMemoryBank``) satisfies two rows, and either helper is correct
+there — the rows are not disjoint, and do not need to be.
+
+What *is* worth knowing: each helper probes for exactly one method name
+and skips when it is absent, so reaching for :func:`aclose_if_owned` on a
+plain ``close()``-only collaborator closes **nothing**. That skip is
+logged (see :func:`_report_unclosable`) rather than silent.
 
 Error isolation is offered as an opt-in on all three: at a teardown
 *cascade* (a bot closing knowledge base, then memory, then storage) one
@@ -57,6 +69,35 @@ __all__ = [
     "close_if_owned",
     "close_if_owned_sync",
 ]
+
+
+def _report_unclosable(resource: Any, method: str) -> None:
+    """Record that an owned collaborator exposes no way to close it.
+
+    ``owns=True`` is a claim of responsibility for teardown, so finding no
+    ``method`` to call means that responsibility cannot be discharged and
+    whatever the collaborator holds is retained. Skipping is still the right
+    behavior — raising would make a collaborator that legitimately needs no
+    teardown impossible to hold — but doing it in total silence is not.
+
+    That matters most for :func:`aclose_if_owned`, whose probe is the
+    *unusual* name: called on a plain ``close()``-only collaborator it closes
+    nothing at all, which is a worse outcome than either sibling's (one
+    raises loudly, the other at least closes something).
+
+    Logged at DEBUG rather than WARNING because, unlike a misspelled
+    registry key, "no teardown method" has a legitimate shape — a frozen
+    config, a plain mapping, a value object. A warning that fires on those
+    is one people learn to ignore, which is the same silence by another
+    route.
+    """
+    logger.debug(
+        "Owned %s exposes no %s(); nothing was closed. If it holds a "
+        "resource, either it needs that method or this holder should not "
+        "claim ownership of it.",
+        type(resource).__name__,
+        method,
+    )
 
 
 async def close_if_owned(
@@ -86,14 +127,18 @@ async def close_if_owned(
             ``SystemExit``) always propagate regardless, so cancellation
             and interpreter shutdown are never swallowed.
     """
-    if owns and resource is not None and hasattr(resource, "close"):
-        if on_error is None:
+    if not (owns and resource is not None):
+        return
+    if not hasattr(resource, "close"):
+        _report_unclosable(resource, "close")
+        return
+    if on_error is None:
+        await resource.close()
+    else:
+        try:
             await resource.close()
-        else:
-            try:
-                await resource.close()
-            except Exception as exc:  # error isolation is the contract
-                on_error(exc)
+        except Exception as exc:  # error isolation is the contract
+            on_error(exc)
 
 
 def close_if_owned_sync(
@@ -120,14 +165,18 @@ def close_if_owned_sync(
             subclasses (``KeyboardInterrupt``, ``SystemExit``) always
             propagate.
     """
-    if owns and resource is not None and hasattr(resource, "close"):
-        if on_error is None:
+    if not (owns and resource is not None):
+        return
+    if not hasattr(resource, "close"):
+        _report_unclosable(resource, "close")
+        return
+    if on_error is None:
+        resource.close()
+    else:
+        try:
             resource.close()
-        else:
-            try:
-                resource.close()
-            except Exception as exc:  # error isolation is the contract
-                on_error(exc)
+        except Exception as exc:  # error isolation is the contract
+            on_error(exc)
 
 
 async def aclose_if_owned(
@@ -145,6 +194,10 @@ async def aclose_if_owned(
     (``None``, raising ``TypeError``), and :func:`close_if_owned_sync`
     would call ``close()``, skipping the coroutine cleanup ``aclose()``
     exists to perform.
+
+    A collaborator whose ``close()`` is itself ``async`` and whose
+    ``aclose()`` merely aliases it is served correctly by either this or
+    :func:`close_if_owned`; the two are not mutually exclusive.
 
     The ownership guard, the ``on_error`` contract, and the set of
     exceptions isolated are identical to :func:`close_if_owned`; only the
@@ -168,11 +221,15 @@ async def aclose_if_owned(
             ``SystemExit``) always propagate regardless, so cancellation
             and interpreter shutdown are never swallowed.
     """
-    if owns and resource is not None and hasattr(resource, "aclose"):
-        if on_error is None:
+    if not (owns and resource is not None):
+        return
+    if not hasattr(resource, "aclose"):
+        _report_unclosable(resource, "aclose")
+        return
+    if on_error is None:
+        await resource.aclose()
+    else:
+        try:
             await resource.aclose()
-        else:
-            try:
-                await resource.aclose()
-            except Exception as exc:  # error isolation is the contract
-                on_error(exc)
+        except Exception as exc:  # error isolation is the contract
+            on_error(exc)

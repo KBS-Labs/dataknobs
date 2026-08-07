@@ -64,23 +64,23 @@ class TestStateTransformExecution:
         
         # Create FSM with the custom function
         try:
-            fsm = SimpleFSM(config, custom_functions={
+            with SimpleFSM(config, custom_functions={
                 'counting_transform': counting_transform
-            })
-            result = fsm.process({'value': 42})
+            }) as fsm:
+                result = fsm.process({'value': 42})
             
-            # Verify the transform was called exactly once
-            assert call_count == 1, f"Transform should be called exactly once, but was called {call_count} times"
+                # Verify the transform was called exactly once
+                assert call_count == 1, f"Transform should be called exactly once, but was called {call_count} times"
             
-            # Verify the transform received the correct input data
-            assert len(call_data_history) == 1
-            assert call_data_history[0] == {'value': 42}
+                # Verify the transform received the correct input data
+                assert len(call_data_history) == 1
+                assert call_data_history[0] == {'value': 42}
             
-            # Verify the final result is correct
-            assert result['success'] is True
-            assert result['data'] == {'result': 84}  # 42 * 2
-            assert result['final_state'] == 'output'
-            assert result['path'] == ['input', 'transform_state', 'output']
+                # Verify the final result is correct
+                assert result['success'] is True
+                assert result['data'] == {'result': 84}  # 42 * 2
+                assert result['final_state'] == 'output'
+                assert result['path'] == ['input', 'transform_state', 'output']
             
         except Exception as e:
             raise e
@@ -135,25 +135,25 @@ class TestStateTransformExecution:
         
         # Create FSM with the custom functions
         try:
-            fsm = SimpleFSM(config, custom_functions={
+            with SimpleFSM(config, custom_functions={
                 'first_transform': first_transform,
                 'second_transform': second_transform
-            })
-            result = fsm.process({'value': 5})
+            }) as fsm:
+                result = fsm.process({'value': 5})
             
-            # Verify each transform was called exactly once with correct data
-            assert len(transform_calls) == 2
+                # Verify each transform was called exactly once with correct data
+                assert len(transform_calls) == 2
             
-            # First transform should receive initial data
-            assert transform_calls[0] == ('first', {'value': 5})
+                # First transform should receive initial data
+                assert transform_calls[0] == ('first', {'value': 5})
             
-            # Second transform should receive result of first transform
-            assert transform_calls[1] == ('second', {'step1': 15})  # 5 + 10
+                # Second transform should receive result of first transform
+                assert transform_calls[1] == ('second', {'step1': 15})  # 5 + 10
             
-            # Final result should be correct
-            assert result['success'] is True
-            assert result['data'] == {'step2': 45}  # (5 + 10) * 3 = 45
-            assert result['path'] == ['start', 'first_transform_state', 'second_transform_state', 'end']
+                # Final result should be correct
+                assert result['success'] is True
+                assert result['data'] == {'step2': 45}  # (5 + 10) * 3 = 45
+                assert result['path'] == ['start', 'first_transform_state', 'second_transform_state', 'end']
 
         except Exception as e:
             raise e
@@ -209,27 +209,27 @@ class TestStateTransformExecution:
         
         # Create FSM with the custom functions
         try:
-            fsm = SimpleFSM(config, custom_functions={
+            with SimpleFSM(config, custom_functions={
                 'state_transform': state_transform,
                 'arc_transform': arc_transform
-            })
-            result = fsm.process({'value': 7})
+            }) as fsm:
+                result = fsm.process({'value': 7})
             
-            # Verify execution order and data flow
-            assert len(execution_log) == 2
+                # Verify execution order and data flow
+                assert len(execution_log) == 2
             
-            # StateTransform should be called first when entering the state
-            assert execution_log[0] == ('state_transform', {'value': 7})
+                # StateTransform should be called first when entering the state
+                assert execution_log[0] == ('state_transform', {'value': 7})
             
-            # ArcTransform should be called during arc traversal with state transform result
-            assert execution_log[1] == ('arc_transform', {'state_result': 70})  # 7 * 10
+                # ArcTransform should be called during arc traversal with state transform result
+                assert execution_log[1] == ('arc_transform', {'state_result': 70})  # 7 * 10
             
-            # Note: In the current implementation, if both state and arc transforms exist,
-            # the arc transform would be applied during transition, but since our test 
-            # has the arc going from transform_state to end, and the state transform
-            # changes the data, the arc transform gets the state-transformed data.
+                # Note: In the current implementation, if both state and arc transforms exist,
+                # the arc transform would be applied during transition, but since our test 
+                # has the arc going from transform_state to end, and the state transform
+                # changes the data, the arc transform gets the state-transformed data.
             
-            assert result['success'] is True
+                assert result['success'] is True
 
         except Exception as e:
             raise e
@@ -285,20 +285,20 @@ class TestStateTransformExecution:
         
         # Register the functions with SimpleFSM
         try:
-            fsm = SimpleFSM(config, custom_functions={
+            with SimpleFSM(config, custom_functions={
                 'test_validator': test_validator,
                 'test_transform': test_transform
-            })
-            result = fsm.process({'test': 'data'})
+            }) as fsm:
+                result = fsm.process({'test': 'data'})
             
-            # Validator should be called during state evaluation
-            assert validator_call_count >= 1, "Validator should be called"
+                # Validator should be called during state evaluation
+                assert validator_call_count >= 1, "Validator should be called"
             
-            # Transform should be called exactly once when entering the state
-            assert transform_call_count == 1, f"Transform should be called exactly once, got {transform_call_count}"
+                # Transform should be called exactly once when entering the state
+                assert transform_call_count == 1, f"Transform should be called exactly once, got {transform_call_count}"
             
-            assert result['success'] is True
-            assert result['data'] == {'transformed': True}
+                assert result['success'] is True
+                assert result['data'] == {'transformed': True}
 
         except Exception as e:
             raise e

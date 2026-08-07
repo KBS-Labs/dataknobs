@@ -72,11 +72,11 @@ class TestStartStateTransformBug:
 
     def test_start_transform_via_simple_fsm(self):
         """SimpleFSM should execute start state transform."""
-        fsm = SimpleFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS)
-        result = fsm.process({"input": "data"})
-        assert result["success"] is True, (
-            "FSM should reach end state — start transform should set computed=True"
-        )
+        with SimpleFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS) as fsm:
+            result = fsm.process({"input": "data"})
+            assert result["success"] is True, (
+                "FSM should reach end state — start transform should set computed=True"
+            )
 
     @pytest.mark.asyncio
     async def test_start_transform_via_async_simple_fsm(self):
@@ -90,28 +90,28 @@ class TestStartStateTransformBug:
     @pytest.mark.asyncio
     async def test_start_transform_via_advanced_fsm_step_async(self):
         """AdvancedFSM.execute_step_async() should execute start state transform."""
-        advanced = AdvancedFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS)
-        context = advanced.create_context({"input": "data"})
-        result = await advanced.execute_step_async(context)
+        async with AdvancedFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS) as advanced:
+            context = advanced.create_context({"input": "data"})
+            result = await advanced.execute_step_async(context)
 
-        assert result.success is True, (
-            f"Step should succeed — start transform should set computed=True. "
-            f"Error: {result.error}"
-        )
-        # Should have transitioned from start to end
-        assert result.to_state == "end"
+            assert result.success is True, (
+                f"Step should succeed — start transform should set computed=True. "
+                f"Error: {result.error}"
+            )
+            # Should have transitioned from start to end
+            assert result.to_state == "end"
 
     def test_start_transform_via_advanced_fsm_step_sync(self):
         """AdvancedFSM.execute_step_sync() should execute start state transform."""
-        advanced = AdvancedFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS)
-        context = advanced.create_context({"input": "data"})
-        result = advanced.execute_step_sync(context)
+        with AdvancedFSM(FSM_CONFIG, custom_functions=CUSTOM_FUNCTIONS) as advanced:
+            context = advanced.create_context({"input": "data"})
+            result = advanced.execute_step_sync(context)
 
-        assert result.success is True, (
-            f"Step should succeed — start transform should set computed=True. "
-            f"Error: {result.error}"
-        )
-        assert result.to_state == "end"
+            assert result.success is True, (
+                f"Step should succeed — start transform should set computed=True. "
+                f"Error: {result.error}"
+            )
+            assert result.to_state == "end"
 
 
 class TestStartTransformNotDuplicated:

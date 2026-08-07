@@ -1397,7 +1397,7 @@ async def close_if_owned(
     resource: Any,
     owns: bool,
     *,
-    on_error: Callable[[BaseException], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> None
 ```
 
@@ -1431,7 +1431,7 @@ def close_if_owned_sync(
     resource: Any,
     owns: bool,
     *,
-    on_error: Callable[[BaseException], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> None
 ```
 
@@ -1456,16 +1456,22 @@ async def aclose_if_owned(
     resource: Any,
     owns: bool,
     *,
-    on_error: Callable[[BaseException], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> None
 ```
 
-For a collaborator that mirrors the sync/async lifecycle pair — a
-*synchronous* `close()` alongside an `aclose()` that awaits coroutine
-cleanup the sync form skips. Same ownership guard and same optional error
-isolation as its siblings; only the probed method differs, so the
-`hasattr` check is what discriminates a dual-method collaborator from a
-plain one.
+For a collaborator exposing an `aclose()`, closed from async code. The
+shape it exists for is the sync/async lifecycle pair — a *synchronous*
+`close()` alongside an `aclose()` that awaits coroutine cleanup the sync
+form skips — but any collaborator with an `aclose()` is served correctly,
+including one whose `close()` is itself `async` and whose `aclose()` is an
+alias for it.
+
+Same ownership guard and same optional error isolation as its siblings;
+only the probed method differs. Each helper probes exactly one method name
+and skips when it is absent, so calling this one on a plain
+`close()`-only collaborator closes **nothing** — that skip is logged at
+DEBUG rather than passing in silence.
 
 ```python
 from dataknobs_common import aclose_if_owned
@@ -1489,13 +1495,19 @@ The collaborator's interface decides, not the caller's:
 |---|---|
 | a synchronous `close()` | `close_if_owned_sync` |
 | an `async def close()` | `close_if_owned` |
-| both `close()` and `aclose()`, closed from async | `aclose_if_owned` |
+| an `aclose()`, closed from async | `aclose_if_owned` |
 
-The third row is the one worth stating explicitly, because for that shape
-neither sibling is correct rather than merely suboptimal: `close_if_owned`
-would `await` a synchronous `close()`'s `None` return and raise
-`TypeError`, while `close_if_owned_sync` would succeed silently through
-the lossy half, skipping the cleanup `aclose()` exists to perform.
+The third row is the one worth stating explicitly, because it is where
+choosing by the *caller's* context instead of the collaborator's interface
+goes wrong. For a synchronous `close()` alongside an `aclose()`, neither
+sibling is correct rather than merely suboptimal: `close_if_owned` would
+`await` that `close()`'s `None` return and raise `TypeError`, while
+`close_if_owned_sync` would succeed silently through the lossy half,
+skipping the cleanup `aclose()` exists to perform.
+
+The rows are not disjoint, and need not be. A collaborator whose `close()`
+is `async` and whose `aclose()` merely aliases it satisfies two of them,
+and either helper is correct for it.
 
 ---
 

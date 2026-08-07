@@ -37,7 +37,8 @@ class TestDatabaseETLPipeline:
     @pytest.fixture
     def fsm(self):
         """Create ETL FSM with custom functions."""
-        return create_etl_fsm()
+        with create_etl_fsm() as fsm:
+            yield fsm
     
     def test_successful_etl_pipeline(self, fsm):
         """Test successful ETL pipeline execution."""
@@ -80,7 +81,7 @@ class TestDatabaseETLPipeline:
             data['validation_passed'] = False  # Exceeds 10% threshold
             return data
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             etl_config,
             data_mode=DataHandlingMode.COPY,
             custom_functions={
@@ -95,32 +96,32 @@ class TestDatabaseETLPipeline:
                 'check_validation_passed': check_validation_passed,
                 'check_ready_to_commit': check_ready_to_commit
             }
-        )
+        ) as fsm:
         
-        result = fsm.process({
-            'source_table': 'sales_raw',
-            'target_table': 'sales_fact',
-            'batch_size': 100
-        })
+            result = fsm.process({
+                'source_table': 'sales_raw',
+                'target_table': 'sales_fact',
+                'batch_size': 100
+            })
         
-        assert result['success'] is True  # FSM execution succeeds
-        assert result['final_state'] == 'failure'  # But ends in failure state
+            assert result['success'] is True  # FSM execution succeeds
+            assert result['final_state'] == 'failure'  # But ends in failure state
         
-        # Verify it went through rollback
-        expected_path = [
-            'start', 'initialize', 'extract', 'validate', 
-            'rollback', 'finalize', 'failure'
-        ]
-        assert result['path'] == expected_path
+            # Verify it went through rollback
+            expected_path = [
+                'start', 'initialize', 'extract', 'validate', 
+                'rollback', 'finalize', 'failure'
+            ]
+            assert result['path'] == expected_path
         
-        # Check rollback was executed
-        assert result['data'].get('rollback_complete') is True
-        rollback_log = result['data'].get('rollback_log', {})
-        assert rollback_log['reason'] == 'Validation failed'
+            # Check rollback was executed
+            assert result['data'].get('rollback_complete') is True
+            rollback_log = result['data'].get('rollback_log', {})
+            assert rollback_log['reason'] == 'Validation failed'
         
-        # Check final status
-        summary = result['data'].get('etl_summary', {})
-        assert summary['status'] == 'FAILED'
+            # Check final status
+            summary = result['data'].get('etl_summary', {})
+            assert summary['status'] == 'FAILED'
     
     def test_initialize_etl_function(self):
         """Test ETL initialization function."""

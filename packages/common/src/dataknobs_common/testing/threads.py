@@ -103,7 +103,11 @@ def assert_no_leaked_bridge_threads(
 
     Args:
         names: Thread names to watch. Defaults to
-            :data:`DK_DAEMON_THREAD_NAMES`.
+            :data:`DK_DAEMON_THREAD_NAMES`. Normalized once on entry, so a
+            one-shot iterable (a generator expression) works: the watch set
+            is needed on both entry and exit, and re-consuming an exhausted
+            iterator would leave the exit check watching nothing — a guard
+            that silently passes forever.
         grace_seconds: How long to wait for an apparently-leaked thread to
             finish shutting down before failing. A thread whose ``close()``
             has been called is joined well within this; a genuinely leaked
@@ -118,9 +122,10 @@ def assert_no_leaked_bridge_threads(
         out of the block is the more informative failure, and asserting on
         thread state while unwinding would mask it.
     """
-    before = set(live_dk_daemon_threads(names))
+    watched = frozenset(names) if names is not None else DK_DAEMON_THREAD_NAMES
+    before = set(live_dk_daemon_threads(watched))
     yield
-    leaked = [t for t in live_dk_daemon_threads(names) if t not in before]
+    leaked = [t for t in live_dk_daemon_threads(watched) if t not in before]
     if not leaked:
         return
 

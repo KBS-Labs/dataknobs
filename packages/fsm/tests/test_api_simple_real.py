@@ -107,48 +107,48 @@ class TestSimpleFSMInitialization:
     
     def test_initialization_from_dict(self, simple_fsm_config):
         """Test basic FSM initialization from config dictionary."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        # Test basic properties
-        assert fsm.data_mode == DataHandlingMode.COPY
-        assert fsm.config.name == simple_fsm_config['name']
-        assert fsm.config.main_network == simple_fsm_config['main_network']
-        assert fsm._fsm is not None
-        # SimpleFSM runs on the single async execution engine (driven through
-        # the FSM's shared async->sync bridge); it no longer holds a separate
-        # synchronous engine.
-        assert fsm._async_engine is not None
-        assert fsm._resource_manager is not None
+            # Test basic properties
+            assert fsm.data_mode == DataHandlingMode.COPY
+            assert fsm.config.name == simple_fsm_config['name']
+            assert fsm.config.main_network == simple_fsm_config['main_network']
+            assert fsm._fsm is not None
+            # SimpleFSM runs on the single async execution engine (driven through
+            # the FSM's shared async->sync bridge); it no longer holds a separate
+            # synchronous engine.
+            assert fsm._async_engine is not None
+            assert fsm._resource_manager is not None
         
-        # Test that FSM was built correctly
-        states = fsm.get_states()
-        assert 'start' in states
-        assert 'process' in states 
-        assert 'end' in states
+            # Test that FSM was built correctly
+            states = fsm.get_states()
+            assert 'start' in states
+            assert 'process' in states 
+            assert 'end' in states
     
     def test_initialization_from_file(self, temp_config_file, simple_fsm_config):
         """Test FSM initialization from config file."""
-        fsm = SimpleFSM(temp_config_file)
+        with SimpleFSM(temp_config_file) as fsm:
         
-        assert fsm._fsm is not None
-        states = fsm.get_states()
-        assert len(states) == 3
+            assert fsm._fsm is not None
+            states = fsm.get_states()
+            assert len(states) == 3
     
     def test_initialization_with_data_mode(self, simple_fsm_config):
         """Test FSM with different data modes."""
-        fsm = SimpleFSM(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE)
-        assert fsm.data_mode == DataHandlingMode.REFERENCE
+        with SimpleFSM(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE) as fsm:
+            assert fsm.data_mode == DataHandlingMode.REFERENCE
     
     def test_initialization_with_resources(self, simple_fsm_config):
         """Test FSM with additional resources."""
         resources = {'test_resource': {'type': 'memory', 'data': {}}}
-        fsm = SimpleFSM(simple_fsm_config, resources=resources)
+        with SimpleFSM(simple_fsm_config, resources=resources) as fsm:
         
-        # Verify resources are available
-        resource_names = fsm.get_resources()
-        # Note: The exact resource names depend on implementation
-        # but we should be able to get a list
-        assert isinstance(resource_names, list)
+            # Verify resources are available
+            resource_names = fsm.get_resources()
+            # Note: The exact resource names depend on implementation
+            # but we should be able to get a list
+            assert isinstance(resource_names, list)
 
 
 class TestSimpleFSMProcessing:
@@ -156,65 +156,65 @@ class TestSimpleFSMProcessing:
     
     def test_process_simple_data(self, processing_fsm_config):
         """Test processing simple data through the FSM."""
-        fsm = SimpleFSM(processing_fsm_config)
+        with SimpleFSM(processing_fsm_config) as fsm:
         
-        # Process data through the FSM
-        input_data = {'value': 5}
-        result = fsm.process(input_data)
+            # Process data through the FSM
+            input_data = {'value': 5}
+            result = fsm.process(input_data)
         
-        # Verify successful processing
-        if not result['success']:
-            print(f"Process failed with error: {result['error']}")
-        assert result['success'] is True
-        assert result['final_state'] == 'output'
-        assert 'data' in result
-        # The exact result depends on the FSM execution
-        assert 'path' in result
-        assert isinstance(result['path'], list)
+            # Verify successful processing
+            if not result['success']:
+                print(f"Process failed with error: {result['error']}")
+            assert result['success'] is True
+            assert result['final_state'] == 'output'
+            assert 'data' in result
+            # The exact result depends on the FSM execution
+            assert 'path' in result
+            assert isinstance(result['path'], list)
     
     def test_process_with_record(self, processing_fsm_config):
         """Test processing with Record input."""
-        fsm = SimpleFSM(processing_fsm_config)
+        with SimpleFSM(processing_fsm_config) as fsm:
         
-        record = Record({'value': 3})
-        result = fsm.process(record)
+            record = Record({'value': 3})
+            result = fsm.process(record)
         
-        assert result['success'] is True
-        assert result['final_state'] == 'output'
+            assert result['success'] is True
+            assert result['final_state'] == 'output'
     
     def test_process_with_timeout(self, simple_fsm_config):
         """Test processing with timeout (should not timeout on simple FSM)."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        result = fsm.process({'input': 'test'}, timeout=5.0)
+            result = fsm.process({'input': 'test'}, timeout=5.0)
         
-        assert result['success'] is True
+            assert result['success'] is True
     
     def test_validation_with_schema(self, simple_fsm_config):
         """Test data validation against start state schema."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        # Valid data
-        valid_result = fsm.validate({'input': 'test_string'})
-        assert valid_result['valid'] is True
-        assert len(valid_result['errors']) == 0
+            # Valid data
+            valid_result = fsm.validate({'input': 'test_string'})
+            assert valid_result['valid'] is True
+            assert len(valid_result['errors']) == 0
         
-        # Invalid data (missing required field)
-        invalid_result = fsm.validate({'wrong_field': 'value'})
-        # The exact validation behavior depends on schema implementation
-        # but we should get a validation result
-        assert isinstance(invalid_result['valid'], bool)
-        assert isinstance(invalid_result['errors'], list)
+            # Invalid data (missing required field)
+            invalid_result = fsm.validate({'wrong_field': 'value'})
+            # The exact validation behavior depends on schema implementation
+            # but we should get a validation result
+            assert isinstance(invalid_result['valid'], bool)
+            assert isinstance(invalid_result['errors'], list)
     
     def test_validation_with_record(self, simple_fsm_config):
         """Test validation with Record input."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        record = Record({'input': 'test'})
-        result = fsm.validate(record)
+            record = Record({'input': 'test'})
+            result = fsm.validate(record)
         
-        assert isinstance(result['valid'], bool)
-        assert isinstance(result['errors'], list)
+            assert isinstance(result['valid'], bool)
+            assert isinstance(result['errors'], list)
 
 
 class TestSimpleFSMBatchProcessing:
@@ -222,37 +222,37 @@ class TestSimpleFSMBatchProcessing:
     
     def test_batch_process_small_dataset(self, processing_fsm_config):
         """Test batch processing with small dataset."""
-        fsm = SimpleFSM(processing_fsm_config)
+        with SimpleFSM(processing_fsm_config) as fsm:
         
-        batch_data = [
-            {'value': 1},
-            {'value': 2},
-            {'value': 3}
-        ]
+            batch_data = [
+                {'value': 1},
+                {'value': 2},
+                {'value': 3}
+            ]
         
-        results = fsm.process_batch(batch_data, batch_size=2, max_workers=1)
+            results = fsm.process_batch(batch_data, batch_size=2, max_workers=1)
         
-        assert len(results) == 3
-        # All should succeed with simple processing
-        successful = [r for r in results if r['success']]
-        assert len(successful) >= 0  # At least some should succeed
+            assert len(results) == 3
+            # All should succeed with simple processing
+            successful = [r for r in results if r['success']]
+            assert len(successful) >= 0  # At least some should succeed
         
-        # Check structure of results
-        for result in results:
-            assert 'success' in result
-            assert 'final_state' in result
-            assert 'data' in result
-            assert 'path' in result
+            # Check structure of results
+            for result in results:
+                assert 'success' in result
+                assert 'final_state' in result
+                assert 'data' in result
+                assert 'path' in result
     
     def test_batch_process_with_records(self, processing_fsm_config):
         """Test batch processing with Record inputs."""
-        fsm = SimpleFSM(processing_fsm_config)
+        with SimpleFSM(processing_fsm_config) as fsm:
         
-        records = [Record({'value': i}) for i in range(3)]
-        results = fsm.process_batch(records)
+            records = [Record({'value': i}) for i in range(3)]
+            results = fsm.process_batch(records)
         
-        assert len(results) == 3
-        assert all('success' in r for r in results)
+            assert len(results) == 3
+            assert all('success' in r for r in results)
 
 
 class TestSimpleFSMStreamProcessing:
@@ -260,31 +260,31 @@ class TestSimpleFSMStreamProcessing:
 
     def test_process_stream_from_file(self, processing_fsm_config, tmp_path):
         """Test stream processing from file."""
-        fsm = SimpleFSM(processing_fsm_config)
+        with SimpleFSM(processing_fsm_config) as fsm:
 
-        # Create a test file with data
-        test_file = tmp_path / "test_data.jsonl"
-        with open(test_file, 'w') as f:
-            for i in range(3):
-                json.dump({'value': i}, f)
-                f.write('\n')
+            # Create a test file with data
+            test_file = tmp_path / "test_data.jsonl"
+            with open(test_file, 'w') as f:
+                for i in range(3):
+                    json.dump({'value': i}, f)
+                    f.write('\n')
 
-        result = fsm.process_stream(
-            source=str(test_file),
-            chunk_size=2
-        )
+            result = fsm.process_stream(
+                source=str(test_file),
+                chunk_size=2
+            )
 
-        # Verify stream processing results
-        assert 'total_processed' in result
-        assert 'successful' in result
-        assert 'failed' in result
-        assert 'duration' in result
-        assert 'throughput' in result
+            # Verify stream processing results
+            assert 'total_processed' in result
+            assert 'successful' in result
+            assert 'failed' in result
+            assert 'duration' in result
+            assert 'throughput' in result
 
-        # Basic sanity checks
-        assert isinstance(result['total_processed'], int)
-        assert isinstance(result['successful'], int)
-        assert isinstance(result['failed'], int)
+            # Basic sanity checks
+            assert isinstance(result['total_processed'], int)
+            assert isinstance(result['successful'], int)
+            assert isinstance(result['failed'], int)
 
     @pytest.mark.asyncio
     async def test_process_stream_from_iterator(self, processing_fsm_config):
@@ -322,23 +322,23 @@ class TestSimpleFSMUtilityMethods:
     
     def test_get_states(self, simple_fsm_config):
         """Test retrieving state names from real FSM."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        states = fsm.get_states()
+            states = fsm.get_states()
         
-        assert isinstance(states, list)
-        assert 'start' in states
-        assert 'process' in states
-        assert 'end' in states
-        assert len(states) == 3
+            assert isinstance(states, list)
+            assert 'start' in states
+            assert 'process' in states
+            assert 'end' in states
+            assert len(states) == 3
     
     def test_get_resources(self, simple_fsm_config):
         """Test retrieving resource names."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        resources = fsm.get_resources()
+            resources = fsm.get_resources()
         
-        assert isinstance(resources, list)
+            assert isinstance(resources, list)
         # The exact resources depend on what the FSM registers
         # but we should get a valid list
     
@@ -355,14 +355,14 @@ class TestSimpleFSMFactoryFunctions:
     
     def test_create_fsm_factory(self, simple_fsm_config):
         """Test create_fsm factory function."""
-        fsm = create_fsm(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE)
+        with create_fsm(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE) as fsm:
         
-        assert isinstance(fsm, SimpleFSM)
-        assert fsm.data_mode == DataHandlingMode.REFERENCE
+            assert isinstance(fsm, SimpleFSM)
+            assert fsm.data_mode == DataHandlingMode.REFERENCE
         
-        # Test it actually works
-        states = fsm.get_states()
-        assert len(states) > 0
+            # Test it actually works
+            states = fsm.get_states()
+            assert len(states) > 0
     
     def test_validate_data_convenience(self, simple_fsm_config):
         """Test validate_data convenience function."""
@@ -417,23 +417,23 @@ class TestSimpleFSMErrorHandling:
         
         # This might succeed or fail depending on validation strictness
         try:
-            fsm = SimpleFSM(invalid_config)
-            # If it succeeds, it should still be a valid FSM object
-            assert fsm._fsm is not None
+            with SimpleFSM(invalid_config) as fsm:
+                # If it succeeds, it should still be a valid FSM object
+                assert fsm._fsm is not None
         except Exception as e:
             # If it fails, it should be a meaningful error
             assert isinstance(e, Exception)
     
     def test_processing_with_missing_data(self, simple_fsm_config):
         """Test processing when required data is missing."""
-        fsm = SimpleFSM(simple_fsm_config)
+        with SimpleFSM(simple_fsm_config) as fsm:
         
-        # Try to process without required 'input' field
-        result = fsm.process({})
+            # Try to process without required 'input' field
+            result = fsm.process({})
         
-        # Should handle the error gracefully
-        assert 'success' in result
-        assert 'error' in result or 'final_state' in result
+            # Should handle the error gracefully
+            assert 'success' in result
+            assert 'error' in result or 'final_state' in result
         
         # The exact behavior depends on how validation is implemented
         # but it should not crash

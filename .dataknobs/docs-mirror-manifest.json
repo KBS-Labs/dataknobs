@@ -273,6 +273,10 @@
         {
           "package": "WIZARD_CONFIG_BUILDER.md",
           "site": "guides/wizard-config-builder.md"
+        },
+        {
+          "package": "WIZARD_SUBFLOWS.md",
+          "site": "guides/wizard-subflows.md"
         }
       ],
       "package_only": [
@@ -294,8 +298,7 @@
         "TESTING.md",
         "TOOLS.md",
         "USER_GUIDE.md",
-        "WIZARD_ADVANCE_API.md",
-        "WIZARD_SUBFLOWS.md"
+        "WIZARD_ADVANCE_API.md"
       ],
       "site_only": [
         "index.md",

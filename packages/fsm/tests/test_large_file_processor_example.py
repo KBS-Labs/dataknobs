@@ -39,7 +39,7 @@ class TestLargeFileProcessor:
     @pytest.fixture
     def fsm(self):
         """Create FSM with custom processing functions."""
-        return SimpleFSM(
+        with SimpleFSM(
             config,
             data_mode=DataHandlingMode.REFERENCE,
             custom_functions={
@@ -51,7 +51,8 @@ class TestLargeFileProcessor:
                 'mark_success': mark_success,
                 'mark_failure': mark_failure
             }
-        )
+        ) as fsm:
+            yield fsm
     
     @pytest.fixture
     def temp_jsonl_file(self):

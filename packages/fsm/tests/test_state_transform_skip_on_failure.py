@@ -102,24 +102,24 @@ def _recovery_config() -> dict:
 
 def test_sync_recovery_state_runs_normal_downstream_skipped() -> None:
     calls: list[str] = []
-    fsm = SimpleFSM(
+    with SimpleFSM(
         _recovery_config(),
         custom_functions={
             "boom": _boom,
             "spy_cleanup": _spy("cleanup", calls),
             "spy_extra": _spy("extra", calls),
         },
-    )
+    ) as fsm:
 
-    result = fsm.process({"id": "1"})
+        result = fsm.process({"id": "1"})
 
-    assert result["success"] is False, "a failed record must report failure"
-    assert "cleanup" in calls, (
-        "a run_on_failure state's transform must run despite the prior failure"
-    )
-    assert "extra" not in calls, (
-        "a normal downstream state's transform must be skipped after a failure"
-    )
+        assert result["success"] is False, "a failed record must report failure"
+        assert "cleanup" in calls, (
+            "a run_on_failure state's transform must run despite the prior failure"
+        )
+        assert "extra" not in calls, (
+            "a normal downstream state's transform must be skipped after a failure"
+        )
 
 
 @pytest.mark.asyncio
@@ -177,17 +177,17 @@ def _within_state_config() -> dict:
 
 def test_sync_within_state_second_transform_skipped_after_raise() -> None:
     calls: list[str] = []
-    fsm = SimpleFSM(
+    with SimpleFSM(
         _within_state_config(),
         custom_functions={"boom": _boom, "spy_second": _spy("second", calls)},
-    )
+    ) as fsm:
 
-    result = fsm.process({"id": "1"})
+        result = fsm.process({"id": "1"})
 
-    assert result["success"] is False
-    assert "second" not in calls, (
-        "a second transform in the same state must be skipped after the first raised"
-    )
+        assert result["success"] is False
+        assert "second" not in calls, (
+            "a second transform in the same state must be skipped after the first raised"
+        )
 
 
 @pytest.mark.asyncio
@@ -314,18 +314,18 @@ def _clean_config() -> dict:
 
 def test_sync_clean_record_runs_all_transforms() -> None:
     calls: list[str] = []
-    fsm = SimpleFSM(
+    with SimpleFSM(
         _clean_config(),
         custom_functions={
             "spy_fail": _spy("fail", calls),
             "spy_cleanup": _spy("cleanup", calls),
             "spy_extra": _spy("extra", calls),
         },
-    )
+    ) as fsm:
 
-    result = fsm.process({"id": "1"})
+        result = fsm.process({"id": "1"})
 
-    assert result["success"] is True
-    assert calls == ["fail", "cleanup", "extra"], (
-        "with no failure, every state's transform must run in order"
-    )
+        assert result["success"] is True
+        assert calls == ["fail", "cleanup", "extra"], (
+            "with no failure, every state's transform must run in order"
+        )

@@ -224,18 +224,18 @@ class TestStepSyncMultiTransform:
                 {"type": "registered", "name": "double"},
             ]
         )
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config,
             custom_functions={"add_ten": add_ten, "double": double},
-        )
-        context = fsm.create_context({"value": 5})
+        ) as fsm:
+            context = fsm.create_context({"value": 5})
 
-        result = fsm.execute_step_sync(context)
+            result = fsm.execute_step_sync(context)
 
-        assert result.success, f"Step failed: {result.error}"
-        assert result.to_state == "end"
-        # value=5 -> add_ten -> 15 -> double -> 30
-        assert context.data["value"] == 30
+            assert result.success, f"Step failed: {result.error}"
+            assert result.to_state == "end"
+            # value=5 -> add_ten -> 15 -> double -> 30
+            assert context.data["value"] == 30
 
     def test_step_sync_single_transform_still_works(self) -> None:
         """Regression guard: a single string transform still works."""
@@ -248,17 +248,17 @@ class TestStepSyncMultiTransform:
         config = self._make_config(
             arc_transform={"type": "registered", "name": "add_ten"},
         )
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config,
             custom_functions={"add_ten": add_ten},
-        )
-        context = fsm.create_context({"value": 5})
+        ) as fsm:
+            context = fsm.create_context({"value": 5})
 
-        result = fsm.execute_step_sync(context)
+            result = fsm.execute_step_sync(context)
 
-        assert result.success, f"Step failed: {result.error}"
-        assert result.to_state == "end"
-        assert context.data["value"] == 15
+            assert result.success, f"Step failed: {result.error}"
+            assert result.to_state == "end"
+            assert context.data["value"] == 15
 
     def test_step_sync_stringified_list_compat(self) -> None:
         """Backward compat: stringified list transforms are parsed correctly."""
@@ -282,11 +282,11 @@ class TestStepSyncMultiTransform:
     def test_step_sync_no_transform(self) -> None:
         """Arc with no transform passes data through unchanged."""
         config = self._make_config(arc_transform=None)
-        fsm = create_advanced_fsm(config)
-        context = fsm.create_context({"value": 42})
+        with create_advanced_fsm(config) as fsm:
+            context = fsm.create_context({"value": 42})
 
-        result = fsm.execute_step_sync(context)
+            result = fsm.execute_step_sync(context)
 
-        assert result.success
-        assert result.to_state == "end"
-        assert context.data["value"] == 42
+            assert result.success
+            assert result.to_state == "end"
+            assert context.data["value"] == 42

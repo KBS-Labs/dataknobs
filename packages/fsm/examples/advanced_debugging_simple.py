@@ -189,75 +189,75 @@ def demonstrate_advanced_features():
     }
     
     # Create the advanced FSM
-    fsm = create_advanced_fsm(
+    with create_advanced_fsm(
         workflow_config,
         custom_functions=custom_functions,
         execution_mode=ExecutionMode.STEP_BY_STEP
-    )
+    ) as fsm:
     
-    print("\n1️⃣ FSM Created with AdvancedFSM")
-    print(f"   Mode: {fsm.execution_mode}")
+        print("\n1️⃣ FSM Created with AdvancedFSM")
+        print(f"   Mode: {fsm.execution_mode}")
     
-    # Add breakpoints
-    print("\n2️⃣ Setting Breakpoints")
-    fsm.add_breakpoint('validate')
-    fsm.add_breakpoint('finalize')
-    print(f"   Breakpoints set at: validate, finalize")
+        # Add breakpoints
+        print("\n2️⃣ Setting Breakpoints")
+        fsm.add_breakpoint('validate')
+        fsm.add_breakpoint('finalize')
+        print(f"   Breakpoints set at: validate, finalize")
     
-    # Inspect states
-    print("\n3️⃣ Inspecting States")
-    for state_name in ['start', 'validate', 'process']:
-        info = fsm.inspect_state(state_name)
-        print(f"   {state_name}:")
-        print(f"     - Is Start: {info.get('is_start', False)}")
-        print(f"     - Is End: {info.get('is_end', False)}")
-        print(f"     - Has Transform: {info.get('has_transform', False)}")
+        # Inspect states
+        print("\n3️⃣ Inspecting States")
+        for state_name in ['start', 'validate', 'process']:
+            info = fsm.inspect_state(state_name)
+            print(f"   {state_name}:")
+            print(f"     - Is Start: {info.get('is_start', False)}")
+            print(f"     - Is End: {info.get('is_end', False)}")
+            print(f"     - Has Transform: {info.get('has_transform', False)}")
     
-    # Get available transitions
-    print("\n4️⃣ Available Transitions")
-    for state_name in ['start', 'validate']:
-        transitions = fsm.get_available_transitions(state_name)
-        print(f"   From '{state_name}':")
-        for trans in transitions:
-            print(f"     → {trans['target']} (has_condition: {trans.get('has_pre_test', False)})")
+        # Get available transitions
+        print("\n4️⃣ Available Transitions")
+        for state_name in ['start', 'validate']:
+            transitions = fsm.get_available_transitions(state_name)
+            print(f"   From '{state_name}':")
+            for trans in transitions:
+                print(f"     → {trans['target']} (has_condition: {trans.get('has_pre_test', False)})")
     
-    # Visualize FSM structure
-    print("\n5️⃣ FSM Structure Visualization")
-    viz = fsm.visualize_fsm()
-    print(viz)
+        # Visualize FSM structure
+        print("\n5️⃣ FSM Structure Visualization")
+        viz = fsm.visualize_fsm()
+        print(viz)
     
-    # Set up execution hooks
-    print("\n6️⃣ Setting Execution Hooks")
+        # Set up execution hooks
+        print("\n6️⃣ Setting Execution Hooks")
     
-    def on_state_enter(state):
-        print(f"   [HOOK] Entering state: {state}")
+        def on_state_enter(state):
+            print(f"   [HOOK] Entering state: {state}")
     
-    def on_state_exit(state):
-        print(f"   [HOOK] Exiting state: {state}")
+        def on_state_exit(state):
+            print(f"   [HOOK] Exiting state: {state}")
     
-    def on_error(error, state, data):
-        print(f"   [HOOK] Error in {state}: {error}")
+        def on_error(error, state, data):
+            print(f"   [HOOK] Error in {state}: {error}")
     
-    hooks = ExecutionHook(
-        on_state_enter=on_state_enter,
-        on_state_exit=on_state_exit,
-        on_error=on_error
-    )
-    fsm.set_hooks(hooks)
-    print("   Hooks configured for state enter/exit and errors")
+        hooks = ExecutionHook(
+            on_state_enter=on_state_enter,
+            on_state_exit=on_state_exit,
+            on_error=on_error
+        )
+        fsm.set_hooks(hooks)
+        print("   Hooks configured for state enter/exit and errors")
     
-    # Enable history tracking
-    print("\n7️⃣ Enabling History Tracking")
-    fsm.enable_history(max_depth=50)
-    print("   History tracking enabled (max depth: 50)")
+        # Enable history tracking
+        print("\n7️⃣ Enabling History Tracking")
+        fsm.enable_history(max_depth=50)
+        print("   History tracking enabled (max depth: 50)")
     
-    print("\n" + "=" * 70)
-    print("Feature demonstration complete!")
-    print("Note: Actual execution would use async methods like:")
-    print("  - fsm.step(context) for step-by-step execution")
-    print("  - fsm.run_until_breakpoint(context) for breakpoint debugging")
-    print("  - fsm.trace_execution(data) for full tracing")
-    print("  - fsm.profile_execution(data) for performance profiling")
+        print("\n" + "=" * 70)
+        print("Feature demonstration complete!")
+        print("Note: Actual execution would use async methods like:")
+        print("  - fsm.step(context) for step-by-step execution")
+        print("  - fsm.run_until_breakpoint(context) for breakpoint debugging")
+        print("  - fsm.trace_execution(data) for full tracing")
+        print("  - fsm.profile_execution(data) for performance profiling")
 
 
 async def demonstrate_async_execution():
@@ -275,42 +275,42 @@ async def demonstrate_async_execution():
         'check_validation': check_validation
     }
     
-    fsm = create_advanced_fsm(
+    async with create_advanced_fsm(
         workflow_config,
         custom_functions=custom_functions,
         execution_mode=ExecutionMode.TRACE
-    )
+    ) as fsm:
     
-    # Test data
-    test_data = {
-        'user_id': 'USER-123',
-        'action': 'create',
-        'data': {'name': 'Test Item'}
-    }
+        # Test data
+        test_data = {
+            'user_id': 'USER-123',
+            'action': 'create',
+            'data': {'name': 'Test Item'}
+        }
     
-    print(f"\nInput Data: {json.dumps(test_data, indent=2)}")
+        print(f"\nInput Data: {json.dumps(test_data, indent=2)}")
     
-    # Execute with tracing
-    print("\n🔍 Executing with Trace Mode...")
-    trace = await fsm.trace_execution(test_data)
+        # Execute with tracing
+        print("\n🔍 Executing with Trace Mode...")
+        trace = await fsm.trace_execution(test_data)
     
-    print("\n📊 Execution Trace:")
-    for entry in trace:
-        print(f"  {entry['from']} → {entry['to']}")
+        print("\n📊 Execution Trace:")
+        for entry in trace:
+            print(f"  {entry['from']} → {entry['to']}")
     
-    # Execute with profiling
-    print("\n⏱️ Executing with Profiling...")
-    profile = await fsm.profile_execution(test_data)
+        # Execute with profiling
+        print("\n⏱️ Executing with Profiling...")
+        profile = await fsm.profile_execution(test_data)
     
-    print("\n📈 Performance Profile:")
-    print(f"  Total Time: {profile['total_time']:.3f}s")
-    print(f"  Transitions: {profile['transitions']}")
-    print(f"  Avg Transition Time: {profile['avg_transition_time']:.3f}s")
+        print("\n📈 Performance Profile:")
+        print(f"  Total Time: {profile['total_time']:.3f}s")
+        print(f"  Transitions: {profile['transitions']}")
+        print(f"  Avg Transition Time: {profile['avg_transition_time']:.3f}s")
     
-    if 'state_times' in profile:
-        print("\n  State Timings:")
-        for state, timing in profile['state_times'].items():
-            print(f"    {state}: {timing['avg']:.3f}s (count: {timing['count']})")
+        if 'state_times' in profile:
+            print("\n  State Timings:")
+            for state, timing in profile['state_times'].items():
+                print(f"    {state}: {timing['avg']:.3f}s (count: {timing['count']})")
 
 
 def main():

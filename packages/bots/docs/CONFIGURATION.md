@@ -1906,11 +1906,20 @@ with WizardConfigLoader().load_from_dict(wizard_config) as fsm:
 # bridge thread released here, along with every owned subflow's
 ```
 
-`close()` and `aclose()` are also available directly. Both are idempotent
-and **non-terminal** — a closed FSM stays usable, and a later `step()`
-lazily rebuilds the bridge — so an unconditional teardown is safe without
-tracking whether the FSM was ever stepped. Prefer `aclose()` from async
-code: it awaits resource cleanup that the synchronous `close()` skips.
+`close()` and `aclose()` are also available directly. Both are idempotent,
+and both leave the FSM **steppable**: a later `step()` lazily rebuilds the
+bridge rather than raising, which is what makes an unconditional teardown
+safe without tracking whether the FSM was ever stepped.
+
+That applies to the bridge, not to registered resources. Closing is
+terminal for the resource manager — providers are closed and not
+re-registered, so an FSM holding resources should not be stepped after
+close. Wizard FSMs built by the loader register none, which is why the
+unconditional teardown above is safe for them.
+
+Prefer `aclose()` from async code: it does everything `close()` does and
+additionally awaits providers whose cleanup is a coroutine, and it keeps
+the bridge join off the event loop.
 
 Ownership is explicit and defaults to *not owned*. `WizardReasoning`
 closes the FSM only when it built one itself (via `from_config`); an FSM

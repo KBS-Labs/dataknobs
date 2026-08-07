@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -302,8 +303,8 @@ async def test_aclose_base_exception_always_propagates(
 
 
 # --------------------------------------------------------------------------
-# Why the third helper exists: neither sibling serves a dual-method
-# collaborator. These pin the gap D-202-2 was opened for.
+# Why the third helper exists: neither sibling serves a collaborator with a
+# synchronous close() alongside an aclose(). These pin that gap.
 # --------------------------------------------------------------------------
 
 
@@ -329,3 +330,85 @@ async def test_aclose_if_owned_is_the_one_that_works() -> None:
     await aclose_if_owned(resource, True)
     assert resource.async_cleanup_ran is True
     assert resource.close_calls == 0
+
+
+class TestUnclosableOwnedResourceIsAudible:
+    """Owning something with no closer is a wiring bug, not a no-op.
+
+    All three helpers guard on ``hasattr``, so a collaborator exposing
+    neither the probed method nor anything else is skipped in silence. For
+    ``close_if_owned`` / ``close_if_owned_sync`` that is mostly benign — the
+    probed name is the ordinary one. For ``aclose_if_owned`` it is the
+    likeliest misuse: reach for the newest helper on a plain ``close()``-only
+    collaborator and *nothing at all* is closed, with no exception and no
+    log — a worse outcome than either sibling's, since one raises loudly and
+    the other at least closes something.
+
+    Declining to close is still the right behavior (raising would make an
+    optional-teardown collaborator un-holdable). Doing it inaudibly is not.
+    """
+
+    class _NoCloser:
+        """A collaborator with no teardown method of any kind."""
+
+    class _SyncOnly:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def test_aclose_logs_when_the_owned_resource_has_no_aclose(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        resource = self._SyncOnly()
+
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
+            await aclose_if_owned(resource, True)
+
+        assert not resource.closed, "aclose_if_owned must not fall back to close()"
+        assert any(
+            "aclose" in record.getMessage() for record in caplog.records
+        ), "the skipped close left no diagnostic at any level"
+
+    async def test_close_logs_when_the_owned_resource_has_no_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
+            await close_if_owned(self._NoCloser(), True)
+
+        assert caplog.records, "the skipped close left no diagnostic at any level"
+
+    def test_sync_close_logs_when_the_owned_resource_has_no_close(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
+            close_if_owned_sync(self._NoCloser(), True)
+
+        assert caplog.records, "the skipped close left no diagnostic at any level"
+
+    async def test_an_unowned_resource_is_not_reported(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Not owning it is the normal case, not a wiring bug.
+
+        The diagnostic must fire on "I own this and cannot close it", never
+        on the injected-collaborator path every consumer takes.
+        """
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
+            await close_if_owned(self._NoCloser(), False)
+            await aclose_if_owned(self._NoCloser(), False)
+            close_if_owned_sync(self._NoCloser(), False)
+
+        assert caplog.records == []
+
+    async def test_none_is_not_reported(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A collaborator that was never built is absence, not misuse."""
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
+            await close_if_owned(None, True)
+            await aclose_if_owned(None, True)
+            close_if_owned_sync(None, True)
+
+        assert caplog.records == []

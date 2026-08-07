@@ -61,7 +61,10 @@ class WizardFSM:
                 they are built for it by the loader, so :meth:`close`
                 cascades to them. Use :meth:`register_subflow` with
                 ``owns=False`` to add one whose lifecycle stays with its
-                caller.
+                caller. The mapping is **copied**: ownership is recorded
+                once, from the contents at construction, so a caller that
+                kept its reference and added an entry afterwards would
+                otherwise get a subflow this FSM steps but never closes.
             transform_context_factory: Optional callable that receives a
                 :class:`FunctionContext` and returns the application-specific
                 context for transforms (e.g. :class:`TransformContext`).
@@ -72,7 +75,7 @@ class WizardFSM:
         self._stage_metadata = stage_metadata
         self._settings = settings or {}
         self._context: ExecutionContext | None = None
-        self._subflow_registry: dict[str, WizardFSM] = subflow_registry or {}
+        self._subflow_registry: dict[str, WizardFSM] = dict(subflow_registry or {})
         self._owns_subflows: set[str] = set(self._subflow_registry)
         self._transform_context_factory: Callable[..., Any] | None = (
             transform_context_factory
@@ -328,7 +331,31 @@ class WizardFSM:
                 Re-registering a name replaces both the subflow and its
                 ownership, so a name is owned iff its *most recent*
                 registration said so.
+
+        Replacing an **owned** subflow with a *different* object closes the
+        one displaced: reusing its name is this FSM's last chance to release
+        it, and dropping it from the registry unclosed would leak whatever
+        it holds — the same unreachable-daemon-thread defect this class's
+        lifecycle exists to prevent, one level down. Re-registering the
+        *same* object closes nothing, so the documented
+        ``register_subflow(name, child, owns=False)`` hand-back does not
+        destroy what it hands over; nor is an unowned subflow ever closed,
+        since displacing it from this registry is not permission to tear
+        down something its caller may still be stepping.
         """
+        displaced = self._subflow_registry.get(name)
+        if (
+            displaced is not None
+            and displaced is not subflow_fsm
+            and name in self._owns_subflows
+        ):
+            try:
+                displaced.close()
+            except Exception:
+                logger.exception(
+                    "Error closing subflow %r displaced by re-registration", name
+                )
+
         self._subflow_registry[name] = subflow_fsm
         if owns:
             self._owns_subflows.add(name)
@@ -642,13 +669,22 @@ class WizardFSM:
         :meth:`register_subflow`); a subflow registered with ``owns=False``
         belongs to its caller and is left alone.
 
-        Prefer :meth:`aclose` from async code so a resource whose cleanup
-        is a coroutine is awaited rather than skipped.
+        Prefer :meth:`aclose` from async code: it does everything this does
+        and additionally awaits providers whose cleanup is a coroutine,
+        while keeping the bridge join off the event loop.
 
-        The FSM remains usable after close: a subsequent synchronous
-        :meth:`step` lazily creates a new bridge. That is what makes an
-        unconditional teardown — a test fixture, a ``with`` block — safe to
-        apply without tracking whether this FSM was ever stepped.
+        The FSM remains **steppable** after close: a subsequent synchronous
+        :meth:`step` lazily creates a new bridge rather than raising. That
+        is what makes an unconditional teardown — a test fixture, a ``with``
+        block — safe to apply without tracking whether this FSM was ever
+        stepped.
+
+        That guarantee covers the bridge, not registered resources. Closing
+        is terminal for the wrapped FSM's resource manager: its providers
+        are closed and not re-registered, so an ``AdvancedFSM`` holding
+        resources should not be stepped after close. Loader-built wizard
+        FSMs register none, which is what makes the unconditional teardown
+        safe in practice.
         """
         self._close_subflows()
         self._fsm.close()
@@ -658,10 +694,11 @@ class WizardFSM:
 
         Awaits the wrapped FSM's async resource cleanup — so a provider
         exposing an ``aclose`` / ``cleanup`` coroutine is awaited rather
-        than skipped — then stops and joins the bridge thread. Cascades to
-        owned subflows via *their* :meth:`aclose`.
+        than skipped — then stops and joins the bridge thread, off the event
+        loop. Cascades to owned subflows via *their* :meth:`aclose`.
 
-        Same idempotence and same reusability as :meth:`close`.
+        Same idempotence, and the same bridge-rebuild-on-next-step /
+        resources-are-terminal split described on :meth:`close`.
         """
         await self._aclose_subflows()
         await self._fsm.aclose()

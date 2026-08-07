@@ -49,7 +49,7 @@ async def test_from_config_built_strategy_closes_its_fsm() -> None:
 
 
 async def test_direct_ctor_strategy_leaves_its_fsm_open() -> None:
-    """D-202-1's guard — delete the ownership gate and this test fails.
+    """The ownership gate's guard — delete it and this test fails.
 
     The caller built this FSM and still holds it. Closing it here would be
     a use-after-close at every direct-construction site.
@@ -115,14 +115,16 @@ async def test_dynabot_close_reaches_the_fsm_end_to_end() -> None:
     is owned: bot → strategy → FSM.
     """
     before = _bridge_threads()
-    harness = await BotTestHarness.create(
+    # ``async with``: a failing assertion below must not leak the harness,
+    # which would surface as this file leaking a thread it did not create.
+    async with await BotTestHarness.create(
         wizard_config=_WIZARD_DICT,
         main_responses=["Hi there!"],
-    )
-    strategy = harness.bot.reasoning_strategy
-    strategy._fsm.step({})
-    assert _bridge_threads() == before + 1
+    ) as harness:
+        strategy = harness.bot.reasoning_strategy
+        strategy._fsm.step({})
+        assert _bridge_threads() == before + 1
 
-    await harness.bot.close()
+        await harness.bot.close()
 
-    assert _bridge_threads() == before
+        assert _bridge_threads() == before

@@ -22,6 +22,7 @@ from dataknobs_bots.reasoning.wizard_types import (
     NavigationConfig,
     WizardState,
 )
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ def _build_navigator(
     consistent_lifecycle: bool = True,
     allow_amendments: bool = False,
     section_to_stage_mapping: dict[str, str] | None = None,
-    wizard_loader: Any,
+    wizard_loader: WizardConfigLoader,
 ) -> WizardNavigator:
     """Build a WizardNavigator from a config dict using real FSM/subflows.
 
@@ -217,12 +218,12 @@ class TestIsAncestorOf:
 class TestResolveNavigationConfig:
     """Tests for _resolve_navigation_config."""
 
-    def test_returns_wizard_config_when_stage_has_no_override(self, wizard_loader) -> None:
+    def test_returns_wizard_config_when_stage_has_no_override(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         result = nav._resolve_navigation_config("start")
         assert result is nav._navigation_config
 
-    def test_stage_override_replaces_keywords(self, wizard_loader) -> None:
+    def test_stage_override_replaces_keywords(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(
             _two_stage_config(
                 start_nav={"back": {"keywords": ["undo", "previous"]}},
@@ -235,7 +236,7 @@ class TestResolveNavigationConfig:
         assert result.skip.keywords == nav._navigation_config.skip.keywords
         assert result.restart.keywords == nav._navigation_config.restart.keywords
 
-    def test_stage_override_can_disable_command(self, wizard_loader) -> None:
+    def test_stage_override_can_disable_command(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(
             _two_stage_config(
                 start_nav={"skip": {"enabled": False}},
@@ -246,7 +247,7 @@ class TestResolveNavigationConfig:
         assert result.skip.enabled is False
         assert result.skip.keywords == nav._navigation_config.skip.keywords
 
-    def test_unknown_stage_returns_wizard_config(self, wizard_loader) -> None:
+    def test_unknown_stage_returns_wizard_config(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         result = nav._resolve_navigation_config("nonexistent")
         assert result is nav._navigation_config
@@ -260,11 +261,11 @@ class TestResolveNavigationConfig:
 class TestMapSectionToStage:
     """Tests for map_section_to_stage."""
 
-    def test_empty_section_returns_none(self, wizard_loader) -> None:
+    def test_empty_section_returns_none(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         assert nav.map_section_to_stage("") is None
 
-    def test_custom_mapping_takes_precedence(self, wizard_loader) -> None:
+    def test_custom_mapping_takes_precedence(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(
             _two_stage_config(),
             section_to_stage_mapping={"mykey": "start"},
@@ -272,12 +273,12 @@ class TestMapSectionToStage:
         )
         assert nav.map_section_to_stage("mykey") == "start"
 
-    def test_default_mapping_returns_none_if_stage_missing(self, wizard_loader) -> None:
+    def test_default_mapping_returns_none_if_stage_missing(self, wizard_loader: WizardConfigLoader) -> None:
         # Default maps "llm" to "configure_llm" which doesn't exist here
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         assert nav.map_section_to_stage("llm") is None
 
-    def test_case_insensitive(self, wizard_loader) -> None:
+    def test_case_insensitive(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(
             _two_stage_config(),
             section_to_stage_mapping={"llm": "start"},
@@ -296,7 +297,7 @@ class TestHandleNavigation:
     """Behavioral tests for handle_navigation dispatch."""
 
     @pytest.mark.asyncio
-    async def test_back_keyword_triggers_back(self, wizard_loader) -> None:
+    async def test_back_keyword_triggers_back(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -310,7 +311,7 @@ class TestHandleNavigation:
         assert state.current_stage == "start"
 
     @pytest.mark.asyncio
-    async def test_skip_keyword_triggers_skip(self, wizard_loader) -> None:
+    async def test_skip_keyword_triggers_skip(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -319,7 +320,7 @@ class TestHandleNavigation:
         assert state.current_stage == "middle"
 
     @pytest.mark.asyncio
-    async def test_restart_keyword_triggers_restart(self, wizard_loader) -> None:
+    async def test_restart_keyword_triggers_restart(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -334,14 +335,14 @@ class TestHandleNavigation:
         assert state.data == {}
 
     @pytest.mark.asyncio
-    async def test_non_navigation_returns_none(self, wizard_loader) -> None:
+    async def test_non_navigation_returns_none(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         result = await nav.handle_navigation("hello there", state, None, None)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_disabled_command_returns_none(self, wizard_loader) -> None:
+    async def test_disabled_command_returns_none(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(
             _two_stage_config(
                 start_nav={"skip": {"enabled": False}},
@@ -362,7 +363,7 @@ class TestNavigateBack:
     """Behavioral tests for navigate_back."""
 
     @pytest.mark.asyncio
-    async def test_back_pops_history_and_restores_stage(self, wizard_loader) -> None:
+    async def test_back_pops_history_and_restores_stage(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         state.current_stage = "middle"
@@ -375,7 +376,7 @@ class TestNavigateBack:
         assert state.history == ["start"]
 
     @pytest.mark.asyncio
-    async def test_back_at_start_returns_false(self, wizard_loader) -> None:
+    async def test_back_at_start_returns_false(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -384,7 +385,7 @@ class TestNavigateBack:
         assert state.current_stage == "start"
 
     @pytest.mark.asyncio
-    async def test_back_records_transition(self, wizard_loader) -> None:
+    async def test_back_records_transition(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         state.current_stage = "middle"
@@ -398,7 +399,7 @@ class TestNavigateBack:
         assert state.transitions[0].to_stage == "start"
 
     @pytest.mark.asyncio
-    async def test_back_fires_enter_hook_when_consistent(self, wizard_loader) -> None:
+    async def test_back_fires_enter_hook_when_consistent(self, wizard_loader: WizardConfigLoader) -> None:
         enter_calls: list[str] = []
         hooks = WizardHooks()
         hooks.on_enter(lambda s, d: enter_calls.append(s))
@@ -418,7 +419,7 @@ class TestNavigateBack:
         assert enter_calls == ["start"]
 
     @pytest.mark.asyncio
-    async def test_back_no_hooks_when_not_consistent(self, wizard_loader) -> None:
+    async def test_back_no_hooks_when_not_consistent(self, wizard_loader: WizardConfigLoader) -> None:
         enter_calls: list[str] = []
         hooks = WizardHooks()
         hooks.on_enter(lambda s, d: enter_calls.append(s))
@@ -447,7 +448,7 @@ class TestNavigateSkip:
     """Behavioral tests for navigate_skip."""
 
     @pytest.mark.asyncio
-    async def test_skip_advances_and_marks_skipped(self, wizard_loader) -> None:
+    async def test_skip_advances_and_marks_skipped(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -456,7 +457,7 @@ class TestNavigateSkip:
         assert state.data.get("_skipped_start") is True
 
     @pytest.mark.asyncio
-    async def test_skip_not_allowed_returns_false(self, wizard_loader) -> None:
+    async def test_skip_not_allowed_returns_false(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(can_skip=False), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -465,7 +466,7 @@ class TestNavigateSkip:
         assert msgs == []
 
     @pytest.mark.asyncio
-    async def test_skip_applies_defaults(self, wizard_loader) -> None:
+    async def test_skip_applies_defaults(self, wizard_loader: WizardConfigLoader) -> None:
         config = _two_stage_config()
         config["stages"][0]["skip_default"] = {"color": "blue"}
         nav = _build_navigator(config, wizard_loader=wizard_loader)
@@ -484,7 +485,7 @@ class TestRestartCleanup:
     """Behavioral tests for restart_cleanup."""
 
     @pytest.mark.asyncio
-    async def test_restart_clears_data_and_history(self, wizard_loader) -> None:
+    async def test_restart_clears_data_and_history(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         state.current_stage = "middle"
@@ -499,7 +500,7 @@ class TestRestartCleanup:
         assert state.completed is False
 
     @pytest.mark.asyncio
-    async def test_restart_preserves_transition_history(self, wizard_loader) -> None:
+    async def test_restart_preserves_transition_history(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         from dataknobs_bots.reasoning.observability import create_transition_record
@@ -516,7 +517,7 @@ class TestRestartCleanup:
         assert state.transitions[-1].trigger == "restart"
 
     @pytest.mark.asyncio
-    async def test_restart_fires_restart_hook(self, wizard_loader) -> None:
+    async def test_restart_fires_restart_hook(self, wizard_loader: WizardConfigLoader) -> None:
         restart_called = []
         hooks = WizardHooks()
         hooks.on_restart(lambda: restart_called.append(True))
@@ -528,7 +529,7 @@ class TestRestartCleanup:
         assert restart_called == [True]
 
     @pytest.mark.asyncio
-    async def test_restart_clears_banks(self, wizard_loader) -> None:
+    async def test_restart_clears_banks(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         # Simulate a bank with a clear() method
         cleared = []
@@ -553,13 +554,13 @@ class TestBranchForRevisitedStage:
     """Behavioral tests for branch_for_revisited_stage."""
 
     @pytest.mark.asyncio
-    async def test_no_crash_when_manager_has_no_state(self, wizard_loader) -> None:
+    async def test_no_crash_when_manager_has_no_state(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         # Plain object with no .state — should degrade gracefully
         await nav.branch_for_revisited_stage(object(), "start")
 
     @pytest.mark.asyncio
-    async def test_no_crash_when_manager_is_none(self, wizard_loader) -> None:
+    async def test_no_crash_when_manager_is_none(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         # None manager — _find_stage_node_id handles getattr(None, "state")
         await nav.branch_for_revisited_stage(None, "start")

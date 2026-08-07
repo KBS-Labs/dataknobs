@@ -18,18 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       fsm.step({"name": "Alice"})
   ```
 
-  Both close forms are idempotent and **non-terminal** — a closed FSM
-  stays usable and a later `step()` lazily rebuilds its bridge — so an
-  unconditional teardown is safe without tracking whether the FSM was ever
-  stepped. Prefer `aclose()` from async code: it awaits resource cleanup
-  the synchronous form skips.
+  Both close forms are idempotent, and both leave the FSM **steppable** —
+  a later `step()` lazily rebuilds its bridge — so an unconditional
+  teardown is safe without tracking whether the FSM was ever stepped. That
+  covers the bridge, not registered resources: closing is terminal for the
+  resource manager, so an FSM holding resources should not be stepped
+  after close. Loader-built wizard FSMs register none, which is what makes
+  the unconditional teardown safe in practice. Prefer `aclose()` from
+  async code: it does everything `close()` does, additionally awaits
+  providers whose cleanup is a coroutine, and keeps the bridge join off
+  the event loop.
 - **`WizardFSM.register_subflow(..., owns=True)`** — closing a wizard
   cascades to the subflows it owns, error-isolated per child so one
   failing subflow cannot orphan the siblings registered after it. Every
   loader-built subflow is parent-owned, which covers the
   configuration-driven case entirely. Pass `owns=False` to register a
-  subflow whose lifecycle belongs to its caller; re-registering a name
-  replaces both the subflow and its ownership.
+  subflow whose lifecycle belongs to its caller. Re-registering a name
+  replaces both the subflow and its ownership, and closes the *owned*
+  subflow it displaces — reusing a name is the parent's last chance to
+  release it. Re-registering the same object closes nothing, so handing a
+  subflow back to its caller with `owns=False` does not destroy it.
 - **`dataknobs_bots.behavior_packs`** — the bot-flavored vocabulary for
   `dataknobs_common.packs`. `BehaviorPackSpec` is a `PackSpec` subclass
   naming five optional fields and the rule each composes under:
@@ -218,6 +226,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertions fail depending on test ordering. `WizardReasoning.close()`
   now releases the FSM, and `DynaBot.close()` reaches it end to end.
 
+  The bridge is allocated by the synchronous `step()`, which the bot
+  itself never calls — it drives the wizard through `step_async`. The
+  reachable leak is therefore in code that steps a `WizardFSM` directly,
+  which `step()` being public API makes a supported thing to do; the
+  end-to-end close path is what keeps it from recurring once someone
+  does.
+
   Ownership is explicit and defaults to **not owned**. The FSM is a
   *required* constructor parameter, so the common shape is a caller
   handing over an FSM it built and may still be stepping; closing that
@@ -225,6 +240,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from_config`, which builds the FSM itself, takes ownership. The two
   errors are not symmetric — the default fails toward the pre-existing
   leak rather than toward tearing down a live FSM.
+
+- **Re-registering a subflow name orphaned the subflow it replaced.**
+  `WizardFSM.register_subflow` overwrote the registry entry and updated
+  the ownership set but never closed the object it displaced, so an owned
+  subflow that had been stepped lost its only route to `close()` the
+  moment its name was reused — the same unreachable-daemon-thread defect
+  the wrapper's lifecycle exists to prevent, one level down. The displaced
+  subflow is now closed when it was owned and is a different object.
+
+- **The subflow registry passed to `WizardFSM(...)` was aliased, not
+  copied.** Ownership is recorded once from the mapping's contents at
+  construction, so a caller that kept its reference and added an entry
+  afterwards produced a subflow the FSM would step but never close —
+  present in the registry, absent from the ownership set. The mapping is
+  now copied.
 
 - **Cost tracking recorded `$0.00` for every paid provider.** Usage was keyed
   on the provider *class* name (`"OpenAIProvider"`), which matches no entry in

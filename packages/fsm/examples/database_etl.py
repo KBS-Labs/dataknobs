@@ -610,127 +610,126 @@ def main():
     print("-" * 70)
     
     # Create ETL FSM
-    fsm = create_etl_fsm()
+    with create_etl_fsm() as fsm:
+        # Simulate databases (in production, these would be real connections)
+        source_db, target_db = simulate_database_operations()
     
-    # Simulate databases (in production, these would be real connections)
-    source_db, target_db = simulate_database_operations()
+        # Test Case 1: Successful ETL
+        print("\n📊 Test Case 1: Successful ETL Pipeline")
+        print("-" * 50)
     
-    # Test Case 1: Successful ETL
-    print("\n📊 Test Case 1: Successful ETL Pipeline")
-    print("-" * 50)
-    
-    result = fsm.process({
-        'source_table': 'sales_raw',
-        'target_table': 'sales_fact',
-        'batch_size': 20,
-        'mode': 'incremental'
-    })
-    
-    if result['success']:
-        print(f"✓ ETL Pipeline completed successfully")
-        print(f"Final State: {result['final_state']}")
-        print(f"Path: {' -> '.join(result['path'])}")
-        
-        summary = result['data'].get('etl_summary', {})
-        print(f"\nETL Summary:")
-        print(f"  • Batch ID: {summary.get('batch_id')}")
-        print(f"  • Duration: {summary.get('duration_seconds', 0):.2f} seconds")
-        print(f"  • Records Extracted: {summary.get('records_extracted', 0)}")
-        print(f"  • Records Validated: {summary.get('records_validated', 0)}")
-        print(f"  • Records Transformed: {summary.get('records_transformed', 0)}")
-        print(f"  • Records Loaded: {summary.get('records_loaded', 0)}")
-        print(f"  • Success Rate: {summary.get('success_rate', 0):.1f}%")
-        print(f"  • Status: {summary.get('status')}")
-    else:
-        print(f"✗ ETL Pipeline failed")
-        print(f"Error: {result.get('error')}")
-    
-    # Test Case 2: ETL with validation failures (high error rate)
-    print("\n📊 Test Case 2: ETL with Validation Failures")
-    print("-" * 50)
-    
-    # Modify validate function to simulate failures
-    def validate_with_failures(state):
-        data = state.data.copy()
-        # Force high error rate
-        data['statistics']['records_extracted'] = 100
-        data['statistics']['records_failed'] = 20  # 20% error rate
-        data['statistics']['records_validated'] = 80
-        data['validated_records'] = data.get('extracted_records', [])[:80]
-        data['validation_passed'] = False  # Exceeds 10% threshold
-        return data
-    
-    fsm_with_failures = SimpleFSM(
-        etl_config,
-        data_mode=DataHandlingMode.COPY,
-        custom_functions={
-            'initialize_etl': initialize_etl,
-            'extract_data': extract_data,
-            'validate_records': validate_with_failures,  # Modified validator
-            'transform_records': transform_records,
-            'load_to_staging': load_to_staging,
-            'commit_to_target': commit_to_target,
-            'rollback_staging': rollback_staging,
-            'finalize_etl': finalize_etl,
-            'check_validation_passed': check_validation_passed,
-            'check_ready_to_commit': check_ready_to_commit
-        }
-    )
-    
-    result = fsm_with_failures.process({
-        'source_table': 'sales_raw',
-        'target_table': 'sales_fact',
-        'batch_size': 100
-    })
-    
-    print(f"Final State: {result['final_state']}")
-    print(f"Path: {' -> '.join(result['path'])}")
-    
-    if result['final_state'] == 'failure':
-        print(f"✓ Correctly routed to failure after validation issues")
-        rollback_log = result['data'].get('rollback_log', {})
-        if rollback_log:
-            print(f"\nRollback Log:")
-            print(f"  • Timestamp: {rollback_log.get('timestamp')}")
-            print(f"  • Reason: {rollback_log.get('reason')}")
-            print(f"  • Records Rolled Back: {rollback_log.get('records_rolled_back', 0)}")
-    
-    # Test Case 3: Batch Processing
-    print("\n📊 Test Case 3: Batch Processing Multiple Chunks")
-    print("-" * 50)
-    
-    batches_processed = []
-    for batch_num in range(3):
-        print(f"\nProcessing batch {batch_num + 1}...")
         result = fsm.process({
             'source_table': 'sales_raw',
             'target_table': 'sales_fact',
-            'batch_size': 10,
-            'batch_number': batch_num + 1
+            'batch_size': 20,
+            'mode': 'incremental'
         })
-        
+    
         if result['success']:
+            print(f"✓ ETL Pipeline completed successfully")
+            print(f"Final State: {result['final_state']}")
+            print(f"Path: {' -> '.join(result['path'])}")
+        
             summary = result['data'].get('etl_summary', {})
-            batches_processed.append({
-                'batch': batch_num + 1,
-                'loaded': summary.get('records_loaded', 0),
-                'success_rate': summary.get('success_rate', 0)
+            print(f"\nETL Summary:")
+            print(f"  • Batch ID: {summary.get('batch_id')}")
+            print(f"  • Duration: {summary.get('duration_seconds', 0):.2f} seconds")
+            print(f"  • Records Extracted: {summary.get('records_extracted', 0)}")
+            print(f"  • Records Validated: {summary.get('records_validated', 0)}")
+            print(f"  • Records Transformed: {summary.get('records_transformed', 0)}")
+            print(f"  • Records Loaded: {summary.get('records_loaded', 0)}")
+            print(f"  • Success Rate: {summary.get('success_rate', 0):.1f}%")
+            print(f"  • Status: {summary.get('status')}")
+        else:
+            print(f"✗ ETL Pipeline failed")
+            print(f"Error: {result.get('error')}")
+    
+        # Test Case 2: ETL with validation failures (high error rate)
+        print("\n📊 Test Case 2: ETL with Validation Failures")
+        print("-" * 50)
+    
+        # Modify validate function to simulate failures
+        def validate_with_failures(state):
+            data = state.data.copy()
+            # Force high error rate
+            data['statistics']['records_extracted'] = 100
+            data['statistics']['records_failed'] = 20  # 20% error rate
+            data['statistics']['records_validated'] = 80
+            data['validated_records'] = data.get('extracted_records', [])[:80]
+            data['validation_passed'] = False  # Exceeds 10% threshold
+            return data
+    
+        with SimpleFSM(
+            etl_config,
+            data_mode=DataHandlingMode.COPY,
+            custom_functions={
+                'initialize_etl': initialize_etl,
+                'extract_data': extract_data,
+                'validate_records': validate_with_failures,  # Modified validator
+                'transform_records': transform_records,
+                'load_to_staging': load_to_staging,
+                'commit_to_target': commit_to_target,
+                'rollback_staging': rollback_staging,
+                'finalize_etl': finalize_etl,
+                'check_validation_passed': check_validation_passed,
+                'check_ready_to_commit': check_ready_to_commit
+            }
+        ) as fsm_with_failures:
+    
+            result = fsm_with_failures.process({
+                'source_table': 'sales_raw',
+                'target_table': 'sales_fact',
+                'batch_size': 100
             })
-            print(f"  ✓ Batch {batch_num + 1}: {summary.get('records_loaded', 0)} records")
     
-    print(f"\nTotal batches processed: {len(batches_processed)}")
-    total_records = sum(b['loaded'] for b in batches_processed)
-    print(f"Total records loaded: {total_records}")
+            print(f"Final State: {result['final_state']}")
+            print(f"Path: {' -> '.join(result['path'])}")
     
-    print("\n" + "=" * 70)
-    print("ETL Pipeline Example Complete!")
-    print("\n📌 Key Features Demonstrated:")
-    print("  • COPY mode ensures transactional integrity")
-    print("  • Staging area allows for rollback on failure")
-    print("  • Validation with configurable error thresholds")
-    print("  • Multi-stage transformation pipeline")
-    print("  • Proper error handling and routing")
-    print("  • Batch processing capabilities")
+            if result['final_state'] == 'failure':
+                print(f"✓ Correctly routed to failure after validation issues")
+                rollback_log = result['data'].get('rollback_log', {})
+                if rollback_log:
+                    print(f"\nRollback Log:")
+                    print(f"  • Timestamp: {rollback_log.get('timestamp')}")
+                    print(f"  • Reason: {rollback_log.get('reason')}")
+                    print(f"  • Records Rolled Back: {rollback_log.get('records_rolled_back', 0)}")
+    
+            # Test Case 3: Batch Processing
+            print("\n📊 Test Case 3: Batch Processing Multiple Chunks")
+            print("-" * 50)
+    
+            batches_processed = []
+            for batch_num in range(3):
+                print(f"\nProcessing batch {batch_num + 1}...")
+                result = fsm.process({
+                    'source_table': 'sales_raw',
+                    'target_table': 'sales_fact',
+                    'batch_size': 10,
+                    'batch_number': batch_num + 1
+                })
+        
+                if result['success']:
+                    summary = result['data'].get('etl_summary', {})
+                    batches_processed.append({
+                        'batch': batch_num + 1,
+                        'loaded': summary.get('records_loaded', 0),
+                        'success_rate': summary.get('success_rate', 0)
+                    })
+                    print(f"  ✓ Batch {batch_num + 1}: {summary.get('records_loaded', 0)} records")
+    
+            print(f"\nTotal batches processed: {len(batches_processed)}")
+            total_records = sum(b['loaded'] for b in batches_processed)
+            print(f"Total records loaded: {total_records}")
+    
+            print("\n" + "=" * 70)
+            print("ETL Pipeline Example Complete!")
+            print("\n📌 Key Features Demonstrated:")
+            print("  • COPY mode ensures transactional integrity")
+            print("  • Staging area allows for rollback on failure")
+            print("  • Validation with configurable error thresholds")
+            print("  • Multi-stage transformation pipeline")
+            print("  • Proper error handling and routing")
+            print("  • Batch processing capabilities")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,12 @@ from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.testing import assert_no_leaked_bridge_threads
 
+logger = logging.getLogger(__name__)
 
-@pytest.fixture(scope="session", autouse=True)
+
+@pytest.fixture(autouse=True)
 def _no_leaked_daemon_threads() -> Iterator[None]:
-    """Fail the session if this package leaks a dataknobs daemon thread.
+    """Fail any test that leaks a dataknobs daemon thread.
 
     A ``WizardFSM`` driven through its synchronous ``step()`` allocates a
     daemon event-loop thread. Until the wrapper exposed a ``close()``, a
@@ -24,8 +27,19 @@ def _no_leaked_daemon_threads() -> Iterator[None]:
     surfacing only as *another package's* teardown assertions failing,
     which named the wrong culprit entirely.
 
-    Keeping the detector in the package that creates the threads means the
-    next such leak fails where it is caused.
+    Scoped per **test**, not per session. A session-scoped guard fires once
+    at the very end with a thread count and no test identity — "something
+    in this suite leaked", which is a better error than the one it replaced
+    but still sends the reader hunting. Per-test, the failure names the
+    culprit outright. The guard measures a delta, so an earlier leak cannot
+    cascade into every later test; the cost is two
+    ``threading.enumerate()`` calls per test, and the one-second grace only
+    applies on the failure path.
+
+    This is also what lets the ``wizard_loader`` fixture below be adopted
+    incrementally: a construction site that has not been converted is
+    harmless until it actually steps an FSM, and on the day it does, this
+    reports *which* test did it.
     """
     with assert_no_leaked_bridge_threads():
         yield
@@ -49,7 +63,12 @@ def wizard_loader() -> Iterator[WizardConfigLoader]:
     directly. Adopt it at *every* construction site, not only the ones
     that step the FSM today: converting selectively encodes the current
     call graph into the tests, and the next test to add a ``step()``
-    leaks again silently.
+    would leak.
+
+    Conversion of the existing direct-construction sites is incremental
+    rather than complete, which is safe only because the per-test guard
+    above names any test that does leak. Without that guard the two would
+    have to land together.
     """
     built: list[WizardFSM] = []
 
@@ -69,8 +88,13 @@ def wizard_loader() -> Iterator[WizardConfigLoader]:
     for fsm in built:
         try:
             fsm.close()
-        except Exception:  # noqa: BLE001 - teardown must not mask a failure
-            pass
+        except Exception:
+            # Teardown must not mask the test's own failure, so this is
+            # caught rather than raised — but swallowing it silently turns a
+            # broken close() into a leaked thread reported with no cause,
+            # which is the diagnosis problem this whole fixture exists to
+            # solve. Log it and carry on to the remaining FSMs.
+            logger.exception("Error closing wizard FSM during test teardown")
 
 
 @pytest.fixture

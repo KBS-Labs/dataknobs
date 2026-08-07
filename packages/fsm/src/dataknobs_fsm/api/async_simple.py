@@ -285,7 +285,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 from dataknobs_data import Record
 
@@ -873,6 +874,17 @@ class AsyncSimpleFSM:
 
     # Alias for consistency with other async libraries
     aclose = close
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.close()
 
 
 # Factory function for AsyncSimpleFSM

@@ -350,56 +350,55 @@ def execute(config_file: str, data: str | None, initial_state: str | None,
                 sys.exit(1)
     
     # Create and run FSM
-    fsm = SimpleFSM(config_file)
-    
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        progress.add_task("Executing FSM...", total=None)
+    with SimpleFSM(config_file) as fsm:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            progress.add_task("Executing FSM...", total=None)
         
-        try:
-            result = fsm.process(
-                data=input_data,
-                initial_state=initial_state,
-                timeout=timeout
-            )
-            progress.stop()
+            try:
+                result = fsm.process(
+                    data=input_data,
+                    initial_state=initial_state,
+                    timeout=timeout
+                )
+                progress.stop()
             
-            if result.get('success', False):
-                console.print("[green][/green] Execution completed successfully!")
-                console.print(f"  Final state: {result.get('final_state', 'unknown')}")
-                path = result.get('path', [])
-                console.print(f"  Transitions: {len(path) - 1 if path else 0}")
+                if result.get('success', False):
+                    console.print("[green][/green] Execution completed successfully!")
+                    console.print(f"  Final state: {result.get('final_state', 'unknown')}")
+                    path = result.get('path', [])
+                    console.print(f"  Transitions: {len(path) - 1 if path else 0}")
                 
-                if verbose:
-                    console.print("\n[bold]Execution Path:[/bold]")
-                    for i, state in enumerate(result.get('path', [])):
-                        console.print(f"  {i+1}. {state}")
+                    if verbose:
+                        console.print("\n[bold]Execution Path:[/bold]")
+                        for i, state in enumerate(result.get('path', [])):
+                            console.print(f"  {i+1}. {state}")
                     
-                    if 'data' in result:
-                        console.print("\n[bold]Final Data:[/bold]")
-                        console.print(Syntax(
-                            json_dumps(result['data'], indent=2),
-                            "json",
-                            theme="monokai"
-                        ))
+                        if 'data' in result:
+                            console.print("\n[bold]Final Data:[/bold]")
+                            console.print(Syntax(
+                                json_dumps(result['data'], indent=2),
+                                "json",
+                                theme="monokai"
+                            ))
                 
-                if output:
-                    with open(output, 'w') as f:
-                        json.dump(result, f, indent=2)
-                    console.print(f"\n[green]Results saved to {output}[/green]")
+                    if output:
+                        with open(output, 'w') as f:
+                            json.dump(result, f, indent=2)
+                        console.print(f"\n[green]Results saved to {output}[/green]")
                     
-            else:
-                console.print("[red][/red] Execution failed!")
-                console.print(f"  Error: {result.get('error', 'Unknown error')}")
+                else:
+                    console.print("[red][/red] Execution failed!")
+                    console.print(f"  Error: {result.get('error', 'Unknown error')}")
+                    sys.exit(1)
+                
+            except Exception as e:
+                progress.stop()
+                console.print(f"[red]Execution error: {e}[/red]")
                 sys.exit(1)
-                
-        except Exception as e:
-            progress.stop()
-            console.print(f"[red]Execution error: {e}[/red]")
-            sys.exit(1)
 
 
 @run.command()
@@ -423,52 +422,51 @@ def batch(config_file: str, data_file: str, batch_size: int, workers: int,
                 sys.exit(1)
     
     # Create FSM
-    fsm = SimpleFSM(config_file)
+    with SimpleFSM(config_file) as fsm:
+        console.print(f"Processing {len(batch_data)} items...")
+        console.print(f"  Batch size: {batch_size}")
+        console.print(f"  Workers: {workers}")
     
-    console.print(f"Processing {len(batch_data)} items...")
-    console.print(f"  Batch size: {batch_size}")
-    console.print(f"  Workers: {workers}")
-    
-    try:
-        if progress:
-            with Progress(console=console) as prog:
-                task = prog.add_task("Processing...", total=len(batch_data))
+        try:
+            if progress:
+                with Progress(console=console) as prog:
+                    task = prog.add_task("Processing...", total=len(batch_data))
                 
-                results = []
-                for i in range(0, len(batch_data), batch_size):
-                    batch = batch_data[i:i+batch_size]
-                    batch_results = fsm.process_batch(
-                        data=batch,
-                        batch_size=batch_size,
-                        max_workers=workers
-                    )
-                    results.extend(batch_results)
-                    prog.update(task, advance=len(batch))
-        else:
-            results = fsm.process_batch(
-                data=batch_data,
-                batch_size=batch_size,
-                max_workers=workers
-            )
+                    results = []
+                    for i in range(0, len(batch_data), batch_size):
+                        batch = batch_data[i:i+batch_size]
+                        batch_results = fsm.process_batch(
+                            data=batch,
+                            batch_size=batch_size,
+                            max_workers=workers
+                        )
+                        results.extend(batch_results)
+                        prog.update(task, advance=len(batch))
+            else:
+                results = fsm.process_batch(
+                    data=batch_data,
+                    batch_size=batch_size,
+                    max_workers=workers
+                )
         
-        # Calculate statistics
-        successful = sum(1 for r in results if r['success'])
-        failed = len(results) - successful
+            # Calculate statistics
+            successful = sum(1 for r in results if r['success'])
+            failed = len(results) - successful
         
-        console.print("\n[bold]Results:[/bold]")
-        console.print(f"  Total: {len(results)}")
-        console.print(f"  [green]Successful: {successful}[/green]")
-        if failed > 0:
-            console.print(f"  [red]Failed: {failed}[/red]")
+            console.print("\n[bold]Results:[/bold]")
+            console.print(f"  Total: {len(results)}")
+            console.print(f"  [green]Successful: {successful}[/green]")
+            if failed > 0:
+                console.print(f"  [red]Failed: {failed}[/red]")
         
-        if output:
-            with open(output, 'w') as f:
-                json.dump(results, f, indent=2)
-            console.print(f"\n[green]Results saved to {output}[/green]")
+            if output:
+                with open(output, 'w') as f:
+                    json.dump(results, f, indent=2)
+                console.print(f"\n[green]Results saved to {output}[/green]")
             
-    except Exception as e:
-        console.print(f"[red]Batch processing error: {e}[/red]")
-        sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]Batch processing error: {e}[/red]")
+            sys.exit(1)
 
 
 @run.command()
@@ -481,42 +479,41 @@ def stream(config_file: str, source: str, sink: str | None,
           chunk_size: int, format: str):
     """Process streaming data through FSM"""
     # Create FSM
-    fsm = SimpleFSM(config_file)
+    with SimpleFSM(config_file) as fsm:
+        console.print("Starting stream processing...")
+        console.print(f"  Source: {source}")
+        if sink:
+            console.print(f"  Sink: {sink}")
+        console.print(f"  Chunk size: {chunk_size}")
     
-    console.print("Starting stream processing...")
-    console.print(f"  Source: {source}")
-    if sink:
-        console.print(f"  Sink: {sink}")
-    console.print(f"  Chunk size: {chunk_size}")
-    
-    async def run_stream():
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            progress.add_task("Processing stream...", total=None)
+        async def run_stream():
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                progress.add_task("Processing stream...", total=None)
             
-            try:
-                result = await fsm.process_stream(
-                    source=source,
-                    sink=sink,
-                    chunk_size=chunk_size
-                )
-                progress.stop()
+                try:
+                    result = await fsm.process_stream(
+                        source=source,
+                        sink=sink,
+                        chunk_size=chunk_size
+                    )
+                    progress.stop()
                 
-                console.print("\n[green][/green] Stream processing completed!")
-                console.print(f"  Records processed: {result.get('total_processed', 0)}")
-                console.print(f"  Chunks: {result.get('chunks_processed', 0)}")
-                if 'errors' in result and result['errors'] > 0:
-                    console.print(f"  [yellow]Errors: {result['errors']}[/yellow]")
+                    console.print("\n[green][/green] Stream processing completed!")
+                    console.print(f"  Records processed: {result.get('total_processed', 0)}")
+                    console.print(f"  Chunks: {result.get('chunks_processed', 0)}")
+                    if 'errors' in result and result['errors'] > 0:
+                        console.print(f"  [yellow]Errors: {result['errors']}[/yellow]")
                     
-            except Exception as e:
-                progress.stop()
-                console.print(f"[red]Stream processing error: {e}[/red]")
-                sys.exit(1)
+                except Exception as e:
+                    progress.stop()
+                    console.print(f"[red]Stream processing error: {e}[/red]")
+                    sys.exit(1)
     
-    asyncio.run(run_stream())
+        asyncio.run(run_stream())
 
 
 @cli.group()
@@ -552,67 +549,66 @@ def run(config_file: str, data: str | None, breakpoint: tuple,
                 sys.exit(1)
     
     # Create advanced FSM
-    fsm = AdvancedFSM(config)
+    with AdvancedFSM(config) as fsm:
+        # Set breakpoints
+        for bp in breakpoint:
+            fsm.set_breakpoint(bp)
+            console.print(f"[yellow]Breakpoint set at state: {bp}[/yellow]")
     
-    # Set breakpoints
-    for bp in breakpoint:
-        fsm.set_breakpoint(bp)
-        console.print(f"[yellow]Breakpoint set at state: {bp}[/yellow]")
-    
-    async def run_debug():
-        try:
-            if trace:
-                console.print("[cyan]Tracing enabled[/cyan]\n")
-                trace_log = await fsm.trace_execution(input_data)
+        async def run_debug():
+            try:
+                if trace:
+                    console.print("[cyan]Tracing enabled[/cyan]\n")
+                    trace_log = await fsm.trace_execution(input_data)
                 
-                # Display trace
-                table = Table(title="Execution Trace")
-                table.add_column("Time", style="cyan")
-                table.add_column("State", style="green")
-                table.add_column("Arc", style="yellow")
-                table.add_column("Event")
+                    # Display trace
+                    table = Table(title="Execution Trace")
+                    table.add_column("Time", style="cyan")
+                    table.add_column("State", style="green")
+                    table.add_column("Arc", style="yellow")
+                    table.add_column("Event")
                 
-                for entry in trace_log:
-                    table.add_row(
-                        entry['timestamp'],
-                        entry.get('state', '-'),
-                        entry.get('arc', '-'),
-                        entry['event']
-                    )
+                    for entry in trace_log:
+                        table.add_row(
+                            entry['timestamp'],
+                            entry.get('state', '-'),
+                            entry.get('arc', '-'),
+                            entry['event']
+                        )
                 
-                console.print(table)
+                    console.print(table)
                 
-            elif profile:
-                console.print("[cyan]Profiling enabled[/cyan]\n")
-                profile_data = await fsm.profile_execution(input_data)
+                elif profile:
+                    console.print("[cyan]Profiling enabled[/cyan]\n")
+                    profile_data = await fsm.profile_execution(input_data)
                 
-                # Display profile
-                console.print("[bold]Performance Profile:[/bold]")
-                console.print(f"  Total time: {profile_data['total_time']:.3f}s")
-                console.print(f"  Transitions: {profile_data['transition_count']}")
+                    # Display profile
+                    console.print("[bold]Performance Profile:[/bold]")
+                    console.print(f"  Total time: {profile_data['total_time']:.3f}s")
+                    console.print(f"  Transitions: {profile_data['transition_count']}")
                 
-                if 'state_times' in profile_data:
-                    console.print("\n[bold]State Execution Times:[/bold]")
-                    for state, time in profile_data['state_times'].items():
-                        console.print(f"  {state}: {time:.3f}s")
+                    if 'state_times' in profile_data:
+                        console.print("\n[bold]State Execution Times:[/bold]")
+                        for state, time in profile_data['state_times'].items():
+                            console.print(f"  {state}: {time:.3f}s")
                 
-                if 'arc_times' in profile_data:
-                    console.print("\n[bold]Arc Transition Times:[/bold]")
-                    for arc, time in profile_data['arc_times'].items():
-                        console.print(f"  {arc}: {time:.3f}s")
+                    if 'arc_times' in profile_data:
+                        console.print("\n[bold]Arc Transition Times:[/bold]")
+                        for arc, time in profile_data['arc_times'].items():
+                            console.print(f"  {arc}: {time:.3f}s")
                         
-            else:
-                # Interactive debugging
-                from ..api.advanced import FSMDebugger
+                else:
+                    # Interactive debugging
+                    from ..api.advanced import FSMDebugger
                 
-                debugger = FSMDebugger(fsm, config)
-                await debugger.start_session(input_data)
+                    debugger = FSMDebugger(fsm, config)
+                    await debugger.start_session(input_data)
                 
-        except Exception as e:
-            console.print(f"[red]Debug error: {e}[/red]")
-            sys.exit(1)
+            except Exception as e:
+                console.print(f"[red]Debug error: {e}[/red]")
+                sys.exit(1)
     
-    asyncio.run(run_debug())
+        asyncio.run(run_debug())
 
 
 def _default_history_path() -> Path:

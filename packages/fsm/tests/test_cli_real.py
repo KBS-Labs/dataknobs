@@ -679,24 +679,24 @@ class TestAsyncCLIOperations:
     async def test_async_fsm_execution(self, temp_config_file):
         """Test async FSM execution directly."""
         # SimpleFSM expects a file path, not a config object
-        fsm = SimpleFSM(temp_config_file)
-        result = fsm.process({'test': 'data'})
-        
-        assert 'final_state' in result
-        assert result['final_state'] == 'end'
+        async with SimpleFSM(temp_config_file) as fsm:
+            result = fsm.process({'test': 'data'})
+
+            assert 'final_state' in result
+            assert result['final_state'] == 'end'
     
     def test_batch_async_execution(self, temp_config_file):
         """Test batch async execution."""
         # SimpleFSM expects a file path, not a config object
-        fsm = SimpleFSM(temp_config_file)
-        batch_data = [{'id': i} for i in range(3)]
+        with SimpleFSM(temp_config_file) as fsm:
+            batch_data = [{'id': i} for i in range(3)]
 
-        # Note: process_batch internally uses async but returns sync results
-        results = fsm.process_batch(batch_data)
+            # Note: process_batch internally uses async but returns sync results
+            results = fsm.process_batch(batch_data)
 
-        assert len(results) == 3
-        for result in results:
-            assert 'final_state' in result
+            assert len(results) == 3
+            for result in results:
+                assert 'final_state' in result
 
 
 class TestHistoryCLICommands:

@@ -7,7 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`aclose()` stalled the caller's event loop.** `AdvancedFSM.aclose()`
+  is `async def`, but it closed the FSM inline — and that stops the
+  async→sync bridge's loop and *joins* its daemon thread, waiting for the
+  in-flight step and the loop's async-generator shutdown to finish. Every
+  other task on a shared loop froze for that window, on the very path
+  async callers are told to prefer. The join is now offloaded, and still
+  awaited, so the thread is gone when `aclose()` returns.
+
+- **`SimpleFSM.aclose()` leaked the bridge thread its sync sibling
+  reclaims.** `close()` ends by releasing the shared bridge; `aclose()`
+  awaited the async FSM and stopped there, so choosing the async form
+  leaked a process-lifetime daemon thread outright.
+
+- **`ResourceManager.cleanup()` was not a superset of `close()`.** The
+  async half awaited providers whose cleanup is a coroutine — the reason
+  callers are told to prefer it — but skipped the acquired-resource
+  release, the pool close, and the closed flag its sync sibling performs.
+  A pooled connection was therefore dropped by reference rather than
+  released, staying open until garbage collection, and a later `acquire`
+  on a cleaned-up manager reported "Unknown resource" where the sync half
+  reported "Resource manager is closed" — one state, two diagnoses. Both
+  halves now share the release-and-close-pools step, so they cannot drift
+  again, and both are terminal in the same way.
+
+- **`ResourcePool.acquire()` waited out its whole timeout before creating a
+  resource it was always allowed to create.** It blocked on the idle queue
+  first and only checked whether the pool could grow after that wait
+  expired, so a pool that was empty but under `max_size` — a pool
+  configured with `min_size=0`, or one whose initial resources are all on
+  loan — delivered a resource `acquire_timeout` seconds late (30 by
+  default) instead of immediately. Capacity is now checked before waiting,
+  and waiting happens only when every resource the pool may create is
+  already out on loan, which is the one situation where a release by
+  another holder is the only thing that can satisfy the caller. The
+  post-wait capacity re-check is kept: a resource retired past its
+  `max_lifetime` frees capacity without queueing anything, so nothing
+  wakes a waiter.
+
+- **`ResourcePool.acquire(timeout=0)` waited for the configured default.**
+  The timeout was resolved by truthiness, which cannot distinguish "do not
+  wait" from an omitted argument, so a caller asking for a resource only
+  if one was free right now blocked for `acquire_timeout` instead. Zero is
+  now honoured as a value.
+
+- **The CLI leaked a daemon event-loop thread per command.** `run execute`,
+  `run batch`, `run stream`, and `debug run` each built an FSM, drove it
+  through its synchronous entry points — which lazily allocate the
+  async→sync bridge — and never closed it. Each command now scopes its FSM
+  to a `with` block.
+
+- **`async with AsyncSimpleFSM(...)` raised `TypeError`.** The API
+  documentation has a "Context Managers" section showing exactly that
+  form, but the class implemented neither `__aenter__` nor `__aexit__`, so
+  the documented example could not run. It now does what the docs already
+  said it did.
+
 ### Added
+
+- **Context-manager support on `SimpleFSM`** (`with` / `async with`),
+  matching `AdvancedFSM` and `AsyncSimpleFSM`. All three own a lifecycle
+  that must be closed — the synchronous entry points allocate a daemon
+  event-loop thread that lives until `close()` — but only one of them
+  offered the form that closes it automatically, leaving the reliable
+  spelling unavailable on the other two.
 
 - **`dataknobs-fsm[chroma]`, `[faiss]`, and `[pgvector]` extras** splitting
   the former all-or-nothing `vector` extra, so a consumer can install just

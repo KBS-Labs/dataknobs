@@ -301,3 +301,110 @@ def test_re_registering_a_name_updates_its_ownership() -> None:
 
     parent.close()
     child.close()
+
+
+def test_replacing_an_owned_subflow_closes_the_one_it_replaces() -> None:
+    """Reproduce-first: re-registration must not orphan the old subflow.
+
+    ``register_subflow`` overwrote the registry entry and updated the
+    ownership set, but never closed the object it displaced. An owned
+    subflow that had been stepped therefore lost its only route to
+    ``close()`` the moment its name was reused — its daemon thread became
+    unreachable through the parent, which is precisely the defect this
+    class's lifecycle exists to eliminate, reintroduced one level down.
+    """
+    before = _bridge_threads()
+    parent = _build()
+    first = _build(_minimal_config("first"))
+    second = _build(_minimal_config("second"))
+
+    parent.register_subflow("child", first)
+    first.step({"name": "Alice"})
+    assert _bridge_threads() == before + 1
+
+    # Reusing the name is the parent's last chance to release `first`.
+    parent.register_subflow("child", second)
+
+    assert _bridge_threads() == before, (
+        "the replaced subflow was dropped from the registry without being "
+        "closed, leaking its bridge thread"
+    )
+    parent.close()
+
+
+def test_replacing_an_unowned_subflow_leaves_it_open() -> None:
+    """The ownership gate applies to replacement too.
+
+    A subflow registered ``owns=False`` belongs to its caller, who may
+    still be stepping it. Displacing it from this registry is not
+    permission to tear it down.
+    """
+    before = _bridge_threads()
+    parent = _build()
+    borrowed = _build(_minimal_config("borrowed"))
+    replacement = _build(_minimal_config("replacement"))
+
+    parent.register_subflow("child", borrowed, owns=False)
+    borrowed.step({"name": "Alice"})
+    assert _bridge_threads() == before + 1
+
+    parent.register_subflow("child", replacement)
+
+    assert _bridge_threads() == before + 1, "closed a subflow it did not own"
+    borrowed.close()
+    parent.close()
+    assert _bridge_threads() == before
+
+
+def test_re_registering_the_same_object_does_not_close_it() -> None:
+    """Re-registering a name to flip ownership must not close the subflow.
+
+    ``register_subflow(name, child, owns=False)`` after an owned
+    registration is the documented way to hand a subflow back to its
+    caller. Closing on every replacement would make that call destroy the
+    thing it is handing over.
+    """
+    before = _bridge_threads()
+    parent = _build()
+    child = _build(_minimal_config("child"))
+
+    parent.register_subflow("child", child, owns=True)
+    child.step({"name": "Alice"})
+    assert _bridge_threads() == before + 1
+
+    parent.register_subflow("child", child, owns=False)
+
+    assert _bridge_threads() == before + 1, "closed the subflow it re-registered"
+    child.close()
+    parent.close()
+    assert _bridge_threads() == before
+
+
+def test_constructor_does_not_alias_the_callers_registry() -> None:
+    """Reproduce-first: the ctor took a reference to the caller's dict.
+
+    ``self._subflow_registry = subflow_registry or {}`` aliased the
+    caller's mapping while ownership was snapshotted from it exactly once.
+    A caller that kept its reference and added an entry afterwards got a
+    subflow that the parent would step but never close — present in the
+    registry, absent from the ownership set.
+    """
+    before = _bridge_threads()
+    # Seeded, because ``subflow_registry or {}`` substitutes a fresh dict for
+    # an *empty* one — only a non-empty registry was ever aliased, which is
+    # exactly the case the loader produces.
+    seed = _build(_minimal_config("seed"))
+    caller_registry: dict[str, WizardFSM] = {"seed": seed}
+    parent = WizardFSM(_build()._fsm, {}, subflow_registry=caller_registry)
+
+    late = _build(_minimal_config("late"))
+    caller_registry["late"] = late
+    late.step({"name": "Alice"})
+
+    assert parent.subflow_names == ["seed"], (
+        "the parent's registry aliases the caller's dict, so an entry added "
+        "after construction silently appears with no ownership recorded"
+    )
+    late.close()
+    parent.close()
+    assert _bridge_threads() == before

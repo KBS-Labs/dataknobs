@@ -14,6 +14,7 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ def conversation_wizard_config() -> dict:
 
 @pytest.fixture
 def conversation_reasoning(
-    conversation_wizard_config: dict, wizard_loader) -> WizardReasoning:
+    conversation_wizard_config: dict, wizard_loader: WizardConfigLoader) -> WizardReasoning:
     """WizardReasoning with conversation stage config."""
     fsm = wizard_loader.load_from_dict(conversation_wizard_config)
     return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
@@ -155,7 +156,7 @@ def roundtrip_wizard_config() -> dict:
 class TestMessageInjection:
     """Tests for _message injection into FSM context."""
 
-    def test_message_based_transition(self, wizard_loader) -> None:
+    def test_message_based_transition(self, wizard_loader: WizardConfigLoader) -> None:
         """Transition condition can use data.get('_message')."""
         config = {
             "name": "msg-test",
@@ -285,7 +286,7 @@ class TestIntentDetection:
     """Tests for _detect_intent method."""
 
     @pytest.fixture
-    def reasoning(self, conversation_wizard_config: dict, wizard_loader) -> WizardReasoning:
+    def reasoning(self, conversation_wizard_config: dict, wizard_loader: WizardConfigLoader) -> WizardReasoning:
         fsm = wizard_loader.load_from_dict(conversation_wizard_config)
         return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
@@ -480,7 +481,7 @@ class TestStructuredStageIntentDetection:
     @pytest.mark.asyncio
     async def test_structured_stage_runs_intent_detection(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
         """Structured stage with intent_detection runs detection after extraction."""
         manager, provider = conversation_manager_pair
 
@@ -565,7 +566,7 @@ class TestStageModeMeta:
     @pytest.mark.asyncio
     async def test_structured_stage_mode_default(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
         """Structured stage returns stage_mode='structured' (default)."""
         manager, provider = conversation_manager_pair
 
@@ -607,7 +608,7 @@ class TestStageModeMeta:
 class TestConfigLoaderConversation:
     """Tests for WizardConfigLoader preserving conversation stage fields."""
 
-    def test_mode_preserved_in_metadata(self, wizard_loader) -> None:
+    def test_mode_preserved_in_metadata(self, wizard_loader: WizardConfigLoader) -> None:
         """Mode field is preserved in stage metadata after loading."""
         config = {
             "name": "loader-test",
@@ -625,7 +626,7 @@ class TestConfigLoaderConversation:
         meta = fsm.current_metadata
         assert meta["mode"] == "conversation"
 
-    def test_intent_detection_preserved_in_metadata(self, wizard_loader) -> None:
+    def test_intent_detection_preserved_in_metadata(self, wizard_loader: WizardConfigLoader) -> None:
         """intent_detection config is preserved in stage metadata."""
         intent_config = {
             "method": "keyword",
@@ -650,7 +651,7 @@ class TestConfigLoaderConversation:
         meta = fsm.current_metadata
         assert meta["intent_detection"] == intent_config
 
-    def test_structured_stage_no_mode(self, wizard_loader) -> None:
+    def test_structured_stage_no_mode(self, wizard_loader: WizardConfigLoader) -> None:
         """Stage without mode has mode=None in metadata."""
         config = {
             "name": "loader-test",
@@ -667,7 +668,7 @@ class TestConfigLoaderConversation:
         meta = fsm.current_metadata
         assert meta["mode"] is None
 
-    def test_structured_stage_no_intent_detection(self, wizard_loader) -> None:
+    def test_structured_stage_no_intent_detection(self, wizard_loader: WizardConfigLoader) -> None:
         """Stage without intent_detection has None in metadata."""
         config = {
             "name": "loader-test",
@@ -697,7 +698,7 @@ class TestConversationRoundTrip:
     async def test_data_preserved_across_conversation_detour(
         self,
         roundtrip_wizard_config: dict,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
         """Partially collected data survives a conversation detour and back."""
         manager, provider = conversation_manager_pair
 

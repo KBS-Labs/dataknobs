@@ -86,10 +86,10 @@ class TestBasicETLExample:
             }]
         }
 
-        fsm = SimpleFSM(config)
+        with SimpleFSM(config) as fsm:
 
-        # Should be able to create without errors
-        assert fsm is not None
+            # Should be able to create without errors
+            assert fsm is not None
 
     @pytest.mark.asyncio
     async def test_simple_fsm_execution(self):
@@ -124,10 +124,10 @@ class TestBasicETLExample:
             }]
         }
 
-        fsm = SimpleFSM(config)
-        result = fsm.process({"input": "test_data"})
+        async with SimpleFSM(config) as fsm:
+            result = fsm.process({"input": "test_data"})
 
-        assert result['success'] is True
-        assert result['final_state'] == 'complete'
-        assert result['data']['processed'] is True
-        assert result['data']['input'] == 'test_data'
+            assert result['success'] is True
+            assert result['final_state'] == 'complete'
+            assert result['data']['processed'] is True
+            assert result['data']['input'] == 'test_data'

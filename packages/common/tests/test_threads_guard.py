@@ -29,7 +29,7 @@ def test_covers_both_dataknobs_daemon_thread_names() -> None:
     ``async_iter`` leave the guard watching for a thread that no longer
     exists — passing forever.
     """
-    assert DK_DAEMON_THREAD_NAMES == {_BRIDGE_THREAD, _PUMP_THREAD}
+    assert {_BRIDGE_THREAD, _PUMP_THREAD} == DK_DAEMON_THREAD_NAMES
 
 
 def test_passes_when_the_bridge_is_closed() -> None:
@@ -55,10 +55,9 @@ def test_fails_when_a_bridge_is_leaked() -> None:
 def test_failure_message_names_the_leaked_thread() -> None:
     leaked: SyncLoopBridge | None = None
     try:
-        with pytest.raises(AssertionError) as excinfo:
-            with assert_no_leaked_bridge_threads():
-                leaked = SyncLoopBridge()
-                leaked.run(_answer())
+        with pytest.raises(AssertionError) as excinfo, assert_no_leaked_bridge_threads():
+            leaked = SyncLoopBridge()
+            leaked.run(_answer())
         assert _BRIDGE_THREAD in str(excinfo.value)
     finally:
         if leaked is not None:
@@ -124,9 +123,8 @@ def test_exception_inside_the_block_propagates_unmasked() -> None:
     Asserting on thread state while unwinding would replace a real
     exception with an AssertionError about its side effects.
     """
-    with pytest.raises(RuntimeError, match="boom"):
-        with assert_no_leaked_bridge_threads():
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), assert_no_leaked_bridge_threads():
+        raise RuntimeError("boom")
 
 
 async def _answer() -> int:
@@ -135,3 +133,47 @@ async def _answer() -> int:
 
 def _counter() -> Iterator[int]:
     yield from range(3)
+
+
+def test_names_may_be_a_one_shot_iterable() -> None:
+    """Reproduce-first: a generator ``names`` silently disabled the guard.
+
+    ``names`` is declared ``Iterable[str]`` and was consumed **twice** —
+    once to sample on entry, once to check on exit. A ``list`` or
+    ``frozenset`` survives that; a generator does not. The second pass saw
+    an exhausted iterator, watched nothing, found nothing, and passed.
+
+    For a construct whose own docstring says a guard that never fails is
+    worse than no guard, silently becoming that guard is the failure mode
+    most worth pinning.
+    """
+    leaked: SyncLoopBridge | None = None
+    try:
+        with pytest.raises(AssertionError, match="daemon thread"):
+            with assert_no_leaked_bridge_threads(
+                names=(name for name in [_BRIDGE_THREAD])
+            ):
+                leaked = SyncLoopBridge()
+                leaked.run(_answer())
+                # deliberately not closed
+    finally:
+        if leaked is not None:
+            leaked.close()
+
+
+def test_live_threads_accepts_a_one_shot_iterable() -> None:
+    """The same contract on the query the guard is built from.
+
+    Measured as a delta. Asserting the absolute result is the mistake this
+    module exists to warn about: another test holding a live bridge — or
+    another package's, in a combined run — would make the list longer and
+    fail this for someone else's thread.
+    """
+    before = set(live_dk_daemon_threads({_BRIDGE_THREAD}))
+    bridge = SyncLoopBridge()
+    try:
+        found = live_dk_daemon_threads(name for name in [_BRIDGE_THREAD])
+        created = [t.name for t in found if t not in before]
+        assert created == [_BRIDGE_THREAD]
+    finally:
+        bridge.close()

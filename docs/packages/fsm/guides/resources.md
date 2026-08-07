@@ -252,6 +252,20 @@ print(f"Pool size: {pool_metrics['database_pool'].size}")
 print(f"Available: {pool_metrics['database_pool'].available}")
 ```
 
+### When acquisition waits
+
+`acquire_timeout` bounds one situation only: every resource the pool is
+allowed to create is already out on loan. There, a release by another holder
+is the only thing that can satisfy the caller, so the pool waits for one.
+
+Any other time — a resource sitting idle, or the pool below `max_size` — the
+caller is served immediately. An empty pool under its limit creates a
+resource rather than waiting, so `min_size=0` costs a lazy first
+construction, not `acquire_timeout` seconds.
+
+Pass `timeout=0` to `acquire()` for a resource only if one can be had
+without waiting; it raises `ResourceError` rather than blocking.
+
 ## Resource Requirements in FSM
 
 Define resource requirements in FSM configuration:

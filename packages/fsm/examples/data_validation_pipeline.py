@@ -263,7 +263,7 @@ config = {
 def main():
     """Run the validation pipeline example."""
     # Create FSM with custom functions
-    fsm = SimpleFSM(
+    with SimpleFSM(
         config,
         custom_functions={
             'normalize_input': normalize_input,
@@ -272,92 +272,92 @@ def main():
             'validate_age': validate_age,
             'calculate_validation_summary': calculate_validation_summary
         }
-    )
+    ) as fsm:
     
-    # Test cases covering different validation scenarios
-    test_cases = [
-        {
-            "name": "All Valid",
-            "data": {
-                "email": "john.doe@gmail.com",
-                "phone": "(555) 123-4567",
-                "age": 25
+        # Test cases covering different validation scenarios
+        test_cases = [
+            {
+                "name": "All Valid",
+                "data": {
+                    "email": "john.doe@gmail.com",
+                    "phone": "(555) 123-4567",
+                    "age": 25
+                }
+            },
+            {
+                "name": "Invalid Email Domain",
+                "data": {
+                    "email": "user@invalid.com",
+                    "phone": "5551234567",
+                    "age": 30
+                }
+            },
+            {
+                "name": "Invalid Phone",
+                "data": {
+                    "email": "user@yahoo.com",
+                    "phone": "123",
+                    "age": 22
+                }
+            },
+            {
+                "name": "Underage",
+                "data": {
+                    "email": "teen@gmail.com",
+                    "phone": "5551234567",
+                    "age": 16
+                }
+            },
+            {
+                "name": "Multiple Issues",
+                "data": {
+                    "email": "not-an-email",
+                    "phone": "abc",
+                    "age": -5
+                }
+            },
+            {
+                "name": "Missing Fields",
+                "data": {}
             }
-        },
-        {
-            "name": "Invalid Email Domain",
-            "data": {
-                "email": "user@invalid.com",
-                "phone": "5551234567",
-                "age": 30
-            }
-        },
-        {
-            "name": "Invalid Phone",
-            "data": {
-                "email": "user@yahoo.com",
-                "phone": "123",
-                "age": 22
-            }
-        },
-        {
-            "name": "Underage",
-            "data": {
-                "email": "teen@gmail.com",
-                "phone": "5551234567",
-                "age": 16
-            }
-        },
-        {
-            "name": "Multiple Issues",
-            "data": {
-                "email": "not-an-email",
-                "phone": "abc",
-                "age": -5
-            }
-        },
-        {
-            "name": "Missing Fields",
-            "data": {}
-        }
-    ]
+        ]
     
-    print("Data Validation Pipeline Example")
-    print("=" * 70)
+        print("Data Validation Pipeline Example")
+        print("=" * 70)
     
-    for test_case in test_cases:
-        print(f"\nTest Case: {test_case['name']}")
-        print(f"Input: {test_case['data']}")
-        print("-" * 50)
+        for test_case in test_cases:
+            print(f"\nTest Case: {test_case['name']}")
+            print(f"Input: {test_case['data']}")
+            print("-" * 50)
         
-        result = fsm.process(test_case['data'])
+            result = fsm.process(test_case['data'])
         
-        if result['success']:
-            print(f"✓ Processing succeeded")
-            print(f"Final State: {result['final_state']}")
-            print(f"Path: {' -> '.join(result['path'])}")
+            if result['success']:
+                print(f"✓ Processing succeeded")
+                print(f"Final State: {result['final_state']}")
+                print(f"Path: {' -> '.join(result['path'])}")
             
-            final_data = result['data']
-            if 'validation_status' in final_data:
-                print(f"\nValidation Status: {final_data['validation_status']}")
-                print(f"Message: {final_data['validation_message']}")
-                print(f"Score: {final_data['validation_score']:.1%}")
+                final_data = result['data']
+                if 'validation_status' in final_data:
+                    print(f"\nValidation Status: {final_data['validation_status']}")
+                    print(f"Message: {final_data['validation_message']}")
+                    print(f"Score: {final_data['validation_score']:.1%}")
                 
-                if final_data['validation_errors']:
-                    print("\nErrors Found:")
-                    for error in final_data['validation_errors']:
-                        print(f"  • {error}")
+                    if final_data['validation_errors']:
+                        print("\nErrors Found:")
+                        for error in final_data['validation_errors']:
+                            print(f"  • {error}")
                 
-                print("\nField Results:")
-                for field, validation in final_data['validations'].items():
-                    status = "✓" if validation['valid'] else "✗"
-                    print(f"  {status} {field}: {'Valid' if validation['valid'] else 'Invalid'}")
-        else:
-            print(f"✗ Processing failed")
-            print(f"Error: {result.get('error', 'Unknown error')}")
+                    print("\nField Results:")
+                    for field, validation in final_data['validations'].items():
+                        status = "✓" if validation['valid'] else "✗"
+                        print(f"  {status} {field}: {'Valid' if validation['valid'] else 'Invalid'}")
+            else:
+                print(f"✗ Processing failed")
+                print(f"Error: {result.get('error', 'Unknown error')}")
     
-    print("\n" + "=" * 70)
-    print("Example complete!")
+        print("\n" + "=" * 70)
+        print("Example complete!")
 
 
 if __name__ == "__main__":
