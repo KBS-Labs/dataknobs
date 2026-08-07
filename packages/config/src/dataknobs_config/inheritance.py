@@ -344,7 +344,6 @@ class InheritableConfigLoader:
 
     Attributes:
         config_dir: Directory containing configuration files
-        cache: Configuration cache for performance
     """
 
     def __init__(self, config_dir: str | Path | None = None):
@@ -355,7 +354,11 @@ class InheritableConfigLoader:
                        If None, uses ./configs
         """
         self.config_dir = Path(config_dir) if config_dir else Path("./configs")
-        self._cache: dict[str, dict[str, Any]] = {}
+        # Keyed by (name, substitute_vars). Resolving `extends:` recurses with
+        # substitute_vars=False, so one config can be produced in two forms; the
+        # key records which. See `load` for why storing both under one key makes
+        # a config's value depend on load order.
+        self._cache: dict[tuple[str, bool], dict[str, Any]] = {}
         self._loading: set[str] = set()  # Track configs being loaded to detect cycles
 
     def load(
@@ -365,6 +368,13 @@ class InheritableConfigLoader:
         substitute_vars: bool = True,
     ) -> dict[str, Any]:
         """Load and resolve configuration with inheritance.
+
+        The cache is keyed by name **and** substitution mode. Resolving
+        `extends:` recurses with ``substitute_vars=False``, so the same config
+        can be produced in two forms; a shared key would let one serve a
+        request for the other, in both directions -- returning raw ``${VAR}``
+        placeholders where expansion was asked for, or expanding an
+        already-expanded value a second time.
 
         Args:
             name: Configuration name (without extension)
@@ -383,10 +393,12 @@ class InheritableConfigLoader:
             config = loader.load("my-domain")
             ```
         """
+        cache_key = (name, substitute_vars)
+
         # Check cache
-        if use_cache and name in self._cache:
+        if use_cache and cache_key in self._cache:
             logger.debug("Using cached config: %s", name)
-            return self._cache[name]
+            return self._cache[cache_key]
 
         # Detect circular inheritance
         if name in self._loading:
@@ -417,7 +429,7 @@ class InheritableConfigLoader:
                 raw_config = substitute_env_vars(raw_config)
 
             # Cache the result
-            self._cache[name] = raw_config
+            self._cache[cache_key] = raw_config
             logger.info("Loaded configuration: %s", name)
 
             return raw_config
@@ -490,11 +502,17 @@ class InheritableConfigLoader:
     def clear_cache(self, name: str | None = None) -> None:
         """Clear configuration cache.
 
+        Clearing a name clears every substitution variant cached under it --
+        the config, not one of the two forms it may have been stored in.
+        Leaving a variant behind would re-create the load-order dependence the
+        keying exists to prevent.
+
         Args:
             name: Specific config to clear, or None to clear all
         """
         if name:
-            self._cache.pop(name, None)
+            for key in [k for k in self._cache if k[0] == name]:
+                del self._cache[key]
             logger.debug("Cleared cache for: %s", name)
         else:
             self._cache.clear()

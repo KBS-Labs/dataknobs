@@ -93,6 +93,16 @@ references are spliced in. Once spliced, the two sources are merged beyond
 telling apart, and any pass over the result would expand the environment's
 values a second time.
 
+The surfaces in this package that the rule governs, and where each records
+what it has already done:
+
+| Surface | Source | Provenance recorded in |
+|---|---|---|
+| `EnvironmentConfig` | an environment file | `substituted`, on the object |
+| `EnvironmentAwareConfig.resolve_for_build` | the app config | the ordering — substituted on entry, before the resource splice |
+| `ConfigBindingResolver` | a resolved resource, plus caller `**overrides` | the environment's `substituted`; overrides are a separate source with their own single pass |
+| `InheritableConfigLoader` | a config file and the parents it `extends:` | the cache key |
+
 ### `EnvironmentConfig.substituted`
 
 `EnvironmentConfig` records whether its values have been expanded, so
@@ -129,6 +139,29 @@ raw.substituted                                # still False
 `merge()` keeps this uniform: merging a substituted config with an
 unsubstituted one expands the unsubstituted side during the merge, rather
 than producing a config whose single flag is wrong for half its values.
+
+### `InheritableConfigLoader`: provenance in the cache key
+
+The loader resolves `extends:` by loading the parent with
+`substitute_vars=False` and substituting the merged result once, at the end.
+So one config can be produced in two forms, and the cache keys on
+`(name, substitute_vars)` to keep them apart. A shared key would let either
+form serve a request for the other, in both directions:
+
+* load a child, then its parent — the parent comes back with raw `${VAR}`
+  placeholders, expanded **zero** times;
+* load a parent, then its child — the already-expanded parent is merged in
+  and the result expanded again, **twice**: the `p${x}ss` → `pINJECTEDss`
+  failure above, reached through a different door.
+
+`clear_cache(name)` clears every variant stored under that name, so clearing
+a config clears the config rather than one of its two forms.
+
+The provenance record is the key here rather than a flag on the value
+because the cached value is a bare `dict`, with nowhere to hang one. Same
+rule, two mechanisms, chosen by what the cached thing is: an
+`EnvironmentConfig` is an object and can carry its own answer; a `dict`
+needs its container to remember.
 
 ### Serializing: `to_dict()` / `from_dict()`
 

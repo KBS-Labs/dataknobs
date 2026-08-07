@@ -555,13 +555,17 @@ llm:
 
     def test_clear_cache(self, loader, config_dir):
         """Test cache clearing."""
-        (config_dir / "test.yaml").write_text("key: value")
+        config_file = config_dir / "test.yaml"
+        config_file.write_text("key: value")
 
         loader.load("test")
-        assert "test" in loader._cache
+
+        # Cached: the rewrite on disk is not visible.
+        config_file.write_text("key: rewritten")
+        assert loader.load("test")["key"] == "value"
 
         loader.clear_cache("test")
-        assert "test" not in loader._cache
+        assert loader.load("test")["key"] == "rewritten"
 
     def test_clear_all_cache(self, loader, config_dir):
         """Test clearing all cache."""
@@ -699,6 +703,117 @@ llm:
         result = loader.load("child")
         assert result["existing"] == "value"
         assert result["new_field"] == "new_value"
+
+
+# A value whose own *content* looks like a template. Substitution is idempotent
+# for ordinary values and not for these, so a config holding one is the only
+# thing that can tell "expanded once" apart from "expanded twice".
+SECRET_WITH_VAR_SYNTAX = "p${GUARD_INNER}ss"
+INNER_VALUE = "INJECTED"
+
+
+class TestCacheSubstitutionProvenance:
+    """The cache must not serve an entry expanded a different number of times.
+
+    ``load()`` resolves ``extends:`` by recursing with ``substitute_vars=False``,
+    so the same config can be produced in two forms. Storing both under one key
+    makes the result of ``load(name)`` depend on what was loaded before it --
+    in both directions.
+    """
+
+    @pytest.fixture
+    def config_dir(self, tmp_path):
+        """Create temporary config directory."""
+        d = tmp_path / "configs"
+        d.mkdir()
+        return d
+
+    @pytest.fixture(autouse=True)
+    def _guard_env(self, monkeypatch):
+        monkeypatch.setenv("GUARD_PW", SECRET_WITH_VAR_SYNTAX)
+        monkeypatch.setenv("GUARD_INNER", INNER_VALUE)
+
+    @pytest.fixture
+    def parent_and_child(self, config_dir):
+        """A child that extends a parent holding a `${`-containing secret."""
+        (config_dir / "parent.yaml").write_text("secret: ${GUARD_PW}\nowner: parent")
+        (config_dir / "child.yaml").write_text("extends: parent\nowner: child")
+        return config_dir
+
+    def _loader(self, config_dir):
+        return InheritableConfigLoader(config_dir)
+
+    def test_parent_loaded_after_child_is_substituted(self, parent_and_child):
+        """Zero substitutions: the `extends:` recursion caches the raw parent.
+
+        The recursion loads the parent with ``substitute_vars=False`` and caches
+        it under the parent's name, so a later direct ``load("parent")`` -- which
+        asked for substitution -- gets served the unexpanded entry.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("child")
+        parent = loader.load("parent")
+
+        assert parent["secret"] == SECRET_WITH_VAR_SYNTAX
+
+    def test_child_loaded_after_parent_substitutes_once(self, parent_and_child):
+        """Two substitutions: an already-expanded parent is merged, then expanded.
+
+        The reverse order. ``load("parent")`` caches the expanded parent; the
+        child's recursion is served that entry despite asking for the raw form,
+        and the merged result is expanded a second time -- so the secret's own
+        content is read as a template.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("parent")
+        child = loader.load("child")
+
+        assert child["secret"] == SECRET_WITH_VAR_SYNTAX
+        assert child["secret"] != "pINJECTEDss", (
+            "the secret's content was expanded as a template, disclosing "
+            "GUARD_INNER into the value"
+        )
+
+    def test_load_order_does_not_change_result(self, parent_and_child):
+        """Both orders equal the fresh-loader baseline.
+
+        The two tests above are different symptoms of one defect; either alone
+        would let a partial fix look complete. This is the property they are
+        symptoms of.
+        """
+        baseline_child = self._loader(parent_and_child).load("child")
+        baseline_parent = self._loader(parent_and_child).load("parent")
+
+        child_first = self._loader(parent_and_child)
+        child_first.load("child")
+        parent_after_child = child_first.load("parent")
+
+        parent_first = self._loader(parent_and_child)
+        parent_first.load("parent")
+        child_after_parent = parent_first.load("child")
+
+        assert parent_after_child == baseline_parent
+        assert child_after_parent == baseline_child
+
+    def test_clear_cache_clears_both_substitution_variants(self, parent_and_child):
+        """One `clear_cache(name)` clears the config, not one of its two forms.
+
+        After a mixed-provenance load the parent is cached in both forms.
+        Clearing only one would re-create the order dependence with an extra
+        step, so both must re-read from disk after a single call.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("child")  # caches the parent unsubstituted
+        loader.load("parent")  # caches the parent substituted
+
+        (parent_and_child / "parent.yaml").write_text("secret: ${GUARD_INNER}\nowner: rewritten")
+        loader.clear_cache("parent")
+
+        assert loader.load("parent", substitute_vars=False)["secret"] == "${GUARD_INNER}"
+        assert loader.load("parent")["secret"] == INNER_VALUE
 
 
 class TestLoadConfigWithInheritance:

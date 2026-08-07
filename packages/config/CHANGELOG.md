@@ -43,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty config in complete silence. The fallback behaviour itself is
   unchanged.
 
+- **`InheritableConfigLoader` returned a different config depending on what
+  had been loaded before it.** Resolving `extends:` loads the parent without
+  substitution and expands the merged result at the end, but both forms were
+  cached under the same name — so whichever was stored first was served to
+  the other. Loading a child and then its parent returned the parent with
+  `${VAR}` placeholders still in it, unexpanded. Loading a parent and then
+  its child expanded the parent's values a *second* time, producing the
+  corruption described in the first entry through a different route:
+  `p${x}ss` again arriving as `pINJECTEDss`. Both symptoms came and went
+  with load order, and `clear_cache(name)` removed only one of the two
+  forms. Configs whose values contain no `${` were unaffected in either
+  direction.
+
 ### Added
 
 - **`EnvironmentConfig.substituted`** — whether `${VAR}` substitution has
