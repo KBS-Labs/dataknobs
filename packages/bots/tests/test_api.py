@@ -32,6 +32,9 @@ from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
+    OperationError as CommonOperationError,
+)
+from dataknobs_common.exceptions import (
     RateLimitError as CommonRateLimitError,
 )
 from dataknobs_common.exceptions import (
@@ -122,6 +125,24 @@ class TestBotCreationError:
         assert error.status_code == 500
         assert error.detail["bot_id"] == "my-bot-id"
         assert error.detail["reason"] == "Invalid configuration"
+
+    def test_catchable_as_the_common_operation_error(self):
+        """Failing to create a bot is an operation failure.
+
+        This is the same reasoning that makes the API ``RateLimitError`` a
+        ``CommonRateLimitError`` — and therefore an ``OperationError``. A
+        consumer catching ``OperationError`` to mean "something DataKnobs
+        attempted did not succeed" has no way to tell that bot creation is
+        excluded from that set, because nothing about the name suggests it.
+
+        Unlike its twinned siblings there is no same-named counterpart to
+        fall back on, so the derived same-name rule cannot reach this class;
+        only the expectation table can, which is why recording it as
+        API-only had to be an assertion rather than a skip.
+        """
+        error = BotCreationError("my-bot-id", "Invalid configuration")
+
+        assert isinstance(error, CommonOperationError)
 
 
 class TestConversationNotFoundError:
@@ -245,6 +266,28 @@ class TestRateLimitError:
         assert error.retry_after == 30.0
         assert error.detail["retry_after"] == 30.0
 
+    def test_a_zero_retry_after_still_reaches_the_response_body(self):
+        """``retry_after=0`` is a value, not an absence.
+
+        The two views of it are populated by different rules — the attribute
+        by direct assignment, the ``detail`` entry by a conditional — so a
+        falsy-but-present value can appear in one and not the other. Zero is
+        the reachable case: ``PyrateRateLimiter.get_status`` reports
+        ``reset_after=0.0`` unconditionally and ``InMemoryRateLimiter`` does
+        so whenever the window has just drained, and the re-raise recipe in
+        the API docs forwards that straight into this constructor.
+
+        The consequence is not a wrong number but a missing one: the 429 body
+        carries no ``retry_after`` at all, so a client that reads it back
+        learns nothing, while server-side code reading the attribute sees
+        ``0.0``. "Retry immediately" and "no guidance offered" are different
+        answers, and only one of them is true.
+        """
+        error = RateLimitError(retry_after=0.0)
+
+        assert error.retry_after == 0.0
+        assert error.detail["retry_after"] == 0.0
+
     def test_retry_after_defaults_to_none_as_an_attribute(self):
         """The common hierarchy's attribute exists even when unset."""
         error = RateLimitError()
@@ -254,12 +297,18 @@ class TestRateLimitError:
 
 
 #: Every exception class this module defines, mapped to the
-#: ``dataknobs_common`` class it is expected to subclass (``None`` where the
-#: concept is API-only). Written out rather than derived so it also covers
-#: the two whose common base has a *different* name.
-_EXPECTED_COMMON_BASE = {
-    "APIError": None,
-    "BotCreationError": None,
+#: ``dataknobs_common`` class it is expected to subclass. Written out rather
+#: than derived so it also covers the ones whose common base has a
+#: *different* name — the derived same-name rule below cannot see those.
+#:
+#: An API-layer-only concept records a rationale string instead of a class.
+#: A bare ``None`` would be indistinguishable from "nobody thought about it",
+#: and because the value is what the check dispatches on, that is precisely
+#: the entry a new class is most likely to be given by default.
+_EXPECTED_COMMON_BASE: dict[str, type[BaseException] | str] = {
+    "APIError": "the API layer's own base — it is what the common hierarchy "
+    "is being extended *into*, so it has no counterpart to inherit",
+    "BotCreationError": CommonOperationError,
     "BotNotFoundError": CommonNotFoundError,
     "ConversationNotFoundError": CommonNotFoundError,
     "ValidationError": CommonValidationError,
@@ -294,11 +343,31 @@ class TestTwinHierarchy:
         ids=sorted(_EXPECTED_COMMON_BASE),
     )
     def test_declared_common_base(self, name, expected_base):
-        """Each API exception subclasses the common class it should."""
+        """Each API exception subclasses the common class it should.
+
+        Both branches assert. Skipping the API-only ones would make the
+        cheapest possible table entry — the one a new class gets when nobody
+        decides — also the one nothing verifies, so a class that *should*
+        have a common base could be waved through by recording that it
+        doesn't.
+        """
         cls = _api_exception_classes()[name]
 
-        if expected_base is None:
-            pytest.skip(f"{name} is an API-layer-only concept")
+        if isinstance(expected_base, str):
+            inherited = [
+                base.__name__
+                for base in cls.__mro__
+                if base.__module__ == common_exceptions.__name__
+                and base is not DataknobsError
+            ]
+            assert not inherited, (
+                f"{name} is recorded as API-only ({expected_base}), but it "
+                f"inherits {', '.join(inherited)} from the common hierarchy. "
+                f"Either record that base in _EXPECTED_COMMON_BASE or drop it "
+                f"from the class"
+            )
+            return
+
         assert issubclass(cls, expected_base), (
             f"{name} must subclass {expected_base.__module__}."
             f"{expected_base.__name__} so that catching the common type "
@@ -341,7 +410,7 @@ class TestTwinHierarchy:
         ``api_error_handler`` responsible for the API variants.
         """
         for name, expected_base in _EXPECTED_COMMON_BASE.items():
-            if expected_base is None:
+            if isinstance(expected_base, str):
                 continue
             mro = _api_exception_classes()[name].__mro__
             assert mro.index(APIError) < mro.index(expected_base), name
@@ -379,6 +448,87 @@ class TestExceptionHandlerDispatch:
         assert body["error"] == "RateLimitError"
         assert body["message"] == "Too many requests"
         assert body["detail"] == {"retry_after": 30.0}
+
+    @pytest.mark.parametrize(
+        ("retry_after", "expected_header"),
+        [
+            (30.0, "30"),
+            (0.0, "0"),
+            # delay-seconds is an integer, so a fractional wait must round
+            # *up* — rounding down tells the client to retry while still
+            # throttled, which earns it a second 429.
+            (2.4, "3"),
+            # Nonsense in, nothing dangerous out: a negative wait is clamped
+            # rather than emitted, since `Retry-After: -5` is unparseable and
+            # a client may fall back to retrying immediately.
+            (-5.0, "0"),
+        ],
+        ids=["whole", "zero", "fractional-rounds-up", "negative-clamped"],
+    )
+    async def test_a_429_carries_a_retry_after_header(
+        self, retry_after, expected_header
+    ):
+        """The retry hint must reach the client, not just the response body.
+
+        ``detail.retry_after`` is DataKnobs' own JSON shape; nothing outside
+        this codebase knows to look for it. ``Retry-After`` is the field HTTP
+        clients, proxies, and SDK retry policies already read, and RFC 6585
+        says a 429 SHOULD carry it. Without the header the server knows
+        exactly how long the client should wait and declines to say so in the
+        one place it would be acted on automatically.
+
+        RFC 7231 defines the value as delay-seconds — a non-negative integer
+        — so the float the rate limiters report has to be converted, not
+        stringified.
+        """
+        pytest.importorskip("fastapi")
+        pytest.importorskip("httpx")
+
+        from fastapi import FastAPI
+        from httpx import ASGITransport, AsyncClient
+
+        app = FastAPI()
+        register_exception_handlers(app)
+
+        @app.get("/throttled")
+        async def throttled():
+            raise RateLimitError("Too many requests", retry_after=retry_after)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/throttled")
+
+        assert response.status_code == 429
+        assert response.headers["retry-after"] == expected_header
+
+    async def test_an_error_without_a_retry_hint_sends_no_header(self):
+        """``Retry-After`` is omitted rather than guessed at.
+
+        Every API error flows through the same handler, so the header has to
+        be driven by the exception actually carrying a hint. Emitting a
+        default would assert a wait the server never computed.
+        """
+        pytest.importorskip("fastapi")
+        pytest.importorskip("httpx")
+
+        from fastapi import FastAPI
+        from httpx import ASGITransport, AsyncClient
+
+        app = FastAPI()
+        register_exception_handlers(app)
+
+        @app.get("/missing")
+        async def missing():
+            raise BotNotFoundError("unknown-bot")
+
+        @app.get("/unhinted")
+        async def unhinted():
+            raise RateLimitError("Too many requests")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            assert "retry-after" not in (await client.get("/missing")).headers
+            assert "retry-after" not in (await client.get("/unhinted")).headers
 
 
 @pytest.mark.filterwarnings("ignore:BotManager is deprecated:DeprecationWarning")

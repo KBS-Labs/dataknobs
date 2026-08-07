@@ -288,7 +288,6 @@
         "CONFIG_TOOLKIT.md",
         "CONTEXT_AWARE_WIZARDS.md",
         "MIGRATION.md",
-        "MULTI_TENANT.md",
         "PROMPT_CUSTOMIZATION.md",
         "PROMPT_REFERENCE.md",
         "PROVIDER_REGISTRY.md",
@@ -309,6 +308,14 @@
           "package": "MIDDLEWARE.md",
           "site": "guides/middleware.md",
           "reason": "Long-drifted hand-authored copies (~15 hunks) that nonetheless document the same subsystem and are edited together. Recorded as a pair so both files are existence-checked and the relationship is visible; reconciling the content is its own task."
+        },
+        {
+          "package": "MULTI_TENANT.md",
+          "site": "guides/bot-manager.md",
+          "reason": "Two presentations of BotManager that share most of their body but are not the same document: the package doc leads with a table of contents and an ASCII topology diagram, the site page with a mermaid graph, and the two name several sections differently. Reconciling them is its own task. The exception-catching block is the part that must not drift, so it is transcluded rather than copied -- see shared_sections.",
+          "shared_sections": [
+            "catching-api-errors"
+          ]
         }
       ]
     },

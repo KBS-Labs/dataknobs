@@ -152,6 +152,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class. See the `### Changed` note below — this is the field that preserves
   what `provider` used to contain.
 
+- **`Retry-After` header on API error responses.** `api_error_handler` now
+  emits one whenever the exception carries a `retry_after` — in practice a
+  429 from `dataknobs_bots.api.RateLimitError`. `detail.retry_after` in the
+  JSON body is this project's own shape and nothing outside it knows to look
+  there; `Retry-After` is what HTTP clients, proxies, and SDK retry policies
+  already act on, and RFC 6585 says a 429 SHOULD carry one. The value is
+  RFC 7231 delay-seconds, so the float the rate limiters report is rounded
+  **up** (rounding down returns the client while it is still throttled) and a
+  negative value clamps to zero. An exception with no hint gets no header
+  rather than a default, since a made-up wait would assert something the
+  server never computed.
+
 - **`TurnState.pricing`** — the per-model USD rates the provider resolved for
   the turn's model, or `None` when it sources none. Captured while the
   provider object is still in hand, because `TurnState` discards it after
@@ -163,9 +175,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`dataknobs_bots.api.RateLimitError` is now also an `OperationError` and
   reaches `DataknobsError` by a second route.** This follows from the
-  subclassing fix above and is the intended semantics — a rate limit *is* an
-  operation failure, which is why the common class is shaped that way — but
-  it widens what an existing `except` clause catches:
+  subclassing fix under `### Fixed` below and is the intended semantics — a
+  rate limit *is* an operation failure, which is why the common class is
+  shaped that way — but it widens what an existing `except` clause catches:
 
   ```python
   try:
@@ -179,6 +191,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-relationship seems unlikely to be deliberate, but unlikely is not
   impossible, which is why this is disclosed here rather than filed only
   under "Fixed".
+
+- **`dataknobs_bots.api.BotCreationError` is now also an `OperationError`**,
+  by the same reasoning and with the same consequence for an existing
+  `except OperationError` block. Creating a bot is an operation and failing
+  to create one is an operation failure; unlike the twinned classes there is
+  no same-named counterpart to reach for, so a consumer catching
+  `OperationError` had no way to discover that this particular failure was
+  excluded from it. `APIError` is now the only class in the module with no
+  counterpart closer than `DataknobsError`, which is correct — it is the base
+  the common hierarchy is being extended *into*.
 
 - **The `provider` value in turn logs and in `after_message` middleware
   kwargs is now the canonical provider family key rather than the provider
@@ -255,7 +277,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `api_error_handler` exactly as before — same 429, same body. A parametrized
   test now pins every API exception to the common class it should subclass,
   so a future divergence in the family fails at the source rather than in a
-  consumer's `except` clause.
+  consumer's `except` clause. An API-layer-only class records *why* it has no
+  counterpart rather than a bare `None`, and that entry is asserted too — a
+  skipped branch would have made the cheapest table entry, the one a new
+  class gets when nobody decides, also the one nothing verifies.
+
+- **A `retry_after` of zero was dropped from the API error response body.**
+  `RateLimitError` populated `detail["retry_after"]` under a truthiness test
+  while assigning the attribute unconditionally, so at zero the two views of
+  one value disagreed: the attribute read `0.0` and the serialized field was
+  absent entirely. The client learned nothing rather than "retry now". Zero
+  is reachable, not hypothetical — `PyrateRateLimiter.get_status` reports
+  `reset_after=0.0` unconditionally and `InMemoryRateLimiter` does so
+  whenever the window has just drained, and the re-raise recipe in the API
+  docs forwards that value straight into this constructor. The test is now
+  `is not None`.
+
+- **`general_exception_handler` logged with an f-string**, which interpolates
+  before the logging call and discards the exception object carrying the
+  traceback that `logger.exception` exists to record. It now uses lazy `%s`
+  formatting, and the logger is resolved once at module scope rather than on
+  every unhandled request.
 
 - **A synchronously-stepped wizard leaked a daemon thread with no way to
   release it.** `WizardFSM` wraps an `AdvancedFSM`, which allocates a

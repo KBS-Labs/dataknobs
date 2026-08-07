@@ -241,6 +241,7 @@ async def create_bot(bot_id: str, config: dict, manager: BotManagerDep):
 }
 ```
 
+<!-- --8<-- [start:catching-api-errors] -->
 #### Catching these errors
 
 **Raise the `dataknobs_bots.api` class; catch the `dataknobs_common.exceptions`
@@ -254,17 +255,17 @@ try:
     reply = await bot.chat(message, context)
 except RateLimitError as exc:
     # Catches both dataknobs_bots.api.RateLimitError and the one
-    # RateLimitMiddleware raises internally.
+    # dataknobs_llm.conversations.middleware.RateLimitMiddleware raises.
     retry_after = exc.retry_after
 ```
 
 Catching the `dataknobs_bots.api` name instead narrows you to errors your own
-handlers raised, and silently misses the ones raised inside DataKnobs. Two of
+handlers raised, and silently misses the ones raised inside DataKnobs. Three of
 the API classes are also *same-named* as their common counterpart
-(`ValidationError`, `ConfigurationError`), so which one an `except` clause
-binds depends only on which module it was imported from — an easy thing to get
-wrong by accident and a hard one to notice. Importing the common name avoids
-the ambiguity entirely.
+(`ValidationError`, `ConfigurationError`, `RateLimitError`), so which one an
+`except` clause binds depends only on which module it was imported from — an
+easy thing to get wrong by accident and a hard one to notice. Importing the
+common name avoids the ambiguity entirely.
 
 The pairing is:
 
@@ -274,15 +275,16 @@ The pairing is:
 | `ValidationError` | `ValidationError` |
 | `ConfigurationError` | `ConfigurationError` |
 | `RateLimitError` | `RateLimitError` (and `OperationError`) |
-| `APIError`, `BotCreationError` | `DataknobsError` only — no closer counterpart |
+| `BotCreationError` | `OperationError` |
+| `APIError` | `DataknobsError` only — it is the API layer's own base |
 
 **Handler coverage:** `register_exception_handlers` registers a handler for
 `APIError`, for FastAPI's `HTTPException`, and a catch-all for `Exception`.
 DataKnobs' other error types — a `dataknobs_common.exceptions.RateLimitError`
-raised by `RateLimitMiddleware`, say — are not `APIError`s, so they reach the
-catch-all and return a generic 500 rather than a status code matching the
-failure. Catch and re-raise them as the API variant if you want a specific
-status:
+raised by `dataknobs_llm.conversations.middleware.RateLimitMiddleware`, say —
+are not `APIError`s, so they reach the catch-all and return a generic 500
+rather than a status code matching the failure. Catch and re-raise them as the
+API variant if you want a specific status:
 
 ```python
 from dataknobs_common.exceptions import RateLimitError as CommonRateLimitError
@@ -292,9 +294,31 @@ from dataknobs_bots.api import RateLimitError
 async def chat(request: ChatRequest, manager: BotManagerDep):
     try:
         return await run_turn(request, manager)
+    except RateLimitError:
+        # Already the API variant — the handlers know what to do with it.
+        # Without this clause the block below would catch it too, since the
+        # API class *is* a CommonRateLimitError, and rebuild it from scratch.
+        raise
     except CommonRateLimitError as exc:
         raise RateLimitError(str(exc), retry_after=exc.retry_after) from exc
 ```
+
+A 429 from `api_error_handler` carries a `Retry-After` header whenever the
+exception was given a `retry_after`, so forwarding it as above is what lets a
+client back off on its own.
+
+**Registering your own handler runs the other way round.** The advice above is
+for `except` clauses; handler *registration* resolves by a different rule.
+Starlette walks `type(exc).__mro__` and takes the first registered match, and
+`APIError` precedes the common base there — so this is shadowed for the API
+variant and fires only for middleware-raised errors:
+
+```python
+app.add_exception_handler(CommonRateLimitError, my_handler)  # API variant → api_error_handler
+```
+
+Register against `APIError` (or a specific API class) to handle the API side.
+<!-- --8<-- [end:catching-api-errors] -->
 
 ### Complete Example
 

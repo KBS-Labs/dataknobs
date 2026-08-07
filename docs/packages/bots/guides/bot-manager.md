@@ -219,60 +219,7 @@ async def get_bot(bot_id: str, manager: BotManagerDep):
 }
 ```
 
-#### Catching these errors
-
-**Raise the `dataknobs_bots.api` class; catch the `dataknobs_common.exceptions`
-one.** Every API exception with a common counterpart subclasses it, so the
-common name catches both the API variant and the one DataKnobs itself raises:
-
-```python
-from dataknobs_common.exceptions import RateLimitError
-
-try:
-    reply = await bot.chat(message, context)
-except RateLimitError as exc:
-    # Catches both dataknobs_bots.api.RateLimitError and the one
-    # RateLimitMiddleware raises internally.
-    retry_after = exc.retry_after
-```
-
-Catching the `dataknobs_bots.api` name instead narrows you to errors your own
-handlers raised, and silently misses the ones raised inside DataKnobs. Two of
-the API classes are also *same-named* as their common counterpart
-(`ValidationError`, `ConfigurationError`), so which one an `except` clause
-binds depends only on which module it was imported from — an easy thing to get
-wrong by accident and a hard one to notice. Importing the common name avoids
-the ambiguity entirely.
-
-The pairing is:
-
-| `dataknobs_bots.api` | also catchable as |
-|---|---|
-| `BotNotFoundError`, `ConversationNotFoundError` | `NotFoundError` |
-| `ValidationError` | `ValidationError` |
-| `ConfigurationError` | `ConfigurationError` |
-| `RateLimitError` | `RateLimitError` (and `OperationError`) |
-| `APIError`, `BotCreationError` | `DataknobsError` only — no closer counterpart |
-
-**Handler coverage:** `register_exception_handlers` registers a handler for
-`APIError`, for FastAPI's `HTTPException`, and a catch-all for `Exception`.
-DataKnobs' other error types — a `dataknobs_common.exceptions.RateLimitError`
-raised by `RateLimitMiddleware`, say — are not `APIError`s, so they reach the
-catch-all and return a generic 500 rather than a status code matching the
-failure. Catch and re-raise them as the API variant if you want a specific
-status:
-
-```python
-from dataknobs_common.exceptions import RateLimitError as CommonRateLimitError
-from dataknobs_bots.api import RateLimitError
-
-@app.post("/chat")
-async def chat(request: ChatRequest, manager: BotManagerDep):
-    try:
-        return await run_turn(request, manager)
-    except CommonRateLimitError as exc:
-        raise RateLimitError(str(exc), retry_after=exc.retry_after) from exc
-```
+--8<-- "packages/bots/docs/MULTI_TENANT.md:catching-api-errors"
 
 ### Complete FastAPI Example
 

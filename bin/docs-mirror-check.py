@@ -23,7 +23,16 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
                   drift fails the check.
   ``diverge``     Intentional content divergence (structural landing page,
                   faithful condensation, independent elaboration). Recorded,
-                  not content-checked; both files must exist.
+                  not content-checked; both files must exist. May additionally
+                  declare ``shared_sections``: named blocks that, despite the
+                  surrounding divergence, are transcluded from the package
+                  source rather than copied. Each is verified at both ends --
+                  the source carries the ``--8<-- [start:name]`` / ``[end:name]``
+                  markers, the site page carries the matching
+                  ``--8<-- "<source>:<name>"`` include. This is the shape for a
+                  pair that is two genuinely different documents sharing one
+                  block; without it such a block has no expressible
+                  classification and ends up hand-copied and unverified.
   ``package_only``  Package doc with no site mirror.
   ``site_only``     Site-native page with no package source.
 
@@ -340,6 +349,83 @@ def check_transclude(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> 
         )
 
 
+def _has_section_marker(text: str, name: str, edge: str) -> bool:
+    """Whether ``text`` carries the pymdownx ``[start:]``/``[end:]`` marker.
+
+    The marker is normally written inside an HTML comment so it stays
+    invisible when the package doc is read directly on GitHub, so this
+    matches it anywhere on the line rather than anchoring to the margin.
+    """
+    pattern = rf"(?:-{{2,}}|;{{2,}})8<-{{2,}}\s+\[{edge}:{re.escape(name)}\]"
+    return re.search(pattern, text) is not None
+
+
+def check_shared_sections(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
+    """Verify the named sections a divergent pair shares structurally.
+
+    Two docs may be different documents overall yet still need one block to
+    stay identical. Copying that block by hand puts it back outside every
+    guarantee this guard exists to provide -- and because the pair as a whole
+    is genuinely divergent, neither ``mirror`` nor whole-file ``transclude``
+    can express it, which is how such a block ends up unclassified and
+    unverified.
+
+    ``shared_sections`` closes that: the block lives once in the package
+    source between pymdownx section markers, and the site page pulls it in
+    with ``--8<-- "<source>:<section>"``. Drift is then impossible by
+    construction. What remains possible is someone replacing the include with
+    a fresh hand-copy, or deleting the markers -- so this checks both ends of
+    the arrangement still exist.
+    """
+    sections = pair.get("shared_sections") or []
+    if not sections:
+        return
+
+    pkg_path = pkg_dir / pair["package"]
+    site_path = site_dir / pair["site"]
+    if not pkg_path.exists() or not site_path.exists():
+        # The missing file is already reported by the caller; reporting every
+        # section against it too would bury that one real error.
+        return
+
+    pkg_text = _read(pkg_path)
+    want_source = pkg_path.relative_to(ROOT).as_posix()
+    include_re = re.compile(r'^\s*(?:-{2,}|;{2,})8<-{2,}\s+"(?P<path>[^"]+)"')
+    included = set()
+    for ln in _read(site_path).splitlines():
+        m = include_re.match(ln)
+        if m:
+            included.add(m.group("path"))
+
+    rel_pkg = pkg_path.relative_to(ROOT)
+    rel_site = site_path.relative_to(ROOT)
+    for name in sections:
+        absent = [
+            edge
+            for edge in ("start", "end")
+            if not _has_section_marker(pkg_text, name, edge)
+        ]
+        if absent:
+            res.fail(
+                f"shared_sections: {rel_pkg} is missing the "
+                f"{' and '.join(absent)} marker for section '{name}'. The "
+                f"site page includes it, so removing the marker breaks the "
+                f"docs build. Restore `<!-- --8<-- [start:{name}] -->` / "
+                f"`<!-- --8<-- [end:{name}] -->` around the shared block, or "
+                f"drop '{name}' from shared_sections in "
+                f"{MANIFEST.relative_to(ROOT)}."
+            )
+        want = f"{want_source}:{name}"
+        if want not in included:
+            res.fail(
+                f"shared_sections: {rel_site} does not include "
+                f'`--8<-- "{want}"`. A section declared as shared must be '
+                f"transcluded, not copied -- a hand-authored copy drifts "
+                f"silently, which is the failure this classification exists "
+                f"to prevent."
+            )
+
+
 def check_diverge(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     pkg_path = pkg_dir / pair["package"]
     site_path = site_dir / pair["site"]
@@ -347,6 +433,7 @@ def check_diverge(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> Non
         res.fail(f"diverge: package source missing: {pkg_path.relative_to(ROOT)}")
     if not site_path.exists():
         res.fail(f"diverge: site page missing: {site_path.relative_to(ROOT)}")
+    check_shared_sections(pair, pkg_dir, site_dir, res)
 
 
 def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
@@ -498,6 +585,19 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
             check_transclude(pair, pkg_dir, site_dir, res)
         for pair in entry.get("diverge", []):
             check_diverge(pair, pkg_dir, site_dir, res)
+
+        # `shared_sections` is only meaningful where the two files legitimately
+        # differ. On the other classes it would be silently ignored -- and a
+        # declaration that is quietly ignored reads as a guarantee while
+        # providing none, which is worse than not offering the key at all.
+        for kind in ("symlink", "mirror", "transclude"):
+            for pair in entry.get(kind, []):
+                if pair.get("shared_sections"):
+                    res.fail(
+                        f"manifest: {kind} pair '{pair.get('package')}' declares "
+                        f"shared_sections, which only applies to `diverge` pairs. "
+                        f"A {kind} pair already shares its whole content."
+                    )
 
         if res.ok:
             n = (
