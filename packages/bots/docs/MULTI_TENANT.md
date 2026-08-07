@@ -278,34 +278,71 @@ The pairing is:
 | `BotCreationError` | `OperationError` |
 | `APIError` | `DataknobsError` only — it is the API layer's own base |
 
-**Handler coverage:** `register_exception_handlers` registers a handler for
-`APIError`, for FastAPI's `HTTPException`, and a catch-all for `Exception`.
-DataKnobs' other error types — a `dataknobs_common.exceptions.RateLimitError`
-raised by `dataknobs_llm.conversations.middleware.RateLimitMiddleware`, say —
-are not `APIError`s, so they reach the catch-all and return a generic 500
-rather than a status code matching the failure. Catch and re-raise them as the
-API variant if you want a specific status:
+#### Handler coverage
+
+`register_exception_handlers` registers handlers for `APIError`, for
+`DataknobsError`, for FastAPI's `HTTPException`, and a catch-all for
+`Exception`. The `DataknobsError` handler is what gives DataKnobs' own errors a
+status matching the failure — a `ConfigurationError` from config validation, a
+`RateLimitError` from `RateLimitMiddleware`, a `RecordNotFoundError` from a
+database backend. You do not need to catch these and re-raise them as API
+variants to get a useful status.
+
+Resolution is by MRO, so a subclass inherits the nearest listed ancestor's row:
+`RecordNotFoundError` returns 404 without appearing in the table at all.
+
+| DataKnobs error | Status | Message and `detail` disclosed? |
+|---|---|---|
+| `ValidationError` | 422 | yes |
+| `NotFoundError` | 404 | yes |
+| `ConsentRequiredError` | 403 | yes |
+| `ConcurrencyError` | 409 | yes |
+| `RateLimitError` | 429 | yes |
+| `TimeoutError` | 504 | yes |
+| `ConfigurationError` | 500 | yes — see below |
+| `ResourceError` | 503 | no — masked |
+| `SerializationError` | 500 | no — masked |
+| `OperationError` | 500 | no — masked |
+| `DataknobsError` | 500 | no — masked (terminal fallback) |
+
+A masked error returns `"An unexpected error occurred"` with an empty `detail`.
+Its real message and context are logged instead, so the diagnostic is
+relocated rather than lost.
+
+**`ConfigurationError` is disclosed by default, and that is an exposure some
+deployments will not want.** A config diagnostic is written for whoever wrote
+the config — masking it is what made the original defect invisible — but a
+route serving unauthenticated traffic hands that diagnostic to anyone who can
+reach it. Mask it with one line:
 
 ```python
-from dataknobs_common.exceptions import RateLimitError as CommonRateLimitError
-from dataknobs_bots.api import RateLimitError
+from dataknobs_bots.api import ErrorPolicy, register_exception_handlers
+from dataknobs_common.exceptions import ConfigurationError
 
-@app.post("/chat")
-async def chat(request: ChatRequest, manager: BotManagerDep):
-    try:
-        return await run_turn(request, manager)
-    except RateLimitError:
-        # Already the API variant — the handlers know what to do with it.
-        # Without this clause the block below would catch it too, since the
-        # API class *is* a CommonRateLimitError, and rebuild it from scratch.
-        raise
-    except CommonRateLimitError as exc:
-        raise RateLimitError(str(exc), retry_after=exc.retry_after) from exc
+register_exception_handlers(
+    app, error_policy={ConfigurationError: ErrorPolicy(500, False)}
+)
 ```
 
-A 429 from `api_error_handler` carries a `Retry-After` header whenever the
-exception was given a `retry_after`, so forwarding it as above is what lets a
-client back off on its own.
+The same parameter gives your own `DataknobsError` subclasses a policy —
+`error_policy={TenantQuotaError: ErrorPolicy(402, True)}` — and is merged over
+the defaults, so rows you do not mention keep working.
+
+**Adding a row means reading what that type's raise sites put in `context`, not
+only what its message says.** `client_safe` is a single bit gating both, so a
+type whose message is harmless but whose context can carry a query string or a
+credential is not client-safe.
+
+A 429 carries a `Retry-After` header — integer seconds, rounded up — whenever
+the exception was given a `retry_after`, from either the API or the common
+`RateLimitError`. Both also report it as `detail.retry_after`.
+
+**One monitoring consequence.** Starlette re-raises after the `Exception`
+catch-all so the ASGI server sees the failure, but not after a handler
+registered for a narrower type. DataKnobs errors now take the narrower path, so
+they no longer reach the server as unhandled exceptions. A deployment alerting
+on that signal will see it drop; the handler logs every error it handles, at
+`warning` when disclosed and `exception` when masked.
 
 **Registering your own handler runs the other way round.** The advice above is
 for `except` clauses; handler *registration* resolves by a different rule.
@@ -318,6 +355,9 @@ app.add_exception_handler(CommonRateLimitError, my_handler)  # API variant → a
 ```
 
 Register against `APIError` (or a specific API class) to handle the API side.
+The same rule is what keeps the built-in `DataknobsError` handler from taking
+API traffic, and it means your own registration for a narrower type wins over
+it.
 <!-- --8<-- [end:catching-api-errors] -->
 
 ### Complete Example

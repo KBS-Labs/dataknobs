@@ -170,9 +170,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading a name: a rate not taken there has to be guessed from a second
   table later, which is how the cost middleware's hand-written duplicate came
   to exist and to drift.
+- **A `DataknobsError` handler in `register_exception_handlers`**, with the
+  `ErrorPolicy` / `DEFAULT_ERROR_POLICY` / `resolve_error_policy` surface it
+  is driven by. Eleven rows map the `dataknobs_common.exceptions` types to a
+  status and a disclosure decision, and resolution walks the exception's MRO
+  rather than looking up its exact type — so the forty-plus `DataknobsError`
+  subclasses the other packages define inherit their nearest listed ancestor's
+  row. `RecordNotFoundError` returns 404 without appearing in the table. An
+  exact-type table would have covered eleven classes and silently 500'd the
+  rest, which is the behaviour being replaced.
+
+  A `client_safe` row returns the error's message and `context`; the rest
+  return a generic message and an empty `detail`, and log the real one.
+  `ConfigurationError` is client-safe — a config diagnostic is written for
+  whoever wrote the config, and masking it is what made the defect below
+  invisible — which is a deliberate exposure on a route serving
+  unauthenticated traffic. `register_exception_handlers` takes an
+  `error_policy=` mapping, merged over the defaults, that opts out in one line
+  and gives a deployment's own `DataknobsError` subclasses a policy:
+
+  ```python
+  register_exception_handlers(
+      app, error_policy={ConfigurationError: ErrorPolicy(500, False)}
+  )
+  ```
 
 ### Changed
 
+- **Handled DataKnobs errors no longer propagate to the ASGI server.**
+  Starlette routes the `Exception` catch-all through `ServerErrorMiddleware`,
+  which calls the handler *and then re-raises* so the server sees the failure;
+  handlers registered for narrower types do not re-raise. A DataKnobs error
+  used to be both returned as a 500 and propagated to uvicorn, producing a
+  server-level error log and a tick on whatever the deployment counts as an
+  unhandled exception. It is now handled cleanly and does not propagate.
+
+  That is the intended semantics — a config typo is not a server fault — but
+  it is a monitoring behaviour change, and a deployment alerting on unhandled
+  exceptions will see that signal drop. The new handler logs every error it
+  handles (`warning` when disclosed, `exception` with the full context when
+  masked), so the information is relocated rather than lost.
 - **`dataknobs_bots.api.RateLimitError` is now also an `OperationError` and
   reaches `DataknobsError` by a second route.** This follows from the
   subclassing fix under `### Fixed` below and is the intended semantics — a
@@ -256,6 +293,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every DataKnobs error raised from a route returned
+  `500 / "An unexpected error occurred"`.** `register_exception_handlers`
+  covered `APIError`, `HTTPException`, and `Exception`, and every
+  `DataknobsError` that is not an `APIError` — which is all of them, from well
+  over a hundred raise sites across DataKnobs' own source — fell to the
+  catch-all with its message and `context` discarded. The reported case was a config-validation
+  diagnostic: DataKnobs generated `embedding: no variant registered for
+  'ollamaa'`, then threw it away one layer later and returned a 500 that named
+  nothing. See the new handler under `### Added`.
+- **The common `RateLimitError` returned no `detail.retry_after`, while the
+  API twin did.** The two classes store the hint in different places — the API
+  variant writes it into `context`, which `to_dict()` serializes, and the
+  common one keeps it as an attribute only — so one condition produced two
+  response bodies depending on which of two same-named classes the raiser
+  reached for. Both now report it in `detail` as well as in the `Retry-After`
+  header, and a `retry_after` a raiser put in `context` deliberately is left
+  alone.
 - **`dataknobs_bots.api.RateLimitError` was not a subclass of
   `dataknobs_common.exceptions.RateLimitError`.** It was a *sibling*, so
   `except RateLimitError` written against the common name — the name

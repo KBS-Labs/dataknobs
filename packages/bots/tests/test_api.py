@@ -6,14 +6,17 @@ import pytest
 
 from dataknobs_bots.api import exceptions as api_exceptions
 from dataknobs_bots.api.exceptions import (
+    DEFAULT_ERROR_POLICY,
     APIError,
     BotCreationError,
     BotNotFoundError,
     ConfigurationError,
     ConversationNotFoundError,
+    ErrorPolicy,
     RateLimitError,
     ValidationError,
     register_exception_handlers,
+    resolve_error_policy,
 )
 from dataknobs_bots.api.dependencies import (
     _BotManagerSingleton,
@@ -36,6 +39,9 @@ from dataknobs_common.exceptions import (
 )
 from dataknobs_common.exceptions import (
     RateLimitError as CommonRateLimitError,
+)
+from dataknobs_common.exceptions import (
+    ResourceError as CommonResourceError,
 )
 from dataknobs_common.exceptions import (
     ValidationError as CommonValidationError,
@@ -328,6 +334,88 @@ def _api_exception_classes() -> dict[str, type[BaseException]]:
     }
 
 
+#: The HTTP status and disclosure each ``dataknobs_common`` exception type must
+#: produce, written out independently of ``DEFAULT_ERROR_POLICY``. Asserting the
+#: table against itself would pass for any value it happened to hold; this is
+#: the contract, and changing a row in the source has to fail here first.
+_EXPECTED_POLICY: dict[str, tuple[int, bool]] = {
+    "ValidationError": (422, True),
+    "NotFoundError": (404, True),
+    "ConsentRequiredError": (403, True),
+    "ConcurrencyError": (409, True),
+    "RateLimitError": (429, True),
+    "TimeoutError": (504, True),
+    "ConfigurationError": (500, True),
+    "ResourceError": (503, False),
+    "SerializationError": (500, False),
+    "OperationError": (500, False),
+    "DataknobsError": (500, False),
+}
+
+
+async def _response_for(exc, *, error_policy=None, raise_app_exceptions=True):
+    """Raise ``exc`` from a route and return the response the handlers built.
+
+    End-to-end through the real ASGI stack rather than by calling a handler
+    directly, because which handler runs is the thing under test: Starlette
+    picks it by walking ``type(exc).__mro__``, and calling one by hand would
+    assume the answer.
+
+    ``raise_app_exceptions`` stays at httpx's strict default so that an
+    exception reaching the ``Exception`` catch-all surfaces here instead of
+    being quietly absorbed — Starlette's ``ServerErrorMiddleware`` re-raises
+    after calling that handler, which is the distinction
+    :class:`TestAsgiPropagation` is about. Pass ``False`` for a case that is
+    *meant* to reach the catch-all.
+    """
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    app = FastAPI()
+    register_exception_handlers(app, error_policy=error_policy)
+
+    @app.get("/boom")
+    async def boom():
+        raise exc
+
+    transport = ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get("/boom")
+
+
+# Subclasses defined outside `dataknobs_common/exceptions.py`, each reached by
+# MRO rather than by a row of its own. Built here rather than in the
+# parametrize list so their differing constructor shapes stay out of the case
+# table, which is about statuses.
+
+
+def _record_not_found():
+    from dataknobs_data.exceptions import RecordNotFoundError
+
+    return RecordNotFoundError("rec-1")
+
+
+def _context_length_exceeded():
+    from dataknobs_llm.exceptions import ContextLengthExceededError
+
+    return ContextLengthExceededError("prompt too long")
+
+
+def _pack_resolution_error():
+    from dataknobs_common.packs import PackResolutionError
+
+    return PackResolutionError("pack 'audit' is not registered", reason="unknown_pack")
+
+
+def _capability_not_supported():
+    from dataknobs_common import Capability, CapabilityNotSupportedError
+
+    return CapabilityNotSupportedError(Capability.CONDITIONAL_WRITE, object())
+
+
 class TestTwinHierarchy:
     """Recurrence guard for the API/common exception pairing.
 
@@ -357,8 +445,7 @@ class TestTwinHierarchy:
             inherited = [
                 base.__name__
                 for base in cls.__mro__
-                if base.__module__ == common_exceptions.__name__
-                and base is not DataknobsError
+                if base.__module__ == common_exceptions.__name__ and base is not DataknobsError
             ]
             assert not inherited, (
                 f"{name} is recorded as API-only ({expected_base}), but it "
@@ -415,6 +502,21 @@ class TestTwinHierarchy:
             mro = _api_exception_classes()[name].__mro__
             assert mro.index(APIError) < mro.index(expected_base), name
 
+    @pytest.mark.parametrize(
+        "name", sorted(_EXPECTED_COMMON_BASE), ids=sorted(_EXPECTED_COMMON_BASE)
+    )
+    def test_api_error_precedes_dataknobs_error_in_the_mro(self, name):
+        """``DataknobsError`` is registered too, and must not win.
+
+        Every API exception is a ``DataknobsError``, so once that type has a
+        handler of its own the two registrations compete for all seven
+        classes. ``APIError`` preceding it is the whole reason they still
+        reach ``api_error_handler`` and keep their per-class status codes
+        instead of resolving through the policy table.
+        """
+        mro = _api_exception_classes()[name].__mro__
+        assert mro.index(APIError) < mro.index(DataknobsError), name
+
 
 class TestExceptionHandlerDispatch:
     """The registered handlers still own the API exception variants."""
@@ -465,9 +567,7 @@ class TestExceptionHandlerDispatch:
         ],
         ids=["whole", "zero", "fractional-rounds-up", "negative-clamped"],
     )
-    async def test_a_429_carries_a_retry_after_header(
-        self, retry_after, expected_header
-    ):
+    async def test_a_429_carries_a_retry_after_header(self, retry_after, expected_header):
         """The retry hint must reach the client, not just the response body.
 
         ``detail.retry_after`` is DataKnobs' own JSON shape; nothing outside
@@ -529,6 +629,416 @@ class TestExceptionHandlerDispatch:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             assert "retry-after" not in (await client.get("/missing")).headers
             assert "retry-after" not in (await client.get("/unhinted")).headers
+
+    @pytest.mark.parametrize(
+        ("exc", "status", "message", "detail"),
+        [
+            (APIError("boom"), 500, "boom", {}),
+            (
+                BotNotFoundError("bot-1"),
+                404,
+                "Bot with ID 'bot-1' not found",
+                {"bot_id": "bot-1"},
+            ),
+            (
+                BotCreationError("bot-1", "disk full"),
+                500,
+                "Failed to create bot 'bot-1': disk full",
+                {"bot_id": "bot-1", "reason": "disk full"},
+            ),
+            (
+                ConversationNotFoundError("conv-1"),
+                404,
+                "Conversation with ID 'conv-1' not found",
+                {"conversation_id": "conv-1"},
+            ),
+            (
+                ValidationError("bad field", {"field": "name"}),
+                422,
+                "bad field",
+                {"field": "name"},
+            ),
+            (
+                ConfigurationError("bad config", config_key="llm.model"),
+                500,
+                "bad config",
+                {"config_key": "llm.model"},
+            ),
+            (
+                RateLimitError("slow down", retry_after=5.0),
+                429,
+                "slow down",
+                {"retry_after": 5.0},
+            ),
+        ],
+        ids=[
+            "APIError",
+            "BotNotFoundError",
+            "BotCreationError",
+            "ConversationNotFoundError",
+            "ValidationError",
+            "ConfigurationError",
+            "RateLimitError",
+        ],
+    )
+    async def test_every_api_class_still_reaches_api_error_handler(
+        self, exc, status, message, detail
+    ):
+        """Registering ``DataknobsError`` must not take any API class with it.
+
+        Every one of the seven is a ``DataknobsError``, so the new handler
+        competes for all of them; ``APIError`` precedes it in each MRO, which
+        is what this asserts through the response rather than through the MRO.
+
+        Two of the rows would visibly change if that regressed: ``APIError``
+        and ``BotCreationError`` resolve through the table to *masked* 500s,
+        so their real messages would disappear. The other five happen to
+        produce the same body either way, which is by design — the table gives
+        the common types the same statuses the API twins already used — and
+        they are here to pin that agreement rather than to detect the
+        regression.
+        """
+        response = await _response_for(exc)
+
+        assert response.status_code == status
+        body = response.json()
+        assert body["message"] == message
+        assert body["detail"] == detail
+        assert body["error"] == type(exc).__name__
+        assert "timestamp" in body
+
+
+class TestErrorPolicyTable:
+    """The policy table covers the hierarchy and resolves by MRO."""
+
+    @pytest.mark.parametrize("name", sorted(_EXPECTED_POLICY), ids=sorted(_EXPECTED_POLICY))
+    def test_table_matches_the_declared_contract(self, name):
+        """Each entry has the status and disclosure recorded above."""
+        cls = getattr(common_exceptions, name)
+        status, client_safe = _EXPECTED_POLICY[name]
+
+        assert cls in DEFAULT_ERROR_POLICY, f"{name} has no policy entry"
+        assert DEFAULT_ERROR_POLICY[cls] == ErrorPolicy(status, client_safe)
+
+    def test_every_common_exception_has_a_policy(self):
+        """A new common error type must be given a row, not defaulted.
+
+        Without this, adding one to ``dataknobs_common.exceptions`` would
+        silently resolve it through ``DataknobsError`` to a masked 500 — the
+        exact behaviour this handler exists to stop, reintroduced one type at
+        a time.
+        """
+        missing = [
+            name
+            for name in common_exceptions.__all__
+            if getattr(common_exceptions, name) not in DEFAULT_ERROR_POLICY
+        ]
+        assert not missing, (
+            f"{', '.join(missing)} in dataknobs_common.exceptions.__all__ but "
+            f"absent from DEFAULT_ERROR_POLICY — add a row, deciding its "
+            f"status and whether its message and context are client-safe"
+        )
+
+    def test_the_expected_policy_table_itself_is_complete(self):
+        """The test's own expectations must not go stale either."""
+        assert set(_EXPECTED_POLICY) == set(common_exceptions.__all__)
+
+    def test_dataknobs_error_is_the_terminal_entry(self):
+        """The fallback is a row, so a consumer can override it."""
+        assert DEFAULT_ERROR_POLICY[DataknobsError] == ErrorPolicy(500, False)
+
+    def test_resolution_walks_the_mro(self):
+        """A subclass with no row of its own inherits its nearest ancestor's."""
+        from dataknobs_data.exceptions import RecordNotFoundError
+
+        assert resolve_error_policy(RecordNotFoundError("rec-1")) == ErrorPolicy(404, True)
+
+    def test_a_subclass_row_beats_its_base(self):
+        """``RateLimitError`` is an ``OperationError``; 429 must win over 500.
+
+        Resolution is by MRO, not by dict order, so this holds however the
+        table happens to be sorted in the source.
+        """
+        assert resolve_error_policy(CommonRateLimitError("nope")) == ErrorPolicy(429, True)
+
+    def test_a_table_without_a_terminal_entry_fails_closed(self):
+        """An override table that omits ``DataknobsError`` masks, not discloses.
+
+        Reachable only by calling this function directly — the registration
+        path merges over the defaults — which is why the guard is here rather
+        than trusted to be unreachable.
+        """
+        assert resolve_error_policy(CommonValidationError("bad"), {}) == ErrorPolicy(500, False)
+
+
+class TestDataknobsErrorHandling:
+    """DataKnobs' own errors reach the client with a meaningful status."""
+
+    @pytest.mark.parametrize("name", sorted(_EXPECTED_POLICY), ids=sorted(_EXPECTED_POLICY))
+    async def test_each_common_type_end_to_end(self, name):
+        """Raised from a route, each type returns its status and disclosure.
+
+        Before this handler existed, every row here returned
+        ``500 / "An unexpected error occurred"``.
+        """
+        status, client_safe = _EXPECTED_POLICY[name]
+        cls = getattr(common_exceptions, name)
+        exc = cls("diagnostic detail", context={"probe": "value"})
+
+        response = await _response_for(exc)
+
+        assert response.status_code == status
+        body = response.json()
+        assert body["error"] == name
+        if client_safe:
+            assert body["message"] == "diagnostic detail"
+            assert body["detail"]["probe"] == "value"
+        else:
+            assert body["message"] == api_exceptions.MASKED_MESSAGE
+            assert body["detail"] == {}
+
+    async def test_the_configuration_diagnostic_survives(self):
+        """The case the gap was reported for.
+
+        A config diagnostic is generated by DataKnobs and was then discarded
+        by DataKnobs one layer later, leaving the deployment a 500 saying
+        nothing about which key was wrong.
+        """
+        response = await _response_for(
+            CommonConfigurationError(
+                "embedding: no variant registered for 'ollamaa'",
+                context={"config_key": "embedding"},
+            )
+        )
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["message"] == "embedding: no variant registered for 'ollamaa'"
+        assert body["detail"] == {"config_key": "embedding"}
+
+    @pytest.mark.parametrize(
+        ("factory", "status", "expect_message"),
+        [
+            # data: NotFoundError -> 404
+            (_record_not_found, 404, "Record with ID 'rec-1' not found"),
+            # llm: ValidationError -> 422
+            (_context_length_exceeded, 422, "prompt too long"),
+            # common, defined outside exceptions.py: ConfigurationError -> 500
+            (_pack_resolution_error, 500, "pack 'audit' is not registered"),
+            # common, defined outside exceptions.py: OperationError -> masked 500
+            (_capability_not_supported, 500, None),
+        ],
+        ids=["data", "llm", "common-packs", "common-capabilities"],
+    )
+    async def test_subclasses_outside_the_table_resolve_by_mro(
+        self, factory, status, expect_message
+    ):
+        """More than forty subclasses live outside ``common/exceptions.py``.
+
+        None of them appear in the table, and an exact-type lookup would 500
+        every one. Four packages' worth are checked here; the MRO walk is what
+        makes the rest work too.
+        """
+        response = await _response_for(factory())
+
+        assert response.status_code == status
+        body = response.json()
+        if expect_message is None:
+            assert body["message"] == api_exceptions.MASKED_MESSAGE
+        else:
+            assert body["message"] == expect_message
+
+    async def test_a_masked_error_discloses_neither_message_nor_context(self):
+        """Security assertion: a masked type leaks nothing to the caller.
+
+        ``ResourceError`` is raised on failed connects, so its message is the
+        one most likely to carry a DSN — credentials included. This fails
+        loudly if someone flips that row to ``client_safe=True``.
+        """
+        dsn = "postgresql://svc_user:hunter2@db.internal:5432/prod"
+        response = await _response_for(
+            CommonResourceError(
+                f"could not connect: {dsn}",
+                context={"dsn": dsn, "password": "hunter2"},
+            )
+        )
+
+        assert response.status_code == 503
+        body = response.json()
+        assert body["message"] == api_exceptions.MASKED_MESSAGE
+        assert body["detail"] == {}
+        for secret in ("hunter2", "svc_user", "db.internal", dsn):
+            assert secret not in response.text, f"{secret!r} leaked into response"
+
+    async def test_a_non_dataknobs_exception_is_untouched(self):
+        """The catch-all still owns everything that is not a DataKnobs error.
+
+        ``raise_app_exceptions=False`` because this one is *supposed* to reach
+        the catch-all, and reaching it means the ASGI server sees the failure
+        too — see :class:`TestAsgiPropagation`.
+        """
+        response = await _response_for(ValueError("nope"), raise_app_exceptions=False)
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["error"] == "InternalServerError"
+        assert body["message"] == api_exceptions.MASKED_MESSAGE
+        assert body["detail"] == {"exception_type": "ValueError"}
+
+
+class TestAsgiPropagation:
+    """Handled DataKnobs errors no longer reach the ASGI server.
+
+    Starlette routes the ``Exception`` catch-all through
+    ``ServerErrorMiddleware``, which calls the handler *and then re-raises* so
+    the server sees the failure. Handlers for narrower types go through
+    ``ExceptionMiddleware``, which does not. So a ``ConfigurationError`` used
+    to be both returned as a 500 and propagated to uvicorn — a server-level
+    error log, and a tick on whatever the deployment counts as an unhandled
+    exception.
+
+    That signal now drops for DataKnobs errors. It is the intended semantics —
+    a config typo is not a server fault — but it is a monitoring behaviour
+    change, so it is pinned here rather than left to be noticed in production.
+    """
+
+    async def test_a_dataknobs_error_is_handled_without_propagating(self):
+        """Handled cleanly: no exception escapes to the transport."""
+        response = await _response_for(
+            CommonConfigurationError("bad config"), raise_app_exceptions=True
+        )
+
+        assert response.status_code == 500
+
+    async def test_a_plain_exception_still_propagates(self):
+        """The catch-all's re-raise is unchanged for everything else."""
+        with pytest.raises(ValueError, match="nope"):
+            await _response_for(ValueError("nope"), raise_app_exceptions=True)
+
+
+class TestRateLimitBodyParity:
+    """Both ``RateLimitError`` variants describe one condition the same way."""
+
+    @pytest.mark.parametrize(
+        ("retry_after", "expected_header"),
+        [(30.0, "30"), (0.0, "0"), (2.4, "3")],
+        ids=["whole", "zero", "fractional-rounds-up"],
+    )
+    async def test_both_variants_agree_on_status_header_and_body(
+        self, retry_after, expected_header
+    ):
+        """Same status, same header, and ``detail.retry_after`` in both.
+
+        The two classes store the hint in different places: the API twin
+        writes it into ``context``, which ``to_dict`` serializes, while the
+        common one keeps it as an attribute only. So the same condition
+        returned ``detail.retry_after`` from one variant and an empty
+        ``detail`` from the other — and ``detail.retry_after`` is the shape
+        this project's own docs tell callers to read.
+        """
+        api = await _response_for(RateLimitError("slow down", retry_after))
+        common = await _response_for(CommonRateLimitError("slow down", retry_after=retry_after))
+
+        for response in (api, common):
+            assert response.status_code == 429
+            assert response.headers["retry-after"] == expected_header
+            assert response.json()["detail"]["retry_after"] == retry_after
+
+    async def test_a_raiser_supplied_context_value_is_not_overwritten(self):
+        """``setdefault``: an explicit ``context`` entry wins over the attribute."""
+        response = await _response_for(
+            CommonRateLimitError("slow down", retry_after=30.0, context={"retry_after": 99})
+        )
+
+        assert response.json()["detail"]["retry_after"] == 99
+
+    async def test_no_hint_means_no_field_and_no_header(self):
+        """Absent stays absent — nothing invents a wait the server never set."""
+        response = await _response_for(CommonRateLimitError("slow down"))
+
+        assert response.status_code == 429
+        assert "retry-after" not in response.headers
+        assert "retry_after" not in response.json()["detail"]
+
+
+class _TenantQuotaError(CommonOperationError):
+    """Stand-in for a deployment's own ``DataknobsError`` subclass."""
+
+
+class TestErrorPolicyOverride:
+    """``error_policy=`` is what makes the permissive defaults defensible."""
+
+    async def test_a_consumer_type_can_be_given_its_own_policy(self):
+        """A subclass DataKnobs has never heard of gets a first-class row."""
+        exc = _TenantQuotaError("quota exhausted for tenant acme")
+
+        default = await _response_for(exc)
+        assert default.status_code == 500
+        assert default.json()["message"] == api_exceptions.MASKED_MESSAGE
+
+        overridden = await _response_for(
+            exc, error_policy={_TenantQuotaError: ErrorPolicy(402, True)}
+        )
+        assert overridden.status_code == 402
+        assert overridden.json()["message"] == "quota exhausted for tenant acme"
+
+    async def test_a_default_row_can_be_masked(self):
+        """The documented opt-out from the client-safe ``ConfigurationError``.
+
+        A deployment serving unauthenticated traffic from a route that can
+        raise a config error needs one line, not a fork of the handler.
+        """
+        exc = CommonConfigurationError("bad config", context={"config_key": "llm.api_base"})
+
+        response = await _response_for(
+            exc, error_policy={CommonConfigurationError: ErrorPolicy(500, False)}
+        )
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["message"] == api_exceptions.MASKED_MESSAGE
+        assert body["detail"] == {}
+
+    async def test_an_override_is_merged_over_the_defaults_not_replacing_them(self):
+        """Rows the consumer did not mention keep working."""
+        response = await _response_for(
+            CommonNotFoundError("missing"),
+            error_policy={CommonConfigurationError: ErrorPolicy(500, False)},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["message"] == "missing"
+
+    def test_the_default_table_is_not_mutated_by_an_override(self):
+        """Registration merges into a copy; the module default is shared state."""
+        pytest.importorskip("fastapi")
+
+        from fastapi import FastAPI
+
+        before = dict(DEFAULT_ERROR_POLICY)
+        register_exception_handlers(
+            FastAPI(), error_policy={CommonConfigurationError: ErrorPolicy(418, False)}
+        )
+
+        assert before == DEFAULT_ERROR_POLICY
+
+    async def test_masking_a_rate_limit_still_sends_retry_after(self):
+        """The header is flow control, not disclosure, so masking keeps it.
+
+        A deployment that masks a rate limit wants its *message* withheld, not
+        its client's back-off broken — and the wait is the one thing a 429 has
+        to say for the client to behave. So ``Retry-After`` survives
+        ``client_safe=False`` even though ``detail.retry_after`` does not.
+        """
+        response = await _response_for(
+            CommonRateLimitError("internal quota name leaks here", retry_after=30.0),
+            error_policy={CommonRateLimitError: ErrorPolicy(429, False)},
+        )
+
+        assert response.status_code == 429
+        assert response.headers["retry-after"] == "30"
+        assert response.json()["message"] == api_exceptions.MASKED_MESSAGE
+        assert response.json()["detail"] == {}
 
 
 @pytest.mark.filterwarnings("ignore:BotManager is deprecated:DeprecationWarning")
