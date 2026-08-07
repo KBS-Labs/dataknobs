@@ -179,7 +179,7 @@ class LLMCaller(ITransformFunction):
                 }
         
         except Exception as e:
-            raise TransformError(f"LLM call failed: {e}") from e
+            raise TransformError(f"LLM call failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
@@ -374,7 +374,7 @@ class FunctionCaller(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Function call failed: {e}") from e
+            raise TransformError(f"Function call failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
@@ -523,7 +523,9 @@ class EmbeddingGenerator(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Embedding generation failed: {e}") from e
+            raise TransformError(
+                f"Embedding generation failed ({type(e).__name__})"
+            ) from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.

@@ -16,21 +16,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dataknobs_common.testing import assert_no_broad_except_in_error_text
+from dataknobs_common.testing import (
+    GUARDED_ERROR_NAMES,
+    assert_no_broad_except_in_error_text,
+)
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
-#: Types this package raises that the API layer renders. ``ValidationError``
-#: and ``ConfigurationError`` are both disclosed-or-masked by policy rather
-#: than never shown, so both are in scope.
-_RENDERED = frozenset(
-    {
-        "ConfigurationError",
-        "ValidationError",
-        "BotCreationError",
-    }
-)
+#: The shared names plus this package's own API family. Every one of them is
+#: rendered by the policy table or by ``client_safe``, so all are in scope.
+_RENDERED = GUARDED_ERROR_NAMES | {
+    "BotCreationError",
+    "APIError",
+    "BotNotFoundError",
+    "ConsentRequiredError",
+}
+
+#: Sites reviewed and judged bounded.
+_ALLOWED = {
+    # wizard_response.py: the message is already assembled from the strategy
+    # name, the stage name and `type(e).__name__`. What the scan sees is
+    # `hint`, which comes from `_maybe_strict_signature_hint(e, forwarded)` —
+    # a helper it cannot look inside, so it assumes the worst. The helper
+    # returns authored text plus collaborator *names* and a doc path, none of
+    # which is the exception's own message.
+    "dataknobs_bots/reasoning/wizard_response.py:1680",
+}
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(_SRC, error_names=_RENDERED)
+    assert_no_broad_except_in_error_text(
+        _SRC, error_names=_RENDERED, ignore=_ALLOWED
+    )

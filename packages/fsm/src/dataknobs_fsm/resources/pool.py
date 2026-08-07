@@ -390,7 +390,7 @@ class ResourcePool(StructuredConfigConsumer[PoolConfig]):
         except Exception as e:
             self.metrics.record_failure()
             raise ResourceError(
-                f"Failed to create resource: {e}",
+                f"Failed to create resource ({type(e).__name__})",
                 resource_name=self.provider.name,
                 operation="create"
             ) from e

@@ -158,8 +158,11 @@ class HTTPServiceResource(BaseResourceProvider):
             
         except Exception as e:
             self.status = ResourceStatus.ERROR
+            # Bounded message: an HTTP client reports a failed connect by
+            # naming the endpoint, which on a self-hosted deployment is an
+            # internal host and port. __cause__ carries it to the logs.
             raise ResourceError(
-                f"Failed to acquire HTTP session: {e}",
+                f"Failed to acquire HTTP session ({type(e).__name__})",
                 resource_name=self.name
             ) from e
     

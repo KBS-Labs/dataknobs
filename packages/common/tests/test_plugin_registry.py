@@ -268,7 +268,7 @@ class TestPluginGet:
 
         registry.register("bad", bad_factory)
 
-        with pytest.raises(OperationError, match="Failed to create"):
+        with pytest.raises(OperationError, match="must return a BaseHandler"):
             registry.get("bad", config={})
 
     def test_get_factory_error_handling(self):
@@ -666,15 +666,25 @@ class TestPluginRegistryCreate:
             registry.create("bad", {})
 
     def test_create_factory_error_wrapped(self) -> None:
-        """Factory exceptions are wrapped in OperationError."""
+        """Factory exceptions are wrapped in OperationError.
+
+        The factory's own words stay out of the wrapper's message. A factory
+        builds a backend from deployment config, so its failure text can carry
+        the connection URL it was handed; the message names the key and the
+        exception type, and the original travels on ``__cause__``.
+        """
         def bad_factory(config: Dict[str, Any], **kwargs: Any) -> BaseHandler:
             raise RuntimeError("boom")
 
         registry = PluginRegistry[BaseHandler]("test")
         registry.register("bad", bad_factory)
 
-        with pytest.raises(OperationError, match="boom"):
+        with pytest.raises(OperationError) as excinfo:
             registry.create("bad", {})
+
+        assert "boom" not in str(excinfo.value)
+        assert "Failed to create plugin 'bad' (RuntimeError)" in str(excinfo.value)
+        assert str(excinfo.value.__cause__) == "boom"
 
     def test_create_with_kwargs(self) -> None:
         """**kwargs are forwarded to the factory."""

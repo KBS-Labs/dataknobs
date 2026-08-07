@@ -150,9 +150,17 @@ def constraint_violation_error(record_id: str | None = None) -> RecordValidation
     """Build the error for a non-duplicate constraint violation.
 
     The counterpart to :func:`is_duplicate_key_error`: once that returns
-    ``False``, every backend raises this. One factory rather than eight copies,
-    because eight copies is why the message they all built was wrong in eight
-    places at once.
+    ``False``, every SQL backend raises this. One factory rather than eight
+    copies, because eight copies is why the message they all built was wrong in
+    eight places at once.
+
+    Two qualifications on "every". Postgres does not use the text predicate —
+    psycopg2 and asyncpg both expose the distinction as an exception type, so
+    it splits on ``UniqueViolation`` vs the ``IntegrityError`` base and reaches
+    this factory from the second clause. And Elasticsearch is not a SQL backend
+    at all: it has no ``NOT NULL`` or ``CHECK`` to violate, so a version
+    conflict is the only write rejection it can produce, and that is already a
+    ``DuplicateRecordError``.
 
     What they built was ``RecordValidationError(str(exc))``, relaying the
     driver's text verbatim. That text names the physical schema —

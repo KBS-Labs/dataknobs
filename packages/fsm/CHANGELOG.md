@@ -60,13 +60,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had already computed the wait was filing it under a spelling only it knew.
   `wait_time` still answers.
 
+- **The resource providers and the transform library no longer relay the
+  underlying failure's text.** Every provider hands its config to a driver, a
+  session factory, or a pool, and every transform in the function library runs
+  a user-supplied callable over a record — so what those failures say is
+  written by something this package does not control. A malformed DSN is
+  reported *by quoting the DSN*, a query failure by naming the constraint and
+  therefore a column, and a field conversion by quoting the value that would
+  not convert, which is the record's own data.
+
+  Seventeen sites across `resources/` and `functions/library/`, plus the arc
+  layer, now name what failed and the exception type, with the original on
+  `__cause__`. `core/arc.py` also stopped copying the same text into `details`,
+  which generic renderers echo just as they do the message.
+
+  These resolve to masked rows under the `dataknobs-bots` API layer's default
+  policy, so nothing was disclosed over HTTP. "Masked" is a policy row rather
+  than a property of the message, and one `error_policy=` entry away from not
+  being one.
+
 ### Deprecated
 
 - **`functions.base.FSMError`, `ConfigurationError`, and
   `StateTransitionError` (with its `FunctionError` alias)** — the three that
   nothing in the package raises, and that duplicate a `core.exceptions` name.
   Constructing one emits a `DeprecationWarning`; they remain exported, and
-  `FSMError` remains the base of the types above, so nothing breaks.
+  `FSMError` remains the base of the types above, so nothing breaks. The notice
+  is about the *name*, so it fires only on direct construction — a deployment
+  that subclasses one of these has stopped using the deprecated name and is
+  not told to migrate off something it is not on.
 
   `FunctionError` is the sharpest reason to move: here it aliases
   `StateTransitionError`, while `core.exceptions.FunctionError` is about a
@@ -1157,6 +1179,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AsyncFileDatabase` provides.  The docstring now describes the
   real single-file behavior and the actual config knobs (`path`,
   `format`, `compression`).
+
+- **The resource providers and the transform library no longer relay the
+  underlying failure's text.** Every provider hands its config to a driver, a
+  session factory, or a pool, and every transform in the function library runs
+  a user-supplied callable over a record — so what those failures say is
+  written by something this package does not control. A malformed DSN is
+  reported *by quoting the DSN*, a query failure by naming the constraint and
+  therefore a column, and a field conversion by quoting the value that would
+  not convert, which is the record's own data.
+
+  Seventeen sites across `resources/` and `functions/library/`, plus the arc
+  layer, now name what failed and the exception type, with the original on
+  `__cause__`. `core/arc.py` also stopped copying the same text into `details`,
+  which generic renderers echo just as they do the message.
+
+  These resolve to masked rows under the `dataknobs-bots` API layer's default
+  policy, so nothing was disclosed over HTTP. "Masked" is a policy row rather
+  than a property of the message, and one `error_policy=` entry away from not
+  being one.
 
 ### Deprecated
 

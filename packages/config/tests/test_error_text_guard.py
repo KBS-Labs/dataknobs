@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dataknobs_common.testing import assert_no_broad_except_in_error_text
+from dataknobs_common.testing import (
+    GUARDED_ERROR_NAMES,
+    assert_no_broad_except_in_error_text,
+)
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
-_RENDERED = frozenset({"ConfigError", "ConfigurationError", "ValidationError"})
+_RENDERED = GUARDED_ERROR_NAMES | {"ConfigError", "InheritanceError"}
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():

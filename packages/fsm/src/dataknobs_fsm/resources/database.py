@@ -64,8 +64,13 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             self.status = ResourceStatus.IDLE
         except Exception as e:
             self.status = ResourceStatus.ERROR
+            # Bounded message: the factory builds a driver from `config`, and
+            # a driver that cannot parse its DSN reports so by quoting the
+            # DSN. The backend key is from the config and the type name is a
+            # class name; __cause__ carries the rest to the logs.
             raise ResourceError(
-                f"Failed to initialize database backend '{self.backend}': {e}",
+                f"Failed to initialize database backend "
+                f"'{self.backend}' ({type(e).__name__})",
                 resource_name=self.name,
                 operation="initialize"
             ) from e
@@ -102,7 +107,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         except Exception as e:
             self.status = ResourceStatus.ERROR
             raise ResourceError(
-                f"Failed to acquire database resource: {e}",
+                f"Failed to acquire database resource ({type(e).__name__})",
                 resource_name=self.name,
                 operation="acquire"
             ) from e

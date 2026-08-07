@@ -513,12 +513,14 @@ class StateTransitionError(OperationError, FSMError):
             from_state: The state transitioning from.
             to_state: The state attempting to transition to.
         """
-        _warn_deprecated(
-            "StateTransitionError (also exported as FunctionError)",
-            "use dataknobs_fsm.core.exceptions.TransitionError for a failed "
-            "transition, or dataknobs_fsm.core.exceptions.FunctionError for a "
-            "failed function -- the FunctionError alias here conflates the two.",
-        )
+        if type(self) is StateTransitionError:
+            _warn_deprecated(
+                "StateTransitionError (also exported as FunctionError)",
+                "use dataknobs_fsm.core.exceptions.TransitionError for a "
+                "failed transition, or dataknobs_fsm.core.exceptions."
+                "FunctionError for a failed function -- the FunctionError "
+                "alias here conflates the two.",
+            )
         super().__init__(
             message, context={"from_state": from_state, "to_state": to_state}
         )
@@ -561,11 +563,13 @@ class ConfigurationError(BaseConfigurationError, FSMError):
     """
 
     def __init__(self, message: str, *args: Any, **kwargs: Any):
-        _warn_deprecated(
-            "ConfigurationError",
-            "use dataknobs_common.ConfigurationError, which this now extends "
-            "and which every raise site in this package already uses.",
-        )
+        if type(self) is ConfigurationError:
+            _warn_deprecated(
+                "ConfigurationError",
+                "use dataknobs_common.ConfigurationError, which this now "
+                "extends and which every raise site in this package already "
+                "uses.",
+            )
         super().__init__(message, *args, **kwargs)
 
 

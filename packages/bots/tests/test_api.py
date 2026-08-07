@@ -631,6 +631,9 @@ class TestExceptionHandlerDispatch:
         ],
         ids=["whole", "zero", "fractional-rounds-up", "negative-clamped"],
     )
+    # NOTE: the non-finite and non-numeric cases are NOT in this list —
+    # `math.ceil` raises on them rather than producing a header, so there is
+    # no `expected_header` to assert. They live in the class below.
     async def test_a_429_carries_a_retry_after_header(self, retry_after, expected_header):
         """The retry hint must reach the client, not just the response body.
 
@@ -982,6 +985,39 @@ class TestErrorPolicyTable:
         """
         assert _documented_policy() == _EXPECTED_POLICY
 
+    def test_the_row_count_in_the_module_comment_is_right(self):
+        """A number written in prose beside a table it describes goes stale.
+
+        The comment over ``DEFAULT_ERROR_POLICY`` said eleven while the table
+        held twelve, and repeated the wrong figure twice more — the row added
+        for ``InvalidTransitionError`` did not come with a re-count. Nothing
+        depends on the number, which is exactly why nobody noticed; asserting
+        it is what makes the next row's author notice.
+        """
+        raw = Path(api_exceptions.__file__).read_text(encoding="utf-8")
+        # Comment continuation lines carry a `#:` marker, so a phrase that
+        # wraps is not contiguous in the file. Flatten before matching.
+        source = " ".join(raw.replace("#:", " ").split())
+        count = len(DEFAULT_ERROR_POLICY)
+        spelled = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen"}[count]
+
+        assert f"{spelled.capitalize()} entries govern" in source, (
+            f"the table has {count} rows; update the comment over "
+            f"DEFAULT_ERROR_POLICY, which spells a different number"
+        )
+        assert f"cover the {spelled}" in source
+
+        # The split the comment claims: all but one come from the exceptions
+        # module, and the odd one out is named.
+        from_exceptions = [
+            t for t in DEFAULT_ERROR_POLICY if t.__module__ == common_exceptions.__name__
+        ]
+        assert len(from_exceptions) == count - 1
+        from dataknobs_common.transitions import InvalidTransitionError
+
+        assert InvalidTransitionError in DEFAULT_ERROR_POLICY
+        assert InvalidTransitionError not in from_exceptions
+
     def test_dataknobs_error_is_the_terminal_entry(self):
         """The fallback is a row, so a consumer can override it."""
         assert DEFAULT_ERROR_POLICY[DataknobsError] == ErrorPolicy(500, False)
@@ -1300,12 +1336,11 @@ class TestResponseEncoding:
         assert response.json()["detail"]["path"] == "/etc/bots.yaml"
 
     async def test_an_unencodable_object_is_not_expanded_into_its_attributes(self):
-        """``str(value)``, not ``vars(value)`` — this is a disclosure decision.
+        """Not ``vars(value)`` — this is a disclosure decision.
 
         ``fastapi.encoders.jsonable_encoder`` falls back to ``dict(obj)`` and
         then ``vars(obj)``, which would put an object's whole attribute dict
-        into a response body the raiser only meant to carry the object. ``str``
-        discloses what the type chose to say.
+        into a response body the raiser only meant to carry the object.
         """
 
         class _Connection:
@@ -1320,8 +1355,104 @@ class TestResponseEncoding:
         )
 
         assert response.status_code == 422
-        assert response.json()["detail"]["conn"] == "<connection to prod>"
         assert "hunter2" not in response.text
+        assert "dsn" not in response.text
+
+    async def test_a_third_party_objects_repr_is_not_disclosed(self):
+        """``str(obj)`` is the object's choice, and it is not ours to publish.
+
+        The previous rule — coerce anything unknown with ``str`` — was argued
+        from a ``StructuredConfig``, whose repr redacts its own secrets. That
+        generalised from one cooperative type. The objects a raise site
+        actually has to hand at the moment of failure do the opposite: a
+        SQLAlchemy ``Engine`` renders as
+        ``Engine(postgresql://svc:hunter2@db/prod)`` and a psycopg2
+        connection as ``<connection object ...; dsn: '... password=hunter2
+        ...'>``. Both put the credential in the repr *by design*, because it
+        is a debugging aid — for a log, not a response body.
+
+        Five rows in the default policy disclose ``context``, so this is the
+        live path, not a hypothetical one.
+        """
+
+        class Engine:
+            def __repr__(self):  # what SQLAlchemy actually does
+                return "Engine(postgresql://svc:hunter2@db.internal:5432/prod)"
+
+        response = await _response_for(
+            CommonValidationError("write rejected", context={"bind": Engine()})
+        )
+
+        assert response.status_code == 422
+        assert "hunter2" not in response.text
+        # The key survives, and the caller is told what kind of thing it was.
+        assert response.json()["detail"]["bind"] == "<Engine>"
+
+    async def test_the_types_whose_text_is_their_value_still_render(self):
+        """Fail-closed must not mean uninformative.
+
+        A ``Path``, a ``UUID``, a timestamp, a ``Decimal``, an enum member —
+        for these ``str`` *is* the value, and they are what raise sites
+        legitimately put in ``context``. Withholding them would trade a real
+        disclosure for a real loss of diagnostic.
+        """
+        from decimal import Decimal
+        from uuid import UUID
+
+        response = await _response_for(
+            CommonValidationError(
+                "record is invalid",
+                context={
+                    "path": Path("/etc/bots.yaml"),
+                    "id": UUID("12345678-1234-5678-1234-567812345678"),
+                    "amount": Decimal("10.25"),
+                },
+            )
+        )
+
+        detail = response.json()["detail"]
+        assert detail["path"] == "/etc/bots.yaml"
+        assert detail["id"] == "12345678-1234-5678-1234-567812345678"
+        assert detail["amount"] == "10.25"
+
+    async def test_a_value_whose_str_raises_does_not_become_a_500(self):
+        """The coercion is the last thing standing between here and the 500.
+
+        ``__str__`` is arbitrary code. An object that raises when rendered —
+        a lazy proxy whose backing resource has closed, a dataclass with a
+        broken ``__repr__`` — would take the whole response with it.
+        """
+
+        class Hostile:
+            def __str__(self):
+                raise RuntimeError("cannot render")
+
+            __repr__ = __str__
+
+        response = await _response_for(
+            CommonValidationError("row rejected", context={"thing": Hostile()})
+        )
+
+        assert response.status_code == 422
+        assert response.json()["message"] == "row rejected"
+
+    async def test_a_mapping_whose_items_raises_does_not_become_a_500(self):
+        """``isinstance(value, Mapping)`` does not promise ``items()`` works.
+
+        A dict subclass over a closed cursor, or a lazily-populated config
+        proxy, satisfies the check and then raises when walked.
+        """
+
+        class HostileMapping(dict):
+            def items(self):
+                raise RuntimeError("backing store is gone")
+
+        response = await _response_for(
+            CommonValidationError("row rejected", context={"m": HostileMapping()})
+        )
+
+        assert response.status_code == 422
+        assert response.json()["message"] == "row rejected"
 
     async def test_a_self_referential_context_does_not_become_a_500(self):
         """``json.dumps`` raises on a cycle; an unbounded walk would hang.
@@ -1392,11 +1523,20 @@ class TestHandlerLogging:
 
         assert [r.levelname for r in self._records(caplog)] == ["ERROR"]
 
-    async def test_a_masked_4xx_is_still_logged_at_info(self, caplog):
-        """And the converse: masking a 404 does not make it an incident.
+    async def test_a_masked_4xx_is_logged_above_info(self, caplog):
+        """The one case where disclosure does move the level.
 
-        Only reachable by a consumer override, which is exactly why the two
-        axes are kept apart rather than collapsed into one branch.
+        Masking a 404 does not make it an incident, so this is not ``error``
+        — but it is the single combination where the log is the *only* record
+        of the failure, since the caller was told nothing. ``info`` is a level
+        production deployments routinely filter, which would discard the
+        diagnostic this design promises to relocate rather than discard. So
+        ``warning`` is the floor for a masked 4xx and ``info`` still covers
+        the disclosed ones.
+
+        No default row reaches here — every masked default is a 5xx — so this
+        is for a consumer override, or an ``APIError`` subclass that sets
+        ``client_safe = False`` at a 4xx.
         """
         import logging
 
@@ -1407,9 +1547,23 @@ class TestHandlerLogging:
             )
 
         records = self._records(caplog)
-        assert [r.levelname for r in records] == ["INFO"]
+        assert [r.levelname for r in records] == ["WARNING"]
         # Masked, so the log line is the only place the context survives.
         assert "acme" in caplog.text
+
+    async def test_a_disclosed_4xx_stays_at_info(self, caplog):
+        """The rule above must not quietly promote ordinary traffic.
+
+        A 404 the caller can read is a routine outcome of serving requests;
+        logging it at ``warning`` is what made a working service look like a
+        failing one.
+        """
+        import logging
+
+        with caplog.at_level(logging.INFO, logger=api_exceptions.__name__):
+            await _response_for(CommonNotFoundError("no such bot"))
+
+        assert [r.levelname for r in self._records(caplog)] == ["INFO"]
 
     async def test_the_api_family_uses_the_same_rule(self, caplog):
         """One helper for both handlers, so the two cannot drift apart.
@@ -1498,6 +1652,71 @@ class TestStatusesThatContradictedTheCondition:
 
         assert response.headers["retry-after"] == "12"
         assert response.json()["message"] == api_exceptions.MASKED_MESSAGE
+
+
+class TestARetryHintThatIsNotANumberOfSeconds:
+    """A bad ``retry_after`` must cost the header, not the response.
+
+    ``math.ceil`` raises on the non-finite floats and on anything that is not
+    a real number, and it runs *inside* the handler — so Starlette's error
+    middleware catches it and returns exactly the ``500 / "An unexpected error
+    occurred"`` these handlers exist to replace. The status, the message, and
+    the retry hint are all lost to a malformed hint about how long to wait.
+
+    This is reachable rather than theoretical: a provider parses the value out
+    of the upstream ``Retry-After`` header with ``float()``, and ``float()``
+    accepts ``"inf"``, ``"Infinity"``, and ``"nan"``. Any consumer-configured
+    endpoint — a self-hosted inference server, a gateway, a proxy — can send
+    one, so the input is not under this codebase's control.
+    """
+
+    @pytest.mark.parametrize(
+        "retry_after",
+        [
+            float("inf"),
+            float("-inf"),
+            float("nan"),
+            "soon",
+            None.__class__,  # a type, not a number
+        ],
+        ids=["inf", "-inf", "nan", "string", "non-numeric"],
+    )
+    async def test_the_status_survives_a_malformed_hint(self, retry_after):
+        error = CommonRateLimitError("Too many requests")
+        error.retry_after = retry_after
+
+        response = await _response_for(error)
+
+        assert response.status_code == 429
+        assert response.json()["error"] == "RateLimitError"
+
+    @pytest.mark.parametrize(
+        "retry_after",
+        [float("inf"), float("nan"), "soon"],
+        ids=["inf", "nan", "string"],
+    )
+    async def test_the_header_is_omitted_rather_than_guessed(self, retry_after):
+        """No header beats a wrong one.
+
+        ``Retry-After: inf`` is unparseable, and a client that gives up on
+        parsing may retry at once — the opposite of what a 429 is asking for.
+        Omitting it lets the client apply its own backoff.
+        """
+        error = CommonRateLimitError("Too many requests")
+        error.retry_after = retry_after
+
+        response = await _response_for(error)
+
+        assert "retry-after" not in response.headers
+
+    async def test_a_usable_hint_is_unaffected(self):
+        """The guard must not cost the header in the ordinary case."""
+        error = CommonRateLimitError("Too many requests")
+        error.retry_after = 30.0
+
+        response = await _response_for(error)
+
+        assert response.headers["retry-after"] == "30"
 
 
 class TestTheFunctionsLayerReachesTheTable:
@@ -1866,6 +2085,102 @@ class TestErrorPolicyOverride:
 
         assert response.status_code == 404
         assert response.json()["message"] == "missing"
+
+    def test_a_policy_for_an_api_error_is_rejected_not_ignored(self):
+        """The table never sees an ``APIError``, so a row for one is a no-op.
+
+        Starlette dispatches by walking ``type(exc).__mro__`` and taking the
+        first registered handler, and ``APIError`` precedes ``DataknobsError``
+        in every class in that family — so ``api_error_handler`` wins and
+        decides disclosure from ``client_safe``, without consulting the table
+        at all.
+
+        Accepting the row anyway is the worst of both: the deployment writes
+        what it believes is a disclosure policy, gets no error, and ships
+        something with no effect. Since the mistake is not detectable from the
+        response either — the default and the override look identical — it has
+        to be caught at registration.
+        """
+        pytest.importorskip("fastapi")
+
+        from fastapi import FastAPI
+
+        with pytest.raises(CommonConfigurationError) as excinfo:
+            register_exception_handlers(
+                FastAPI(),
+                error_policy={BotNotFoundError: ErrorPolicy(418, True, True)},
+            )
+
+        message = str(excinfo.value)
+        assert "BotNotFoundError" in message
+        assert "client_safe" in message
+
+    async def test_the_two_configuration_errors_disagree_deliberately(self):
+        """Same name, opposite disclosure — pinned so it stays a decision.
+
+        ``api.ConfigurationError`` subclasses the common one, so the pair is
+        easy to read as a drift. It is not: this one takes its message from a
+        raise site writing for the caller, while the common one is also where
+        the funnels wrapping a third-party constructor land, and their text is
+        unbounded. The API class wins dispatch because ``APIError`` precedes
+        ``DataknobsError`` in its MRO, so the two never contend for the same
+        exception instance.
+        """
+        api_level = await _response_for(
+            api_exceptions.ConfigurationError("llm.api_base is unset", "llm.api_base")
+        )
+        library_level = await _response_for(
+            CommonConfigurationError("llm.api_base is unset")
+        )
+
+        assert api_level.json()["message"] == "llm.api_base is unset"
+        assert api_level.json()["detail"] == {"config_key": "llm.api_base"}
+
+        assert library_level.json()["message"] == api_exceptions.MASKED_MESSAGE
+        assert library_level.json()["detail"] == {}
+
+    def test_a_policy_for_a_non_dataknobs_type_is_rejected(self):
+        """Same reasoning: the handler is registered for ``DataknobsError``."""
+        pytest.importorskip("fastapi")
+
+        from fastapi import FastAPI
+
+        class NotOursError(Exception):
+            pass
+
+        with pytest.raises(CommonConfigurationError) as excinfo:
+            register_exception_handlers(
+                FastAPI(), error_policy={NotOursError: ErrorPolicy(418, True)}
+            )
+
+        assert "NotOursError" in str(excinfo.value)
+
+    async def test_registration_returns_the_effective_table_for_middleware(self):
+        """The footgun this closes: ``dataknobs_error_handler`` defaults.
+
+        Middleware cannot raise to reach a handler — Starlette consults the
+        per-type handlers only below the middleware stack — so the documented
+        pattern is to *call* one. Calling ``dataknobs_error_handler`` without
+        a ``table=`` silently applies ``DEFAULT_ERROR_POLICY`` rather than the
+        table registered on the app, and the two differ exactly when someone
+        bothered to pass ``error_policy=``. Naming cannot prevent an omitted
+        argument; handing back the table gives it something to be passed.
+        """
+        pytest.importorskip("fastapi")
+
+        from fastapi import FastAPI
+
+        table = register_exception_handlers(
+            FastAPI(), error_policy={_TenantQuotaError: ErrorPolicy(402, True)}
+        )
+
+        assert table[_TenantQuotaError] == ErrorPolicy(402, True)
+        # Rows not mentioned come along, so the returned table is usable on
+        # its own rather than only for the overridden types.
+        assert table[CommonNotFoundError] == DEFAULT_ERROR_POLICY[CommonNotFoundError]
+
+        with pytest.raises(TypeError):
+            table[CommonNotFoundError] = ErrorPolicy(418, True)  # type: ignore[index]
 
     def test_the_default_table_is_not_mutated_by_an_override(self):
         """Registration merges into a copy; the module default is shared state."""

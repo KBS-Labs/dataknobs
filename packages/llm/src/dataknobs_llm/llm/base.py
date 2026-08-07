@@ -57,6 +57,7 @@ See Also:
 
 import asyncio
 import logging
+import math
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Mapping
@@ -1282,9 +1283,17 @@ class LLMProvider(ABC):
         if not raw:
             return None
         try:
-            return float(raw)
+            parsed = float(raw)
         except (TypeError, ValueError):
             pass
+        else:
+            # `float()` accepts "inf", "Infinity" and "nan", and the header is
+            # written by whatever endpoint the deployment configured. A
+            # non-finite wait is not a wait — it cannot be converted to
+            # delay-seconds by a caller building a `Retry-After` header, and
+            # it cannot be slept on. Treat it as no hint rather than passing
+            # it along for someone else to choke on.
+            return parsed if math.isfinite(parsed) else None
         # RFC 7231 HTTP-date form, e.g. "Wed, 21 Oct 2025 07:28:00 GMT".
         try:
             when = parsedate_to_datetime(str(raw))

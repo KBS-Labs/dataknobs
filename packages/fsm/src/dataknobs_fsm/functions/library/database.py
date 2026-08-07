@@ -132,7 +132,9 @@ class DatabaseFetch(ITransformFunction):
                 return {"records": result, **data}
         
         except Exception as e:
-            raise TransformError(f"Database query failed: {e}") from e
+            raise TransformError(
+                f"Database query failed ({type(e).__name__})"
+            ) from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -246,7 +248,9 @@ class DatabaseUpsert(ITransformFunction):
             # actionable type rather than masking it as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(f"Database upsert failed: {e}") from e
+            raise TransformError(
+                f"Database upsert failed ({type(e).__name__})"
+            ) from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -371,7 +375,9 @@ class BatchCommit(ITransformFunction):
             # rather than being masked as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(f"Batch commit failed: {e}") from e
+            raise TransformError(
+                f"Batch commit failed ({type(e).__name__})"
+            ) from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -432,7 +438,9 @@ class DatabaseQuery(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Query execution failed: {e}") from e
+            raise TransformError(
+                f"Query execution failed ({type(e).__name__})"
+            ) from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -598,7 +606,9 @@ class DatabaseTransaction(ITransformFunction):
             # masked as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(f"Transaction {self.action} failed: {e}") from e
+            raise TransformError(
+                f"Transaction {self.action} failed ({type(e).__name__})"
+            ) from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -713,7 +723,9 @@ class DatabaseBulkInsert(ITransformFunction):
             # actionable type rather than masking it as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(f"Bulk insert failed: {e}") from e
+            raise TransformError(
+                f"Bulk insert failed ({type(e).__name__})"
+            ) from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""

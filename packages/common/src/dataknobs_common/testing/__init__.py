@@ -81,6 +81,7 @@ from dataknobs_common.testing.blocking import (
     requires_blockbuster,
 )
 from dataknobs_common.testing.error_text import (
+    GUARDED_ERROR_NAMES,
     BroadExceptFinding,
     assert_no_broad_except_in_error_text,
 )
@@ -128,6 +129,7 @@ __all__ = [
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
     "assert_no_blocking",
+    "GUARDED_ERROR_NAMES",
     "assert_no_broad_except_in_error_text",
     "assert_no_leaked_bridge_threads",
     "assert_polymorphic_bindings_resolve",

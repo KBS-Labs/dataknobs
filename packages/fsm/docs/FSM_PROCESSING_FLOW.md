@@ -384,9 +384,16 @@ flowchart TD
 **2. Depth Limit Check**
 - Maximum network stack depth is enforced (default: 10 levels)
 - Prevents infinite recursion in network hierarchies
-- Logs an error and declines the push if depth exceeded — the push arc
-  returns `False` and the engine tries the next available arc, the same as
-  every other push failure. No exception is raised.
+- If the depth is exceeded, the engine logs an error and declines the push.
+  **No exception is raised** — the push arc returns `False`, which aborts the
+  run with `(False, "Transition failed: <arc>")`. The engine does *not* fall
+  back to another arc: `_choose_transition` has already selected this one, and
+  a `False` return from executing it ends the run. The same is true of every
+  other push failure (unknown target network, missing initial state).
+- So the failure is visible only in the log and in the run's failure reason.
+  A caller that needs to distinguish "too deep" from any other transition
+  failure has to read the log; the return value does not carry the
+  difference.
 
 **3. Resource Context Preservation**
 - Parent state resources are saved before pushing
@@ -432,28 +439,38 @@ flowchart TD
 
 #### Push Arc Error Handling
 
+The checks are ordered so that everything which can fail is decided *before*
+the push is committed. Only one failure happens after, and it is the only one
+that has anything to unwind.
+
 ```mermaid
 flowchart TD
-    PushArc[Execute Push Arc] --> TryPush[Attempt Push]
-    TryPush --> CheckErrors{Errors?}
-
-    CheckErrors -->|Network Not Found| PopReturn[Pop Stack & Return False]
-    CheckErrors -->|State Not Found| PopReturn
-    CheckErrors -->|Depth Exceeded| PopReturn
-    CheckErrors -->|Context Error| PopReturn
-    CheckErrors -->|Subnetwork Failed| UpdateFailed[Update with Failure Result]
-    CheckErrors -->|Success| UpdateSuccess[Update with Success Result]
-
-    PopReturn --> Cleanup[Cleanup Resources]
-    UpdateFailed --> Cleanup
-    UpdateSuccess --> ReturnSuccess[Return True]
+    PushArc[Execute Push Arc] --> Depth{Depth exceeded?}
+    Depth -->|yes| Decline[Log & return False — nothing pushed]
+    Depth -->|no| Network{Target network found?}
+    Network -->|no| Decline
+    Network -->|yes| Initial{Initial state resolves?}
+    Initial -->|no| Decline
+    Initial -->|yes| Commit[begin_subflow: push stack, isolate data]
+    Commit --> Enter{enter_state succeeds?}
+    Enter -->|no| Rollback[rollback_push, then return False]
+    Enter -->|yes| Success[Return True]
 ```
 
+**Reading it**: a `False` return from any of these paths aborts the run with
+`Transition failed: <arc>` — the engine does not try another arc. The three
+`Decline` paths leave the context untouched, so there is no stack to unwind;
+`rollback_push` exists for the one path that had already committed.
+
 **Error Recovery**:
-- Network stack is properly unwound on failures
-- Resources are cleaned up even on error conditions
-- Parent context remains intact after failed subnetwork execution
-- Execution can continue with alternative arcs if push arc fails
+- The network stack is unwound on the one failure that had already pushed
+  (`rollback_push`); the earlier checks decline before pushing, so there is
+  nothing to unwind
+- Resources are released by the run's `finally`, on every exit path
+- The parent context remains intact after a failed push
+- Execution does **not** continue with an alternative arc. A failed push ends
+  the run. Only a push arc whose *condition* evaluates false is skipped, and
+  that happens during arc selection, before any of this
 
 ### 7. Complete Execution Loop
 

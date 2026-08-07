@@ -43,10 +43,13 @@ def _maybe_strict_signature_hint(
     ``knowledge_base``, ``prompt_resolver``) opaquely to each per-stage
     sub-strategy. Wizard-stage-safe strategies absorb ``**kwargs`` and
     consume what they accept. A strict-signature ``from_config`` raises
-    ``TypeError("got an unexpected keyword argument 'X'")`` — we
-    surface that as part of the wrapped ``ConfigurationError``, but
-    consumers seeing it for the first time benefit from a one-line
-    pointer to the convention rather than reverse-engineering it.
+    ``TypeError("got an unexpected keyword argument 'X'")``. That text is
+    *not* surfaced — the wrapped ``ConfigurationError`` names the strategy,
+    the stage, and the exception type, and leaves the original on
+    ``__cause__`` — so without this hint a consumer seeing the failure for
+    the first time has to reverse-engineer the convention from a traceback.
+    The hint is authored here and names collaborators, so it is bounded and
+    safe to include in a message that may be rendered.
 
     Returns an empty string when the cause chain has no ``TypeError``
     (so unrelated failures are not falsely annotated).

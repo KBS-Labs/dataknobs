@@ -139,6 +139,25 @@ class TestRetryAfterFromHeaders:
         """A header object with no ``.get`` yields ``None`` (not a crash)."""
         assert LLMProvider._retry_after_from_headers(object()) is None
 
+    @pytest.mark.parametrize(
+        "raw",
+        ["inf", "Infinity", "-inf", "nan", "NaN"],
+        ids=["inf", "Infinity", "-inf", "nan", "NaN"],
+    )
+    def test_a_non_finite_value_is_not_a_wait(self, raw: str) -> None:
+        """``float()`` accepts these; a caller building a header does not.
+
+        The header is written by whatever endpoint the deployment configured
+        — a self-hosted inference server, a gateway, a proxy — so this input
+        is outside the codebase's control. Passing a non-finite float along as
+        if it were a duration hands the next caller a value it cannot convert:
+        ``math.ceil(float("inf"))`` raises ``OverflowError`` and
+        ``math.ceil(float("nan"))`` raises ``ValueError``. Downstream, the
+        bots API layer turns ``retry_after`` into a ``Retry-After`` header
+        inside its error handler, where a raise costs the whole response.
+        """
+        assert LLMProvider._retry_after_from_headers({"retry-after": raw}) is None
+
 
 class TestRetryAfterHttpDate:
     """``_retry_after_from_headers`` also parses the RFC 7231 HTTP-date form.

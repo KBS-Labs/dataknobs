@@ -79,10 +79,14 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
+from enum import Enum
 from functools import partial
+from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from uuid import UUID
 
 from dataknobs_common.exceptions import (
     ConcurrencyError as CommonConcurrencyError,
@@ -138,6 +142,25 @@ MASKED_MESSAGE = "An unexpected error occurred"
 #: ``StructuredConfig`` uses for the same reason.
 _MAX_JSON_DEPTH = 6
 
+#: Types :func:`_jsonable` renders with ``str``. The test is "is the text the
+#: value?" — for a path, an identifier, a timestamp, a duration, an exact
+#: decimal, or an enum member it is, and these are what raise sites
+#: legitimately drop into ``context``. Everything else is rendered as its type
+#: name, because ``__str__`` is arbitrary code written for a log rather than
+#: for a caller. Extending this list means asserting that a type's repr is
+#: safe to return over HTTP for *every* instance of it.
+_TEXT_IS_THE_VALUE: tuple[type, ...] = (
+    Path,
+    PurePath,
+    UUID,
+    datetime,
+    date,
+    time,
+    timedelta,
+    Decimal,
+    Enum,
+)
+
 
 def _jsonable(value: Any, _depth: int = 0) -> Any:
     """Coerce a response body into something the JSON encoder accepts.
@@ -150,13 +173,23 @@ def _jsonable(value: Any, _depth: int = 0) -> Any:
     message. ``context`` is a free ``dict[str, Any]`` and raise sites fill it
     with whatever the failure was about, so this is not an exotic input.
 
-    Unknown values become ``str(value)`` rather than being expanded, which is
-    a disclosure decision as much as a simplicity one:
-    ``fastapi.encoders.jsonable_encoder`` falls back to ``dict(obj)`` and then
-    ``vars(obj)``, which would put an object's whole attribute dict into a
-    response body the raiser only meant to carry the object. ``str`` discloses
-    what the type chose to say — for a ``StructuredConfig`` that is a repr
-    with its secrets already redacted.
+    Values outside :data:`_TEXT_IS_THE_VALUE` are rendered as their type name
+    rather than their text, which is a disclosure decision. Expanding them is
+    plainly wrong — ``fastapi.encoders.jsonable_encoder`` falls back to
+    ``dict(obj)`` and then ``vars(obj)``, putting an object's whole attribute
+    dict into a response body the raiser only meant to carry the object — but
+    ``str(obj)`` is not safe either. That rule was argued from a
+    ``StructuredConfig``, whose repr redacts its own secrets, and generalised
+    from the one cooperative type to every type. The objects a raise site
+    actually holds when it fails do the opposite: a SQLAlchemy ``Engine``
+    renders as ``Engine(postgresql://user:pw@host/db)`` and a psycopg2
+    connection quotes its DSN, both deliberately, because a repr is a
+    debugging aid — written for a log, not for a response body. Five rows in
+    the default policy disclose ``context``.
+
+    The allow-list keeps the cases where withholding would cost a real
+    diagnostic for no gain: for a ``Path``, a ``UUID``, a timestamp, a
+    ``Decimal``, or an enum member, the text *is* the value.
     """
     if value is None or isinstance(value, str | bool | int):
         return value
@@ -165,13 +198,35 @@ def _jsonable(value: Any, _depth: int = 0) -> Any:
         # that an error rather than the non-standard literal Python emits.
         return value if math.isfinite(value) else str(value)
     if _depth >= _MAX_JSON_DEPTH:
-        return str(value)
+        return _rendered(value)
     if isinstance(value, Mapping):
-        # Keys too: json.dumps coerces int and float keys but rejects the rest.
-        return {str(k): _jsonable(v, _depth + 1) for k, v in value.items()}
+        try:
+            # Keys too: json.dumps coerces int and float keys but rejects the
+            # rest. `items()` is arbitrary code — a dict subclass over a
+            # closed cursor satisfies the isinstance check and then raises.
+            items = list(value.items())
+        except Exception:
+            return _rendered(value)
+        return {str(k): _jsonable(v, _depth + 1) for k, v in items}
     if isinstance(value, list | tuple | set | frozenset):
         return [_jsonable(v, _depth + 1) for v in value]
-    return str(value)
+    return _rendered(value)
+
+
+def _rendered(value: Any) -> str:
+    """Render one value that is not natively JSON, without disclosing it.
+
+    ``__str__`` is arbitrary code, so it can raise as well as over-share: a
+    lazy proxy whose backing resource has closed takes the whole response with
+    it, since this runs inside the handler and the only catcher left is the
+    error middleware that returns the generic 500.
+    """
+    if isinstance(value, _TEXT_IS_THE_VALUE):
+        try:
+            return str(value)
+        except Exception:  # pragma: no cover - defensive, see below
+            return f"<{type(value).__name__}>"
+    return f"<{type(value).__name__}>"
 
 
 def _disclosure_label(message: bool, context: bool) -> str:
@@ -188,16 +243,30 @@ def _disclosure_label(message: bool, context: bool) -> str:
 
 
 def _log_handled_error(
-    exc: Exception, status_code: int, template: str, *args: Any
+    exc: Exception,
+    status_code: int,
+    template: str,
+    *args: Any,
+    disclosed: bool = True,
 ) -> None:
     """Log an error one of these handlers turned into a response.
 
-    The level follows the status class, not the disclosure bit. A 404 or a 422
-    is the caller's problem and a routine outcome of serving traffic, so
-    logging it at ``warning`` made a working service look like a failing one
-    and buried the 5xx that do need attention. A 5xx is the server's problem
-    and is worth a traceback, which is live here because Starlette calls
-    handlers from inside its ``except`` block.
+    The level follows the status class. A 404 or a 422 is the caller's problem
+    and a routine outcome of serving traffic, so logging it at ``warning`` made
+    a working service look like a failing one and buried the 5xx that do need
+    attention. A 5xx is the server's problem and is worth a traceback, which is
+    live here because Starlette calls handlers from inside its ``except``
+    block.
+
+    With one exception, where the disclosure bit does move the level: a
+    *masked* 4xx. The rest of this design rests on a masked error's diagnostic
+    being relocated to the log rather than discarded, and ``info`` is a level
+    production deployments routinely filter out — so for the one combination
+    where the log is the only surviving record of a response the caller was
+    told nothing about, ``warning`` is the floor. No default row is affected
+    (every masked default is a 5xx); this is for a consumer ``APIError``
+    subclass with ``client_safe = False`` at a 4xx, or a consumer row that
+    masks one.
 
     *What* is logged stays with the caller, because that is the half
     disclosure decides: a masked error's message and ``context`` appear
@@ -216,8 +285,10 @@ def _log_handled_error(
         args = (*args, type(cause).__name__, cause)
     if status_code >= 500:
         logger.exception(template, *args)
-    else:
+    elif disclosed:
         logger.info(template, *args)
+    else:
+        logger.warning(template, *args)
 
 
 def _error_body(
@@ -398,7 +469,25 @@ class ValidationError(APIError, CommonValidationError):
 
 
 class ConfigurationError(APIError, CommonConfigurationError):
-    """Exception raised when configuration is invalid."""
+    """Exception raised when configuration is invalid.
+
+    Disclosed, while ``dataknobs_common.exceptions.ConfigurationError`` — which
+    this subclasses — is masked by the default policy. Two same-named types
+    with opposite answers is worth being explicit about, so: the difference is
+    where the message comes from, not what the failure is.
+
+    This one takes ``(message, config_key)`` from a raise site at the API
+    layer, writing for the caller. The common one is also where the funnels
+    wrapping a third-party constructor or module import land, and their text
+    is unbounded — a database client raises with its connection URL — so it
+    fails closed.
+
+    ``api_error_handler`` reaches this class first (``APIError`` precedes
+    ``DataknobsError`` in the MRO), so the ``client_safe`` attribute decides,
+    and the table is not consulted. A deployment wanting this masked sets
+    ``client_safe = False`` on a subclass; an ``error_policy=`` row for it is
+    rejected at registration rather than silently ignored.
+    """
 
     def __init__(self, message: str, config_key: str | None = None):
         detail = {}
@@ -482,12 +571,17 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Eleven entries govern more than fifty
+#: :func:`resolve_error_policy`). Twelve entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: eleven and silently 500 the rest -- which is the behaviour this handler
+#: twelve and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
+#:
+#: Eleven come from ``dataknobs_common.exceptions``; the twelfth,
+#: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
+#: count here is checked against the shipped mapping by the parity test, so
+#: the two cannot drift.
 #:
 #: Ordered by tier rather than alphabetically, because the tier is what a
 #: reviewer has to check. Nothing about the literal order is load-bearing:
@@ -608,11 +702,30 @@ def _retry_after_headers(exc: DataknobsError) -> dict[str, str] | None:
     down returns the client while it is still throttled) and a negative wait
     clamps to zero (``Retry-After: -5`` is unparseable, and a client that
     gives up on parsing may simply retry at once).
+
+    A value that is not a real number costs the header and nothing else. It is
+    not this function's to validate — ``retry_after`` is a plain attribute any
+    raise site sets, and a provider parses it out of an upstream header with
+    ``float()``, which accepts ``"inf"`` and ``"nan"``. But ``math.ceil``
+    raises on those, and it raises *inside the handler*, where the only
+    catcher left is Starlette's error middleware: the 429, the message, and
+    the hint would all be replaced by the generic 500 this module exists to
+    stop returning. A malformed hint about how long to wait must not cost the
+    answer it was attached to.
     """
     retry_after = getattr(exc, "retry_after", None)
     if retry_after is None:
         return None
-    return {"Retry-After": str(max(0, math.ceil(retry_after)))}
+    try:
+        seconds = max(0, math.ceil(retry_after))
+    except (TypeError, ValueError, OverflowError):
+        logger.warning(
+            "Dropping unusable Retry-After hint on %s: %r",
+            type(exc).__name__,
+            retry_after,
+        )
+        return None
+    return {"Retry-After": str(seconds)}
 
 
 def _error_response(
@@ -632,6 +745,15 @@ def _error_response(
     handler, so a consumer's overridden ``to_dict`` is covered by the same
     guarantee as a body this module built.
 
+    :func:`_jsonable` handles the ways a value is known to resist encoding,
+    and the ``except`` below is the guarantee rather than a second attempt at
+    the same job. Everything it walks — ``__str__``, ``items()``, ``__iter__``,
+    an overridden ``to_dict`` — is arbitrary code, so "no value can make this
+    raise" is not something the walk can promise on its own. If one does, the
+    status and the error name still reach the caller; only the detail is lost.
+    Falling through instead would hand the response to Starlette's error
+    middleware, which returns the generic 500 this module exists to replace.
+
     Args:
         status_code: HTTP status for the response.
         content: The response body, from :func:`_error_body` or ``to_dict()``.
@@ -642,9 +764,21 @@ def _error_response(
     """
     from fastapi.responses import JSONResponse
 
-    return JSONResponse(
-        status_code=status_code, content=_jsonable(content), headers=headers
-    )
+    try:
+        body = _jsonable(content)
+    except Exception:
+        logger.exception(
+            "Could not encode an error response body; returning the status "
+            "without detail (status_code=%s)",
+            status_code,
+        )
+        body = {
+            "error": str(content.get("error", "Error")),
+            "message": MASKED_MESSAGE,
+            "detail": {},
+        }
+
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
 
 
 async def api_error_handler(
@@ -697,6 +831,7 @@ async def api_error_handler(
         _disclosure_label(safe, safe),
         exc,
         exc.detail,
+        disclosed=safe,
     )
 
     return _error_response(
@@ -754,6 +889,7 @@ async def dataknobs_error_handler(
         _disclosure_label(policy.disclose_message, policy.disclose_context),
         exc,
         exc.context,
+        disclosed=policy.disclose_message or policy.disclose_context,
     )
 
     detail: dict[str, Any] = dict(exc.context) if policy.disclose_context else {}
@@ -838,11 +974,51 @@ async def general_exception_handler(
     )
 
 
+def _reject_unreachable_policy_keys(
+    error_policy: Mapping[type[DataknobsError], ErrorPolicy],
+) -> None:
+    """Fail on a policy row that :func:`dataknobs_error_handler` cannot reach.
+
+    Starlette dispatches by walking ``type(exc).__mro__`` and taking the first
+    registered handler. Two kinds of key never arrive:
+
+    * a type that is not a ``DataknobsError`` — the handler holding this table
+      is registered for ``DataknobsError``, so nothing else routes to it;
+    * an ``APIError`` subclass — ``APIError`` precedes ``DataknobsError`` in
+      the MRO of every class in that family, so ``api_error_handler`` wins and
+      decides disclosure from ``client_safe`` instead.
+
+    Neither is detectable from the outside: the response looks the same
+    whether the row was applied or ignored, so a deployment that writes one
+    believing it has set a disclosure policy has no way to find out it has
+    not. A wiring mistake with no visible symptom has to be raised at wiring.
+    """
+    for exc_type, _ in error_policy.items():
+        if not (isinstance(exc_type, type) and issubclass(exc_type, DataknobsError)):
+            raise CommonConfigurationError(
+                f"error_policy key {getattr(exc_type, '__name__', exc_type)!r} "
+                "is not a DataknobsError subclass, so the policy table would "
+                "never be consulted for it. Handlers are registered per type "
+                "by Starlette; a type outside the hierarchy reaches the "
+                "generic Exception handler instead.",
+                context={"key": getattr(exc_type, "__name__", str(exc_type))},
+            )
+        if issubclass(exc_type, APIError):
+            raise CommonConfigurationError(
+                f"error_policy key {exc_type.__name__!r} is an APIError "
+                "subclass, which is handled by api_error_handler and takes "
+                "its disclosure from the class attribute `client_safe`, not "
+                "from this table. Set `client_safe` on the class (subclass it "
+                "if it is not yours) instead of adding a row here.",
+                context={"key": exc_type.__name__},
+            )
+
+
 def register_exception_handlers(
     app: FastAPI,  # type: ignore[name-defined]
     *,
     error_policy: Mapping[type[DataknobsError], ErrorPolicy] | None = None,
-) -> None:
+) -> Mapping[type[DataknobsError], ErrorPolicy]:
     """Register all exception handlers with a FastAPI app.
 
     Args:
@@ -850,8 +1026,32 @@ def register_exception_handlers(
         error_policy: Optional per-type overrides merged over
             ``DEFAULT_ERROR_POLICY``. Use it to add a policy for the
             deployment's own ``DataknobsError`` subclasses, or to disagree with
-            a default — most usefully to mask ``ConfigurationError`` on a route
-            serving unauthenticated traffic.
+            a default — most usefully to *disclose* ``ConfigurationError``,
+            which is masked by default, on a route that is not public.
+
+            A key the table can never be consulted for is rejected here rather
+            than accepted and ignored: a type outside the ``DataknobsError``
+            hierarchy, or an ``APIError`` subclass (which takes its disclosure
+            from ``client_safe``).
+
+    Returns:
+        The effective table, read-only. Middleware that wants a status has to
+        *call* a handler rather than raise — Starlette consults per-type
+        handlers only below the middleware stack — and calling
+        ``dataknobs_error_handler(request, exc)`` without a table silently
+        applies ``DEFAULT_ERROR_POLICY``, not the one registered here. Keep
+        this and pass it:
+
+        ```python
+        table = register_exception_handlers(app, error_policy={...})
+
+        class Guard(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                try:
+                    return await call_next(request)
+                except DataknobsError as exc:
+                    return await dataknobs_error_handler(request, exc, table=table)
+        ```
 
     Example:
         ```python
@@ -872,9 +1072,14 @@ def register_exception_handlers(
 
     table = dict(DEFAULT_ERROR_POLICY)
     if error_policy:
+        _reject_unreachable_policy_keys(error_policy)
         table.update(error_policy)
 
+    bound = partial(dataknobs_error_handler, table=table)
+
     app.add_exception_handler(APIError, api_error_handler)
-    app.add_exception_handler(DataknobsError, partial(dataknobs_error_handler, table=table))
+    app.add_exception_handler(DataknobsError, bound)
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(Exception, general_exception_handler)
+
+    return MappingProxyType(table)

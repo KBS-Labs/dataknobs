@@ -761,7 +761,9 @@ policy), and a vendor rendering is not ours to disclose: `aiohttp` renders the
 endpoint URL, and the OpenAI and Anthropic SDKs relay the response body
 verbatim. The rendering is not lost — it is on `__cause__`, so
 `raise ... from exc` chaining puts it in any traceback, and the bots API layer
-appends it to the log line it writes for every handled error.
+appends it to the log line it writes for the errors it maps to a status — which
+is the path a translated error takes. (The `HTTPException` and catch-all
+handlers write no `cause=` field; they are not what these errors reach.)
 
 The family key comes from `provider.provider_name`, so a gateway that declares
 its own key reports that key here too. If you write your own provider, note that

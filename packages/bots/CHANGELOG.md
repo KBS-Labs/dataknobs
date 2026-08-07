@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`register_exception_handlers` returns the effective policy table**, and
+  rejects a row it could never consult. Middleware cannot raise to reach a
+  handler — Starlette consults the per-type handlers only below the middleware
+  stack — so the documented pattern is to *call* one; calling
+  `dataknobs_error_handler` without a `table=` silently applies
+  `DEFAULT_ERROR_POLICY` rather than the table registered on the app, and the
+  two differ exactly when someone bothered to pass `error_policy=`. Naming
+  cannot prevent an omitted argument, so registration now hands back the table
+  to pass.
+
+  A key that is not a `DataknobsError`, or that is an `APIError` subclass —
+  which takes its disclosure from `client_safe` and never reaches the table —
+  now raises at registration instead of being accepted and ignored. Neither is
+  detectable from the outside: the response is identical whether the row
+  applied or not, so a deployment that writes one believing it has set a
+  disclosure policy has no way to discover it has not.
+
 - **A `DEFAULT_ERROR_POLICY` row for `InvalidTransitionError`** —
   `409 Conflict`, message and `detail` both disclosed. It is an
   `OperationError`, so it inherited a masked 500: the server blamed for the
@@ -213,8 +230,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than looking up its exact type — so the forty-plus `DataknobsError`
   subclasses the other packages define inherit their nearest listed ancestor's
   row. `RecordNotFoundError` returns 404 without appearing in the table. An
-  exact-type table would have covered eleven classes and silently 500'd the
-  rest, which is the behaviour being replaced.
+  exact-type table would have covered the twelve listed classes and silently
+  500'd the rest, which is the behaviour being replaced.
 
   A row decides the message and the `context` separately —
   `ErrorPolicy(status, disclose_message, disclose_context)`. A withheld message
@@ -398,6 +415,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vendor's response body on `__cause__`. Logging only the outer message made
   every such 422 read identically. Both handlers now append
   `cause=<type>: <message>` when there is one, and nothing when there is not.
+
+- **A malformed `retry_after` turned a 429 into a generic 500.** `math.ceil`
+  raises on the non-finite floats and on anything that is not a real number,
+  and it ran inside the handler — where the only catcher left is Starlette's
+  error middleware, so the status, the message, and the retry hint were all
+  replaced by the response these handlers exist to stop returning. Reachable
+  rather than theoretical: a provider parses the value from the upstream
+  `Retry-After` header with `float()`, which accepts `"inf"` and `"nan"`, and
+  the endpoint is consumer-configured. A hint that cannot be converted now
+  costs the header and nothing else. (`dataknobs-llm` additionally stopped
+  producing one — see its changelog.)
+
+- **An arbitrary object in `context` was rendered with `str()` into a
+  disclosed response.** Five rows disclose `context`, and the rule was argued
+  from a `StructuredConfig`, whose repr redacts its own secrets — generalising
+  from the one cooperative type to every type. The objects a raise site
+  actually holds when it fails do the opposite: a SQLAlchemy `Engine` renders
+  as `Engine(postgresql://user:pw@host/db)` and a psycopg2 connection quotes
+  its DSN, both deliberately, because a repr is a debugging aid written for a
+  log. Values are now rendered as their type name unless they are one of the
+  types whose text *is* their value — `Path`, `UUID`, the datetime family,
+  `Decimal`, `Enum` — which is what keeps the fix from costing the diagnostic.
+
+  A value whose `__str__` raises, and a `Mapping` whose `items()` raises, no
+  longer take the response with them either; and the response builder now
+  catches whatever the walk still cannot handle, since everything it touches
+  is arbitrary code and "no value can make this raise" is not something it can
+  promise on its own.
+
+- **A masked 4xx is logged at `warning` rather than `info`.** The level follows
+  the status class everywhere else, deliberately — logging a 404 at `warning`
+  makes a working service look like a failing one. But a masked 4xx is the one
+  combination where the log is the *only* record of a failure the caller was
+  told nothing about, and `info` is a level production deployments routinely
+  filter. No default row is affected; this is for a consumer `APIError`
+  subclass with `client_safe = False`, or a consumer row that masks a 4xx.
 
 - **A `context` value the JSON encoder could not represent turned any error
   response into a generic 500.** The response body is rendered with

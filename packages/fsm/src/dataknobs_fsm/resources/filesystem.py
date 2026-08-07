@@ -161,7 +161,7 @@ class FileSystemResource(BaseResourceProvider):
         except Exception as e:
             self.status = ResourceStatus.ERROR
             raise ResourceError(
-                f"Failed to acquire file resource: {e}",
+                f"Failed to acquire file resource ({type(e).__name__})",
                 resource_name=self.name,
                 operation="acquire"
             ) from e

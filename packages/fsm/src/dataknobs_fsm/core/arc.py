@@ -532,10 +532,19 @@ class ArcExecution:
             except Exception as e:
                 # Resource acquisition failed - clean up only arc-specific resources
                 self._release_arc_resources(context, getattr(context, '_arc_acquired_resources', {}))
+                # Bounded message AND bounded details: `details` is echoed by
+                # generic renderers just as the message is, so relaying the
+                # provider's text there would reopen what the message closes.
                 raise ResourceError(
                     resource_id=resource_name,
-                    message=f"Failed to acquire arc resource: {e}",
-                    details={"operation": "acquire", "error": str(e)}
+                    message=(
+                        f"Failed to acquire arc resource "
+                        f"({type(e).__name__})"
+                    ),
+                    details={
+                        "operation": "acquire",
+                        "error_type": type(e).__name__,
+                    },
                 ) from e
 
         return resources

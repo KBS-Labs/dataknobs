@@ -906,6 +906,30 @@ class PluginRegistry(Generic[T]):
         self._not_found_kind = not_found_kind
         self._not_found_exception = not_found_exception
 
+    def _check_validate_type(self, key: str, instance: Any) -> None:
+        """Reject a factory result that is not the registered type.
+
+        Raised as an ``OperationError`` rather than a ``TypeError`` because
+        every caller sits inside a ``except Exception`` that wraps a factory
+        failure into a bounded message — a factory builds a backend from
+        deployment config, so its text can carry a connection URL. This
+        message is authored here and names two class names, so it is bounded
+        by construction and deserves to survive that wrap intact; the callers
+        let an ``OperationError`` through untouched. Flattening it would leave
+        a caller unable to tell a factory that *failed* from one that returned
+        the wrong thing.
+
+        Four call sites built this check inline, which is why correcting the
+        wrap once would otherwise have had to be done four times.
+        """
+        if self._validate_type and not isinstance(instance, self._validate_type):
+            raise OperationError(
+                f"Factory for plugin '{key}' must return a "
+                f"{self._validate_type.__name__} instance, "
+                f"got {type(instance).__name__}",
+                context={"key": key, "registry": self._name},
+            )
+
     def _canon(self, key: str) -> str:
         """Canonicalize a key if configured."""
         return key.lower() if self._canonicalize_keys else key
@@ -1139,16 +1163,18 @@ class PluginRegistry(Generic[T]):
             try:
                 instance = factory(key, config or {})
 
-                # Validate instance type if specified
-                if self._validate_type and not isinstance(instance, self._validate_type):
-                    raise TypeError(
-                        f"Factory must return a {self._validate_type.__name__} instance, "
-                        f"got {type(instance).__name__}"
-                    )
+                self._check_validate_type(key, instance)
 
+            except OperationError:
+                raise
             except Exception as e:
+                # Bounded message: a plugin factory builds a backend — a
+                # database, an event bus, an LLM client — from deployment
+                # config, so `e` here is a driver's or an SDK's text and can
+                # carry the connection URL it was handed. The key and the
+                # registry name are ours; __cause__ carries the rest.
                 raise OperationError(
-                    f"Failed to create plugin '{key}': {e}",
+                    f"Failed to create plugin '{key}' ({type(e).__name__})",
                     context={"key": key, "registry": self._name},
                 ) from e
 
@@ -1218,16 +1244,11 @@ class PluginRegistry(Generic[T]):
                 else:
                     instance = result
 
-            # Validate instance type
-            if self._validate_type and not isinstance(instance, self._validate_type):
-                raise TypeError(
-                    f"Factory must return a {self._validate_type.__name__} instance, "
-                    f"got {type(instance).__name__}"
-                )
+            self._check_validate_type(key, instance)
 
         except Exception as e:
             raise OperationError(
-                f"Failed to create plugin '{key}': {e}",
+                f"Failed to create plugin '{key}' ({type(e).__name__})",
                 context={"key": key, "registry": self._name},
             ) from e
 
@@ -1304,20 +1325,13 @@ class PluginRegistry(Generic[T]):
             else:
                 instance = factory(config or {}, **kwargs)
 
-            if self._validate_type and not isinstance(
-                instance, self._validate_type
-            ):
-                raise TypeError(
-                    f"Factory must return a "
-                    f"{self._validate_type.__name__} instance, "
-                    f"got {type(instance).__name__}"
-                )
+            self._check_validate_type(key, instance)
 
         except (NotFoundError, OperationError):
             raise
         except Exception as e:
             raise OperationError(
-                f"Failed to create plugin '{key}': {e}",
+                f"Failed to create plugin '{key}' ({type(e).__name__})",
                 context={"key": key, "registry": self._name},
             ) from e
 
@@ -1392,20 +1406,13 @@ class PluginRegistry(Generic[T]):
                     await result if inspect.isawaitable(result) else result
                 )
 
-            if self._validate_type and not isinstance(
-                instance, self._validate_type
-            ):
-                raise TypeError(
-                    f"Factory must return a "
-                    f"{self._validate_type.__name__} instance, "
-                    f"got {type(instance).__name__}"
-                )
+            self._check_validate_type(key, instance)
 
         except (NotFoundError, OperationError):
             raise
         except Exception as e:
             raise OperationError(
-                f"Failed to create plugin '{key}': {e}",
+                f"Failed to create plugin '{key}' ({type(e).__name__})",
                 context={"key": key, "registry": self._name},
             ) from e
 

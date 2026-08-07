@@ -152,9 +152,12 @@ def serialize(obj: Any) -> Dict[str, Any]:
     except Exception as e:
         if isinstance(e, SerializationError):
             raise
+        # Bounded message and context: `to_dict()` is the object's own code,
+        # so its failure text is whatever that object's dependencies say. The
+        # class name is bounded; the original travels on __cause__.
         raise SerializationError(
-            f"Failed to serialize {type(obj).__name__}: {e}",
-            context={"type": type(obj).__name__, "error": str(e)},
+            f"Failed to serialize {type(obj).__name__} ({type(e).__name__})",
+            context={"type": type(obj).__name__, "error_type": type(e).__name__},
         ) from e
 
 
@@ -205,9 +208,12 @@ def deserialize(cls: Type[T], data: Dict[str, Any]) -> T:
     except Exception as e:
         if isinstance(e, SerializationError):
             raise
+        # Bounded message and context. `data` was the payload being decoded —
+        # the caller already has it, and echoing it back into an error meant a
+        # failed deserialize carried the whole document, whatever was in it.
         raise SerializationError(
-            f"Failed to deserialize {cls.__name__}: {e}",
-            context={"class": cls.__name__, "error": str(e), "data": data},
+            f"Failed to deserialize {cls.__name__} ({type(e).__name__})",
+            context={"class": cls.__name__, "error_type": type(e).__name__},
         ) from e
 
 

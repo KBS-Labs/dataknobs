@@ -65,6 +65,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A non-finite `Retry-After` header is no longer parsed into a wait.**
+  `float()` accepts `"inf"`, `"Infinity"`, and `"nan"`, and the header is
+  written by whatever endpoint the deployment configured — a self-hosted
+  inference server, a gateway, a proxy. A non-finite value is not a duration:
+  it cannot be slept on, and a caller converting it to RFC 7231 delay-seconds
+  gets `OverflowError` or `ValueError`. It now yields no hint rather than one
+  the next caller chokes on. (The `dataknobs-bots` API layer, which turns
+  `retry_after` into a `Retry-After` header inside its error handler, was that
+  next caller; it is hardened independently.)
+
+- **The FSM integration layer no longer relays a vendor rendering.** Provider
+  translation withholds it, but those transforms wrap `except Exception`
+  around a live provider call and built their `TransformError` from the
+  result — so an endpoint URL or a relayed response body reached an error that
+  never passed through the translation path. Same for the LLM resource
+  providers, whose text is an SDK client constructor's.
+
 - `ResponseValidator` reported a schema failure by interpolating pydantic's
   whole rendering into the message — a multi-line blob carrying each field's
   `input_value` and a versioned docs URL — while leaving `validation_errors`,
@@ -134,6 +151,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads it — that is never disclosed. A provider cannot influence the message
   at all, which is what extends the fix to a provider this package has never
   seen, rather than only to the five it ships.
+
+  **For an out-of-tree provider, that last sentence is the breaking part.** A
+  provider passing `message=` gets a `TypeError` and finds out immediately; one
+  passing the same string positionally keeps type-checking and keeps
+  classifying correctly, but its message is now written by the dispatcher and
+  the string it passes is read and discarded. That is deliberate — a provider
+  choosing its own message is precisely the hole being closed, so there is no
+  opt-out — but it is silent, and no warning can distinguish a string passed as
+  classification material from the same string passed as a message. Providers
+  outside this package should expect their translated errors' text to change.
 
 - Bumped minimum `aiohttp` requirement (extras: `ollama`,
   `huggingface`) from `>=3.14.1` to `>=3.14.3` to extend the prior

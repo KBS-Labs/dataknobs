@@ -183,6 +183,34 @@ class TestTheNamesWithNoRaiserAreDeprecated:
             TransformError("boom")
             ResourceError("boom", "db", "connect")
 
+    @pytest.mark.parametrize(
+        ("base", "args"),
+        [
+            (FSMError, ("boom",)),
+            (ConfigurationError, ("boom",)),
+            (StateTransitionError, ("boom", "draft")),
+        ],
+        ids=["FSMError", "ConfigurationError", "StateTransitionError"],
+    )
+    def test_a_consumer_subclass_is_not_warned_about(self, base, args) -> None:
+        """The notice is about the *name*, so only direct use should fire it.
+
+        A deployment that subclasses one of these has stopped using the
+        deprecated name — it is using its own. Warning there tells someone to
+        migrate off something they are not on, points ``stacklevel`` at the
+        wrong frame, and cannot be silenced except by silencing the notice
+        that still matters.
+
+        ``FSMError`` guarded this from the start because it stays as the base
+        of the live types; the other two were written without the guard, which
+        is the whole difference this pins.
+        """
+        subclass = type("ConsumerError", (base,), {})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            subclass(*args)
+
     def test_the_alias_names_the_trap_it_creates(self) -> None:
         # `FunctionError` here is an alias of `StateTransitionError`, while
         # `core.exceptions.FunctionError` is about a failed user function.
