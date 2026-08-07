@@ -104,7 +104,12 @@ resources:
       capabilities: [chat, function_calling, streaming]
 ```
 
-The `capabilities` field is stripped during resolution — it's validation metadata, not a provider parameter. The `$requires` field is also stripped and not passed through.
+The `$requires` field is stripped during resolution — it is validation
+metadata and never reaches the factory.
+
+`capabilities` is **not** stripped. It is read to validate `$requires` and
+then passed through with the rest of the resource config, so a factory that
+receives one must tolerate the keyword.
 
 ### 3. Environment Detection
 
@@ -223,9 +228,12 @@ portable = config.get_portable_config()
 `resolve_for_build` substitutes the **app config first**, then splices in
 resource references:
 
-1. `${VAR}` refs authored in the app config are expanded (late binding).
+1. `${VAR}` refs authored in the app config are expanded (late binding) —
+   except a `$resource` reference's inline defaults, which are held back for
+   step 2.
 2. `$resource` references are resolved against the environment, whose own
-   values were already expanded when it loaded.
+   values were already expanded when it loaded. Each surviving inline default
+   is expanded here, as it is spliced.
 
 The order matters. Once resource values are spliced in, they are
 indistinguishable from app-authored ones, and a substitution pass over the
@@ -242,10 +250,18 @@ Expanding the whole environment up front would read values no reference names,
 so an unset required `${VAR}` in an unrelated resource would abort a build that
 never looked at it. Your own `EnvironmentConfig` is never mutated by this.
 
-A reference's inline defaults are app-authored, so they were already expanded
-in step 1 and are merged in *after* the resource's own pass — which is what
-keeps every value at exactly one expansion regardless of which side supplied
-it.
+A reference's inline defaults follow the same rule one level in. Step 1 holds
+them back, and each is expanded at the splice — once, and only where the
+environment did not supply the key. The splice is the latest point they are
+still separable, so expanding one earlier would read a value the build then
+discards: a dev-time fallback that production overrides would still have to
+resolve in production, and an unset required `${VAR}` among them would abort a
+build that never used it.
+
+That deferral is also what keeps a **nested** reference at one expansion. A
+`$resource` block can arrive inside an inline default, or inside a resource
+the environment supplies; either way its own defaults reach their own splice
+raw, and are expanded there rather than by whichever pass carried them.
 
 Because step 1 runs first, the `$resource` and `type` values are themselves
 substituted, so resource *selection* can be bound to an environment variable:
@@ -521,8 +537,10 @@ llm_providers:
 
 | Method | Description |
 |--------|-------------|
-| `load(environment, config_dir)` | Load environment config from file |
-| `from_dict(data)` | Create from dictionary |
+| `load(environment, config_dir, *, substitute_vars=True)` | Load environment config from file |
+| `from_dict(data, *, substitute_vars=True)` | Create from dictionary |
+| `substituted` (attribute) | Whether `${VAR}` refs in these values have been expanded |
+| `substituted_view()` | An expanded copy of an unexpanded config |
 | `detect_environment()` | Detect current environment |
 | `get_resource(type, name, defaults)` | Get resource config |
 | `has_resource(type, name)` | Check if resource exists |

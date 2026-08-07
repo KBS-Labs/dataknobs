@@ -3,6 +3,7 @@
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -978,6 +979,53 @@ class TestEveryHandOutIsolatesNestedStructure:
         merged = env.merge(other)
 
         assert merged.resources["caches"]["r"]["client"] is sentinel
+
+    def test_a_self_referential_container_terminates(self):
+        """The copy this replaced carried a memo; a config read must not
+        become a ``RecursionError`` for having dropped it."""
+        cyclic: dict[str, Any] = {"host": "db.prod"}
+        cyclic["self"] = cyclic
+        env = EnvironmentConfig(
+            name="a", resources={"databases": {"main": cyclic}}
+        )
+
+        config = env.get_resource("databases", "main")
+
+        assert config["host"] == "db.prod"
+        assert config["self"] is config
+        assert config is not cyclic
+
+    def test_a_subtree_shared_between_two_keys_stays_shared(self):
+        """A memo also preserves sharing, rather than silently forking it."""
+        shared = {"timeout": 30}
+        env = EnvironmentConfig(
+            name="a",
+            resources={"databases": {"main": {"read": shared, "write": shared}}},
+        )
+
+        config = env.get_resource("databases", "main")
+
+        assert config["read"] is config["write"]
+        assert config["read"] is not shared
+
+    def test_get_resource_does_not_alias_the_defaults_it_falls_back_on(
+        self, env
+    ):
+        """The found path fills gaps from the caller's own dict.
+
+        Its sibling — the path taken when the resource is absent — copies
+        what it returns. Both hand back a config someone will adjust, so
+        whether adjusting it reaches back into the caller's dict should not
+        depend on which branch ran.
+        """
+        defaults = {"pool_defaults": {"min": 0}}
+
+        # "main" exists but declares no `pool_defaults`, so the default fills
+        # the gap and the found path is the one exercised.
+        config = env.get_resource("databases", "main", defaults)
+        config["pool_defaults"]["min"] = 42
+
+        assert defaults["pool_defaults"]["min"] == 0
 
 
 class TestProvenanceIsRecordedOnEveryConstructionPath:

@@ -33,10 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and both layers substitute a source exactly once. Configs built directly
   via the dataclass constructor, or loaded with `substitute_vars=False`,
   still carry raw refs and are still expanded by the resolution layers — but
-  they are not otherwise untouched: `resolve_for_build` now expands them per
-  resource as each is spliced rather than as a whole document, which is what
-  the `$resource: ${VAR}` entry under **Changed** describes, and `merge()`
+  they are not otherwise untouched: `resolve_for_build` expands them per
+  resource as each is spliced rather than as a whole document, and `merge()`
   can now raise for them.
+
+  Where each source is expanded follows from the same rule. A resource is
+  still separable when it is spliced, so that is the latest point it can be
+  expanded, and the latest point is the safest one — expanding earlier reads
+  values the build then discards, so an unset required `${VAR}` in a resource
+  no reference names cannot abort a build that never looked at it. A
+  reference's inline defaults get the same treatment one level in: the splice
+  discards every one the environment supplies, so each is expanded there,
+  only once known to survive. A dev-time fallback such as
+  `password: ${LOCAL_DB_PASSWORD}` therefore need not be set in production,
+  where the environment overrides it; a default that *is* used still raises
+  when its variable is unset. A `$resource` block nested inside a default, or
+  inside a resource the environment supplies, reaches its own splice raw for
+  the same reason — so it too is expanded exactly once.
 
   `substituted` describes the values a config was *built* with. Writing into
   `resources` or `settings` afterwards does not update it, and a layer
@@ -51,47 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning.** The warning existed but was unreachable — it sat in an
   `except KeyError` branch, while the call it guarded returns the supplied
   defaults instead of raising whenever a defaults dict is passed, which that
-  call site always does. A mistyped binding name therefore degraded to an
-  empty config in complete silence. The fallback behaviour itself is
-  unchanged: a degraded config is still config, so it gets the same
-  `$requires` check and the same recursive walk a found one does — which is
-  what resolves a nested `$resource` inside the reference's inline defaults,
-  and what keeps that nested reference's `$resource` / `type` marker keys
-  from reaching a factory as keyword arguments.
-
-- **An unreferenced resource can no longer abort a build.**
-  `resolve_for_build` expands an unsubstituted environment per resource, as
-  each is spliced in, rather than expanding the environment as a whole
-  beforehand. Expanding it whole reads values no reference names, so an unset
-  required `${VAR}` in a resource the app never mentions would raise. It also
-  scales with the size of the environment rather than with the subset
-  actually referenced.
-
-- **An overridden inline default no longer has to resolve.** A `$resource`
-  reference's inline defaults are app config, and the splice discards every
-  one the environment supplies — but they were expanded on entry along with
-  the rest of the app config, so a dev-time fallback such as
-  `password: ${LOCAL_DB_PASSWORD}` still had to be set in production, where
-  the environment overrides it. The build aborted on a value it was about to
-  throw away. Defaults are now expanded at the splice, once each, and only
-  once known to survive; a default that *is* used still raises when its
-  variable is unset, exactly as before. The mirror of the preceding entry,
-  applied to the other source.
-
-- **`EnvironmentConfig.get_resource` no longer duplicates the values it
-  copies.** Isolating the caller requires copying the nested *structure*, not
-  the leaves. A resource assembled in Python can hold a live object — a
-  connection pool, a prebuilt provider, a lock — and a deep copy silently
-  handed the factory a second pool, or raised `TypeError` on a value that
-  cannot be pickled. Containers are copied; every other value is passed
-  through by identity, which is the same bound the substitution pass set
-  while it was incidentally providing this isolation.
-
-- **`merge()` and `to_dict()` handed out aliased nested containers.** Both
-  copied one level, so `env.to_dict()["resources"][...]["pool"]` was the
-  live config's own dict and writing to it wrote through. The same defect as
-  the `get_resource` aliasing fixed above, one and two methods away; all
-  three now share one structural copy.
+  call site always does. A mistyped binding name therefore degraded in
+  complete silence to the reference's inline defaults — an empty config when
+  it declares none. The fallback behaviour itself is unchanged: a degraded
+  config is still config, so it gets the same `$requires` check and the same
+  resolution a found one does — which is what resolves a nested `$resource`
+  inside the reference's inline defaults, and what keeps that nested
+  reference's `$resource` / `type` marker keys from reaching a factory as
+  keyword arguments.
 
 - **`EnvironmentConfig.load()` reported the wrong provenance when the
   environment file was absent.** It short-circuits to an empty config before
@@ -110,10 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `${VAR}` placeholders still in it, unexpanded. Loading a parent and then
   its child expanded the parent's values a *second* time, producing the
   corruption described in the first entry through a different route:
-  `p${x}ss` again arriving as `pINJECTEDss`. Both symptoms came and went
-  with load order, and `clear_cache(name)` removed only one of the two
-  forms. Configs whose values contain no `${` were unaffected in either
-  direction.
+  `p${x}ss` again arriving as `pINJECTEDss`. Both symptoms came and went with
+  load order. Configs whose values contain no `${` were unaffected in either
+  direction. `clear_cache(name)` clears every variant stored under that name.
 
 ### Added
 
@@ -132,10 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A `$resource` name or `type` containing `${VAR}` now resolves.**
   `resolve_for_build` substitutes the app config before splicing in resource
-  references, which means the reference's own values are expanded too, so
-  resource *selection* can be bound to an environment variable
-  (`$resource: ${LLM_BINDING}`). Previously the literal text was looked up,
-  matched nothing, and fell back to the reference's inline defaults.
+  references, and a reference's marker keys — `$resource`, `type`,
+  `$requires` — are expanded by that pass, so resource *selection* can be
+  bound to an environment variable (`$resource: ${LLM_BINDING}`). Previously
+  the literal text was looked up, matched nothing, and fell back to the
+  reference's inline defaults.
 
   That fallback was silent (see `### Fixed`), so a deployment cannot find it
   in existing logs. To check whether you were relying on it, search your app
@@ -156,15 +136,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsubstituted one holds an unset required `${VAR}`. Merging two sides that
   agree still touches no environment variables and cannot raise.
 
-- **`EnvironmentConfig.get_resource()` now copies deeply.** It always
-  documented that it copies "to avoid mutation", but the copy was shallow, so
-  every nested container in the returned config was the environment's own
-  object and a consumer adjusting a nested section wrote through into an
-  environment that outlives the resolution. This was masked wherever a
-  substitution pass ran afterwards — `substitute_env_vars` rebuilds the
+- **`get_resource()`, `merge()` and `to_dict()` now copy nested structure.**
+  All three documented or implied a copy but stopped at the resource-config
+  level, so every container *inside* a resource was the environment's own
+  object: `env.to_dict()["resources"][type][name]["pool"]` was the live
+  config's own dict, and a consumer adjusting a nested section wrote through
+  into an environment that outlives the resolution. This was masked wherever
+  a substitution pass ran afterwards — `substitute_env_vars` rebuilds the
   structure through comprehensions, isolating the result incidentally — and
   surfaced once that pass was correctly skipped for an already-substituted
   environment.
+
+  Containers are copied; every other value is passed through by identity,
+  which is the same bound the substitution pass set while it was providing
+  the isolation incidentally. Copying the leaves too would overshoot: a
+  resource assembled in Python can hold a live object — a connection pool, a
+  prebuilt provider, a lock — and duplicating one would hand a factory a
+  second pool, or raise `TypeError` on a value that cannot be pickled. A
+  container reached twice is copied once and the same copy used both times,
+  so a structure that refers back to itself terminates rather than exhausting
+  the stack, and one that shares a subtree between two keys keeps sharing it.
 
 - **`InheritableConfigLoader.load(use_cache=False)` no longer writes to the
   cache.** Bypassing the cache now means not taking part in it in either

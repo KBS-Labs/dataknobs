@@ -1105,3 +1105,166 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
         )
 
         assert app.resolve_for_build()["name"] == "billing"
+
+    def test_a_default_deferred_past_a_splice_that_never_runs_is_stranded(
+        self, env, monkeypatch
+    ):
+        """Deferring is only sound when a splice follows.
+
+        ``resolve_resources=False`` performs no splice, so nothing discards a
+        default and nothing else expands one. Holding them back there defers
+        to a step that never happens, and the placeholder is handed onward as
+        literal text -- the quiet direction of the same defect.
+        """
+        monkeypatch.setenv("LOCAL_DB_PASSWORD", "devsecret")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["db"]["password"] == "devsecret"
+
+
+class TestANestedReferenceIsExpandedOnceAtItsOwnSplice:
+    """A ``$resource`` block can arrive inside a value another splice moves.
+
+    Every splice is followed by a walk of its result, so whatever the splice
+    expanded is visited again. For a nested reference that is not a
+    re-reading of the same value -- it is a *second* expansion of the nested
+    block's own inline defaults, which the walk reaches at their own splice.
+
+    Substitution is not idempotent, so the second pass re-reads the content
+    of the first pass's output: a secret whose text happens to contain
+    ``${...}`` is treated as a template and has an unrelated variable pulled
+    into it. The nested block must therefore arrive at its own splice raw,
+    from whichever side carried it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _secret_that_looks_like_a_template(self, monkeypatch):
+        # One expansion yields the password; a second re-reads it as a
+        # template and substitutes ``x`` into the middle of the secret.
+        monkeypatch.setenv("PW", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+
+    def test_carried_by_a_surviving_inline_default(self):
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {"host": "db.prod"},
+                        "backup": {"host": "db.backup"},
+                    }
+                },
+            }
+        )
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    # survives: the environment's `main` has no `spare`
+                    "spare": {
+                        "$resource": "backup",
+                        "type": "databases",
+                        # survives: the environment's `backup` has no
+                        # `password`, so this reaches the inner splice
+                        "password": "${PW}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_carried_by_the_defaults_a_degraded_reference_falls_back_to(self):
+        env = EnvironmentConfig.from_dict({"name": "prod", "resources": {}})
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "absent",
+                    "type": "databases",
+                    "spare": {
+                        "$resource": "also_absent",
+                        "type": "databases",
+                        "password": "${PW}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_carried_by_a_resource_the_environment_already_expanded(self):
+        """The same shape reached from the other source.
+
+        A pre-expanded environment ran a plain pass over its whole document,
+        so a nested block inside one of its resources arrives with its inline
+        defaults *already* expanded -- and the walk after the splice expands
+        them again.
+        """
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {
+                            "host": "db.prod",
+                            "spare": {
+                                "$resource": "absent",
+                                "type": "databases",
+                                "password": "${PW}",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+        assert env.substituted is True
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_an_unset_var_in_a_nested_default_still_raises(self, monkeypatch):
+        """Deferring one level deeper must not suppress the error either."""
+        monkeypatch.delenv("NESTED_ONLY", raising=False)
+
+        env = EnvironmentConfig.from_dict({"name": "prod", "resources": {}})
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "absent",
+                    "type": "databases",
+                    "spare": {
+                        "$resource": "also_absent",
+                        "type": "databases",
+                        "password": "${NESTED_ONLY}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="NESTED_ONLY"):
+            app.resolve_for_build()

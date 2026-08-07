@@ -486,3 +486,101 @@ class TestEnvironmentSwitching:
         assert prod_bot is not None
         # They should be different instances
         assert dev_bot is not prod_bot
+
+
+class TestResolutionThroughAnAlreadyExpandedEnvironment:
+    """The arm the production entry point actually takes.
+
+    ``DynaBot.from_environment_aware_config`` builds its environment with
+    ``EnvironmentConfig.load()``, which substitutes — so the resolution it
+    drives must *not* substitute again. Every other test in this file
+    constructs an environment directly, which is the opposite provenance, so
+    the arm the shipped call path uses had no consumer-side coverage.
+
+    The value below is chosen so a second expansion is visible: one pass
+    yields the secret, and a second re-reads that secret as a template.
+    """
+
+    @pytest.fixture
+    def env(self, monkeypatch):
+        monkeypatch.setenv("CONV_DSN", "postgres://u:p${x}ss@h/db")
+        monkeypatch.setenv("x", "INJECTED")
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "production",
+                "resources": {
+                    "databases": {
+                        "conversations": {
+                            "backend": "postgres",
+                            "connection_string": "${CONV_DSN}",
+                        }
+                    }
+                },
+            }
+        )
+
+    def test_a_resource_value_reaches_the_factory_expanded_exactly_once(
+        self, env
+    ):
+        assert env.substituted is True
+
+        config = EnvironmentAwareConfig(
+            config={
+                "bot": {
+                    "conversation_storage": {
+                        "$resource": "conversations",
+                        "type": "databases",
+                    }
+                }
+            },
+            environment=env,
+        )
+
+        resolved = config.resolve_for_build("bot")
+
+        assert (
+            resolved["conversation_storage"]["connection_string"]
+            == "postgres://u:p${x}ss@h/db"
+        )
+
+    def test_a_nested_reference_carried_by_the_environment_too(
+        self, monkeypatch
+    ):
+        """A `$resource` block inside a resource the environment supplies.
+
+        Built with the nesting in place rather than written in afterwards:
+        an amended config's ``substituted`` flag does not update, and
+        ``substituted_view()`` is a no-op once the flag is already ``True``,
+        so a post-construction write would leave the added value raw.
+        """
+        monkeypatch.setenv("CONV_DSN", "postgres://u:p${x}ss@h/db")
+        monkeypatch.setenv("x", "INJECTED")
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "production",
+                "resources": {
+                    "databases": {
+                        "conversations": {
+                            "backend": "postgres",
+                            "replica": {
+                                "$resource": "absent",
+                                "type": "databases",
+                                "connection_string": "${CONV_DSN}",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+
+        config = EnvironmentAwareConfig(
+            config={"bot": {"db": {"$resource": "conversations", "type": "databases"}}},
+            environment=env,
+        )
+
+        resolved = config.resolve_for_build("bot")
+
+        assert (
+            resolved["db"]["replica"]["connection_string"]
+            == "postgres://u:p${x}ss@h/db"
+        )

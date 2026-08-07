@@ -428,6 +428,13 @@ class InheritableConfigLoader:
                 # and `load_from_file` bypasses with `config_dir` rebound, so
                 # recording there would file an edge under a bare name from
                 # another directory and over-clear the configured one.
+                #
+                # Edges accumulate and are never pruned, so editing a config
+                # to drop its `extends:` leaves the old edge in place until
+                # the process restarts. That over-clears rather than
+                # under-clears -- the cost is a cache miss, and the next load
+                # is correct -- which is the safe direction for an
+                # invalidation graph to be imprecise in.
                 if use_cache:
                     self._dependents.setdefault(parent_name, set()).add(name)
 

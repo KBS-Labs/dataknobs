@@ -93,13 +93,21 @@ references are spliced in. Once spliced, the two sources are merged beyond
 telling apart, and any pass over the result would expand the environment's
 values a second time.
 
+One thing in the app config stays separable past that entry, so it is
+expanded later: a `$resource` reference's inline defaults. The splice
+discards every one the environment supplies, so entry is *not* their latest
+separable point — the splice is, and that is where they are expanded, once
+each and only where they survived. This also keeps a `$resource` block
+nested inside one at a single expansion, since it reaches its own splice
+raw rather than expanded by the pass that carried it.
+
 The surfaces in this package that the rule governs, and where each records
 what it has already done:
 
 | Surface | Source | Provenance recorded in |
 |---|---|---|
 | `EnvironmentConfig` | an environment file | `substituted`, on the object |
-| `EnvironmentAwareConfig.resolve_for_build` | the app config | the ordering — substituted on entry, before the resource splice |
+| `EnvironmentAwareConfig.resolve_for_build` | the app config | the ordering — substituted on entry, before the resource splice, except inline defaults, which the splice expands |
 | `ConfigBindingResolver` | a resolved resource, plus caller `**overrides` | the environment's `substituted`; overrides are a separate source with their own single pass |
 | `InheritableConfigLoader` | a config file and the parents it `extends:` | the cache key |
 

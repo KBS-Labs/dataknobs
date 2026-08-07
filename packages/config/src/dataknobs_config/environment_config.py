@@ -69,7 +69,7 @@ from dataknobs_common.config_loading import (
 logger = logging.getLogger(__name__)
 
 
-def _copy_structure(value: Any) -> Any:
+def _copy_structure(value: Any, _seen: dict[int, Any] | None = None) -> Any:
     """Copy nested containers; pass every other value through by identity.
 
     What every hand-out from this class needs, and the exact bound the
@@ -81,11 +81,33 @@ def _copy_structure(value: Any) -> Any:
     duplicating one silently gives the factory a second pool, while a value
     that cannot be pickled raises out of what is meant to be a dict read.
     Neither is a risk the aliasing this copy prevents justifies taking.
+
+    The one thing kept from ``deepcopy`` is its memo. A container reached
+    twice is copied once and the same copy used both times, so a structure
+    that refers back to itself terminates instead of recursing to a
+    ``RecursionError`` -- and one that merely shares a subtree between two
+    keys keeps sharing it. A config read is the wrong place to discover
+    either. ``_seen`` is internal; callers pass one argument.
     """
+    if _seen is None:
+        _seen = {}
+    marker = id(value)
+    if marker in _seen:
+        return _seen[marker]
+
     if isinstance(value, dict):
-        return {key: _copy_structure(item) for key, item in value.items()}
+        copied_dict: dict[Any, Any] = {}
+        # Registered before recursing, so a self-reference finds it.
+        _seen[marker] = copied_dict
+        for key, item in value.items():
+            copied_dict[key] = _copy_structure(item, _seen)
+        return copied_dict
     if isinstance(value, list):
-        return [_copy_structure(item) for item in value]
+        copied_list: list[Any] = []
+        _seen[marker] = copied_list
+        for item in value:
+            copied_list.append(_copy_structure(item, _seen))
+        return copied_list
     return value
 
 
@@ -380,10 +402,15 @@ class EnvironmentConfig:
             # not a property to depend on from here.
             config = _copy_structure(type_resources[logical_name])
 
-            # Apply defaults for missing keys
+            # Apply defaults for missing keys. Copied like everything else
+            # handed out of here: the object aliased is the caller's own
+            # rather than the environment's, but the result is still a config
+            # someone will adjust, and the two paths out of this method
+            # should not differ on whether doing so reaches back.
             if defaults:
                 for key, value in defaults.items():
-                    config.setdefault(key, value)
+                    if key not in config:
+                        config[key] = _copy_structure(value)
 
             return config
 
