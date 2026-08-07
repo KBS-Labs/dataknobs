@@ -258,6 +258,12 @@ discards: a dev-time fallback that production overrides would still have to
 resolve in production, and an unset required `${VAR}` among them would abort a
 build that never used it.
 
+This covers a default's **value**, not the key that names it. What decides
+whether a default is discarded is its key, so a key must be expanded to ask
+the question — and deferring it would expand every default's key at the splice
+instead, to ask it there. A required `${VAR}` in key position therefore does
+have to resolve, even where the environment supplies that key.
+
 That deferral is also what keeps a **nested** reference at one expansion —
 though not always at the same step. Arriving inside an inline default, or
 inside a resource an *unsubstituted* environment supplies, its own defaults

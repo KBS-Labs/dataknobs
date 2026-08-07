@@ -115,6 +115,14 @@ def _substitute_deferring_defaults(
     Holding a default back therefore keeps every value at exactly one
     expansion, performed at the splice that proves it survived.
 
+    A default's *key* is expanded here regardless, because what proves the
+    default survived is the key: the splice asks ``if key not in resolved``.
+    Deferring it would only move the same expansion to the splice, which
+    expands every default's key there to ask the question. So an unset
+    required ``${VAR}`` in key position does abort the build even when the
+    environment supplies that key — a value's survival is decided by
+    something else, and a key's is decided by itself.
+
     ``defer_defaults=False`` expands everything, for the caller that will not
     splice at all. With no splice nothing discards a default and nothing else
     would expand it, so deferring there would strand a raw ``${VAR}``.

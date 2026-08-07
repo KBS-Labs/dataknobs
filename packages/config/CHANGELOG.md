@@ -47,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only once known to survive. A dev-time fallback such as
   `password: ${LOCAL_DB_PASSWORD}` therefore need not be set in production,
   where the environment overrides it; a default that *is* used still raises
-  when its variable is unset. A `$resource` block nested inside a default —
+  when its variable is unset. This holds for a default's value, not for the
+  key naming it: what proves a default was discarded is its key, so a
+  required `${VAR}` in key position must resolve either way. A `$resource`
+  block nested inside a default —
   or inside a resource an unsubstituted environment supplies — reaches its
   own splice raw for the same reason. Nested inside a resource an
   already-substituted environment supplies, it was expanded at that

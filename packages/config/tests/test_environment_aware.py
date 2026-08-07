@@ -1373,3 +1373,68 @@ class TestKeysAreExpandedLikeValues:
         )
 
         assert app.resolve_for_build()["codes"] == {200: "ok", True: "yes"}
+
+
+class TestADefaultsKeyIsExpandedEvenIfTheDefaultIsDiscarded:
+    """Deferral covers a default's value, not the key that names it.
+
+    A value is deferred because the splice may discard it, and a discarded
+    value is one an unset required ``${VAR}`` should not be able to abort the
+    build over. But what decides whether a default is discarded is its *key*:
+    ``if key not in resolved``. A key must therefore be expanded to ask the
+    question that deferral exists to answer, and expanding it at the splice
+    instead would expand every default's key there just the same.
+
+    So the asymmetry is inherent rather than a gap: a value's survival is
+    decided by something else, and a key's is decided by itself.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {"main": {"host": "db.prod", "opt": "env"}}
+                },
+            }
+        )
+
+    def test_a_discarded_defaults_value_is_never_demanded(self, env):
+        """The deferral guarantee, in the position it holds for."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opt": "${UNSET_FALLBACK:?dev-only fallback}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"] == {
+            "host": "db.prod",
+            "opt": "env",
+        }
+
+    def test_a_discarded_defaults_key_is_demanded(self, env):
+        """The same variable in key position aborts the build.
+
+        Pinned so the asymmetry stays deliberate. Answering "did the
+        environment supply this key?" requires the key, so there is no point
+        at which it is both known to be discarded and still unexpanded.
+        """
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "${UNSET_KEY_NAME:?names a default}": "fallback",
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="names a default"):
+            app.resolve_for_build()

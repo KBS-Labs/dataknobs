@@ -981,8 +981,11 @@ class TestEveryHandOutIsolatesNestedStructure:
         assert merged.resources["caches"]["r"]["client"] is sentinel
 
     def test_a_self_referential_container_terminates(self):
-        """The copy this replaced carried a memo; a config read must not
-        become a ``RecursionError`` for having dropped it."""
+        """A cyclic structure survives the copy.
+
+        The copy this replaced carried a memo; a config read must not become
+        a ``RecursionError`` for having dropped it.
+        """
         cyclic: dict[str, Any] = {"host": "db.prod"}
         cyclic["self"] = cyclic
         env = EnvironmentConfig(
