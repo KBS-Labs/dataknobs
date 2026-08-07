@@ -27,10 +27,15 @@ expanded and resolved on its own terms *before* the merge
 (:meth:`EnvironmentAwareConfig._resolve_source`) rather than the merged
 result being walked once afterwards: one flag cannot be true of both halves,
 and walking the result under it would either expand an environment's values a
-second time or leave a default's nested refs raw. It also means a
-``$resource`` block carried inside either source reaches its own splice
-unexpanded, and is expanded there — once — rather than by the pass that
-carried it.
+second time or leave a default's nested refs raw.
+
+A ``$resource`` block nested inside either source is held to one expansion
+too, though not in the same place. Carried by an inline default — or by a
+resource an *unsubstituted* environment supplies — it reaches its own splice
+raw, because the pass over that source defers it, and is expanded there.
+Carried by a resource an already substituted environment supplies, it was
+expanded at that environment's load, and ``substituted`` is what stops the
+splice expanding it a second time.
 
 Example:
     ```python
@@ -101,11 +106,10 @@ def _substitute_deferring_defaults(
     Inline defaults are held back for two reasons that point the same way.
     The splice discards every one the environment supplies, so expanding one
     here reads a value the build then throws away — and an unset required
-    ``${VAR}`` among them aborts a build that never used it. And a splice is
-    followed by a walk of its result, so a nested ``$resource`` block
-    expanded here would have *its* defaults expanded a second time when that
-    walk reached them. Substitution is not idempotent: the second pass
-    re-reads the first pass's output, so a value whose own text contains
+    ``${VAR}`` among them aborts a build that never used it. And the splice
+    expands each default that survives it, so one expanded here would be
+    expanded a second time there. Substitution is not idempotent: the second
+    pass re-reads the first pass's output, so a value whose own text contains
     ``${...}`` is treated as a template.
 
     Holding a default back therefore keeps every value at exactly one
@@ -116,21 +120,27 @@ def _substitute_deferring_defaults(
     would expand it, so deferring there would strand a raw ``${VAR}``.
     """
     if isinstance(config, dict):
-        if defer_defaults and "$resource" in config:
-            return {
-                key: (
+        deferring = defer_defaults and "$resource" in config
+        substituted: dict[Any, Any] = {}
+        for key, value in config.items():
+            # :func:`substitute_env_vars` expands keys as well as values, and
+            # this is a wrapper around it. Re-walking the structure here and
+            # calling it only at the leaves would keep everything it does to a
+            # value and silently drop everything it does at a container --
+            # which is how expanding keys got lost. Handing the key back to it
+            # is also what passes a non-string key through untouched.
+            key = substitute_env_vars(key)
+            if deferring:
+                substituted[key] = (
                     substitute_env_vars(value)
                     if key in RESOURCE_MARKER_KEYS
                     else value
                 )
-                for key, value in config.items()
-            }
-        return {
-            key: _substitute_deferring_defaults(
-                value, defer_defaults=defer_defaults
-            )
-            for key, value in config.items()
-        }
+            else:
+                substituted[key] = _substitute_deferring_defaults(
+                    value, defer_defaults=defer_defaults
+                )
+        return substituted
     if isinstance(config, list):
         return [
             _substitute_deferring_defaults(
@@ -443,10 +453,23 @@ class EnvironmentAwareConfig:
                     # made this branch unreachable, so a mistyped $resource
                     # name degraded in total silence to those inline defaults
                     # -- an empty config only when none are declared.
+                    # This line is the only signal an operator gets, so it
+                    # distinguishes the two degradations: falling back to
+                    # declared defaults is a config that still builds, while
+                    # falling back to nothing is a factory about to be called
+                    # with no arguments at all.
                     logger.warning(
-                        f"Resource '{resource_name}' of type '{resource_type}' "
-                        f"not found in environment '{environment.name}', "
-                        f"using defaults"
+                        "Resource '%s' of type '%s' not found in environment "
+                        "'%s'; %s",
+                        resource_name,
+                        resource_type,
+                        environment.name,
+                        (
+                            "falling back to its inline defaults"
+                            if defaults
+                            else "it declares no inline defaults, so this "
+                            "resolves to an empty config"
+                        ),
                     )
                     # Degrade to the inline defaults only -- matching what
                     # get_resource returned on this path all along. The

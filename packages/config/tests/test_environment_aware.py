@@ -589,6 +589,9 @@ class TestMissingResourceIsObservable:
         assert resolved["db"] == {}
         assert "typo" in caplog.text
         assert "not found" in caplog.text
+        # The degradation an operator most needs told apart: nothing was
+        # substituted in, and a factory is about to be called with nothing.
+        assert "empty config" in caplog.text
 
     def test_missing_resource_warns_with_inline_defaults(self, env, caplog):
         app = EnvironmentAwareConfig(
@@ -603,6 +606,8 @@ class TestMissingResourceIsObservable:
 
         assert resolved["db"] == {"timeout": 5}
         assert "typo" in caplog.text
+        assert "inline defaults" in caplog.text
+        assert "empty config" not in caplog.text
 
     def test_found_resource_does_not_warn(self, env, caplog):
         app = EnvironmentAwareConfig(
@@ -1140,13 +1145,13 @@ class TestANestedReferenceIsExpandedOnceAtItsOwnSplice:
     Every splice is followed by a walk of its result, so whatever the splice
     expanded is visited again. For a nested reference that is not a
     re-reading of the same value -- it is a *second* expansion of the nested
-    block's own inline defaults, which the walk reaches at their own splice.
+    block's own inline defaults, at their own splice.
 
     Substitution is not idempotent, so the second pass re-reads the content
     of the first pass's output: a secret whose text happens to contain
     ``${...}`` is treated as a template and has an unrelated variable pulled
-    into it. The nested block must therefore arrive at its own splice raw,
-    from whichever side carried it.
+    into it. Each case below reaches the nested block by a different route,
+    and each must expand it exactly once.
     """
 
     @pytest.fixture(autouse=True)
@@ -1216,8 +1221,9 @@ class TestANestedReferenceIsExpandedOnceAtItsOwnSplice:
 
         A pre-expanded environment ran a plain pass over its whole document,
         so a nested block inside one of its resources arrives with its inline
-        defaults *already* expanded -- and the walk after the splice expands
-        them again.
+        defaults *already* expanded. Unlike the cases above it does not reach
+        its splice raw; ``substituted`` is what keeps the splice from
+        expanding it a second time.
         """
         env = EnvironmentConfig.from_dict(
             {
@@ -1268,3 +1274,102 @@ class TestANestedReferenceIsExpandedOnceAtItsOwnSplice:
 
         with pytest.raises(ValueError, match="NESTED_ONLY"):
             app.resolve_for_build()
+
+
+class TestKeysAreExpandedLikeValues:
+    """A ``${VAR}`` in key position is expanded wherever a value would be.
+
+    :func:`substitute_env_vars` substitutes keys as well as values, and the
+    entry pass is a wrapper around it. Wrapping a recursive function by
+    re-walking the structure and calling it only on the leaves keeps its
+    value handling and silently drops everything it does at a container --
+    here, keys. That is the quiet half of this module's defect: no error, no
+    log line, a literal ``${VAR}`` handed onward as a section name or a
+    factory's keyword argument.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("SECTION", "prod")
+        monkeypatch.setenv("TIER", "gold")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {"databases": {"main": {"host": "db.prod"}}},
+            }
+        )
+
+    def test_a_key_in_ordinary_app_config(self, env):
+        app = EnvironmentAwareConfig(
+            config={"sections": {"${SECTION}": {"${TIER}": "on"}}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["sections"] == {"prod": {"gold": "on"}}
+
+    def test_a_key_inside_a_list(self, env):
+        app = EnvironmentAwareConfig(
+            config={"items": [{"${SECTION}": 1}]}, environment=env
+        )
+
+        assert app.resolve_for_build()["items"] == [{"prod": 1}]
+
+    def test_a_key_in_a_surviving_inline_default(self, env):
+        """Defaults defer to the splice, which must expand keys there too."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${TIER}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["opts"] == {"gold": "on"}
+
+    def test_a_key_with_no_splice_to_defer_to(self, env):
+        """The un-deferred pass expands keys as well."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${TIER}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["db"]["opts"] == {"gold": "on"}
+
+    def test_a_key_is_expanded_exactly_once(self, env, monkeypatch):
+        """Keys are values for the purposes of this module's invariant."""
+        monkeypatch.setenv("KEY_NAME", "k${x}y")
+        monkeypatch.setenv("x", "INJECTED")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${KEY_NAME}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["opts"] == {"k${x}y": "on"}
+
+    def test_a_non_string_key_passes_through(self, env):
+        app = EnvironmentAwareConfig(
+            config={"codes": {200: "ok", True: "yes"}}, environment=env
+        )
+
+        assert app.resolve_for_build()["codes"] == {200: "ok", True: "yes"}

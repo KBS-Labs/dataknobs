@@ -87,7 +87,11 @@ def _copy_structure(value: Any, _seen: dict[int, Any] | None = None) -> Any:
     that refers back to itself terminates instead of recursing to a
     ``RecursionError`` -- and one that merely shares a subtree between two
     keys keeps sharing it. A config read is the wrong place to discover
-    either. ``_seen`` is internal; callers pass one argument.
+    either.
+
+    ``_seen`` is internal. A caller assembling one hand-out from several
+    values passes the same memo to each, so the result's sharing reflects the
+    source's; a caller copying one value omits it.
     """
     if _seen is None:
         _seen = {}
@@ -400,7 +404,12 @@ class EnvironmentConfig:
             # that outlives the resolution. Callers that ran a substitution
             # pass afterwards were incidentally isolated by it -- which is
             # not a property to depend on from here.
-            config = _copy_structure(type_resources[logical_name])
+            # One memo for the whole hand-out, so two keys that shared a
+            # subtree on the way in still share it on the way out. Copying
+            # each default under its own memo would make that property depend
+            # on which of the two paths below the caller took.
+            seen: dict[int, Any] = {}
+            config = _copy_structure(type_resources[logical_name], seen)
 
             # Apply defaults for missing keys. Copied like everything else
             # handed out of here: the object aliased is the caller's own
@@ -410,7 +419,7 @@ class EnvironmentConfig:
             if defaults:
                 for key, value in defaults.items():
                     if key not in config:
-                        config[key] = _copy_structure(value)
+                        config[key] = _copy_structure(value, seen)
 
             return config
 

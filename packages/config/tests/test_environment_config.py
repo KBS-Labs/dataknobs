@@ -1008,6 +1008,28 @@ class TestEveryHandOutIsolatesNestedStructure:
         assert config["read"] is config["write"]
         assert config["read"] is not shared
 
+    def test_sharing_among_defaults_does_not_depend_on_the_branch_taken(self):
+        """Both paths out of ``get_resource`` assemble one hand-out.
+
+        The absent path copies the defaults dict whole, so two of its keys
+        sharing a subtree keep sharing it. Copying each surviving default
+        under its own memo would fork them on the found path only, making an
+        observable property of the result depend on whether the resource
+        happened to exist.
+        """
+        shared = {"timeout": 30}
+        defaults = {"read": shared, "write": shared}
+
+        env = EnvironmentConfig(
+            name="a", resources={"databases": {"main": {"host": "db"}}}
+        )
+        found = env.get_resource("databases", "main", defaults=defaults)
+        absent = env.get_resource("databases", "typo", defaults=defaults)
+
+        assert found["read"] is found["write"]
+        assert absent["read"] is absent["write"]
+        assert found["read"] is not shared
+
     def test_get_resource_does_not_alias_the_defaults_it_falls_back_on(
         self, env
     ):

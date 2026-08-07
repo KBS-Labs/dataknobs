@@ -258,10 +258,13 @@ discards: a dev-time fallback that production overrides would still have to
 resolve in production, and an unset required `${VAR}` among them would abort a
 build that never used it.
 
-That deferral is also what keeps a **nested** reference at one expansion. A
-`$resource` block can arrive inside an inline default, or inside a resource
-the environment supplies; either way its own defaults reach their own splice
-raw, and are expanded there rather than by whichever pass carried them.
+That deferral is also what keeps a **nested** reference at one expansion —
+though not always at the same step. Arriving inside an inline default, or
+inside a resource an *unsubstituted* environment supplies, its own defaults
+reach their own splice raw and are expanded there. Arriving inside a resource
+an already-substituted environment supplies, they were expanded at that
+environment's load, and `substituted` is what stops the splice expanding them
+a second time.
 
 Because step 1 runs first, the `$resource` and `type` values are themselves
 substituted, so resource *selection* can be bound to an environment variable:
