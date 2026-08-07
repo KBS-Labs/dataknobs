@@ -1,5 +1,6 @@
 """Tests for EnvironmentAwareConfig class."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -552,3 +553,888 @@ class TestResourcesInLists:
 
         assert resolved["connectors"][0]["database"]["host"] == "main.db"
         assert resolved["connectors"][1]["database"]["host"] == "backup.db"
+
+
+class TestMissingResourceIsObservable:
+    """A ``$resource`` name that matches nothing must say so.
+
+    ``_resolve_resource_refs`` degrades to the reference's inline defaults
+    when a resource is missing, which is deliberate. What was not deliberate
+    is that the degrade was **silent**: the warning lived in an
+    ``except KeyError`` branch that could never run, because
+    ``_resolve_resource_refs`` always passes a (possibly empty) defaults dict
+    and ``get_resource`` returns those defaults rather than raising whenever
+    one is supplied. A typo'd binding name therefore produced an empty config
+    and no log line anywhere.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {"databases": {"main": {"backend": "postgres"}}},
+            }
+        )
+
+    def test_missing_resource_warns_with_no_inline_defaults(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "typo", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {}
+        assert "typo" in caplog.text
+        assert "not found" in caplog.text
+        # The degradation an operator most needs told apart: nothing was
+        # substituted in, and a factory is about to be called with nothing.
+        assert "empty config" in caplog.text
+
+    def test_missing_resource_warns_with_inline_defaults(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "typo", "type": "databases", "timeout": 5}
+            },
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {"timeout": 5}
+        assert "typo" in caplog.text
+        assert "inline defaults" in caplog.text
+        assert "empty config" not in caplog.text
+
+    def test_found_resource_does_not_warn(self, env, caplog):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {"backend": "postgres"}
+        assert "not found" not in caplog.text
+
+
+class TestResolveForBuildSubstitutionOrder:
+    """``resolve_for_build`` substitutes each source exactly once.
+
+    The app config is loaded *without* substitution (late binding), so its
+    ``${VAR}`` refs must still be expanded here. Environment values were
+    expanded at load. Both are true simultaneously only if the app config is
+    substituted **before** resource refs are spliced in — afterwards the two
+    are merged beyond distinguishing.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("ORDER_PW", "p${ORDER_INNER}ss")
+        monkeypatch.setenv("ORDER_INNER", "INJECTED")
+        monkeypatch.setenv("ORDER_TEMP", "0.9")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"main": {"password": "${ORDER_PW}"}}
+                },
+            }
+        )
+
+    @pytest.fixture
+    def app(self, env):
+        return EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "main", "type": "databases"},
+                "temperature": "${ORDER_TEMP}",
+            },
+            environment=env,
+        )
+
+    def test_late_binding_still_works(self, app):
+        """The headline feature: app-authored refs resolve at build time."""
+        assert app.resolve_for_build()["temperature"] == "0.9"
+
+    def test_environment_value_is_not_re_expanded(self, app):
+        assert app.resolve_for_build()["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_both_at_once(self, app):
+        """Neither provenance is served at the other's expense."""
+        resolved = app.resolve_for_build()
+
+        assert resolved["temperature"] == "0.9"
+        assert resolved["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_resolve_env_vars_false_expands_nothing_at_this_layer(self, app):
+        resolved = app.resolve_for_build(resolve_env_vars=False)
+
+        assert resolved["temperature"] == "${ORDER_TEMP}"
+        # The environment was substituted at load, so its values arrive
+        # expanded once regardless -- this flag governs *this* layer only.
+        assert resolved["db"]["password"] == "p${ORDER_INNER}ss"
+
+    def test_resolve_resources_false_is_unchanged_by_the_reorder(self, app):
+        """With no splice, ordering is unobservable."""
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["temperature"] == "0.9"
+        assert resolved["db"] == {"$resource": "main", "type": "databases"}
+
+    def test_nested_refs_are_expanded_exactly_once_at_any_depth(self):
+        """A resource reached through another resource is still one source.
+
+        Each is expanded as it is spliced, so the inner one is expanded by
+        its own splice rather than by a pass over the outer's already-spliced
+        result — which is what a value reached at depth being expanded twice
+        would look like.
+        """
+        env = EnvironmentConfig(
+            name="test",
+            resources={
+                "databases": {
+                    "outer": {"inner": {"$resource": "leaf", "type": "secrets"}}
+                },
+                "secrets": {"leaf": {"password": "${ORDER_PW}"}},
+            },
+        )
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "outer", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["inner"]["password"] == "p${ORDER_INNER}ss"
+
+
+class TestResourceNameFromEnvVar:
+    """``$resource: ${VAR}`` resolves (behaviour change, D-199-2).
+
+    Substituting the app config before the splice means the ``$resource``
+    and ``type`` values are themselves expanded, so binding resource
+    *selection* to an environment variable now works. Previously the literal
+    ``${VAR}`` text was looked up, matched nothing, and degraded to the
+    reference's inline defaults.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("BINDING_NAME", "primary")
+        monkeypatch.setenv("BINDING_TYPE", "databases")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"primary": {"backend": "postgres"}}
+                },
+            }
+        )
+
+    def test_resource_name_from_env_var(self, env):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "${BINDING_NAME}", "type": "databases"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["backend"] == "postgres"
+
+    def test_resource_type_from_env_var(self, env):
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "primary", "type": "${BINDING_TYPE}"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["backend"] == "postgres"
+
+    def test_still_degrades_when_the_expansion_names_nothing(self, env, caplog):
+        """Expanding first does not remove the not-found path, only moves it.
+
+        The name is now resolved before lookup, so the warning names the
+        expanded value -- which is the one an operator needs to see.
+        """
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "${BINDING_TYPE}", "type": "databases"}},
+            environment=env,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = app.resolve_for_build()
+
+        assert resolved["db"] == {}
+        assert "databases" in caplog.text
+        assert "${BINDING_TYPE}" not in caplog.text
+
+    def test_unset_var_in_resource_name_is_unchanged(self, env, monkeypatch):
+        """An unset ref without a default still raises, as it does anywhere."""
+        monkeypatch.delenv("MISSING_BINDING", raising=False)
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {"$resource": "${MISSING_BINDING}", "type": "databases"}
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="MISSING_BINDING"):
+            app.resolve_for_build()
+
+
+class TestMissingResourceStillResolvesItsDefaults:
+    """Degrading to inline defaults must not stop treating them as config.
+
+    The missing-resource branch used to reach the shared tail — ``$requires``
+    validation and the recursive walk — because ``get_resource`` returned the
+    supplied defaults instead of raising, so ``resolved`` was simply the
+    defaults and execution continued. Testing membership explicitly made the
+    branch reachable but also made it return early, dropping both.
+
+    The recursive walk is what resolves a nested ``$resource`` *inside* the
+    defaults and what rebuilds the structure so the returned config does not
+    alias the environment. Returning the reference's own marker keys to a
+    factory is the failure the branch's comment says it was avoiding; without
+    the walk it happens one level down instead of at the top.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {
+                        "fallback": {"backend": "sqlite", "path": ":memory:"}
+                    }
+                },
+            }
+        )
+
+    def test_nested_reference_in_defaults_is_resolved(self, env):
+        """A ``$resource`` inside the inline defaults must still resolve."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"] == {
+            "backend": "sqlite",
+            "path": ":memory:",
+        }
+
+    def test_nested_marker_keys_never_reach_the_result(self, env):
+        """The markers are the reference's syntax, never a factory kwarg."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert "$resource" not in resolved["db"]["spare"]
+        assert "type" not in resolved["db"]["spare"]
+
+    def test_requires_is_validated_against_inline_defaults(self, env):
+        """``$requires`` was checked on the degraded config before, too."""
+        from dataknobs_config.exceptions import ConfigError
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "$requires": ["transactions"],
+                    "capabilities": ["reads"],
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ConfigError, match="transactions"):
+            app.resolve_for_build()
+
+    def test_degraded_result_does_not_alias_the_environment(self, env):
+        """The walk rebuilds the structure it returns.
+
+        ``resolve_for_build`` deep-copies the app config on the way in, so
+        the defaults themselves are already safe; what the walk protects is
+        anything spliced in from the environment during the recursion.
+        """
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+        resolved["db"]["spare"]["path"] = "/tmp/clobbered"
+
+        assert env.resources["databases"]["fallback"]["path"] == ":memory:"
+
+
+class TestOnlyReferencedResourcesAreExpanded:
+    """An environment holds resources this app never asked for.
+
+    Substituting the environment as a whole before the splice reads every
+    value in it, so an unset required ``${VAR}`` in a resource no reference
+    names aborts a build that would never have looked at it. The pre-change
+    pass ran *after* the splice and so covered exactly the values spliced in.
+
+    The invariant is "each source exactly once", not "every source eagerly";
+    a resource is still separable at the point it is spliced, which is the
+    latest point it can be substituted.
+    """
+
+    @pytest.fixture
+    def env(self):
+        # Loaded unsubstituted: the deliberate late-binding path, and the
+        # only one where the downstream pass is load-bearing.
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"main": {"dsn": "${WANTED_DSN}"}},
+                    "warehouses": {"analytics": {"dsn": "${NEVER_REFERENCED}"}},
+                },
+                "settings": {"unused": "${ALSO_NEVER_REFERENCED}"},
+            },
+            substitute_vars=False,
+        )
+
+    def test_an_unreferenced_resource_does_not_abort_the_build(
+        self, env, monkeypatch
+    ):
+        monkeypatch.setenv("WANTED_DSN", "postgres://real")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["dsn"] == "postgres://real"
+
+    def test_the_referenced_resource_is_still_expanded_exactly_once(
+        self, env, monkeypatch
+    ):
+        """The value's own ``${...}`` text stays literal — the whole point."""
+        monkeypatch.setenv("WANTED_DSN", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["dsn"] == "p${x}ss"
+
+    def test_the_environment_itself_is_never_mutated(self, env, monkeypatch):
+        monkeypatch.setenv("WANTED_DSN", "postgres://real")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+        app.resolve_for_build()
+
+        assert env.resources["databases"]["main"]["dsn"] == "${WANTED_DSN}"
+        assert env.substituted is False
+
+
+class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
+    """The app-config mirror of :class:`TestOnlyReferencedResourcesAreExpanded`.
+
+    A ``$resource`` reference's inline defaults are app config, and the splice
+    discards every one the environment supplies. Substituting the whole app
+    config on entry reads them all, so a dev-time fallback that production
+    overrides still has to resolve in production — the build aborts on a value
+    it was about to throw away.
+
+    Inline defaults stay separable until ``setdefault`` decides which survive,
+    so that is the latest point they can be expanded, and therefore where they
+    are. Same rule as the environment side, applied to the other source.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {"host": "db.prod", "password": "realsecret"}
+                    }
+                },
+            }
+        )
+
+    def test_an_overridden_default_does_not_have_to_resolve(
+        self, env, monkeypatch
+    ):
+        monkeypatch.delenv("LOCAL_DB_PASSWORD", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["password"] == "realsecret"
+
+    def test_a_surviving_default_is_still_expanded(self, env, monkeypatch):
+        """Deferring the pass must not become skipping it."""
+        monkeypatch.setenv("LOCAL_POOL_SIZE", "7")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["pool_size"] == "7"
+
+    def test_a_surviving_default_is_expanded_exactly_once(
+        self, env, monkeypatch
+    ):
+        monkeypatch.setenv("LOCAL_POOL_SIZE", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["pool_size"] == "p${x}ss"
+
+    def test_an_unset_var_in_a_surviving_default_still_raises(
+        self, env, monkeypatch
+    ):
+        """The deferral moves the pass; it does not suppress its errors."""
+        monkeypatch.delenv("LOCAL_POOL_SIZE", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="LOCAL_POOL_SIZE"):
+            app.resolve_for_build()
+
+    def test_a_degraded_reference_expands_the_defaults_it_falls_back_to(
+        self, env, monkeypatch
+    ):
+        """Nothing overrides them, so every one survives — and must resolve."""
+        monkeypatch.setenv("LOCAL_DB_PASSWORD", "devsecret")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["password"] == "devsecret"
+
+    def test_ordinary_app_values_are_untouched_by_the_deferral(
+        self, env, monkeypatch
+    ):
+        """Only inline defaults defer; the rest of the app config does not."""
+        monkeypatch.setenv("APP_NAME", "billing")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "name": "${APP_NAME}",
+                "db": {"$resource": "main", "type": "databases"},
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["name"] == "billing"
+
+    def test_a_default_deferred_past_a_splice_that_never_runs_is_stranded(
+        self, env, monkeypatch
+    ):
+        """Deferring is only sound when a splice follows.
+
+        ``resolve_resources=False`` performs no splice, so nothing discards a
+        default and nothing else expands one. Holding them back there defers
+        to a step that never happens, and the placeholder is handed onward as
+        literal text -- the quiet direction of the same defect.
+        """
+        monkeypatch.setenv("LOCAL_DB_PASSWORD", "devsecret")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["db"]["password"] == "devsecret"
+
+
+class TestANestedReferenceIsExpandedOnceAtItsOwnSplice:
+    """A ``$resource`` block can arrive inside a value another splice moves.
+
+    Every splice is followed by a walk of its result, so whatever the splice
+    expanded is visited again. For a nested reference that is not a
+    re-reading of the same value -- it is a *second* expansion of the nested
+    block's own inline defaults, at their own splice.
+
+    Substitution is not idempotent, so the second pass re-reads the content
+    of the first pass's output: a secret whose text happens to contain
+    ``${...}`` is treated as a template and has an unrelated variable pulled
+    into it. Each case below reaches the nested block by a different route,
+    and each must expand it exactly once.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _secret_that_looks_like_a_template(self, monkeypatch):
+        # One expansion yields the password; a second re-reads it as a
+        # template and substitutes ``x`` into the middle of the secret.
+        monkeypatch.setenv("PW", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+
+    def test_carried_by_a_surviving_inline_default(self):
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {"host": "db.prod"},
+                        "backup": {"host": "db.backup"},
+                    }
+                },
+            }
+        )
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    # survives: the environment's `main` has no `spare`
+                    "spare": {
+                        "$resource": "backup",
+                        "type": "databases",
+                        # survives: the environment's `backup` has no
+                        # `password`, so this reaches the inner splice
+                        "password": "${PW}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_carried_by_the_defaults_a_degraded_reference_falls_back_to(self):
+        env = EnvironmentConfig.from_dict({"name": "prod", "resources": {}})
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "absent",
+                    "type": "databases",
+                    "spare": {
+                        "$resource": "also_absent",
+                        "type": "databases",
+                        "password": "${PW}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_carried_by_a_resource_the_environment_already_expanded(self):
+        """The same shape reached from the other source.
+
+        A pre-expanded environment ran a plain pass over its whole document,
+        so a nested block inside one of its resources arrives with its inline
+        defaults *already* expanded. Unlike the cases above it does not reach
+        its splice raw; ``substituted`` is what keeps the splice from
+        expanding it a second time.
+        """
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {
+                            "host": "db.prod",
+                            "spare": {
+                                "$resource": "absent",
+                                "type": "databases",
+                                "password": "${PW}",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+        assert env.substituted is True
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"]["password"] == "p${x}ss"
+
+    def test_an_unset_var_in_a_nested_default_still_raises(self, monkeypatch):
+        """Deferring one level deeper must not suppress the error either."""
+        monkeypatch.delenv("NESTED_ONLY", raising=False)
+
+        env = EnvironmentConfig.from_dict({"name": "prod", "resources": {}})
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "absent",
+                    "type": "databases",
+                    "spare": {
+                        "$resource": "also_absent",
+                        "type": "databases",
+                        "password": "${NESTED_ONLY}",
+                    },
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="NESTED_ONLY"):
+            app.resolve_for_build()
+
+
+class TestKeysAreExpandedLikeValues:
+    """A ``${VAR}`` in key position is expanded wherever a value would be.
+
+    :func:`substitute_env_vars` substitutes keys as well as values, and the
+    entry pass is a wrapper around it. Wrapping a recursive function by
+    re-walking the structure and calling it only on the leaves keeps its
+    value handling and silently drops everything it does at a container --
+    here, keys. That is the quiet half of this module's defect: no error, no
+    log line, a literal ``${VAR}`` handed onward as a section name or a
+    factory's keyword argument.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _env_vars(self, monkeypatch):
+        monkeypatch.setenv("SECTION", "prod")
+        monkeypatch.setenv("TIER", "gold")
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {"databases": {"main": {"host": "db.prod"}}},
+            }
+        )
+
+    def test_a_key_in_ordinary_app_config(self, env):
+        app = EnvironmentAwareConfig(
+            config={"sections": {"${SECTION}": {"${TIER}": "on"}}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["sections"] == {"prod": {"gold": "on"}}
+
+    def test_a_key_inside_a_list(self, env):
+        app = EnvironmentAwareConfig(
+            config={"items": [{"${SECTION}": 1}]}, environment=env
+        )
+
+        assert app.resolve_for_build()["items"] == [{"prod": 1}]
+
+    def test_a_key_in_a_surviving_inline_default(self, env):
+        """Defaults defer to the splice, which must expand keys there too."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${TIER}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["opts"] == {"gold": "on"}
+
+    def test_a_key_with_no_splice_to_defer_to(self, env):
+        """The un-deferred pass expands keys as well."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${TIER}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build(resolve_resources=False)
+
+        assert resolved["db"]["opts"] == {"gold": "on"}
+
+    def test_a_key_is_expanded_exactly_once(self, env, monkeypatch):
+        """Keys are values for the purposes of this module's invariant."""
+        monkeypatch.setenv("KEY_NAME", "k${x}y")
+        monkeypatch.setenv("x", "INJECTED")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opts": {"${KEY_NAME}": "on"},
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["opts"] == {"k${x}y": "on"}
+
+    def test_a_non_string_key_passes_through(self, env):
+        app = EnvironmentAwareConfig(
+            config={"codes": {200: "ok", True: "yes"}}, environment=env
+        )
+
+        assert app.resolve_for_build()["codes"] == {200: "ok", True: "yes"}
+
+
+class TestADefaultsKeyIsExpandedEvenIfTheDefaultIsDiscarded:
+    """Deferral covers a default's value, not the key that names it.
+
+    A value is deferred because the splice may discard it, and a discarded
+    value is one an unset required ``${VAR}`` should not be able to abort the
+    build over. But what decides whether a default is discarded is its *key*:
+    ``if key not in resolved``. A key must therefore be expanded to ask the
+    question that deferral exists to answer, and expanding it at the splice
+    instead would expand every default's key there just the same.
+
+    So the asymmetry is inherent rather than a gap: a value's survival is
+    decided by something else, and a key's is decided by itself.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {"main": {"host": "db.prod", "opt": "env"}}
+                },
+            }
+        )
+
+    def test_a_discarded_defaults_value_is_never_demanded(self, env):
+        """The deferral guarantee, in the position it holds for."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "opt": "${UNSET_FALLBACK:?dev-only fallback}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"] == {
+            "host": "db.prod",
+            "opt": "env",
+        }
+
+    def test_a_discarded_defaults_key_is_demanded(self, env):
+        """The same variable in key position aborts the build.
+
+        Pinned so the asymmetry stays deliberate. Answering "did the
+        environment supply this key?" requires the key, so there is no point
+        at which it is both known to be discarded and still unexpanded.
+        """
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "${UNSET_KEY_NAME:?names a default}": "fallback",
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="names a default"):
+            app.resolve_for_build()

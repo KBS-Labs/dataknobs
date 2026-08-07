@@ -5,6 +5,38 @@ This module provides the EnvironmentAwareConfig class that supports:
 - Late-binding of environment variables (at instantiation time, not load time)
 - Separation of portable app config from infrastructure bindings
 
+Substitution rule: **substitute each source exactly once, at the latest point
+that source is still separable.** For the environment that is its load; for
+the app config it is entry to :meth:`EnvironmentAwareConfig.resolve_for_build`,
+which is still before resource refs are spliced in. Once spliced, the two are
+merged beyond distinguishing, and a pass over the result would expand
+environment values a second time — reinterpreting the *content* of a value as
+a template. :attr:`EnvironmentConfig.substituted` is what makes the
+environment's provenance knowable rather than guessed.
+
+Two things are separable for longer than that, and so are expanded later: an
+environment resource, which is expanded as it is spliced rather than with the
+environment as a whole, and a reference's inline defaults, which the splice
+discards wherever the environment supplies the key. Both follow the same rule
+— expanding either earlier reads values the build then throws away, and an
+unset required ``${VAR}`` among them aborts a build that never used it.
+
+That makes a splice, not the entry point, the place expansion happens, and a
+splice merges two sources whose provenances differ. So each source is
+expanded and resolved on its own terms *before* the merge
+(:meth:`EnvironmentAwareConfig._resolve_source`) rather than the merged
+result being walked once afterwards: one flag cannot be true of both halves,
+and walking the result under it would either expand an environment's values a
+second time or leave a default's nested refs raw.
+
+A ``$resource`` block nested inside either source is held to one expansion
+too, though not in the same place. Carried by an inline default — or by a
+resource an *unsubstituted* environment supplies — it reaches its own splice
+raw, because the pass over that source defers it, and is expanded there.
+Carried by a resource an already substituted environment supplies, it was
+expanded at that environment's load, and ``substituted`` is what stops the
+splice expanding it a second time.
+
 Example:
     ```python
     # Load with auto-detected environment
@@ -55,6 +87,76 @@ from .environment_config import EnvironmentConfig
 from .inheritance import substitute_env_vars
 
 logger = logging.getLogger(__name__)
+
+#: Keys of a ``$resource`` block that select and constrain the resource
+#: rather than supplying a default for it. Everything else in the block is an
+#: inline default, kept raw by the entry pass and expanded at the splice.
+RESOURCE_MARKER_KEYS = frozenset({"$resource", "type", "$requires"})
+
+
+def _substitute_deferring_defaults(
+    config: Any, *, defer_defaults: bool = True
+) -> Any:
+    """Expand ``${VAR}`` refs, holding ``$resource`` inline defaults back.
+
+    Run over each source as it enters resolution — the app config on the way
+    in, and every value a splice carries. Markers are always expanded, so a
+    reference can select its resource by variable.
+
+    Inline defaults are held back for two reasons that point the same way.
+    The splice discards every one the environment supplies, so expanding one
+    here reads a value the build then throws away — and an unset required
+    ``${VAR}`` among them aborts a build that never used it. And the splice
+    expands each default that survives it, so one expanded here would be
+    expanded a second time there. Substitution is not idempotent: the second
+    pass re-reads the first pass's output, so a value whose own text contains
+    ``${...}`` is treated as a template.
+
+    Holding a default back therefore keeps every value at exactly one
+    expansion, performed at the splice that proves it survived.
+
+    A default's *key* is expanded here regardless, because what proves the
+    default survived is the key: the splice asks ``if key not in resolved``.
+    Deferring it would only move the same expansion to the splice, which
+    expands every default's key there to ask the question. So an unset
+    required ``${VAR}`` in key position does abort the build even when the
+    environment supplies that key — a value's survival is decided by
+    something else, and a key's is decided by itself.
+
+    ``defer_defaults=False`` expands everything, for the caller that will not
+    splice at all. With no splice nothing discards a default and nothing else
+    would expand it, so deferring there would strand a raw ``${VAR}``.
+    """
+    if isinstance(config, dict):
+        deferring = defer_defaults and "$resource" in config
+        substituted: dict[Any, Any] = {}
+        for key, value in config.items():
+            # :func:`substitute_env_vars` expands keys as well as values, and
+            # this is a wrapper around it. Re-walking the structure here and
+            # calling it only at the leaves would keep everything it does to a
+            # value and silently drop everything it does at a container --
+            # which is how expanding keys got lost. Handing the key back to it
+            # is also what passes a non-string key through untouched.
+            key = substitute_env_vars(key)
+            if deferring:
+                substituted[key] = (
+                    substitute_env_vars(value)
+                    if key in RESOURCE_MARKER_KEYS
+                    else value
+                )
+            else:
+                substituted[key] = _substitute_deferring_defaults(
+                    value, defer_defaults=defer_defaults
+                )
+        return substituted
+    if isinstance(config, list):
+        return [
+            _substitute_deferring_defaults(
+                item, defer_defaults=defer_defaults
+            )
+            for item in config
+        ]
+    return substitute_env_vars(config)
 
 
 class EnvironmentAwareConfigError(Exception):
@@ -265,17 +367,45 @@ class EnvironmentAwareConfig:
         else:
             config = copy.deepcopy(self._config)
 
-        # Resolve logical resource references
-        if resolve_resources:
-            config = self._resolve_resource_refs(config)
-
-        # Resolve environment variables (late binding)
+        # Late-bind app-authored ${VAR} refs BEFORE splicing in environment
+        # values. Environment values were already substituted when the
+        # environment was loaded (or are substituted exactly once, below,
+        # when it was not) -- substituting after the splice would expand
+        # them a second time, reinterpreting the *content* of a value as a
+        # template. See the module docstring.
+        #
+        # Inline defaults are held back: the splice discards every one the
+        # environment supplies, so expanding them here would read values the
+        # build is about to throw away -- the same argument that keeps this
+        # from expanding the whole environment, applied to the other source.
+        #
+        # Only when there is a splice to hold them for, though. Without one
+        # nothing discards a default and nothing else expands it, so
+        # deferring would hand a caller literal ${VAR} text.
         if resolve_env_vars:
-            config = substitute_env_vars(config)
+            config = _substitute_deferring_defaults(
+                config, defer_defaults=resolve_resources
+            )
+
+        # Resolve logical resource references. Each resource is substituted
+        # as it is spliced, not the environment as a whole: a resource is
+        # still separable at the splice point, which is the latest point it
+        # can be expanded, and expanding the whole environment would read
+        # values no reference names -- so an unset required ${VAR} in an
+        # unrelated resource would abort a build that never looked at it.
+        if resolve_resources:
+            config = self._resolve_resource_refs(
+                config, self._environment, substitute=resolve_env_vars
+            )
 
         return config
 
-    def _resolve_resource_refs(self, config: Any) -> Any:
+    def _resolve_resource_refs(
+        self,
+        config: Any,
+        environment: EnvironmentConfig | None = None,
+        substitute: bool = False,
+    ) -> Any:
         """Resolve logical resource references in configuration.
 
         Finds resource references in the config and replaces them
@@ -291,10 +421,22 @@ class EnvironmentAwareConfig:
 
         Args:
             config: Configuration to process
+            environment: Environment to resolve against. Defaults to this
+                config's own environment.
+            substitute: Whether the config being walked still needs
+                expanding. Each source a splice merges is finished by
+                :meth:`_resolve_source` on its own terms before the merge, so
+                an environment that arrived expanded is not expanded again
+                while the inline defaults merged alongside it — which always
+                arrive raw — are, once each, and only where the environment
+                did not supply the key.
 
         Returns:
             Configuration with resource references resolved
         """
+        if environment is None:
+            environment = self._environment
+
         if isinstance(config, dict):
             if "$resource" in config:
                 # This is a resource reference
@@ -305,54 +447,142 @@ class EnvironmentAwareConfig:
                 defaults = {
                     k: v
                     for k, v in config.items()
-                    if k not in ("$resource", "type", "$requires")
+                    if k not in RESOURCE_MARKER_KEYS
                 }
                 requires = config.get("$requires", [])
 
-                try:
-                    resolved = self._environment.get_resource(
-                        resource_type, resource_name, defaults
-                    )
-
-                    # Validate $requires against capabilities metadata
-                    if requires and isinstance(resolved, dict):
-                        declared = resolved.get("capabilities")
-                        if declared is not None:
-                            missing = set(requires) - set(declared)
-                            if missing:
-                                from dataknobs_config.exceptions import (
-                                    ConfigError,
-                                )
-
-                                raise ConfigError(
-                                    f"Resource '{resource_name}' missing "
-                                    f"required capabilities: {sorted(missing)}. "
-                                    f"Declared: {declared}"
-                                )
-
-                    # Recursively resolve any nested references in the resolved config
-                    return self._resolve_resource_refs(resolved)
-                except KeyError:
-                    # Resource not found - return config with defaults only
-                    # This allows graceful degradation
+                if not environment.has_resource(resource_type, resource_name):
+                    # Resource not found - degrade to the reference's inline
+                    # defaults. Membership is tested explicitly rather than
+                    # caught: get_resource returns the supplied defaults
+                    # instead of raising whenever a defaults dict is passed,
+                    # and the dict comprehension above always produces one
+                    # (possibly empty). Relying on ResourceNotFoundError here
+                    # made this branch unreachable, so a mistyped $resource
+                    # name degraded in total silence to those inline defaults
+                    # -- an empty config only when none are declared.
+                    # This line is the only signal an operator gets, so it
+                    # distinguishes the two degradations: falling back to
+                    # declared defaults is a config that still builds, while
+                    # falling back to nothing is a factory about to be called
+                    # with no arguments at all.
                     logger.warning(
-                        f"Resource '{resource_name}' of type '{resource_type}' "
-                        f"not found in environment '{self._environment.name}', "
-                        f"using defaults"
+                        "Resource '%s' of type '%s' not found in environment "
+                        "'%s'; %s",
+                        resource_name,
+                        resource_type,
+                        environment.name,
+                        (
+                            "falling back to its inline defaults"
+                            if defaults
+                            else "it declares no inline defaults, so this "
+                            "resolves to an empty config"
+                        ),
                     )
-                    return defaults if defaults else config
+                    # Degrade to the inline defaults only -- matching what
+                    # get_resource returned on this path all along. The
+                    # unreachable branch this replaced fell back to the
+                    # reference dict itself when there were no defaults,
+                    # which would put the `$resource` / `type` marker keys
+                    # into the resolved config and hand them to a factory as
+                    # keyword arguments. Making the branch reachable must not
+                    # also make its never-exercised return value live.
+                    #
+                    # Nothing overrides them here, so every default survives
+                    # and every one is expanded. A degraded config is still
+                    # config, so it gets the same $requires check and the
+                    # same recursive walk as a found one.
+                    resolved = self._resolve_source(
+                        defaults, environment, substitute=substitute
+                    )
+                else:
+                    # The two sources are walked separately and merged after,
+                    # because they do not share a provenance. An environment
+                    # loaded with substitution arrives expanded; inline
+                    # defaults always arrive raw. Walking the merged result
+                    # under one flag would either re-expand the environment's
+                    # values or leave the defaults' nested refs raw.
+                    env_needs_pass = substitute and not environment.substituted
+                    resolved = self._resolve_source(
+                        environment.get_resource(resource_type, resource_name),
+                        environment,
+                        substitute=env_needs_pass,
+                    )
+                    # Inline defaults fill gaps *after* the source above, and
+                    # each is expanded only once it is known to survive -- so
+                    # no value is handed to a second expansion, and none is
+                    # expanded that the environment overrode.
+                    for key, value in defaults.items():
+                        if key not in resolved:
+                            resolved[key] = self._resolve_source(
+                                value, environment, substitute=substitute
+                            )
+
+                # Validate $requires against capabilities metadata
+                if requires and isinstance(resolved, dict):
+                    declared = resolved.get("capabilities")
+                    if declared is not None:
+                        missing = set(requires) - set(declared)
+                        if missing:
+                            from dataknobs_config.exceptions import (
+                                ConfigError,
+                            )
+
+                            raise ConfigError(
+                                f"Resource '{resource_name}' missing "
+                                f"required capabilities: {sorted(missing)}. "
+                                f"Declared: {declared}"
+                            )
+
+                # Each source was already walked as it was spliced, so the
+                # merged result is fully resolved -- walking it again here
+                # would be the second expansion this splits sources to avoid.
+                return resolved
             else:
                 # Regular dict - recurse into values
                 return {
-                    key: self._resolve_resource_refs(value)
+                    key: self._resolve_resource_refs(
+                        value, environment, substitute=substitute
+                    )
                     for key, value in config.items()
                 }
         elif isinstance(config, list):
             # Recurse into list items
-            return [self._resolve_resource_refs(item) for item in config]
+            return [
+                self._resolve_resource_refs(
+                    item, environment, substitute=substitute
+                )
+                for item in config
+            ]
         else:
             # Return other types unchanged
             return config
+
+    def _resolve_source(
+        self,
+        value: Any,
+        environment: EnvironmentConfig,
+        *,
+        substitute: bool,
+    ) -> Any:
+        """Expand one source's ``${VAR}`` refs, then resolve its references.
+
+        A splice merges two sources with different provenances, and the
+        single ``substitute`` flag can only be true of one of them. So each
+        is finished here, on its own terms, before the merge — rather than
+        merged first and walked once under a flag that is wrong for half of
+        the result.
+
+        ``substitute`` says whether *this* source still needs expanding: an
+        environment loaded with substitution does not, an inline default
+        always does. The pass defers nested ``$resource`` defaults so that
+        the walk below expands them at their own splice, exactly once.
+        """
+        if substitute:
+            value = _substitute_deferring_defaults(value)
+        return self._resolve_resource_refs(
+            value, environment, substitute=substitute
+        )
 
     def get_portable_config(self) -> dict[str, Any]:
         """Get the portable (unresolved) configuration.

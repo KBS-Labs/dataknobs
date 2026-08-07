@@ -109,14 +109,18 @@ class ConfigBindingResolver:
 
         Args:
             environment: Environment configuration for resource lookup
-            resolve_env_vars: Whether to resolve env vars before
-                instantiation. Idempotent for ``EnvironmentConfig``
-                instances loaded via :meth:`EnvironmentConfig.load` /
-                :meth:`EnvironmentConfig.from_dict` (which substitute
-                by default); load-bearing for dataclass-constructed
-                instances. To opt out of all substitution, pass
-                ``substitute_vars=False`` to ``EnvironmentConfig.load``
-                and ``resolve_env_vars=False`` here.
+            resolve_env_vars: Whether to substitute env vars before
+                instantiation. Applies only to environments that have not
+                already been substituted — an ``EnvironmentConfig`` loaded
+                via :meth:`EnvironmentConfig.load` /
+                :meth:`EnvironmentConfig.from_dict` records that it was
+                (:attr:`EnvironmentConfig.substituted`) and is not
+                substituted again here, because substitution is not
+                idempotent for a value whose own text contains ``${...}``.
+                Load-bearing for dataclass-constructed instances. To opt
+                out of all substitution, pass ``substitute_vars=False`` to
+                ``EnvironmentConfig.load`` and ``resolve_env_vars=False``
+                here.
         """
         self._environment = environment
         self._resolve_env_vars = resolve_env_vars
@@ -299,18 +303,30 @@ class ConfigBindingResolver:
         """
         config = self._environment.get_resource(resource_type, logical_name)
 
-        # Apply overrides
+        # Substitute each source exactly once, before the two are merged
+        # beyond distinguishing.
+        #
+        # The environment's values are substituted here only when they have
+        # not been already. This pass is NOT idempotent: a value whose own
+        # text contains ${...} would be expanded a second time, replacing it
+        # with whatever unrelated variable its content happened to name.
+        # EnvironmentConfig.load() and from_dict() substitute by default and
+        # record it on ``substituted``, so this runs only for
+        # directly-constructed environments (or ones loaded with
+        # substitute_vars=False), where it is load-bearing.
+        if self._resolve_env_vars and not self._environment.substituted:
+            config = substitute_env_vars(config)
+
+        # Overrides are a separate source -- caller-supplied and never
+        # previously substituted -- so they get their own single pass
+        # regardless of the environment's provenance. Whether they should be
+        # substituted at all is a separate question (199-FU2); this preserves
+        # the behaviour they have always had.
         if overrides:
+            if self._resolve_env_vars:
+                overrides = substitute_env_vars(overrides)
             config = config.copy()
             config.update(overrides)
-
-        # Resolve environment variables. EnvironmentConfig.load() and
-        # from_dict() already substitute by default, so this pass is
-        # idempotent for those construction paths; it remains
-        # load-bearing for consumers that construct EnvironmentConfig
-        # directly via the dataclass constructor.
-        if self._resolve_env_vars:
-            config = substitute_env_vars(config)
 
         return config
 

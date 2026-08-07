@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +67,52 @@ from dataknobs_common.config_loading import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_structure(value: Any, _seen: dict[int, Any] | None = None) -> Any:
+    """Copy nested containers; pass every other value through by identity.
+
+    What every hand-out from this class needs, and the exact bound the
+    substitution pass set while it was incidentally providing this isolation:
+    it rebuilds dicts and lists and returns everything else unchanged.
+
+    ``copy.deepcopy`` would overshoot. A resource assembled in Python may hold
+    a live object — a connection pool, a prebuilt provider, a lock — and
+    duplicating one silently gives the factory a second pool, while a value
+    that cannot be pickled raises out of what is meant to be a dict read.
+    Neither is a risk the aliasing this copy prevents justifies taking.
+
+    The one thing kept from ``deepcopy`` is its memo. A container reached
+    twice is copied once and the same copy used both times, so a structure
+    that refers back to itself terminates instead of recursing to a
+    ``RecursionError`` -- and one that merely shares a subtree between two
+    keys keeps sharing it. A config read is the wrong place to discover
+    either.
+
+    ``_seen`` is internal. A caller assembling one hand-out from several
+    values passes the same memo to each, so the result's sharing reflects the
+    source's; a caller copying one value omits it.
+    """
+    if _seen is None:
+        _seen = {}
+    marker = id(value)
+    if marker in _seen:
+        return _seen[marker]
+
+    if isinstance(value, dict):
+        copied_dict: dict[Any, Any] = {}
+        # Registered before recursing, so a self-reference finds it.
+        _seen[marker] = copied_dict
+        for key, item in value.items():
+            copied_dict[key] = _copy_structure(item, _seen)
+        return copied_dict
+    if isinstance(value, list):
+        copied_list: list[Any] = []
+        _seen[marker] = copied_list
+        for item in value:
+            copied_list.append(_copy_structure(item, _seen))
+        return copied_list
+    return value
 
 
 class EnvironmentConfigError(Exception):
@@ -108,12 +154,46 @@ class EnvironmentConfig:
         resources: Nested dict of {resource_type: {logical_name: config}}
         settings: Environment-wide settings (log levels, feature flags, etc.)
         description: Optional description of the environment
+        substituted: Whether ``${VAR}`` substitution has already been applied
+            to the values held here. See below.
     """
 
     name: str
     resources: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     settings: dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    substituted: bool = field(default=False, compare=False)
+    """Whether ``${VAR}`` substitution has already been applied to the values
+    in this config.
+
+    :meth:`load` and :meth:`from_dict` set this when they substitute. It stays
+    ``False`` for direct dataclass construction, which is what keeps the
+    downstream substitution passes in :class:`EnvironmentAwareConfig` and
+    :class:`ConfigBindingResolver` load-bearing for that path.
+
+    Downstream layers read this so they substitute each source **exactly
+    once**. Substituting a second time re-expands the *output* of the first,
+    which reinterprets the content of a value as a template — so a secret
+    whose own text contains ``${...}`` is replaced by the value of whatever
+    unrelated variable that text happens to name.
+
+    Excluded from equality: two configs holding the same values are the same
+    environment regardless of which layer expanded them.
+
+    Describes the values **as constructed**. Writing into :attr:`resources` or
+    :attr:`settings` afterwards does not update it, and a downstream layer
+    reading a stale ``True`` will skip the pass those new values needed --
+    handing a literal ``${VAR}`` to a factory. Build the config you want
+    instead of amending one, or re-mark an amended config explicitly::
+
+        env = dataclasses.replace(env, substituted=False)
+
+    The dataclass is deliberately left mutable rather than frozen: it is
+    public, and freezing it would break any consumer assembling an
+    environment field by field. The contract is therefore stated rather than
+    enforced -- amending a constructed config is out of contract, not merely
+    discouraged.
+    """
 
     @classmethod
     def detect_environment(cls) -> str:
@@ -202,7 +282,11 @@ class EnvironmentConfig:
                 f"No environment config found for '{environment}' in {config_dir}, "
                 "using empty configuration"
             )
-            return cls(name=environment)
+            # Records provenance like every other path out of this method.
+            # Vacuous while the config is empty, and load-bearing the moment
+            # one is merged: a stale ``False`` would send the merge looking
+            # for variables to expand in a config that asked to be expanded.
+            return cls(name=environment, substituted=substitute_vars)
 
         data = cls._load_file(config_path)
 
@@ -219,6 +303,7 @@ class EnvironmentConfig:
             resources=data.get("resources", {}),
             settings=data.get("settings", {}),
             description=data.get("description", ""),
+            substituted=substitute_vars,
         )
 
     @classmethod
@@ -254,6 +339,7 @@ class EnvironmentConfig:
             resources=data.get("resources", {}),
             settings=data.get("settings", {}),
             description=data.get("description", ""),
+            substituted=substitute_vars,
         )
 
     @classmethod
@@ -312,18 +398,33 @@ class EnvironmentConfig:
         type_resources = self.resources.get(resource_type, {})
 
         if logical_name in type_resources:
-            # Copy to avoid mutation
-            config = type_resources[logical_name].copy()
+            # A shallow copy leaves every nested container in the returned
+            # config pointing at the environment's own object, so a consumer
+            # adjusting a nested section writes through into an environment
+            # that outlives the resolution. Callers that ran a substitution
+            # pass afterwards were incidentally isolated by it -- which is
+            # not a property to depend on from here.
+            # One memo for the whole hand-out, so two keys that shared a
+            # subtree on the way in still share it on the way out. Copying
+            # each default under its own memo would make that property depend
+            # on which of the two paths below the caller took.
+            seen: dict[int, Any] = {}
+            config = _copy_structure(type_resources[logical_name], seen)
 
-            # Apply defaults for missing keys
+            # Apply defaults for missing keys. Copied like everything else
+            # handed out of here: the object aliased is the caller's own
+            # rather than the environment's, but the result is still a config
+            # someone will adjust, and the two paths out of this method
+            # should not differ on whether doing so reaches back.
             if defaults:
                 for key, value in defaults.items():
-                    config.setdefault(key, value)
+                    if key not in config:
+                        config[key] = _copy_structure(value, seen)
 
             return config
 
         if defaults is not None:
-            return defaults.copy()
+            return _copy_structure(defaults)
 
         raise ResourceNotFoundError(
             f"Resource '{logical_name}' of type '{resource_type}' "
@@ -373,8 +474,54 @@ class EnvironmentConfig:
         """
         return list(self.resources.get(resource_type, {}).keys())
 
+    def substituted_view(self) -> EnvironmentConfig:
+        """Return an equivalent config with ``${VAR}`` substitution applied.
+
+        Returns ``self`` when substitution has already been applied, so
+        calling this is always safe and never expands a value twice.
+
+        Never mutates: a caller holding an unsubstituted config for direct
+        :meth:`get_resource` reads keeps the config it asked for, even when
+        a resolution layer reads through it.
+
+        Every field is covered, not just ``resources`` and ``settings``:
+        :meth:`load` and :meth:`from_dict` substitute the whole raw document
+        before constructing, so a view that skipped ``name`` and
+        ``description`` would set the same flag over a narrower claim, and
+        the two ways of reaching ``substituted=True`` would disagree about
+        what it means.
+
+        Returns:
+            ``self`` if already substituted, otherwise a substituted copy.
+
+        Raises:
+            ValueError: If a required ``${VAR}`` ref has no default and no
+                value in the environment.
+        """
+        if self.substituted:
+            return self
+
+        from .inheritance import substitute_env_vars
+
+        return replace(
+            self,
+            name=substitute_env_vars(self.name),
+            description=substitute_env_vars(self.description),
+            resources=substitute_env_vars(self.resources),
+            settings=substitute_env_vars(self.settings),
+            substituted=True,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation.
+
+        Values are emitted as held — already substituted for a config built
+        by :meth:`load` or :meth:`from_dict` with the default
+        ``substitute_vars=True``. Provenance is deliberately **not** emitted,
+        so feeding the result back through :meth:`from_dict` substitutes a
+        second time. Round-trip with
+        ``EnvironmentConfig.from_dict(cfg.to_dict(), substitute_vars=False)``
+        to preserve values whose own text contains ``${...}``.
 
         Returns:
             Dictionary representation of environment config
@@ -385,13 +532,10 @@ class EnvironmentConfig:
             result["description"] = self.description
 
         if self.settings:
-            result["settings"] = self.settings.copy()
+            result["settings"] = _copy_structure(self.settings)
 
         if self.resources:
-            result["resources"] = {
-                rtype: {name: config.copy() for name, config in resources.items()}
-                for rtype, resources in self.resources.items()
-            }
+            result["resources"] = _copy_structure(self.resources)
 
         return result
 
@@ -400,20 +544,44 @@ class EnvironmentConfig:
 
         The other config's values take precedence.
 
+        When the two sides disagree on :attr:`substituted`, the unsubstituted
+        side is substituted **during** the merge and the result is marked
+        substituted. ``substituted`` is a single flag describing the whole
+        config, so it is only sound if provenance is uniform within one
+        instance; degrading the result to ``False`` instead would leave the
+        already-substituted half exposed to a second pass downstream, which
+        is the exact defect the flag exists to prevent.
+
         Args:
             other: Environment config to merge
 
         Returns:
             New merged EnvironmentConfig
-        """
-        # Deep merge resources
-        merged_resources: dict[str, dict[str, dict[str, Any]]] = {}
 
-        # Start with self's resources
-        for rtype, resources in self.resources.items():
-            merged_resources[rtype] = {
-                name: config.copy() for name, config in resources.items()
-            }
+        Raises:
+            ValueError: If the two sides disagree on :attr:`substituted` and
+                the unsubstituted side holds a required ``${VAR}`` ref with
+                no default and no value in the environment. Merging two sides
+                that agree touches no environment variables and cannot raise.
+        """
+        # Normalize mixed provenance before merging so the result's single
+        # ``substituted`` flag is true of every value in it.
+        #
+        # This expands the whole config, where the resolution layer expands
+        # only the resources a build references. The asymmetry is forced by
+        # the single flag: a merge has to make provenance uniform across
+        # every value, so there is no per-resource provenance to consult and
+        # no subset it would be sound to skip. It is why this is the one path
+        # that can raise on an unset variable.
+        if self.substituted != other.substituted:
+            return self.substituted_view().merge(other.substituted_view())
+
+        # Deep merge resources. Copied structurally, like every other hand-out
+        # from this class: a one-level copy would leave each nested section of
+        # the result aliasing one of the two inputs, both of which outlive it.
+        merged_resources: dict[str, dict[str, dict[str, Any]]] = (
+            _copy_structure(self.resources)
+        )
 
         # Merge in other's resources
         for rtype, resources in other.resources.items():
@@ -422,17 +590,20 @@ class EnvironmentConfig:
             for name, config in resources.items():
                 if name in merged_resources[rtype]:
                     # Merge configs
-                    merged_resources[rtype][name].update(config)
+                    merged_resources[rtype][name].update(
+                        _copy_structure(config)
+                    )
                 else:
-                    merged_resources[rtype][name] = config.copy()
+                    merged_resources[rtype][name] = _copy_structure(config)
 
         # Merge settings
-        merged_settings = self.settings.copy()
-        merged_settings.update(other.settings)
+        merged_settings: dict[str, Any] = _copy_structure(self.settings)
+        merged_settings.update(_copy_structure(other.settings))
 
         return EnvironmentConfig(
             name=other.name,
             resources=merged_resources,
             settings=merged_settings,
             description=other.description or self.description,
+            substituted=self.substituted,
         )

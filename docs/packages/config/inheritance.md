@@ -308,15 +308,57 @@ config1 = loader.load("production")
 # Second load - returns cached version
 config2 = loader.load("production")  # Same object
 
-# Force reload
+# Read fresh without touching the cache: this neither reads the stored
+# entry nor replaces it, so later load() calls still get the cached one
 config3 = loader.load("production", use_cache=False)
 
-# Clear specific cache
+# Refresh what everyone else sees: evict, then load
 loader.clear_cache("production")
+config4 = loader.load("production")
 
 # Clear all cache
 loader.clear_cache()
 ```
+
+`use_cache=False` is a bypass, not a refresh. It takes no part in the cache
+in either direction — a bypassing load that also wrote would let
+`load_from_file`, which reads with `config_dir` rebound to another
+directory, store content under a bare name that then answers reads for the
+configured one. To make a reload visible to subsequent callers, clear the
+entry and load normally.
+
+### Clearing a config clears what inherited from it
+
+`clear_cache(name)` also evicts every config that reached `name` through
+`extends:`, transitively. A cached child holds its parent's content merged
+in, so clearing only the parent would leave that copy answering with content
+the parent no longer has — the staleness the call was made to resolve,
+surviving the call. Invalidation runs down the inheritance edges, never up:
+clearing a child leaves its parent cached.
+
+### Substitution mode is part of the cache key
+
+Resolving `extends:` loads the parent **without** substitution and expands
+the merged result once, at the end — so the same config can be produced in
+two forms. The cache keys on both the name and the substitution mode, so an
+entry stored by the inheritance recursion can never serve a request that
+asked for expansion, or the reverse:
+
+```python
+loader.load("child")             # also caches `parent`, unexpanded
+loader.load("parent")            # reads from disk and expands -- not the
+                                 # unexpanded entry the recursion stored
+```
+
+Without this, `load("parent")` would return raw `${VAR}` placeholders after
+a child had been loaded, and `load("child")` would expand the parent's
+values a *second* time if the parent had been loaded first. Substitution is
+not idempotent — a value whose own text contains `${...}` is re-read as a
+template on the second pass — so a config's value depended on load order.
+See
+[Substitution runs once per source](environment-variables.md#substitution-runs-once-per-source).
+
+`clear_cache(name)` clears every variant stored under that name.
 
 ## Error Handling
 

@@ -555,13 +555,17 @@ llm:
 
     def test_clear_cache(self, loader, config_dir):
         """Test cache clearing."""
-        (config_dir / "test.yaml").write_text("key: value")
+        config_file = config_dir / "test.yaml"
+        config_file.write_text("key: value")
 
         loader.load("test")
-        assert "test" in loader._cache
+
+        # Cached: the rewrite on disk is not visible.
+        config_file.write_text("key: rewritten")
+        assert loader.load("test")["key"] == "value"
 
         loader.clear_cache("test")
-        assert "test" not in loader._cache
+        assert loader.load("test")["key"] == "rewritten"
 
     def test_clear_all_cache(self, loader, config_dir):
         """Test clearing all cache."""
@@ -701,6 +705,117 @@ llm:
         assert result["new_field"] == "new_value"
 
 
+# A value whose own *content* looks like a template. Substitution is idempotent
+# for ordinary values and not for these, so a config holding one is the only
+# thing that can tell "expanded once" apart from "expanded twice".
+SECRET_WITH_VAR_SYNTAX = "p${GUARD_INNER}ss"
+INNER_VALUE = "INJECTED"
+
+
+class TestCacheSubstitutionProvenance:
+    """The cache must not serve an entry expanded a different number of times.
+
+    ``load()`` resolves ``extends:`` by recursing with ``substitute_vars=False``,
+    so the same config can be produced in two forms. Storing both under one key
+    makes the result of ``load(name)`` depend on what was loaded before it --
+    in both directions.
+    """
+
+    @pytest.fixture
+    def config_dir(self, tmp_path):
+        """Create temporary config directory."""
+        d = tmp_path / "configs"
+        d.mkdir()
+        return d
+
+    @pytest.fixture(autouse=True)
+    def _guard_env(self, monkeypatch):
+        monkeypatch.setenv("GUARD_PW", SECRET_WITH_VAR_SYNTAX)
+        monkeypatch.setenv("GUARD_INNER", INNER_VALUE)
+
+    @pytest.fixture
+    def parent_and_child(self, config_dir):
+        """A child that extends a parent holding a `${`-containing secret."""
+        (config_dir / "parent.yaml").write_text("secret: ${GUARD_PW}\nowner: parent")
+        (config_dir / "child.yaml").write_text("extends: parent\nowner: child")
+        return config_dir
+
+    def _loader(self, config_dir):
+        return InheritableConfigLoader(config_dir)
+
+    def test_parent_loaded_after_child_is_substituted(self, parent_and_child):
+        """Zero substitutions: the `extends:` recursion caches the raw parent.
+
+        The recursion loads the parent with ``substitute_vars=False`` and caches
+        it under the parent's name, so a later direct ``load("parent")`` -- which
+        asked for substitution -- gets served the unexpanded entry.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("child")
+        parent = loader.load("parent")
+
+        assert parent["secret"] == SECRET_WITH_VAR_SYNTAX
+
+    def test_child_loaded_after_parent_substitutes_once(self, parent_and_child):
+        """Two substitutions: an already-expanded parent is merged, then expanded.
+
+        The reverse order. ``load("parent")`` caches the expanded parent; the
+        child's recursion is served that entry despite asking for the raw form,
+        and the merged result is expanded a second time -- so the secret's own
+        content is read as a template.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("parent")
+        child = loader.load("child")
+
+        assert child["secret"] == SECRET_WITH_VAR_SYNTAX
+        assert child["secret"] != "pINJECTEDss", (
+            "the secret's content was expanded as a template, disclosing "
+            "GUARD_INNER into the value"
+        )
+
+    def test_load_order_does_not_change_result(self, parent_and_child):
+        """Both orders equal the fresh-loader baseline.
+
+        The two tests above are different symptoms of one defect; either alone
+        would let a partial fix look complete. This is the property they are
+        symptoms of.
+        """
+        baseline_child = self._loader(parent_and_child).load("child")
+        baseline_parent = self._loader(parent_and_child).load("parent")
+
+        child_first = self._loader(parent_and_child)
+        child_first.load("child")
+        parent_after_child = child_first.load("parent")
+
+        parent_first = self._loader(parent_and_child)
+        parent_first.load("parent")
+        child_after_parent = parent_first.load("child")
+
+        assert parent_after_child == baseline_parent
+        assert child_after_parent == baseline_child
+
+    def test_clear_cache_clears_both_substitution_variants(self, parent_and_child):
+        """One `clear_cache(name)` clears the config, not one of its two forms.
+
+        After a mixed-provenance load the parent is cached in both forms.
+        Clearing only one would re-create the order dependence with an extra
+        step, so both must re-read from disk after a single call.
+        """
+        loader = self._loader(parent_and_child)
+
+        loader.load("child")  # caches the parent unsubstituted
+        loader.load("parent")  # caches the parent substituted
+
+        (parent_and_child / "parent.yaml").write_text("secret: ${GUARD_INNER}\nowner: rewritten")
+        loader.clear_cache("parent")
+
+        assert loader.load("parent", substitute_vars=False)["secret"] == "${GUARD_INNER}"
+        assert loader.load("parent")["secret"] == INNER_VALUE
+
+
 class TestLoadConfigWithInheritance:
     """Test the convenience function."""
 
@@ -731,3 +846,160 @@ class TestLoadConfigWithInheritance:
 
         result = load_config_with_inheritance(config_file, substitute_vars=False)
         assert result["key"] == "${VAR}"
+
+
+class TestCacheParticipationIsAllOrNothing:
+    """``use_cache=False`` has to mean "not part of the cache", both ways.
+
+    The cache write was unconditional, so a caller that asked to bypass the
+    cache still populated it. Two callers do exactly that for a reason:
+    ``validate`` is a dry run, and ``load_from_file`` temporarily rebinds
+    ``config_dir`` to another directory. The second is the damaging one --
+    the key holds no directory, so the entry it leaves behind answers later
+    ``load()`` calls for a loader configured to read somewhere else.
+    """
+
+    def test_validate_does_not_warm_the_cache(self, tmp_path):
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"port": 1}))
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        loader.validate("svc")
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"port": 2}))
+
+        assert loader.load("svc")["port"] == 2
+
+    def test_load_from_file_does_not_answer_for_another_directory(
+        self, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "svc.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (configured / "svc.yaml").write_text(yaml.dump({"origin": "configured"}))
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+
+        assert loader.load("svc")["origin"] == "configured"
+
+    def test_a_parent_pulled_in_by_load_from_file_is_not_cached_either(
+        self, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (elsewhere / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 1})
+        )
+        (configured / "base.yaml").write_text(
+            yaml.dump({"origin": "configured"})
+        )
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+
+        # Read back in the form the recursion would have stored: it loads a
+        # parent with substitute_vars=False, so asserting through the default
+        # True would miss on the key alone and pass without the write gate.
+        assert (
+            loader.load("base", substitute_vars=False)["origin"] == "configured"
+        )
+
+    def test_a_bypassing_load_records_no_inheritance_edge(self, tmp_path):
+        """Not participating in the cache means not recording edges for it.
+
+        ``load_from_file`` rebinds ``config_dir``, and the edge would be filed
+        under a bare parent name that means something else in the configured
+        directory — so a later ``clear_cache`` there would evict a config that
+        never inherited from it.
+        """
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (elsewhere / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 1})
+        )
+        (configured / "base.yaml").write_text(yaml.dump({"origin": "conf"}))
+        (configured / "svc.yaml").write_text(yaml.dump({"port": 9}))
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+        loader.load("svc")
+        loader.clear_cache("base")
+
+        assert loader._cache.get(("svc", True)) is not None
+
+
+class TestClearingAParentClearsWhatInheritedFromIt:
+    """A cached child holds a copy of its parent's content, merged in.
+
+    Clearing the parent alone leaves that copy answering, so the next read of
+    the child returns content the parent no longer has -- which is the exact
+    staleness ``clear_cache`` is called to resolve, surviving the call.
+    """
+
+    def test_clearing_a_parent_reloads_the_child(self, tmp_path):
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
+        (tmp_path / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 8080})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        assert loader.load("svc")["timeout"] == 30
+
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 60}))
+        loader.clear_cache("base")
+
+        assert loader.load("svc")["timeout"] == 60
+
+    def test_clearing_a_grandparent_reaches_the_grandchild(self, tmp_path):
+        (tmp_path / "root.yaml").write_text(yaml.dump({"region": "us-east"}))
+        (tmp_path / "mid.yaml").write_text(
+            yaml.dump({"extends": "root", "tier": "std"})
+        )
+        (tmp_path / "leaf.yaml").write_text(
+            yaml.dump({"extends": "mid", "name": "leaf"})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        assert loader.load("leaf")["region"] == "us-east"
+
+        (tmp_path / "root.yaml").write_text(yaml.dump({"region": "eu-west"}))
+        loader.clear_cache("root")
+
+        assert loader.load("leaf")["region"] == "eu-west"
+
+    def test_clearing_a_child_leaves_its_parent_cached(self, tmp_path):
+        """Invalidation runs down the inheritance edges, not up them."""
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
+        (tmp_path / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 8080})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+        loader.load("svc")
+
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 60}))
+        loader.clear_cache("svc")
+
+        # The parent was not cleared, so its cached form still answers.
+        assert loader.load("svc")["timeout"] == 30
+
+    def test_a_cycle_in_the_edges_does_not_hang_the_clear(self, tmp_path):
+        """Recorded edges are walked, so the walk needs its own guard."""
+        (tmp_path / "a.yaml").write_text(yaml.dump({"v": 1}))
+        (tmp_path / "b.yaml").write_text(yaml.dump({"extends": "a", "w": 2}))
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+        loader.load("b")
+
+        # Forge a cycle directly: reachable only if a config were edited to
+        # extend its own descendant between loads.
+        loader._dependents.setdefault("b", set()).add("a")
+
+        loader.clear_cache("a")
+
+        assert loader._cache == {}

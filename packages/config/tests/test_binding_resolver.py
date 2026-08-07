@@ -476,3 +476,170 @@ class TestFactoryProtocol:
         db = resolver.resolve("databases", "primary")
         assert isinstance(db, MockDatabase)
         assert db.backend == "postgres"
+
+
+class TestSubstitutionProvenance:
+    """The resolver substitutes only environments that have not been.
+
+    This is the most severe of the double-expansion sites: the corrupted
+    value goes straight into a live resource via a factory, leaving no
+    resolved-config artifact for anyone to diff. Assertions here are made on
+    the config the factory actually receives, not on an intermediate.
+    """
+
+    SECRET = "p${PROV_INNER}ss"
+
+    @pytest.fixture(autouse=True)
+    def _prov_env(self, monkeypatch):
+        monkeypatch.setenv("PROV_PW", self.SECRET)
+        monkeypatch.setenv("PROV_INNER", "INJECTED")
+
+    @staticmethod
+    def _resolve_through_factory(env, **kwargs):
+        """Return the config a factory is handed for ``databases[main]``."""
+        built: dict = {}
+
+        def factory(**config):
+            built.update(config)
+            return object()
+
+        resolver = ConfigBindingResolver(env)
+        resolver.register_factory("databases", factory)
+        resolver.resolve("databases", "main", **kwargs)
+        return built
+
+    @staticmethod
+    def _payload():
+        return {
+            "name": "test",
+            "resources": {
+                "databases": {
+                    "main": {"backend": "postgres", "password": "${PROV_PW}"}
+                }
+            },
+        }
+
+    def test_substituted_environment_is_not_substituted_again(self):
+        env = EnvironmentConfig.from_dict(self._payload())
+
+        built = self._resolve_through_factory(env)
+
+        assert built["password"] == self.SECRET
+
+    def test_directly_constructed_environment_is_still_substituted(self):
+        """The path the removed comment correctly identified as load-bearing.
+
+        A dataclass-constructed environment has never had substitution
+        applied, so the resolver must apply it — exactly once.
+        """
+        env = EnvironmentConfig(
+            name="test",
+            resources={
+                "databases": {
+                    "main": {"backend": "postgres", "password": "${PROV_PW}"}
+                }
+            },
+        )
+
+        built = self._resolve_through_factory(env)
+
+        assert built["password"] == self.SECRET
+
+    def test_opt_out_environment_is_still_substituted(self):
+        env = EnvironmentConfig.from_dict(
+            self._payload(), substitute_vars=False
+        )
+
+        built = self._resolve_through_factory(env)
+
+        assert built["password"] == self.SECRET
+
+    def test_resolve_env_vars_false_leaves_refs_intact(self):
+        env = EnvironmentConfig.from_dict(
+            self._payload(), substitute_vars=False
+        )
+        built: dict = {}
+
+        def factory(**config):
+            built.update(config)
+            return object()
+
+        resolver = ConfigBindingResolver(env, resolve_env_vars=False)
+        resolver.register_factory("databases", factory)
+        resolver.resolve("databases", "main")
+
+        assert built["password"] == "${PROV_PW}"
+
+    @pytest.mark.parametrize("substitute_vars", [True, False])
+    def test_overrides_get_their_own_single_pass(self, substitute_vars):
+        """Overrides are a separate source with separate provenance.
+
+        They are caller-supplied and have never been substituted, so they are
+        expanded here regardless of whether the *environment* was expanded at
+        load. Gating them on the environment's provenance would silently stop
+        substituting them for every normally-loaded environment — a
+        behaviour change to a source the flag says nothing about.
+
+        Whether overrides should be substituted at all is a separate
+        question (199-FU2); this pins the behaviour they have always had.
+        """
+        env = EnvironmentConfig.from_dict(
+            self._payload(), substitute_vars=substitute_vars
+        )
+
+        built = self._resolve_through_factory(env, password="${PROV_PW}")
+
+        assert built["password"] == self.SECRET, (
+            f"override expanded the wrong number of times with "
+            f"substitute_vars={substitute_vars}"
+        )
+
+    def test_overrides_are_not_substituted_when_disabled(self):
+        env = EnvironmentConfig.from_dict(self._payload())
+        built: dict = {}
+
+        def factory(**config):
+            built.update(config)
+            return object()
+
+        resolver = ConfigBindingResolver(env, resolve_env_vars=False)
+        resolver.register_factory("databases", factory)
+        resolver.resolve("databases", "main", password="${PROV_PW}")
+
+        assert built["password"] == "${PROV_PW}"
+
+    def test_resolving_does_not_mutate_the_environment(self):
+        """The environment outlives the resolution and must come out intact.
+
+        This replaces a test that asserted a caller's ``**overrides`` mapping
+        was unmodified. ``resolve(**overrides)`` materializes a fresh dict per
+        call, so nothing downstream could ever have written through to the
+        caller's own mapping and the assertion could not fail. The property
+        actually at risk is one layer over: the resolved config is derived
+        from the environment's stored values, and the environment is reused.
+        """
+        env = EnvironmentConfig.from_dict(self._payload())
+
+        first = self._resolve_through_factory(env, password="override")
+        second = self._resolve_through_factory(env)
+
+        assert first["password"] == "override"
+        assert second["password"] == self.SECRET
+
+    def test_a_factory_adjusting_a_nested_section_cannot_reach_the_env(self):
+        """``get_resource`` copies deeply, so a factory owns what it is given.
+
+        A shallow copy leaves nested containers pointing at the environment's
+        own objects. It went unnoticed while a substitution pass always ran
+        afterwards -- rebuilding the structure through comprehensions isolated
+        the result incidentally -- and surfaced once that pass was correctly
+        skipped for an already-substituted environment.
+        """
+        payload = self._payload()
+        payload["resources"]["databases"]["main"]["pool"] = {"max": 10}
+        env = EnvironmentConfig.from_dict(payload)
+
+        first = self._resolve_through_factory(env)
+        first["pool"]["max"] = 999
+
+        assert self._resolve_through_factory(env)["pool"]["max"] == 10

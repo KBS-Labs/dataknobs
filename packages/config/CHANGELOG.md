@@ -7,6 +7,184 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A configuration value whose own text contains `${...}` was expanded
+  twice, replacing it with the value of an unrelated environment variable.**
+  Substitution ran in two layers that did not know about each other — once
+  when an `EnvironmentConfig` loaded, and again when a resolution layer read
+  through it — and the second pass expanded the *output* of the first. A
+  generated password of `p${x}ss` therefore arrived as `pINJECTEDss` if some
+  variable `x` happened to be set. Nothing warned; the value was simply
+  wrong, and wrong in a way that depends on the rest of the process
+  environment.
+
+  Two paths carried it. `EnvironmentAwareConfig.resolve_for_build` corrupted
+  the resolved config dict a reviewer could at least diff.
+  `ConfigBindingResolver` is the more serious one: it hands the value
+  straight to a factory that builds a live resource, so a mangled DSN or API
+  key produced a connection failure with no artifact anywhere showing the
+  value that was actually used. Beyond corruption, the expansion reads the
+  process environment using text taken from a secret — a value that happens
+  to contain `${AWS_SECRET_ACCESS_KEY}` would have pulled that variable's
+  contents into wherever the first value was headed.
+
+  `EnvironmentConfig` now records whether its values have been substituted,
+  and both layers substitute a source exactly once. Configs built directly
+  via the dataclass constructor, or loaded with `substitute_vars=False`,
+  still carry raw refs and are still expanded by the resolution layers — but
+  they are not otherwise untouched: `resolve_for_build` expands them per
+  resource as each is spliced rather than as a whole document, and `merge()`
+  can now raise for them.
+
+  Where each source is expanded follows from the same rule. A resource is
+  still separable when it is spliced, so that is the latest point it can be
+  expanded, and the latest point is the safest one — expanding earlier reads
+  values the build then discards, so an unset required `${VAR}` in a resource
+  no reference names cannot abort a build that never looked at it. A
+  reference's inline defaults get the same treatment one level in: the splice
+  discards every one the environment supplies, so each is expanded there,
+  only once known to survive. A dev-time fallback such as
+  `password: ${LOCAL_DB_PASSWORD}` therefore need not be set in production,
+  where the environment overrides it; a default that *is* used still raises
+  when its variable is unset. This holds for a default's value, not for the
+  key naming it: what proves a default was discarded is its key, so a
+  required `${VAR}` in key position must resolve either way. A `$resource`
+  block nested inside a default —
+  or inside a resource an unsubstituted environment supplies — reaches its
+  own splice raw for the same reason. Nested inside a resource an
+  already-substituted environment supplies, it was expanded at that
+  environment's load, and `substituted` is what stops the splice expanding it
+  again. Either way it is expanded exactly once.
+
+  `substituted` describes the values a config was *built* with. Writing into
+  `resources` or `settings` afterwards does not update it, and a layer
+  reading a stale `True` will skip the pass those new values needed. Build
+  the config you want rather than amending one; if you must amend, re-mark
+  it with `dataclasses.replace(env, substituted=False)`. The dataclass is
+  deliberately left mutable — freezing it would break consumers that
+  assemble an environment field by field — so this is a stated contract
+  rather than an enforced one.
+
+- **A `$resource` reference naming a resource that does not exist now logs a
+  warning.** The warning existed but was unreachable — it sat in an
+  `except KeyError` branch, while the call it guarded returns the supplied
+  defaults instead of raising whenever a defaults dict is passed, which that
+  call site always does. A mistyped binding name therefore degraded in
+  complete silence to the reference's inline defaults — an empty config when
+  it declares none. The fallback behaviour itself is unchanged: a degraded
+  config is still config, so it gets the same `$requires` check and the same
+  resolution a found one does — which is what resolves a nested `$resource`
+  inside the reference's inline defaults, and what keeps that nested
+  reference's `$resource` / `type` marker keys from reaching a factory as
+  keyword arguments.
+
+- **`EnvironmentConfig.load()` reported the wrong provenance when the
+  environment file was absent.** It short-circuits to an empty config before
+  reaching the construction that records `substituted`, so it always reported
+  `False` — while `from_dict({})` reported `True` for the same request. Two
+  empty configs built the same way disagreed, and the documented truth table
+  carved out no such case. Note the consequence: an absent-file config is now
+  a *substituted* config, so merging one with a directly-constructed config
+  is a mixed-provenance merge and can raise on an unset variable.
+
+- **`InheritableConfigLoader` returned a different config depending on what
+  had been loaded before it.** Resolving `extends:` loads the parent without
+  substitution and expands the merged result at the end, but both forms were
+  cached under the same name — so whichever was stored first was served to
+  the other. Loading a child and then its parent returned the parent with
+  `${VAR}` placeholders still in it, unexpanded. Loading a parent and then
+  its child expanded the parent's values a *second* time, producing the
+  corruption described in the first entry through a different route:
+  `p${x}ss` again arriving as `pINJECTEDss`. Both symptoms came and went with
+  load order. Configs whose values contain no `${` were unaffected in either
+  direction. `clear_cache(name)` clears every variant stored under that name.
+
+### Added
+
+- **`EnvironmentConfig.substituted`** — whether `${VAR}` substitution has
+  been applied to the values held. Set by `load()` / `from_dict()` from their
+  `substitute_vars` argument; `False` for direct dataclass construction.
+  Excluded from equality, so two configs holding the same values remain
+  equal regardless of which layer expanded them.
+
+- **`EnvironmentConfig.substituted_view()`** — an equivalent config with
+  substitution applied, or `self` when it already is. Never mutates the
+  receiver, so a caller holding raw refs on purpose keeps them even after a
+  resolution layer reads through the config.
+
+### Changed
+
+- **A `$resource` name or `type` containing `${VAR}` now resolves.**
+  `resolve_for_build` substitutes the app config before splicing in resource
+  references, and a reference's marker keys — `$resource`, `type`,
+  `$requires` — are expanded by that pass, so resource *selection* can be
+  bound to an environment variable (`$resource: ${LLM_BINDING}`). Previously
+  the literal text was looked up, matched nothing, and fell back to the
+  reference's inline defaults.
+
+  That fallback was silent (see `### Fixed`), so a deployment cannot find it
+  in existing logs. To check whether you were relying on it, search your app
+  configs for `$resource:` or `type:` values containing `${`; those are
+  exactly the references whose behaviour changes. After upgrading, the
+  now-reachable *"Resource '...' not found in environment ..., using
+  defaults"* warning reports any that still fail to match.
+
+- **`EnvironmentConfig.merge()` normalizes mixed substitution provenance.**
+  Merging a substituted config with an unsubstituted one expands the
+  unsubstituted side during the merge and returns a substituted result,
+  rather than producing a config whose single flag is wrong for half its
+  values. Merging two configs that agree is unchanged.
+
+  That normalization runs a substitution pass, so `merge()` — previously pure
+  data manipulation with no dependency on the process environment — can now
+  raise `RequiredEnvVarError` when the two sides disagree and the
+  unsubstituted one holds an unset required `${VAR}`. Merging two sides that
+  agree still touches no environment variables and cannot raise.
+
+- **`get_resource()`, `merge()` and `to_dict()` now copy nested structure.**
+  All three documented or implied a copy but stopped at the resource-config
+  level, so every container *inside* a resource was the environment's own
+  object: `env.to_dict()["resources"][type][name]["pool"]` was the live
+  config's own dict, and a consumer adjusting a nested section wrote through
+  into an environment that outlives the resolution. This was masked wherever
+  a substitution pass ran afterwards — `substitute_env_vars` rebuilds the
+  structure through comprehensions, isolating the result incidentally — and
+  surfaced once that pass was correctly skipped for an already-substituted
+  environment.
+
+  Containers are copied; every other value is passed through by identity,
+  which is the same bound the substitution pass set while it was providing
+  the isolation incidentally. Copying the leaves too would overshoot: a
+  resource assembled in Python can hold a live object — a connection pool, a
+  prebuilt provider, a lock — and duplicating one would hand a factory a
+  second pool, or raise `TypeError` on a value that cannot be pickled. A
+  container reached twice is copied once and the same copy used both times,
+  so a structure that refers back to itself terminates rather than exhausting
+  the stack, and one that shares a subtree between two keys keeps sharing it.
+
+- **`InheritableConfigLoader.load(use_cache=False)` no longer writes to the
+  cache.** Bypassing the cache now means not taking part in it in either
+  direction. Two callers depend on this: `validate()` is a dry run, and
+  `load_from_file()` reads with `config_dir` rebound to another directory —
+  and since the cache key carries no directory, the entry it left behind
+  answered later `load()` calls for the directory the loader was actually
+  configured for. Inheritance edges are recorded on the same condition, so a
+  bypassing load no longer files a dependent under a bare parent name from
+  another directory either.
+
+  Note for callers using `use_cache=False` as a reload: it is a bypass, not a
+  refresh. It reads fresh but leaves the stored entry in place, so subsequent
+  `load()` calls still get the cached one. To make a reload visible to other
+  callers, `clear_cache(name)` and then `load(name)`.
+
+- **`InheritableConfigLoader.clear_cache(name)` now clears dependents.**
+  A cached child holds its parent's content merged in, so clearing only the
+  parent left that copy answering — the staleness the call was made to
+  resolve, surviving the call. Clearing a name now transitively clears every
+  config that reached it through `extends:`. Invalidation runs down the
+  inheritance edges, never up: clearing a child leaves its parent cached.
+
 ### Security
 
 - **`ObjectBuilder._load_class` no longer puts an arbitrary import failure's

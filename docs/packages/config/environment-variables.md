@@ -186,6 +186,8 @@ directly:
 Constructing ``VariableSubstitution()`` emits a ``DeprecationWarning``;
 the class will be removed in a future release.
 
+--8<-- "packages/config/docs/environment-variable-substitution.md:substitute-once"
+
 ## Named vs Indexed Access
 
 ### Named Access
