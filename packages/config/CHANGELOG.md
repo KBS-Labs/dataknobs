@@ -113,6 +113,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver, so a caller holding raw refs on purpose keeps them even after a
   resolution layer reads through the config.
 
+- **`InheritableConfigLoader.resolve_name()`, and a `resolver=` argument to
+  go with it** — a public seam for how a configuration *name* maps to a
+  location under `config_dir`. It applies to every `extends:` target as well
+  as to the requested config, which is the point: parents are named inside
+  config files and the recursion into them happens entirely inside the
+  loader, so a deployment that could only intercept the entry point could not
+  express a layout convention at all. A config tree under `domains/` whose
+  children say `extends: parent` was unloadable without overriding a private
+  method.
+
+  Two ways to use it, and they are **alternatives, not layers.** An override
+  replaces the default implementation, so a loader given both ignores the
+  injected resolver — unless the override delegates to
+  `super().resolve_name(...)`, in which case both mappings apply in sequence
+  and a prefixing pair looks for `domains/domains/x.yaml`. Constructing that
+  combination warns, because the first outcome is otherwise silent: the
+  loader reads a file the caller did not configure and says nothing. It is a
+  warning rather than an error, since overriding to normalize or log *and*
+  delegating to `super()` is a legitimate use of both. Pick one:
+
+  ```python
+  from dataknobs_common import CallableResolver, MappingResolver
+
+  # Inject a resolver — no consumer class needed for either common layout.
+  InheritableConfigLoader(root, resolver=CallableResolver(lambda n: f"domains/{n}"))
+  InheritableConfigLoader(root, resolver=MappingResolver({"tutor": "domains/bio-tutor"}))
+
+  # Or override the public method, when the mapping needs loader state.
+  class DomainAware(InheritableConfigLoader):
+      def resolve_name(self, name: str) -> str:
+          return f"domains/{name}"
+  ```
+
+  A resolver returning `None` means "no mapping" and falls back to identity,
+  per the `ResourceResolver` contract. With no resolver and no override,
+  `resolve_name` is identity and nothing about a flat layout changes.
+
+  The resolved name is what the loader keys on throughout — the cache, the
+  cycle-detection set, the `extends:` invalidation edges, and `clear_cache`
+  — so two spellings of one config are one cache entry, one node, and one
+  thing to clear, rather than a config that is two to one structure and one
+  to another.
+
+  `load_from_file` suppresses resolution for the file **and** its `extends:`
+  subtree. A mapping is defined relative to `config_dir`, and that method
+  rebinds `config_dir` to the file's own directory, so a convention applied
+  there would look for its location beneath a directory the caller chose
+  instead. The suppression is honored where resolution is invoked, so
+  overriding `resolve_name` does not defeat it.
+
+  `clear_cache` resolves the name it is given, the same way `load` does, so
+  pass it the name you passed `load`. An already-resolved name is mapped a
+  second time — harmless for a lookup table, which leaves a name it has no
+  entry for alone, but a prefixing resolver double-prefixes and the call
+  clears nothing. Nothing is raised; the debug log reports the names it
+  targeted **and** how many cached entries that removed, so
+  `Cleared 0 cache entries for: domains/domains/child` is the sign.
+
+- **`InheritableConfigLoader.available_names()`** — the names `load` accepts,
+  for this deployment's layout. `list_available()` now delegates to it, and
+  it is the one to override.
+
+  It exists because `resolve_name` is one-way. A resolver answers "where does
+  this name live"; nothing runs it backwards to recover the names from the
+  locations, so a deployment that governs the mapping has to govern
+  enumeration too. The default — the stems of the files directly under
+  `config_dir` — is the loadable set only while `resolve_name` is identity,
+  and leaving it alone under a resolver does not raise, it reports the wrong
+  thing quietly. Under a layout one directory down it returns `[]`, so the
+  natural `for name in ...: load(name)` loop runs zero times; a layout mixing
+  depths is worse than empty, because the stems it does find are *locations*,
+  and mapping a location through `resolve_name` addresses something else
+  again.
+
+  ```python
+  class DomainLoader(InheritableConfigLoader):
+      def resolve_name(self, name: str) -> str:
+          return f"domains/{name}"
+
+      def available_names(self) -> list[str]:
+          return self.stems_in(self.config_dir / "domains")
+  ```
+
+  A flat layout is unchanged: with no resolver and no override, the default
+  is exactly what `list_available` returned before.
+
+- **`InheritableConfigLoader.stems_in(directory)`** — the default
+  `available_names` body, taking a directory, public so an override can point
+  it somewhere else. It globs the extensions `load` itself probes, read from
+  the one shared list, so enumeration cannot fall behind loading. Writing the
+  glob by hand is the quiet way to get an override wrong: covering `*.yaml`
+  alone omits every `.json` config from the listing while leaving each one
+  perfectly loadable.
+
 ### Changed
 
 - **A `$resource` name or `type` containing `${VAR}` now resolves.**
