@@ -7,7 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **FSM functions-layer errors now get a status matching the failure.** The
+  exceptions in `dataknobs_fsm.functions.base` were rooted at a plain
+  `Exception` rather than at `DataknobsError`, so they never reached
+  `dataknobs_error_handler` at all — they fell through to the `Exception`
+  catch-all, which is precisely where that handler's own docs say DataKnobs
+  errors no longer arrive. Every one of them came back as an indistinguishable
+  `500 / InternalServerError`.
+
+  With those types rebased onto their common counterparts (see the
+  `dataknobs-fsm` changelog), the table resolves them: a resource-acquisition
+  failure from any of the six resource backends is now `503`, masked, and a
+  validation failure from the validator library is `422` with the failed
+  checks in `detail`. No new rows — they resolve through `ResourceError`,
+  `ValidationError` and `OperationError` by MRO, as any subclass does.
+
 ### Added
+
+- **`register_exception_handlers` returns the effective policy table**, and
+  rejects a row it could never consult. Middleware cannot raise to reach a
+  handler — Starlette consults the per-type handlers only below the middleware
+  stack — so the documented pattern is to *call* one; calling
+  `dataknobs_error_handler` without a `table=` silently applies
+  `DEFAULT_ERROR_POLICY` rather than the table registered on the app, and the
+  two differ exactly when someone bothered to pass `error_policy=`. Naming
+  cannot prevent an omitted argument, so registration now hands back the table
+  to pass.
+
+  A key that is not a `DataknobsError`, or that is an `APIError` subclass —
+  which takes its disclosure from `client_safe` and never reaches the table —
+  now raises at registration instead of being accepted and ignored. Neither is
+  detectable from the outside: the response is identical whether the row
+  applied or not, so a deployment that writes one believing it has set a
+  disclosure policy has no way to discover it has not.
+
+- **A `DEFAULT_ERROR_POLICY` row for `InvalidTransitionError`** —
+  `409 Conflict`, message and `detail` both disclosed. It is an
+  `OperationError`, so it inherited a masked 500: the server blamed for the
+  caller's mistake, and the `allowed` targets its `context` carries — the
+  remedy — withheld. "Cannot go from `draft` to `shipped`" is the textbook
+  409, the request conflicting with the resource's current state.
+
+  A row rather than a rebase. `OperationError` is the right base for a
+  library, because an invalid transition is permanent and retry logic keyed on
+  that base correctly declines to re-attempt it; rebasing onto
+  `ConcurrencyError` would have bought the same status and broken that. The
+  two axes disagreeing is what this table is for.
+
+  This is the first row whose type is not in `dataknobs_common.exceptions`,
+  which exposed a hole in the guard around the table: both the recorded
+  contract and the published status table were keyed off that module's
+  `__all__`, so a row for a type from anywhere else shipped an undocumented
+  status with the suite green. A row is now required to appear in both.
 
 - **`WizardFSM` lifecycle** — `close()`, `aclose()`, `__enter__`/`__exit__`,
   and `__aenter__`/`__aexit__`, mirroring the wrapped `AdvancedFSM`
@@ -170,9 +223,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading a name: a rate not taken there has to be guessed from a second
   table later, which is how the cost middleware's hand-written duplicate came
   to exist and to drift.
+- **A `DataknobsError` handler in `register_exception_handlers`**, with the
+  `ErrorPolicy` / `DEFAULT_ERROR_POLICY` / `resolve_error_policy` surface it
+  is driven by. Eleven rows map the `dataknobs_common.exceptions` types to a
+  status and a disclosure decision, and resolution walks the exception's MRO
+  rather than looking up its exact type — so the forty-plus `DataknobsError`
+  subclasses the other packages define inherit their nearest listed ancestor's
+  row. `RecordNotFoundError` returns 404 without appearing in the table. An
+  exact-type table would have covered the twelve listed classes and silently
+  500'd the rest, which is the behaviour being replaced.
+
+  A row decides the message and the `context` separately —
+  `ErrorPolicy(status, disclose_message, disclose_context)`. A withheld message
+  is replaced by a generic one, a withheld `context` by `{}`, and both halves
+  are logged whichever way the row falls, so a diagnostic is relocated to the
+  server log rather than discarded — the half of the defect that mattered.
+
+  The two are separate because the types disagree about which half is safe, in
+  both directions. `NotFoundError`'s message is the caller's own key echoed
+  back while its `context` carries `available_keys` — a registry's entire
+  keyspace, a "did you mean" for a library caller and an inventory listing for
+  an HTTP one. `TimeoutError`'s own docstring example puts a SQL query in
+  `context`. Conversely `ValidationError`'s `context` is the caller's own
+  fields while its message can be a database driver's. One bit would force each
+  of those rows to give up a useful half to withhold an unsafe one. Both are
+  now `(status, True, False)`: they keep their message and drop their context,
+  with no change at any raise site. `disclose_context` defaults to `False`, so
+  a row written without thinking about `context` fails closed.
+
+  The `dataknobs_bots.api` family keeps a single `client_safe` bit, because a
+  subclass writes its message and its `detail` in one constructor for one
+  audience, and because `to_dict()` is overridable and returns an arbitrary
+  dict — partial disclosure could only mean allow-listing keys, which would
+  silently drop one an override added.
+
+  `ConfigurationError` is **masked by default**, and that is the one row where
+  the setting is a judgement rather than a reading of the type. Most config
+  diagnostics are authored — a key name, a sorted list of the valid ones — and
+  are exactly what a failing config route should return. But that type is also
+  where the funnels wrapping a third-party constructor or module import land,
+  and their text is unbounded: a database or cache client raises with its
+  connection URL, credentials included. DataKnobs bounds its own funnels (see
+  `### Security`) but cannot audit a consumer's, and bots are built lazily on
+  the request path.
+
+  The handler covers errors raised at any depth **under a route**, not
+  anywhere in the ASGI stack. Starlette builds `ServerErrorMiddleware` → user
+  middleware → `ExceptionMiddleware` → router, and only `ExceptionMiddleware`
+  consults the per-type handlers; an error raised in an `app.add_middleware`
+  layer is above that and still returns a generic 500. That was already true
+  of `APIError`, and is Starlette's layering rather than something this
+  handler could reach. Middleware wanting a status should return
+  `await api_error_handler(request, exc)` instead of raising, or move the work
+  into a route dependency.
+
+  `register_exception_handlers` takes an `error_policy=` mapping, merged over
+  the defaults, that turns it on in one line for a route that is not public,
+  and gives a deployment's own `DataknobsError` subclasses a policy:
+
+  ```python
+  register_exception_handlers(
+      app, error_policy={ConfigurationError: ErrorPolicy(500, True)}
+  )
+  ```
+
+  `DEFAULT_ERROR_POLICY` is a read-only mapping. It is process-global and read
+  per request, so assigning a row into it would change the disclosure policy of
+  every app in the process — including ones registered earlier, which no care
+  at registration time would catch. `error_policy=` is the per-app route.
+
+  Two parameters carry a policy table and they compose differently, so they are
+  named differently: `register_exception_handlers(error_policy=...)` takes
+  *overrides*, merged over the defaults, while `resolve_error_policy(table=...)`
+  and `dataknobs_error_handler(table=...)` take the *whole* table, replacing
+  them. A table passed to the latter that omits `DataknobsError` has no
+  terminal row, and resolution fails closed to a masked 500 rather than
+  falling through.
 
 ### Changed
 
+- **Handled DataKnobs errors no longer propagate to the ASGI server.**
+  Starlette routes the `Exception` catch-all through `ServerErrorMiddleware`,
+  which calls the handler *and then re-raises* so the server sees the failure;
+  handlers registered for narrower types do not re-raise. A DataKnobs error
+  used to be both returned as a 500 and propagated to uvicorn, producing a
+  server-level error log and a tick on whatever the deployment counts as an
+  unhandled exception. It is now handled cleanly and does not propagate.
+
+  That is the intended semantics — a config typo is not a server fault — but
+  it is a monitoring behaviour change, and a deployment alerting on unhandled
+  exceptions will see that signal drop. The handlers log every error they
+  handle instead, so the information is relocated rather than lost: a 4xx at
+  `info`, a 5xx at `error` with the traceback, and a masked error's message
+  and `context` on that line since the response does not carry them.
+
+  The level follows the status class, not the disclosure bit. A 404 is a
+  routine outcome of serving traffic — logging one at `warning` makes a
+  working service look like a failing one and buries the 5xx that need
+  attention — and a 504 is a server-side fault even though it is disclosed.
+  Both handlers share one helper, so the API family and the policy table
+  cannot drift into disagreeing about severity.
 - **`dataknobs_bots.api.RateLimitError` is now also an `OperationError` and
   reaches `DataknobsError` by a second route.** This follows from the
   subclassing fix under `### Fixed` below and is the intended semantics — a
@@ -256,6 +406,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A handled error's log line dropped what it was raised `from`.** For a 5xx
+  the chain came free with the traceback, but a 4xx logs at `info` with no
+  traceback and `%s` renders only the outer exception's own message — so
+  nothing recorded the cause. That is exactly the case a library raising
+  wrapped errors produces: a provider translating a vendor failure it must not
+  disclose raises `ValidationError("openai API error (HTTP 400)")` with the
+  vendor's response body on `__cause__`. Logging only the outer message made
+  every such 422 read identically. Both handlers now append
+  `cause=<type>: <message>` when there is one, and nothing when there is not.
+
+- **A malformed `retry_after` turned a 429 into a generic 500.** `math.ceil`
+  raises on the non-finite floats and on anything that is not a real number,
+  and it ran inside the handler — where the only catcher left is Starlette's
+  error middleware, so the status, the message, and the retry hint were all
+  replaced by the response these handlers exist to stop returning. Reachable
+  rather than theoretical: a provider parses the value from the upstream
+  `Retry-After` header with `float()`, which accepts `"inf"` and `"nan"`, and
+  the endpoint is consumer-configured. A hint that cannot be converted now
+  costs the header and nothing else. (`dataknobs-llm` additionally stopped
+  producing one — see its changelog.)
+
+- **An arbitrary object in `context` was rendered with `str()` into a
+  disclosed response.** Five rows disclose `context`, and the rule was argued
+  from a `StructuredConfig`, whose repr redacts its own secrets — generalising
+  from the one cooperative type to every type. The objects a raise site
+  actually holds when it fails do the opposite: a SQLAlchemy `Engine` renders
+  as `Engine(postgresql://user:pw@host/db)` and a psycopg2 connection quotes
+  its DSN, both deliberately, because a repr is a debugging aid written for a
+  log. Values are now rendered as their type name unless they are one of the
+  types whose text *is* their value — `Path`, `UUID`, the datetime family,
+  `Decimal`, `Enum` — which is what keeps the fix from costing the diagnostic.
+
+  A value whose `__str__` raises, and a `Mapping` whose `items()` raises, no
+  longer take the response with them either; and the response builder now
+  catches whatever the walk still cannot handle, since everything it touches
+  is arbitrary code and "no value can make this raise" is not something it can
+  promise on its own.
+
+- **A masked 4xx is logged at `warning` rather than `info`.** The level follows
+  the status class everywhere else, deliberately — logging a 404 at `warning`
+  makes a working service look like a failing one. But a masked 4xx is the one
+  combination where the log is the *only* record of a failure the caller was
+  told nothing about, and `info` is a level production deployments routinely
+  filter. No default row is affected; this is for a consumer `APIError`
+  subclass with `client_safe = False`, or a consumer row that masks a 4xx.
+
+- **A `context` value the JSON encoder could not represent turned any error
+  response into a generic 500.** The response body is rendered with
+  `json.dumps(..., allow_nan=False)`, so a `Path`, an object, or a
+  `float("inf")` raised *inside* the handler; Starlette's error middleware
+  then caught that and returned exactly the `500 / "An unexpected error
+  occurred"` these handlers exist to replace, losing the real status and
+  message. `context` is a free `dict[str, Any]` and raise sites fill it with
+  whatever the failure was about, so this was not an exotic input — a 404 from
+  a config loader carrying the path it looked in was enough.
+
+  Such values are now rendered with `str()`. Not with
+  `fastapi.encoders.jsonable_encoder`, which falls back to `vars(obj)` and
+  would put an object's whole attribute dict into a response body the raiser
+  only meant to carry the object; `str` discloses what the type chose to say.
+  The walk is depth-bounded, which also terminates a self-referential
+  `context` — another input `json.dumps` rejects outright. It runs in the
+  shared response builder, so a consumer's overridden `APIError.to_dict()` is
+  covered by the same guarantee.
+- **Every DataKnobs error raised from a route returned
+  `500 / "An unexpected error occurred"`.** `register_exception_handlers`
+  covered `APIError`, `HTTPException`, and `Exception`, and every
+  `DataknobsError` that is not an `APIError` — which is all of them, from well
+  over a hundred raise sites across DataKnobs' own source — fell to the
+  catch-all with its message and `context` discarded. The reported case was a config-validation
+  diagnostic: DataKnobs generated `embedding: no variant registered for
+  'ollamaa'`, then threw it away one layer later and returned a 500 that named
+  nothing. See the new handler under `### Added`.
+- **The common `RateLimitError` returned no `detail.retry_after`, while the
+  API twin did.** The two classes store the hint in different places — the API
+  variant writes it into `context`, which `to_dict()` serializes, and the
+  common one keeps it as an attribute only — so one condition produced two
+  response bodies depending on which of two same-named classes the raiser
+  reached for. Both now report it in `detail` as well as in the `Retry-After`
+  header, and a `retry_after` a raiser put in `context` deliberately is left
+  alone.
 - **`dataknobs_bots.api.RateLimitError` was not a subclass of
   `dataknobs_common.exceptions.RateLimitError`.** It was a *sibling*, so
   `except RateLimitError` written against the common name — the name
@@ -384,6 +615,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares one is honored.
 
 ### Security
+
+- **The tool and middleware resolvers no longer put a failed constructor's
+  message into the `ConfigurationError` they raise.** Both wrap
+  `except Exception` around code the deployment supplies — `import_module`,
+  which executes the target module, and the class constructor itself — so the
+  text they were interpolating was unbounded. A tool or middleware whose
+  constructor opens a database or a cache raises with its connection URL in
+  the message, and bots are built lazily on the request path, so that string
+  reached an HTTP response body.
+
+  The message now names the class path (which comes from the config, not from
+  the exception) and the exception type (a class name); the original travels
+  on `__cause__` and reaches the logs from there. The `optional: true` warning
+  log is unchanged and still carries the full text.
+
+  Affects `DynaBot._resolve_tool` and
+  `dataknobs_bots.middleware.factory.resolve_middleware_from_spec`, and so
+  both `build_middleware` and `build_conversation_middleware`. The
+  `ImportError` and `AttributeError` branches are untouched: those are scoped
+  to failures whose text is module and attribute names.
+
+- **`BotCreationError` no longer returns its `reason` to the caller.** The
+  class carries a new `client_safe` class attribute, declared `True` on
+  `APIError` and `False` here; a class with it `False` renders as
+  `"An unexpected error occurred"` with an empty `detail`, and its message and
+  detail are logged instead.
+
+  `BotCreationError` is the only class in the family whose entire payload is
+  one free-text field. The others put the authored part in `detail` or
+  `config_key` and keep the caller's own input in the message, so what they
+  disclose is bounded by construction; `reason` is not, and the pattern this
+  package's own documentation showed for it was
+  `raise BotCreationError(bot_id, str(e))`. Bots are built lazily on the
+  request path, and the tool and middleware factories wrap `except Exception`
+  into a message ending in `{e}` — so a tool whose constructor opened a
+  database or a cache put the driver's error text, connection URL and
+  credentials included, into an HTTP response body.
+
+  The documented pattern is now an authored reason with `raise ... from e`,
+  which keeps the underlying error in the logs where it was always wanted.
+  A deployment that authors its own `reason` and wants it returned subclasses
+  and sets `client_safe = True`.
+
+  The other six API classes and any consumer subclass of `APIError` are
+  unaffected: `client_safe` defaults to `True`, because a class written for
+  the HTTP boundary is written to be shown.
 
 - Put `HTTPRegistryBackend`'s aiohttp transport under a declared version
   floor. aiohttp was never declared by this package, so it reached

@@ -183,8 +183,13 @@ class LLMResource(BaseResourceProvider):
                 
         except Exception as e:
             self.status = ResourceStatus.ERROR
+            # Bounded message: an SDK client constructor reports a bad
+            # credential or an unreachable base URL by naming it. The provider
+            # family is ours and the type name is a class name; the rest
+            # travels on __cause__.
             raise ResourceError(
-                f"Failed to initialize {self.provider.value} client: {e}",
+                f"Failed to initialize {self.provider.value} client "
+                f"({type(e).__name__})",
                 resource_name=self.name,
                 operation="initialize"
             ) from e
@@ -239,7 +244,7 @@ class LLMResource(BaseResourceProvider):
         except Exception as e:
             self.status = ResourceStatus.ERROR
             raise ResourceError(
-                f"Failed to acquire LLM session: {e}",
+                f"Failed to acquire LLM session ({type(e).__name__})",
                 resource_name=self.name,
                 operation="acquire"
             ) from e

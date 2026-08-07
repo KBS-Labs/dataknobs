@@ -995,13 +995,9 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             code = response.get("Error", {}).get("Code", "")
             if code in ("ThrottlingException", "TooManyRequestsException"):
                 status = 429
-            return self._dataknobs_error_for_status(
-                status, f"Bedrock API error: {exc}"
-            )
+            return self._dataknobs_error_for_status(status, str(exc))
         if isinstance(exc, BotoCoreError):
-            return self._dataknobs_error_for_status(
-                None, f"Bedrock API error: {exc}"
-            )
+            return self._dataknobs_error_for_status(None, str(exc))
         return None
 
     async def complete(

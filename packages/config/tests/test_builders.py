@@ -12,6 +12,96 @@ from dataknobs_config.examples import (
 )
 
 
+class TestClassLoadingDisclosure:
+    """``_load_class`` imports the module, and importing runs it."""
+
+    def test_a_module_that_fails_to_import_does_not_leak_its_message(
+        self, tmp_path, monkeypatch
+    ):
+        """The non-``ImportError`` branch catches arbitrary module-level code.
+
+        A dotted class path resolves through ``importlib.import_module``, which
+        *executes* the target module. Anything that module does at import time
+        — opening a connection, reading a secret — can raise with text this
+        project does not control, and ``ConfigError`` is a
+        ``ConfigurationError``, which the bots API layer renders at the HTTP
+        boundary.
+
+        The class path survives, because it comes from the config rather than
+        from the exception, and so does the exception type, because a class
+        name is bounded. The rest travels on ``__cause__``.
+        """
+        package = tmp_path / "leakypkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "boom.py").write_text(
+            'raise ValueError("connect failed: '
+            'postgresql://svc:hunter2@db.internal:5432/prod")\n'
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        config = Config(
+            {"widget": [{"name": "w", "class": "leakypkg.boom.Widget"}]}
+        )
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.build_object("xref:widget[w]")
+
+        message = str(excinfo.value)
+        assert "hunter2" not in message
+        assert "leakypkg.boom.Widget" in message
+        assert "ValueError" in message
+
+
+class TestConfigFileDisclosure:
+    """A config file's path and contents are the server's, not the caller's.
+
+    ``ConfigFileNotFoundError`` is a ``NotFoundError`` and the parse failure is
+    a ``ValidationError``, so the bots API layer renders both with their
+    message disclosed — a 404 and a 422. Config loading is reachable from a
+    request because bots are built lazily on the request path.
+    """
+
+    def test_a_missing_file_does_not_disclose_the_resolved_path(self, tmp_path):
+        """The path is resolved to an absolute one before the message is built.
+
+        Which turns "the config you asked for is missing" into a disclosure of
+        the server's directory layout. The name the caller referred to is the
+        actionable half and stays; the resolved location moves to ``context``,
+        which this type does not disclose.
+        """
+        from dataknobs_config.exceptions import FileNotFoundError as ConfigFileNotFound
+
+        missing = tmp_path / "deploy" / "secrets" / "bots.yaml"
+
+        with pytest.raises(ConfigFileNotFound) as excinfo:
+            Config(str(missing))
+
+        message = str(excinfo.value)
+        assert "bots.yaml" in message
+        assert str(tmp_path) not in message
+        assert excinfo.value.context["path"] == str(missing.resolve())
+
+    def test_a_parse_failure_does_not_echo_the_file_contents(self, tmp_path):
+        """A YAML syntax error quotes the line it choked on.
+
+        That line is config, which is where credentials live. An unterminated
+        quote on an ``api_key`` puts the key itself in the parser's message,
+        and relaying that message put it in a 422 response body.
+        """
+        from dataknobs_config.exceptions import ValidationError
+
+        broken = tmp_path / "bots.yaml"
+        broken.write_text('api_key: "sk-live-do-not-disclose\nother: 1\n')
+
+        with pytest.raises(ValidationError) as excinfo:
+            Config(str(broken))
+
+        message = str(excinfo.value)
+        assert "sk-live-do-not-disclose" not in message
+        assert "bots.yaml" in message
+
+
 class TestObjectConstruction:
     """Test object construction from configurations."""
 

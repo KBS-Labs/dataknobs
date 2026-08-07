@@ -281,8 +281,14 @@ class TypeConverter(ITransformFunction):
                 result[field] = self._convert_value(value, target_type)
             except Exception as e:
                 if self.strict:
+                    # Bounded message: the conversion failed *on the value*,
+                    # so the underlying text quotes it — `invalid literal for
+                    # int() with base 10: '<the record's own data>'`. The
+                    # field name and target type say what went wrong without
+                    # republishing the row.
                     raise TransformError(
-                        f"Failed to convert field '{field}': {e}"
+                        f"Failed to convert field '{field}' to "
+                        f"{target_type} ({type(e).__name__})"
                     ) from e
                 # Keep original value if conversion fails and not strict
         
@@ -373,7 +379,8 @@ class DataEnricher(ITransformFunction):
                     computed = value(data)
                 except Exception as e:
                     raise TransformError(
-                        f"Failed to compute enrichment for '{field}': {e}"
+                        f"Failed to compute enrichment for '{field}' "
+                        f"({type(e).__name__})"
                     ) from e
             else:
                 computed = value

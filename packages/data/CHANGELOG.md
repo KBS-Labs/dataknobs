@@ -32,6 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Postgres now maps a non-duplicate constraint violation at all.** It caught
+  `UniqueViolation` by type and nothing else, so a `NOT NULL`, `CHECK`, or
+  `FOREIGN KEY` failure was never mapped: the raw driver exception propagated,
+  a caller's invalid write came back as a 500 rather than the 422 it is, and
+  psycopg2's text for a `CHECK` violation carries a `DETAIL:` line quoting
+  **the failing row** — so the rejected value travelled in an exception a
+  library caller is likely to log.
+
+  Both drivers expose the distinction as an exception type, which is more
+  precise than the text matching the other backends need, so the split is
+  `UniqueViolation` / `UniqueViolationError` first and then the
+  `IntegrityError` / `IntegrityConstraintViolationError` base — catching the
+  base rather than naming each constraint kind, so one not listed still maps.
+  Six sites, sync and async.
+
+  The structural guard did not catch this because it checks that no backend
+  *constructs* `RecordValidationError` itself, and postgres constructed
+  nothing. Elasticsearch, the other backend that never calls the factory, is
+  correct as-is: it has no `NOT NULL` or `CHECK` to violate, so a version
+  conflict is the only write rejection it can produce.
+
+- **A constraint violation no longer answers with the schema that rejected
+  it.** All eight SQL sites that map a non-duplicate constraint error built
+  their message from `str(driver_exception)`, and a driver names what it
+  enforced: `NOT NULL constraint failed: records.tenant_secret`.
+  `RecordValidationError` is a `dataknobs_common.exceptions.ValidationError`,
+  which the `dataknobs-bots` API layer returns to the caller as a 422 with its
+  message shown — so a rejected write published a piece of the storage schema.
+
+  The eight sites now raise through one `constraint_violation_error()` factory
+  in `sql_base.py`, beside the `is_duplicate_key_error()` predicate they
+  already share: eight independent copies is why one wrong message was wrong
+  in eight places. The message names the record where the caller knows which
+  one it was (a batch write does not — the driver reports the constraint, not
+  the row), and the driver's text stays on `__cause__`, in the traceback a
+  library caller sees and in the line the API handler logs.
+
 - Re-verified the accepted GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311
   (CVSS 9.3, pre-authentication code injection via the
   `/api/v2/.../collections` endpoint) against the `chromadb>=1.0.0`

@@ -95,6 +95,55 @@ class Config:
         else:
             raise ValidationError(f"Invalid source type: {type(source)}")
 
+    @staticmethod
+    def _read_file(path: Path, *, description: str) -> Any:
+        """Read a config file, raising errors that disclose only the filename.
+
+        Both loaders route through here, so the disclosure decision is made
+        once. It has to be made at all because these errors are rendered at an
+        HTTP boundary: ``ConfigFileNotFoundError`` is a ``NotFoundError`` and a
+        parse failure is a ``ValidationError``, both of which the bots API
+        layer returns with their message shown, and bots are built lazily on
+        the request path.
+
+        Two things are kept out of the message. The **resolved path**, because
+        it is absolute by the time we get here, so "your config is missing"
+        would double as a map of the server's filesystem; it goes in
+        ``context``, which ``NotFoundError`` does not disclose and which a
+        library caller reads directly. And the **parser's own text**, because a
+        YAML syntax error quotes the line it choked on — an unterminated quote
+        on an ``api_key`` puts the key in the message. That travels on
+        ``__cause__``, which a traceback and the API handler's log both carry.
+
+        The filename stays: it is what the caller referred to, and a config
+        error that will not say which file is barely an error at all.
+
+        Args:
+            path: The resolved path to read.
+            description: How to name the file in a not-found message.
+
+        Returns:
+            The parsed contents, which may be a non-dict or ``None``.
+        """
+        if not path.exists():
+            raise ConfigFileNotFoundError(
+                f"{description} not found: {path.name}",
+                context={"path": str(path)},
+            )
+
+        try:
+            return load_yaml_or_json(path, require_dict=False)
+        except ConfigUnsupportedFormatError as e:
+            # Rebuilt from the path rather than relayed: the helper's own
+            # message names the full path too.
+            raise ValidationError(
+                f"Unsupported config file extension: {path.suffix!r} ({path.name})"
+            ) from e
+        except ConfigLoadError as e:
+            raise ValidationError(
+                f"Failed to load {path.name} ({type(e).__name__})"
+            ) from e
+
     def _load_file(self, path: Union[str, Path]) -> None:
         """Load configuration from a file.
 
@@ -103,21 +152,16 @@ class Config:
         """
         path = Path(path).resolve()
 
-        if not path.exists():
-            raise ConfigFileNotFoundError(f"Configuration file not found: {path}")
-
-        # Update config_root if not set
-        if not self._settings_manager.get_setting("config_root"):
-            self._settings_manager.set_setting("config_root", str(path.parent))
-
         # Tolerates non-dict / empty roots — see _load_dict for atomic-config
         # validation that runs only when data is truthy.
-        try:
-            data = load_yaml_or_json(path, require_dict=False)
-        except ConfigUnsupportedFormatError as e:
-            raise ValidationError(str(e)) from e
-        except ConfigLoadError as e:
-            raise ValidationError(f"Failed to load {path}: {e}") from e
+        data = self._read_file(path, description="Configuration file")
+
+        # Update config_root if not set. After the read rather than before it,
+        # so there is one existence check rather than two; the only difference
+        # is that an unreadable file no longer leaves config_root set, and the
+        # exception makes the object unusable either way.
+        if not self._settings_manager.get_setting("config_root"):
+            self._settings_manager.set_setting("config_root", str(path.parent))
 
         if data:
             self._load_dict(data)
@@ -194,16 +238,8 @@ class Config:
 
         path_obj = Path(path).resolve()
 
-        if not path_obj.exists():
-            raise ConfigFileNotFoundError(f"Referenced configuration file not found: {path_obj}")
-
         # Referenced files may be lists or empty — caller normalizes.
-        try:
-            data = load_yaml_or_json(path_obj, require_dict=False)
-        except ConfigUnsupportedFormatError as e:
-            raise ValidationError(str(e)) from e
-        except ConfigLoadError as e:
-            raise ValidationError(f"Failed to load {path_obj}: {e}") from e
+        data = self._read_file(path_obj, description="Referenced configuration file")
         # Preserve the historical ``yaml.safe_load(f) or {}`` semantic:
         # any falsy parsed value (None, empty list, empty dict, etc.)
         # collapses to ``{}``.

@@ -65,6 +65,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A non-finite `Retry-After` header is no longer parsed into a wait.**
+  `float()` accepts `"inf"`, `"Infinity"`, and `"nan"`, and the header is
+  written by whatever endpoint the deployment configured — a self-hosted
+  inference server, a gateway, a proxy. A non-finite value is not a duration:
+  it cannot be slept on, and a caller converting it to RFC 7231 delay-seconds
+  gets `OverflowError` or `ValueError`. It now yields no hint rather than one
+  the next caller chokes on. (The `dataknobs-bots` API layer, which turns
+  `retry_after` into a `Retry-After` header inside its error handler, was that
+  next caller; it is hardened independently.)
+
+- **The FSM integration layer no longer relays a vendor rendering.** Provider
+  translation withholds it, but those transforms wrap `except Exception`
+  around a live provider call and built their `TransformError` from the
+  result — so an endpoint URL or a relayed response body reached an error that
+  never passed through the translation path. Same for the LLM resource
+  providers, whose text is an SDK client constructor's.
+
+- `ResponseValidator` reported a schema failure by interpolating pydantic's
+  whole rendering into the message — a multi-line blob carrying each field's
+  `input_value` and a versioned docs URL — while leaving `validation_errors`,
+  the parameter the error class has for exactly this list, empty. The message
+  now says how many fields failed, `validation_errors` names them, and
+  pydantic's rendering stays reachable on `__cause__`.
+
 - Schema extraction attributed records to a munged class name rather than to
   the provider family. It read a private `_provider_name` attribute that no
   provider sets, then fell back to lower-casing the class name and stripping
@@ -97,6 +121,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CVE floor declared below rather than an unconstrained aiohttp.
 
 ### Security
+
+- **A translated vendor error no longer carries the vendor's own rendering in
+  its message.** Every provider built the message as `f"<Vendor> API error:
+  {exc}"`, and two of the types translation produces —
+  `dataknobs_common.exceptions.ValidationError` and `RateLimitError` — are
+  rendered *with their message shown* at an HTTP boundary by the
+  `dataknobs-bots` API layer, at 422 and 429. So the vendor rendering reached
+  the response body: `aiohttp.ClientResponseError` renders the endpoint URL
+  verbatim (on a self-hosted deployment, an internal hostname and port), the
+  OpenAI and Anthropic SDKs relay the response body, and botocore names the
+  AWS operation.
+
+  The message is now written by the shared dispatcher from the provider family
+  and the status — `"openai API error (HTTP 400)"`, or `"ollama API error"`
+  when the transport gave no status. A context-window overflow appends
+  `": request exceeds the model's context window"`, the one 400 worth telling
+  apart in the text because the caller can act on it; naming it needs none of
+  the vendor's words, since `ContextLengthExceededError` has already been
+  chosen by then. The rendering stays on `__cause__`, which every translating
+  call site already preserved.
+
+  This is a behaviour change for anyone matching on the text of a translated
+  error rather than on its type; the type mapping, `retry_after`, and
+  context-window-overflow detection are all unchanged.
+
+  `_dataknobs_error_for_status`'s second parameter is renamed `message` →
+  `detail` to say what it now is: classification material — overflow detection
+  reads it — that is never disclosed. A provider cannot influence the message
+  at all, which is what extends the fix to a provider this package has never
+  seen, rather than only to the five it ships.
+
+  **For an out-of-tree provider, that last sentence is the breaking part.** A
+  provider passing `message=` gets a `TypeError` and finds out immediately; one
+  passing the same string positionally keeps type-checking and keeps
+  classifying correctly, but its message is now written by the dispatcher and
+  the string it passes is read and discarded. That is deliberate — a provider
+  choosing its own message is precisely the hole being closed, so there is no
+  opt-out — but it is silent, and no warning can distinguish a string passed as
+  classification material from the same string passed as a message. Providers
+  outside this package should expect their translated errors' text to change.
 
 - Bumped minimum `aiohttp` requirement (extras: `ollama`,
   `huggingface`) from `>=3.14.1` to `>=3.14.3` to extend the prior

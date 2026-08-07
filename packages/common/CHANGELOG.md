@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`assert_no_broad_except_in_error_text`** (`dataknobs_common.testing`) —
+  a source guard that fails when a broad `except ... as exc` reaches a `raise`
+  of a named error type whose message interpolates `exc`. The text of an
+  exception caught by `except Exception` comes from whatever ran in the `try`,
+  including consumer code, so it can carry a connection URL or a credential —
+  and several of these types are rendered at an HTTP boundary by the
+  `dataknobs-bots` API layer.
+
+  It flags **any read of the caught name it cannot prove is a class name**.
+  `type(exc).__name__`, `exc.__class__.__name__`, and `isinstance(exc, X)` are
+  safe; everything else is a finding, including the forms that are not an
+  f-string at all — `str(exc)`, `%`-formatting, `.format()`, concatenation,
+  `exc.args[0]`, passing it to a helper — and including an intermediate
+  variable, since `msg = f"...{exc}"` followed by `raise X(msg)` discloses
+  exactly as much as interpolating at the raise. Keyword arguments are scanned
+  as well as positional, because `context=` is returned to the caller for
+  several of these types. `raise ... from exc` is never flagged: that is where
+  the original is supposed to go.
+
+  Failing closed is the point. Recognising an enumerated list of dangerous
+  shapes means the shape nobody thought of reports green, which is worse than
+  no guard because it also reports green over the shapes that *were* thought
+  of and then written differently.
+
+  `error_names` defaults are available as `GUARDED_ERROR_NAMES` — derived from
+  `dataknobs_common.exceptions` at import rather than listed, so a new shared
+  exception is guarded the day it is added. Reports every site in one failure.
+  `ignore={"pkg/module.py:120"}` exempts a site reviewed and judged bounded,
+  matched on a path-component boundary; an ignore entry that matches nothing
+  is itself an error, since a suppression whose site moved is a hole that
+  reads as a clean scan. `unbounded_types=` widens what counts as a broad
+  catch — `ImportError` is the case that motivated it, since its text carries
+  an absolute filesystem path.
+
+### Security
+
+- **`PluginRegistry` no longer relays a factory's failure text.** A plugin
+  factory builds a backend — a database, an event bus, an LLM client — from
+  deployment config, so the exception it raises is a driver's or an SDK's and
+  can carry the connection URL it was handed. All four `create`/`get` paths
+  wrapped it into the message. They now name the key and the exception type,
+  with the original on `__cause__`.
+
+  The type-validation failure was extracted to a shared `_check_validate_type`
+  while doing it, and raises directly rather than through the same wrap. Its
+  message is authored here and names two class names, so it is bounded by
+  construction — flattening it to `(TypeError)` would have left a caller unable
+  to tell a factory that *failed* from one that returned the wrong thing. Four
+  inline copies is why correcting the wrap once would otherwise have had to be
+  done four times.
+
+- **`serialize()` / `deserialize()` no longer echo the object's failure text —
+  or the payload.** `to_dict()` / `from_dict()` are the object's own code, so
+  their text is whatever their dependencies say. `deserialize` additionally put
+  the entire input `data` in `context`: the whole document being decoded,
+  echoed back into the error about failing to decode it.
+
+- **A failing custom pack reducer no longer has its message interpolated into
+  the `ConfigurationError` that wraps it.** The reducer is consumer code, the
+  wrap catches `Exception`, and what a reducer folds *is* config — so a
+  failure quoting the value it choked on quoted a config value. That error is
+  rendered at the HTTP boundary by the `dataknobs-bots` API layer.
+
+  The message now names the field, the packs being folded, and the exception
+  type; the original travels on `__cause__`.
+
 ### Fixed
 
 - **A `SyncLoopBridge.close()` that raised deadlocked every later

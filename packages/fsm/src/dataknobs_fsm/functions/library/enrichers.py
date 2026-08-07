@@ -162,7 +162,9 @@ class LookupMergeEnricher(ITransformFunction):
                 query, fetch_one=True, as_dict=True
             )
         except Exception as e:
-            raise TransformError(f"Enrichment lookup failed: {e}") from e
+            raise TransformError(
+                f"Enrichment lookup failed ({type(e).__name__})"
+            ) from e
 
         result = dict(data)
         if not row:

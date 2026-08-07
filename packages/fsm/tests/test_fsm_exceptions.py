@@ -10,8 +10,6 @@ This test suite covers:
 
 import pytest
 import json
-import pickle
-from typing import Dict, Any
 
 from dataknobs_fsm.core.exceptions import (
     FSMError,
@@ -141,7 +139,8 @@ class TestFSMExceptionTypes:
         error2 = CircuitBreakerError(details={"state": "open"})
         assert str(error2) == "Circuit breaker is open"
         assert error2.wait_time is None
-    
+
+
     def test_etl_error(self):
         """Test ETLError for ETL operations."""
         error = ETLError(
@@ -240,7 +239,7 @@ class TestFSMExceptionTypes:
                     "data_load",
                     f"Failed due to resource error: {e}",
                     {"original_error": str(e), "resource": e.resource_id}
-                )
+                ) from e
         
         def outer_function():
             try:
@@ -340,3 +339,50 @@ class TestFSMExceptionTypes:
         
         for error, expected in test_cases:
             assert str(error) == expected
+
+class TestCircuitBreakerIsAResourceFailure:
+    """An open breaker is unavailability, not a conflict.
+
+    It derived from ``ConcurrencyError``, whose documented cases are lock
+    acquisition, transaction conflicts, race conditions, and optimistic
+    locking — none of which describe a breaker. ``ResourceError`` lists
+    "resource acquisition failures" and "connection errors", which is exactly
+    the condition: the dependency is failing and we are refusing to call it.
+
+    The base is not decoration. Retry logic catching ``ConcurrencyError``
+    treats a failure as a contended write to re-attempt at once, which is the
+    worst possible response to a breaker — the retry is what the breaker
+    exists to prevent. And a caller mapping exception types onto HTTP statuses
+    got ``409 Conflict``, which says the request conflicts with the resource's
+    current state and would succeed if the caller changed the request. Nothing
+    about the request is wrong; the answer is "not now".
+    """
+
+    def test_it_is_a_resource_error(self):
+        from dataknobs_common.exceptions import ResourceError as CommonResourceError
+
+        assert isinstance(CircuitBreakerError(), CommonResourceError)
+
+    def test_it_is_not_a_concurrency_error(self):
+        from dataknobs_common.exceptions import (
+            ConcurrencyError as CommonConcurrencyError,
+        )
+
+        assert not isinstance(CircuitBreakerError(), CommonConcurrencyError)
+
+    def test_the_wait_is_readable_as_retry_after(self):
+        """``retry_after`` is the codebase-wide name for "come back in N".
+
+        ``RateLimitError`` carries it, and consumers key on it by ``getattr``
+        — the bots API layer turns it into a ``Retry-After`` header. A breaker
+        that has computed the wait and files it under a private spelling is
+        withholding a hint it already has.
+        """
+        error = CircuitBreakerError(wait_time=5.5)
+
+        assert error.retry_after == 5.5
+        assert error.wait_time == 5.5  # the original name still answers
+
+    def test_no_wait_means_no_hint(self):
+        assert CircuitBreakerError().retry_after is None
+

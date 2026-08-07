@@ -174,6 +174,49 @@ def test_resolution_failure_raises_without_optional() -> None:
     assert "Failed to resolve middleware" in str(excinfo.value)
 
 
+_LEAKY_DSN = "postgresql://svc:hunter2@db.internal:5432/prod"
+
+
+class LeakyCtorMiddleware(Middleware):
+    """A middleware whose constructor fails the way a real driver does.
+
+    Not a mock: the point is that an arbitrary third-party constructor runs
+    inside the factory's ``except Exception``, and the text it raises with is
+    outside DataKnobs' control. Database and cache clients routinely put the
+    connection URL in the message.
+    """
+
+    def __init__(self) -> None:
+        raise ValueError(f"Could not parse URL from string {_LEAKY_DSN!r}")
+
+
+_LEAKY_CLASS = "tests.test_middleware_factory.LeakyCtorMiddleware"
+
+
+def test_a_failing_ctor_does_not_leak_its_message_into_the_config_error() -> None:
+    """The funnel catches ``Exception``, so ``{e}`` here is unbounded text.
+
+    ``ConfigurationError`` is a diagnostic type whose messages are otherwise
+    authored — key names, class paths, sorted key lists — and this package
+    renders it at the HTTP boundary. A message built from an arbitrary
+    constructor's failure breaks that property, and the constructor in
+    question is the consumer's, reached through their config.
+
+    The class path stays: it names the spec that failed, which is what the
+    deployment has to fix, and it comes from the config rather than from the
+    exception. The underlying error stays reachable through ``__cause__``.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        build_middleware([{"class": _LEAKY_CLASS}])
+
+    message = str(excinfo.value)
+    assert "hunter2" not in message
+    assert _LEAKY_DSN not in message
+    assert _LEAKY_CLASS in message
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert _LEAKY_DSN in str(excinfo.value.__cause__)
+
+
 # ---------------------------------------------------------------------------
 # Class-shape check — always raises, never optional
 # ---------------------------------------------------------------------------

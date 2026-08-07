@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A config file's resolved path and the parser's text no longer reach the
+  error message.** `KnowledgeBaseConfig.load` reported a failure by relaying
+  both, and a parser reports a syntax error by quoting the line it choked on —
+  an unterminated quote on an `api_key` puts the key in the text. The message
+  now names the file and the exception class, with the parser's own words on
+  `__cause__`. Matches what `dataknobs-config` does for the same failure, so
+  the two loaders cannot disagree about it.
+
+
 ### Fixed
 
 - `MultiAuthorityData.get_unique_vals_df` raised `TypeError` for columns with

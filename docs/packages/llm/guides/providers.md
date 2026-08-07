@@ -719,8 +719,8 @@ import ContextLengthExceededError`) for it. Because that type *is a*
 `ValidationError`, an existing `except ValidationError` keeps matching — catch
 the narrower type only when you want to react to overflow specifically (compact
 history and retry, switch to a larger-context model, or surface a distinct
-message). Detection is a machine `code` (OpenAI) or a conservative message
-marker (all vendors), and stays deliberately narrow — an unrelated 400 (a
+message). Detection is a machine `code` (OpenAI) or a conservative marker in the
+vendor's own text (all vendors), and stays deliberately narrow — an unrelated 400 (a
 rejected sampling parameter, a malformed request) remains a plain
 `ValidationError`.
 
@@ -749,6 +749,28 @@ vendor type around a provider call (`except openai.RateLimitError`, `except
 aiohttp.ClientResponseError`, `except botocore.exceptions.ClientError`), switch
 to the dataknobs type (`except RateLimitError` / `except OperationError` from
 `dataknobs_common.exceptions`); the raw error is still reachable on `__cause__`.
+
+**What the message says, and what it doesn't.** A translated error's message is
+built from the provider family and the status — `"openai API error (HTTP 400)"`,
+or `"ollama API error"` when the failure carried no status; a context-window
+overflow adds `": request exceeds the model's context window"`, the one 400
+worth distinguishing in the text because the caller can act on it. It
+deliberately does
+**not** include the vendor's own rendering, because two of the types above are
+rendered *with their message shown* at an HTTP boundary (`ValidationError` at
+422 and `RateLimitError` at 429 under the `dataknobs-bots` API layer's default
+policy), and a vendor rendering is not ours to disclose: `aiohttp` renders the
+endpoint URL, and the OpenAI and Anthropic SDKs relay the response body
+verbatim. The rendering is not lost — it is on `__cause__`, so
+`raise ... from exc` chaining puts it in any traceback, and the bots API layer
+appends it to the log line it writes for every handled error.
+
+The family key comes from `provider.provider_name`, so a gateway that declares
+its own key reports that key here too. If you write your own provider, note that
+`_dataknobs_error_for_status(status, detail, ...)` takes the vendor rendering as
+*classification* material only — it decides context-window overflow from it and
+then discards it. You cannot set the message, which is the point: a provider
+this package has never seen inherits the same guarantee.
 
 #### Anthropic 400-retry safety net
 

@@ -35,7 +35,13 @@ from .postgres_mixins import (
     PostgresTableManager,
     PostgresVectorSupport,
 )
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager, validate_field_name
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLRecordSerializer,
+    SQLTableManager,
+    constraint_violation_error,
+    validate_field_name,
+)
 from ..vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -330,6 +336,12 @@ class SyncPostgresDatabase(
             self.db.execute(sql, row)
         except psycopg2.errors.UniqueViolation as e:
             raise DuplicateRecordError(id) from e
+        except psycopg2.IntegrityError as e:
+            # Every other constraint the deployment put on this table. Caught
+            # by the DB-API base rather than by naming NOT NULL / CHECK /
+            # FOREIGN KEY, so a constraint kind not listed here still maps.
+            # `UniqueViolation` is a subclass, so it must precede this clause.
+            raise constraint_violation_error(id) from e
         return id
 
     def read(self, id: str) -> Record | None:
@@ -626,6 +638,10 @@ class SyncPostgresDatabase(
                 (r.id for r in records if r.id and self.exists(r.id)), ids[0]
             )
             raise DuplicateRecordError(colliding) from e
+        except psycopg2.IntegrityError as e:
+            # No id: a batch INSERT is one statement, and the driver names the
+            # constraint rather than the row that tripped it.
+            raise constraint_violation_error() from e
 
         # PostgreSQL RETURNING clause gives us the actual inserted IDs
         if not result_df.empty:
@@ -862,6 +878,8 @@ class SyncPostgresDatabase(
                 (r.id for r in records if r.id and self.exists(r.id)), ids[0]
             )
             raise DuplicateRecordError(colliding) from e
+        except psycopg2.IntegrityError as e:
+            raise constraint_violation_error() from e
         return ids
 
     def vector_search(
@@ -1384,6 +1402,8 @@ class AsyncPostgresDatabase(
                 await conn.execute(sql, *values)
         except asyncpg.exceptions.UniqueViolationError as e:
             raise DuplicateRecordError(id) from e
+        except asyncpg.exceptions.IntegrityConstraintViolationError as e:
+            raise constraint_violation_error(id) from e
 
         return id
 
@@ -1762,6 +1782,8 @@ class AsyncPostgresDatabase(
                         colliding = record.id
                         break
             raise DuplicateRecordError(colliding) from e
+        except asyncpg.exceptions.IntegrityConstraintViolationError as e:
+            raise constraint_violation_error() from e
 
         # Return the actual inserted IDs from RETURNING clause
         if rows:
@@ -2356,6 +2378,8 @@ class AsyncPostgresDatabase(
                     colliding = record.id
                     break
             raise DuplicateRecordError(colliding) from e
+        except asyncpg.exceptions.IntegrityConstraintViolationError as e:
+            raise constraint_violation_error() from e
 
         return ids
 

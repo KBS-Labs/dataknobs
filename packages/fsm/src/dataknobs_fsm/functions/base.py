@@ -8,11 +8,19 @@ This module defines the interfaces for:
 - Resources (external systems and services)
 """
 
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Tuple, TypeVar
 
+from dataknobs_common.exceptions import (
+    ConfigurationError as BaseConfigurationError,
+    DataknobsError,
+    OperationError,
+    ResourceError as BaseResourceError,
+    ValidationError as BaseValidationError,
+)
 from dataknobs_common.structured_config import StructuredConfig
 
 T = TypeVar("T")
@@ -407,66 +415,162 @@ class IResource(ABC):
 
 
 # Exception classes
+#
+# These predate the migration of the package's exceptions onto the shared
+# `dataknobs_common` hierarchy and were left behind by it, so for a while
+# they formed a second hierarchy rooted at a plain `Exception` that reused
+# four names `dataknobs_fsm.core.exceptions` also defines as unrelated
+# types. Each is now *also* the common type that describes what happened,
+# which does two things: `except DataknobsError` reaches them, and anything
+# that classifies an exception rather than just reporting it -- retry logic
+# keyed on a base, an HTTP boundary mapping types onto statuses -- reads the
+# same answer here as it does everywhere else in dataknobs.
+#
+# `FSMError` is kept as their common base so no existing `except FSMError`
+# clause catches less than it did.
 
-class FSMError(Exception):
-    """Base exception for FSM errors."""
-    pass
+
+def _warn_deprecated(name: str, guidance: str) -> None:
+    """Emit the notice for a legacy name that nothing in the package raises."""
+    warnings.warn(
+        f"dataknobs_fsm.functions.base.{name} is deprecated and is raised "
+        f"nowhere in this package; {guidance}",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
-class ValidationError(FSMError):
-    """Raised when validation fails."""
-    
+class FSMError(DataknobsError):
+    """Base exception for the errors raised by the functions layer.
+
+    Deprecated as a name to raise or to catch on. It duplicates
+    :data:`dataknobs_fsm.core.exceptions.FSMError`, which is an alias of
+    ``DataknobsError`` and so means something considerably broader, and
+    nothing raises this one directly. It remains the base of the types below
+    purely so existing ``except FSMError`` clauses are unaffected; new code
+    should catch ``DataknobsError``, which now reaches these too, or the
+    specific common type for the condition it handles.
+    """
+
+    def __init__(self, message: str, *args: Any, **kwargs: Any):
+        if type(self) is FSMError:
+            _warn_deprecated(
+                "FSMError",
+                "catch dataknobs_common.DataknobsError instead, which now "
+                "reaches every error this package raises.",
+            )
+        super().__init__(message, *args, **kwargs)
+
+
+class ValidationError(BaseValidationError, FSMError):
+    """Raised when validation fails.
+
+    Also a :class:`dataknobs_common.exceptions.ValidationError`: the
+    condition is that data the caller supplied did not validate, which is
+    what that type describes and how a caller should render it.
+    """
+
     def __init__(self, message: str, validation_errors: List[str] | None = None):
         """Initialize validation error.
-        
+
         Args:
             message: Error message.
             validation_errors: List of specific validation errors.
         """
-        super().__init__(message)
+        super().__init__(
+            message,
+            context={"validation_errors": list(validation_errors)}
+            if validation_errors
+            else None,
+        )
         self.validation_errors = validation_errors or []
 
 
-class TransformError(FSMError):
-    """Raised when transformation fails."""
+class TransformError(OperationError, FSMError):
+    """Raised when transformation fails.
+
+    An :class:`dataknobs_common.exceptions.OperationError`: a transform that
+    fails is a failed operation, and unlike a validation failure it is not
+    the caller's input that is at fault.
+    """
     pass
 
 
-class StateTransitionError(FSMError):
-    """Raised when state transition fails."""
-    
+class StateTransitionError(OperationError, FSMError):
+    """Raised when state transition fails.
+
+    Deprecated, and raised nowhere in this package. Its alias below,
+    ``FunctionError``, is the reason to prefer the ``core.exceptions``
+    types: that name means a failed *transition* here and a failed
+    *function* there.
+    """
+
     def __init__(self, message: str, from_state: str, to_state: str | None = None):
         """Initialize state transition error.
-        
+
         Args:
             message: Error message.
             from_state: The state transitioning from.
             to_state: The state attempting to transition to.
         """
-        super().__init__(message)
+        if type(self) is StateTransitionError:
+            _warn_deprecated(
+                "StateTransitionError (also exported as FunctionError)",
+                "use dataknobs_fsm.core.exceptions.TransitionError for a "
+                "failed transition, or dataknobs_fsm.core.exceptions."
+                "FunctionError for a failed function -- the FunctionError "
+                "alias here conflates the two.",
+            )
+        super().__init__(
+            message, context={"from_state": from_state, "to_state": to_state}
+        )
         self.from_state = from_state
         self.to_state = to_state
 
 
-class ResourceError(FSMError):
-    """Raised when resource operations fail."""
-    
+class ResourceError(BaseResourceError, FSMError):
+    """Raised when resource operations fail.
+
+    Also a :class:`dataknobs_common.exceptions.ResourceError`, which is what
+    a caller reads to tell "the deployment could not reach something" apart
+    from "the request was wrong". Note that the message may carry
+    infrastructure detail -- a connection string from a failed connect --
+    so a caller rendering this to an untrusted client should mask it.
+    """
+
     def __init__(self, message: str, resource_name: str, operation: str):
         """Initialize resource error.
-        
+
         Args:
             message: Error message.
             resource_name: Name of the resource.
             operation: The operation that failed.
         """
-        super().__init__(message)
+        super().__init__(
+            message,
+            context={"resource_name": resource_name, "operation": operation},
+        )
         self.resource_name = resource_name
         self.operation = operation
 
 
-class ConfigurationError(FSMError):
-    """Raised when configuration is invalid."""
-    pass
+class ConfigurationError(BaseConfigurationError, FSMError):
+    """Raised when configuration is invalid.
+
+    Deprecated, and raised nowhere in this package -- every ``raise
+    ConfigurationError`` in it already uses the ``dataknobs_common`` type
+    this now extends.
+    """
+
+    def __init__(self, message: str, *args: Any, **kwargs: Any):
+        if type(self) is ConfigurationError:
+            _warn_deprecated(
+                "ConfigurationError",
+                "use dataknobs_common.ConfigurationError, which this now "
+                "extends and which every raise site in this package already "
+                "uses.",
+            )
+        super().__init__(message, *args, **kwargs)
 
 
 # Base implementations
@@ -652,5 +756,10 @@ class FunctionRegistry:
         self.transforms.clear()
 
 
-# Alias FunctionError to StateTransitionError for compatibility
+# Alias FunctionError to StateTransitionError for compatibility.
+#
+# Deprecated along with what it points at, and the sharpest reason to prefer
+# `core.exceptions`: that module also exports a `FunctionError`, but it is an
+# `OperationError` about a user-supplied function failing, not a transition.
+# Same name, two conditions, depending on which module you imported from.
 FunctionError = StateTransitionError

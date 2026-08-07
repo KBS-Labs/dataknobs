@@ -80,6 +80,11 @@ from dataknobs_common.testing.blocking import (
     no_blocking,
     requires_blockbuster,
 )
+from dataknobs_common.testing.error_text import (
+    GUARDED_ERROR_NAMES,
+    BroadExceptFinding,
+    assert_no_broad_except_in_error_text,
+)
 from dataknobs_common.testing.elasticsearch_fixtures import (
     elasticsearch_connection_params,
     ensure_elasticsearch_ready,
@@ -118,11 +123,14 @@ __all__ = [
     "DK_AITER_PUMP_THREAD",
     "DK_DAEMON_THREAD_NAMES",
     "DK_SYNC_BRIDGE_THREAD",
+    "BroadExceptFinding",
     "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
     "assert_no_blocking",
+    "GUARDED_ERROR_NAMES",
+    "assert_no_broad_except_in_error_text",
     "assert_no_leaked_bridge_threads",
     "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",

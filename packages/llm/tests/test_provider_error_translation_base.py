@@ -92,10 +92,24 @@ class TestStatusDispatch:
         err = provider._dataknobs_error_for_status(None, "connection reset")
         assert type(err) is OperationError
 
-    def test_message_is_preserved(self) -> None:
+    def test_the_detail_is_not_the_message(self) -> None:
+        """The second argument is classification material, not disclosed text.
+
+        It used to become the message verbatim, which is how each provider's
+        ``f"... {exc}"`` — an endpoint URL from ``aiohttp``, a relayed response
+        body from the OpenAI and Anthropic SDKs — ended up in a 422 body. The
+        message is written here now, from the provider family and the status;
+        see ``test_vendor_error_disclosure.py`` for the end-to-end sweep.
+        """
         provider = _provider()
-        err = provider._dataknobs_error_for_status(400, "the exact message")
-        assert "the exact message" in str(err)
+        err = provider._dataknobs_error_for_status(400, "the exact vendor text")
+        assert "the exact vendor text" not in str(err)
+        assert str(err) == "test API error (HTTP 400)"
+
+    def test_a_statusless_failure_names_no_status(self) -> None:
+        provider = _provider()
+        err = provider._dataknobs_error_for_status(None, "connection reset")
+        assert str(err) == "test API error"
 
 
 class TestRetryAfterFromHeaders:
@@ -124,6 +138,25 @@ class TestRetryAfterFromHeaders:
     def test_mapping_without_get(self) -> None:
         """A header object with no ``.get`` yields ``None`` (not a crash)."""
         assert LLMProvider._retry_after_from_headers(object()) is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["inf", "Infinity", "-inf", "nan", "NaN"],
+        ids=["inf", "Infinity", "-inf", "nan", "NaN"],
+    )
+    def test_a_non_finite_value_is_not_a_wait(self, raw: str) -> None:
+        """``float()`` accepts these; a caller building a header does not.
+
+        The header is written by whatever endpoint the deployment configured
+        — a self-hosted inference server, a gateway, a proxy — so this input
+        is outside the codebase's control. Passing a non-finite float along as
+        if it were a duration hands the next caller a value it cannot convert:
+        ``math.ceil(float("inf"))`` raises ``OverflowError`` and
+        ``math.ceil(float("nan"))`` raises ``ValueError``. Downstream, the
+        bots API layer turns ``retry_after`` into a ``Retry-After`` header
+        inside its error handler, where a raise costs the whole response.
+        """
+        assert LLMProvider._retry_after_from_headers({"retry-after": raw}) is None
 
 
 class TestRetryAfterHttpDate:

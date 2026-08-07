@@ -19,7 +19,7 @@ import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
-from ..exceptions import DuplicateRecordError, RecordValidationError
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
@@ -27,6 +27,7 @@ from .sql_base import (
     SQLQueryBuilder,
     SQLRecordSerializer,
     SQLTableManager,
+    constraint_violation_error,
     is_duplicate_key_error,
 )
 
@@ -244,7 +245,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(params[0]) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error(params[0]) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -627,7 +628,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                                 colliding = rid
                                 break
                     raise DuplicateRecordError(colliding) from e
-                raise RecordValidationError(str(e)) from e
+                raise constraint_violation_error() from e
             except Exception:
                 if own_tx:
                     self.conn.rollback()
@@ -1046,7 +1047,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(params[0]) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error(params[0]) from e
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -1259,7 +1260,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
                     (r.id for r in records if r.id and self.exists(r.id)), ids[0]
                 )
                 raise DuplicateRecordError(colliding) from e
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error() from e
         except Exception:
             self.conn.rollback()
             raise

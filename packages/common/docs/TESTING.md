@@ -9,6 +9,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
 - [Factory Parity Helpers](#factory-parity-helpers)
+- [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
@@ -582,6 +583,106 @@ first two — together they pin both the dataclass↔ctor parity and the
 factory↔ctor parity, so drift in either direction fails the test. For a
 `StructuredConfigConsumer` adopter, `assert_structured_config_consumer`
 bundles them into a single call.
+
+---
+
+## Error Text Disclosure Guard
+
+An error message built from a caught exception is only as bounded as the
+exception is. When the `except` clause names a specific type the text is
+predictable — `ImportError` yields module names, a `TypeError` from a call
+yields a signature mismatch. When it catches `Exception`, the text comes from
+whatever ran inside the `try`, and if that includes consumer code — a
+constructor, a module import, a callback — the message can carry anything the
+consumer's own dependencies put in *theirs*. Database and cache clients
+routinely put the connection URL, credentials included, in theirs.
+
+That matters because some of these types are rendered at an HTTP boundary:
+`dataknobs_bots.api` maps `dataknobs_common.exceptions` types to statuses and
+decides per type whether the message reaches the caller. A message assembled
+from an arbitrary third-party exception is a disclosure channel that no single
+raise site looks like it is opening.
+
+The fix at each site is to name what failed — an identifier the project already
+had, plus `type(exc).__name__` — and let `raise ... from exc` carry the original
+to the logs.
+
+### `assert_no_broad_except_in_error_text`
+
+```python
+from pathlib import Path
+
+from dataknobs_common.testing import (
+    GUARDED_ERROR_NAMES,
+    assert_no_broad_except_in_error_text,
+)
+
+_SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_no_broad_except_feeds_a_rendered_error_message():
+    assert_no_broad_except_in_error_text(
+        _SRC,
+        error_names=GUARDED_ERROR_NAMES | {"MyPackageConfigError"},
+    )
+```
+
+Scans `*.py` under each root and fails if a broad `except ... as exc` reaches a
+`raise` of one of `error_names` that reads `exc`.
+
+**It flags any read it cannot prove is a class name.** `type(exc).__name__`,
+`exc.__class__.__name__`, and `isinstance(exc, X)` are safe; everything else is
+a finding. That includes the forms that are not an f-string —
+
+```python
+raise ConfigurationError(str(exc))                     # flagged
+raise ConfigurationError("failed: %s" % exc)           # flagged
+raise ConfigurationError("failed: " + str(exc))        # flagged
+raise ConfigurationError(f"failed: {exc.args[0]}")     # flagged
+raise ConfigurationError(_describe(exc))               # flagged: opaque helper
+```
+
+— and an intermediate variable, because putting the text in a local first
+discloses exactly as much:
+
+```python
+msg = f"failed: {exc}"
+raise ConfigurationError(msg)                          # flagged
+```
+
+Keyword arguments are scanned as well as positional, since `context=` is
+returned to the caller for several of these types. `raise ... from exc` is
+never flagged: that is where the original is supposed to go.
+
+Failing closed is deliberate. A guard that recognises an enumerated list of
+dangerous shapes reports green over the shape nobody listed — worse than no
+guard, because it also reports green over the listed shapes written slightly
+differently. The cost is the occasional false positive, which `ignore=`
+covers.
+
+`GUARDED_ERROR_NAMES` is derived from `dataknobs_common.exceptions` at import
+rather than written out, so a new shared exception is guarded the day it is
+added; union your package's own names onto it. Matching is on the bare class
+name at the raise site, so an aliased import is covered by listing the alias.
+
+`ignore={"pkg/module.py:120"}` exempts a site reviewed and judged bounded —
+pair each entry with a comment saying why. Matching is on a path-component
+boundary, so a bare `"module.py:120"` exempts that line in *every* file of that
+name under the roots while `"pkg/module.py:120"` exempts one; give as much path
+as you mean. **An entry that matches nothing fails the guard**, because a
+suppression whose site moved is a hole that otherwise reads as a clean scan.
+
+`unbounded_types=` widens what counts as a broad catch. `ImportError` is the
+case that motivated it: its text reads
+`cannot import name 'X' from 'pkg' (/abs/path/site-packages/pkg/__init__.py)`,
+an absolute filesystem path. A package resolving dotted paths from config
+should add it rather than assume the narrow clause bounded the text.
+
+The failure lists every site, so one run reports the whole surface.
+
+It is a source scan rather than a runtime check because the defect is a shape
+in the code, and the runtime path reaching any given site may need a real
+failing dependency to trigger.
 
 ---
 

@@ -292,7 +292,9 @@ class RecordParser(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Failed to parse {self.format}: {e}") from e
+            raise TransformError(
+                f"Failed to parse {self.format} ({type(e).__name__})"
+            ) from e
 
     def _parse_json(self, raw: Union[str, bytes]) -> Any:
         """Parse JSON data."""

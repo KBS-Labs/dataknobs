@@ -365,7 +365,11 @@ class ResourceManager:
                     self.release(name, owner_id)
                 except Exception:
                     pass
-            raise ResourceError(f"Failed to acquire resources: {e}", resource_name="multiple", operation="configure") from e
+            raise ResourceError(
+                f"Failed to acquire resources ({type(e).__name__})",
+                resource_name="multiple",
+                operation="configure",
+            ) from e
     
     def _release_acquired_and_close_pools(self) -> None:
         """Return every acquired resource and close every pool.

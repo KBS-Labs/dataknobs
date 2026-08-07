@@ -188,7 +188,13 @@ def test_create_validate_type_failure() -> None:
     with pytest.raises(OperationError) as excinfo:
         registry.create(key="wrong")
 
-    assert "Failed to create plugin 'wrong'" in str(excinfo.value)
+    # A factory that *returned the wrong thing* is a different failure from a
+    # factory that *raised*, and the message says which. Both are authored
+    # here, so both survive the bounded wrap intact.
+    assert "Factory for plugin 'wrong' must return a Base instance" in str(
+        excinfo.value
+    )
+    assert excinfo.value.__cause__ is None
 
 
 # ---------------------------------------------------------------------------

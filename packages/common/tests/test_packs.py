@@ -508,6 +508,41 @@ def test_callable_reducer_is_honored() -> None:
     assert reg.resolve({"a": {}, "b": {}}).spec.total == 5
 
 
+def test_a_failing_custom_reducer_does_not_leak_its_message() -> None:
+    """The reducer is consumer code folding config values.
+
+    The wrap around it catches ``Exception``, so its text is outside this
+    module's control, and what a reducer is folding *is* config -- a failure
+    quoting the value it choked on quotes a config value. ``ConfigurationError``
+    is rendered at the HTTP boundary by the bots API layer, so the message has
+    to stay bounded: field name, pack names, exception type. The full text
+    travels on ``__cause__``.
+    """
+
+    def leaky(base: Any, override: Any) -> Any:
+        raise ValueError("cannot fold token='hunter2'")
+
+    @dataclass(frozen=True)
+    class LeakyPack(PackSpec):
+        creds: str = ""
+
+        _COMPOSITION = MappingProxyType({"creds": leaky})
+
+    reg: PackRegistry[LeakyPack] = PackRegistry("leaky", LeakyPack)
+    reg.register_pack(LeakyPack(name="a", creds="x"))
+    reg.register_pack(LeakyPack(name="b", priority=1, creds="y"))
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        reg.resolve({"a": {}, "b": {}})
+
+    message = str(excinfo.value)
+    assert "hunter2" not in message
+    assert "creds" in message
+    assert "ValueError" in message
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "hunter2" in str(excinfo.value.__cause__)
+
+
 def test_callable_hatch_accepts_the_config_packages_deep_merge() -> None:
     """The documented recursive-merge recipe, pinned against the real function.
 

@@ -4,6 +4,7 @@ import pytest
 from dataknobs_common.exceptions import ConfigurationError
 
 from dataknobs_bots import DynaBot
+from dataknobs_llm.tools import Tool
 from tests.fixtures.test_tools import (
     KBDependentTestTool,
     ParameterizedTestTool,
@@ -30,6 +31,28 @@ class _SideEffectyNonTool:
     @classmethod
     def reset(cls) -> None:
         cls.instances_created = 0
+
+
+_LEAKY_DSN = "postgresql://svc:hunter2@db.internal:5432/prod"
+
+
+class LeakyCtorTool(Tool):
+    """A real ``Tool`` whose constructor fails the way a real driver does.
+
+    Must genuinely subclass ``Tool``: the resolver's shape check runs before
+    instantiation, so a non-Tool would be rejected without ever reaching the
+    constructor this test is about.
+    """
+
+    def __init__(self, **_kwargs: object) -> None:
+        raise ValueError(f"Could not parse URL from string {_LEAKY_DSN!r}")
+
+    @property
+    def schema(self):  # pragma: no cover - ctor always raises
+        raise NotImplementedError
+
+    async def execute(self, **kwargs):  # pragma: no cover - ctor always raises
+        raise NotImplementedError
 
 
 class TestToolResolution:
@@ -136,6 +159,33 @@ class TestToolResolution:
 
         with pytest.raises(ConfigurationError, match="Failed to import tool class"):
             DynaBot._resolve_tool(tool_config, {})
+
+    def test_a_failing_ctor_does_not_leak_its_message(self):
+        """The instantiation funnel catches ``Exception``; its text is unbounded.
+
+        Tools are constructed from consumer config, and bots are built lazily
+        on the request path, so a tool whose constructor opens a database put
+        the driver's error text — connection URL and credentials included —
+        into a ``ConfigurationError``, which this package renders at the HTTP
+        boundary.
+
+        The class path survives: it names the spec the deployment has to fix
+        and it comes from the config, not from the exception.
+        """
+        tool_config = {
+            "class": "tests.unit.test_tool_resolution.LeakyCtorTool",
+            "params": {},
+        }
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            DynaBot._resolve_tool(tool_config, {})
+
+        message = str(excinfo.value)
+        assert "hunter2" not in message
+        assert _LEAKY_DSN not in message
+        assert "LeakyCtorTool" in message
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert _LEAKY_DSN in str(excinfo.value.__cause__)
 
     def test_resolve_invalid_class_path_optional(self):
         """Invalid class path with optional: true returns None."""

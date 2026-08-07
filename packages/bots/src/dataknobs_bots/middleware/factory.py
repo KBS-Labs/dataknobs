@@ -132,11 +132,17 @@ def resolve_middleware_from_spec(
     except Exception as e:
         # Resolution failure (missing module / class / malformed spec)
         # — covered by ``optional``.
-        msg = f"Failed to resolve {label} '{class_path}': {e}"
+        detail = f"Failed to resolve {label} '{class_path}': {e}"
         if optional:
-            logger.warning("Skipping optional %s: %s", label, msg)
+            logger.warning("Skipping optional %s: %s", label, detail)
             return None
-        raise ConfigurationError(msg) from e
+        # Bounded message: importing a module executes it, so `e` here can
+        # come from arbitrary module-level code. The class path is from the
+        # config and the type name is a class name; both are bounded. The
+        # full text travels on __cause__.
+        raise ConfigurationError(
+            f"Failed to resolve {label} '{class_path}' ({type(e).__name__})"
+        ) from e
 
     # Class-shape check BEFORE instantiation. Never optional: a class
     # listed under the wrong field is a programmer error, not a
@@ -158,11 +164,19 @@ def resolve_middleware_from_spec(
     except Exception as e:
         # Instantiation failure (bad params, ctor raised) — covered by
         # ``optional``.
-        msg = f"Failed to instantiate {label} '{class_path}': {e}"
+        detail = f"Failed to instantiate {label} '{class_path}': {e}"
         if optional:
-            logger.warning("Skipping optional %s: %s", label, msg)
+            logger.warning("Skipping optional %s: %s", label, detail)
             return None
-        raise ConfigurationError(msg) from e
+        # Bounded message: this catches ANY constructor, so `e` is
+        # third-party text the deployment does not control -- a database or
+        # cache client raises with its connection URL in the message, and
+        # `ConfigurationError` is rendered at the HTTP boundary. Keep the
+        # class path (from the config) and the exception type (a class
+        # name); let __cause__ carry the rest to the logs.
+        raise ConfigurationError(
+            f"Failed to instantiate {label} '{class_path}' ({type(e).__name__})"
+        ) from e
 
 
 def build_middleware(specs: Iterable[Mapping[str, Any]]) -> list[Middleware]:

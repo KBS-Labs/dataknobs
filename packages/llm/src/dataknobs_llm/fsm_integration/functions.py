@@ -179,7 +179,7 @@ class LLMCaller(ITransformFunction):
                 }
         
         except Exception as e:
-            raise TransformError(f"LLM call failed: {e}") from e
+            raise TransformError(f"LLM call failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
@@ -264,7 +264,21 @@ class ResponseValidator(IValidationFunction):
                     try:
                         model(**parsed)
                     except PydanticValidationError as e:
-                        raise ValidationError(f"Schema validation failed: {e}") from e
+                        # Pydantic renders every failure into one multi-line
+                        # blob: each field's `input_value` — here the model's
+                        # own output — and a versioned docs URL. Which fields
+                        # failed is the part a caller acts on, and this class
+                        # already has `validation_errors` for exactly that;
+                        # the rendering stays reachable on `__cause__`.
+                        fields = sorted(
+                            ".".join(str(part) for part in err.get("loc", ()))
+                            for err in e.errors()
+                        )
+                        raise ValidationError(
+                            f"Response failed schema validation on "
+                            f"{len(fields)} field(s)",
+                            validation_errors=fields,
+                        ) from e
                 
                 # Check required fields
                 for field in self.required_fields:
@@ -360,7 +374,7 @@ class FunctionCaller(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Function call failed: {e}") from e
+            raise TransformError(f"Function call failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
@@ -509,7 +523,9 @@ class EmbeddingGenerator(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Embedding generation failed: {e}") from e
+            raise TransformError(
+                f"Embedding generation failed ({type(e).__name__})"
+            ) from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.

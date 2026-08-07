@@ -778,9 +778,16 @@ def _reduce_field(
         try:
             return _Reduction(rule(acc, nxt), (), True)
         except Exception as exc:
+            # Bounded message: the reducer is consumer code folding config
+            # values, so `exc` is text this module does not control and may
+            # quote the values themselves. ConfigurationError is rendered at
+            # the HTTP boundary by the bots API layer. The field, pack, and
+            # exception type are all bounded names; __cause__ carries the
+            # rest to the logs.
             raise ConfigurationError(
                 f"The custom reducer for '{field_name}' failed folding "
-                f"'{next_pack}' into {list(acc_packs)}: {exc}",
+                f"'{next_pack}' into {list(acc_packs)} "
+                f"({type(exc).__name__})",
                 context={
                     "field": field_name,
                     "source": next_pack,

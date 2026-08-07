@@ -218,13 +218,14 @@ class TestExceptions:
         assert str(error) == "Transform failed"
     
     def test_state_transition_error(self):
-        """Test StateTransitionError."""
-        error = StateTransitionError(
-            "Cannot transition",
-            from_state="state_a",
-            to_state="state_b"
-        )
-        
+        """Test StateTransitionError, which is deprecated."""
+        with pytest.warns(DeprecationWarning):
+            error = StateTransitionError(
+                "Cannot transition",
+                from_state="state_a",
+                to_state="state_b"
+            )
+
         assert str(error) == "Cannot transition"
         assert error.from_state == "state_a"
         assert error.to_state == "state_b"
@@ -242,8 +243,9 @@ class TestExceptions:
         assert error.operation == "connect"
     
     def test_configuration_error(self):
-        """Test ConfigurationError."""
-        error = ConfigurationError("Invalid configuration")
+        """Test ConfigurationError, which is deprecated."""
+        with pytest.warns(DeprecationWarning):
+            error = ConfigurationError("Invalid configuration")
         assert str(error) == "Invalid configuration"
 
 

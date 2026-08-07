@@ -57,6 +57,7 @@ See Also:
 
 import asyncio
 import logging
+import math
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Mapping
@@ -1091,16 +1092,19 @@ class LLMProvider(ABC):
 
     @staticmethod
     def _is_context_length_error(
-        status: int | None, message: str, *, code: str | None = None
+        status: int | None, detail: str, *, code: str | None = None
     ) -> bool:
         """True when a 400 is specifically a context-window overflow.
 
         Status-gated first (only 400s qualify), then a machine ``code``
-        (OpenAI supplies one) or a conservative message marker (every provider
-        folds the vendor error body into the dispatched message — see
-        :data:`_CONTEXT_LENGTH_MARKERS`). Deliberately narrow so an unrelated
-        400 — a rejected sampling parameter, a malformed request — stays a plain
-        :class:`~dataknobs_common.exceptions.ValidationError`.
+        (OpenAI supplies one) or a conservative marker in the vendor's own
+        rendering (see :data:`_CONTEXT_LENGTH_MARKERS`). Deliberately narrow so
+        an unrelated 400 — a rejected sampling parameter, a malformed request —
+        stays a plain :class:`~dataknobs_common.exceptions.ValidationError`.
+
+        Reads ``detail``, not the raised exception's message: the vendor
+        phrasing this matches on is deliberately kept out of that message (see
+        :meth:`_api_error_message`).
         """
         if status != 400:
             return False
@@ -1108,13 +1112,32 @@ class LLMProvider(ABC):
         # provider passing a non-str machine code must not ``AttributeError``.
         if code and str(code).lower() in _CONTEXT_LENGTH_MARKERS:
             return True
-        text = message.lower()
+        text = detail.lower()
         return any(marker in text for marker in _CONTEXT_LENGTH_MARKERS)
+
+    def _api_error_message(self, status: int | None) -> str:
+        """The message a translated vendor error is raised with.
+
+        Built from what *this* class knows — the provider family and the HTTP
+        status — and never from the vendor's rendering of the failure. Two of
+        the types :meth:`_dataknobs_error_for_status` produces are rendered
+        with their message shown at an HTTP boundary
+        (:class:`~dataknobs_common.exceptions.ValidationError` at 422,
+        :class:`~dataknobs_common.exceptions.RateLimitError` at 429), and a
+        vendor rendering is not ours to disclose: an ``aiohttp`` transport
+        error names the endpoint URL, and the OpenAI and Anthropic SDKs relay
+        the response body verbatim.
+
+        The rendering is not discarded — it stays on ``__cause__``, which every
+        translating call site preserves by raising ``... from exc``.
+        """
+        suffix = f" (HTTP {status})" if status is not None else ""
+        return f"{self.provider_name} API error{suffix}"
 
     def _dataknobs_error_for_status(
         self,
         status: int | None,
-        message: str,
+        detail: str,
         *,
         retry_after: float | None = None,
         code: str | None = None,
@@ -1126,6 +1149,12 @@ class LLMProvider(ABC):
         gate + extraction (which is where the vendor coupling belongs) and then
         defers the status→type decision here, so the policy stays consistent
         across providers and this method stays import-free of any vendor SDK.
+
+        It also writes the raised exception's message
+        (:meth:`_api_error_message`). A provider supplies only *classification*
+        material and never the disclosed text — which is what keeps a provider
+        this package has never seen from reintroducing a vendor rendering into
+        a response body.
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
           (carrying ``retry_after`` when a provider could extract it),
@@ -1141,20 +1170,31 @@ class LLMProvider(ABC):
         Args:
             status: HTTP status code, or ``None`` when the transport gave none
                 (connection error, timeout).
-            message: Human-readable error message for the raised exception.
+            detail: The vendor's own rendering of the failure — usually
+                ``str(exc)``. Read for classification only (see
+                :meth:`_is_context_length_error`); never placed in the raised
+                exception's message or context, since a caller may render
+                either at an HTTP boundary. It reaches an operator via
+                ``__cause__``.
             retry_after: Seconds to wait, when known (429 only).
             code: Machine error code, when the SDK supplies one (OpenAI). Used
-                to identify a context-length overflow even if the message
+                to identify a context-length overflow even if ``detail``'s
                 phrasing does not match a marker.
 
         Returns:
             A dataknobs exception instance (not raised — the caller raises it
             ``from`` the original SDK error to preserve ``__cause__``).
         """
+        message = self._api_error_message(status)
         if status == 429:
             return RateLimitError(message, retry_after=retry_after)
-        if self._is_context_length_error(status, message, code=code):
-            return ContextLengthExceededError(message)
+        if self._is_context_length_error(status, detail, code=code):
+            # Named, unlike the other 400s: this is the one the caller can act
+            # on (compact history, switch model), and naming it needs none of
+            # the vendor's words — the type is already decided by here.
+            return ContextLengthExceededError(
+                f"{message}: request exceeds the model's context window"
+            )
         if status == 400:
             return ValidationError(message)
         return OperationError(message)  # 401/403 and everything else
@@ -1243,9 +1283,17 @@ class LLMProvider(ABC):
         if not raw:
             return None
         try:
-            return float(raw)
+            parsed = float(raw)
         except (TypeError, ValueError):
             pass
+        else:
+            # `float()` accepts "inf", "Infinity" and "nan", and the header is
+            # written by whatever endpoint the deployment configured. A
+            # non-finite wait is not a wait — it cannot be converted to
+            # delay-seconds by a caller building a `Retry-After` header, and
+            # it cannot be slept on. Treat it as no hint rather than passing
+            # it along for someone else to choke on.
+            return parsed if math.isfinite(parsed) else None
         # RFC 7231 HTTP-date form, e.g. "Wed, 21 Oct 2025 07:28:00 GMT".
         try:
             when = parsedate_to_datetime(str(raw))

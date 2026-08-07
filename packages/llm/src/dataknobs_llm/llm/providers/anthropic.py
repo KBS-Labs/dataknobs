@@ -1078,7 +1078,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             getattr(response, "headers", None)
         )
         return self._dataknobs_error_for_status(
-            status, f"Anthropic API error: {exc}", retry_after=retry_after
+            status, str(exc), retry_after=retry_after
         )
 
     def _recover_rejected_param(

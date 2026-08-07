@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 
 from dataknobs_utils.sql_utils import quote_ident
 
-from ..exceptions import DuplicateRecordError
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Filter, Operator, Query, SortOrder, is_storage_key_field
 from ..records import Record
 
@@ -144,6 +144,49 @@ def is_duplicate_key_error(exc: BaseException) -> bool:
         or "primary key" in msg  # duckdb
         or "duplicate key" in msg  # duckdb / generic
     )
+
+
+def constraint_violation_error(record_id: str | None = None) -> RecordValidationError:
+    """Build the error for a non-duplicate constraint violation.
+
+    The counterpart to :func:`is_duplicate_key_error`: once that returns
+    ``False``, every SQL backend raises this. One factory rather than eight
+    copies, because eight copies is why the message they all built was wrong in
+    eight places at once.
+
+    Two qualifications on "every". Postgres does not use the text predicate —
+    psycopg2 and asyncpg both expose the distinction as an exception type, so
+    it splits on ``UniqueViolation`` vs the ``IntegrityError`` base and reaches
+    this factory from the second clause. And Elasticsearch is not a SQL backend
+    at all: it has no ``NOT NULL`` or ``CHECK`` to violate, so a version
+    conflict is the only write rejection it can produce, and that is already a
+    ``DuplicateRecordError``.
+
+    What they built was ``RecordValidationError(str(exc))``, relaying the
+    driver's text verbatim. That text names the physical schema —
+    ``NOT NULL constraint failed: records.tenant_secret`` — and
+    ``RecordValidationError`` is a ``ValidationError``, which the
+    ``dataknobs-bots`` API layer returns to the caller as a disclosed 422. So
+    a rejected write published the table and column it was rejected by.
+
+    The driver's text is not lost, only moved: every call site raises
+    ``from exc``, so it stays on ``__cause__`` — in the traceback a library
+    caller sees, and in the line the API handler logs. Only the response body
+    loses it, which is the audience it was never written for.
+
+    Args:
+        record_id: The id being written, when the caller knows which one it
+            was. Batch writes do not: the driver reports the constraint, not
+            the row.
+
+    Returns:
+        The error to raise ``from`` the driver's exception.
+    """
+    if record_id:
+        return RecordValidationError(
+            f"Record '{record_id}' was rejected by a database constraint"
+        )
+    return RecordValidationError("A record was rejected by a database constraint")
 
 
 if TYPE_CHECKING:

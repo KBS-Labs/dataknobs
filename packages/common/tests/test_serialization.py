@@ -152,7 +152,13 @@ class TestSerialize:
 
         error = exc_info.value
         assert "Failed to serialize" in str(error)
-        assert "Intentional error" in error.context["error"]
+        # The object's own failure text stays out of the message and out of
+        # `context`. `to_dict()` is the object's code, so what it says is
+        # whatever its dependencies say; `__cause__` is where it belongs.
+        assert "Intentional error" not in str(error)
+        assert "Intentional error" not in repr(error.context)
+        assert error.context["error_type"] == "ValueError"
+        assert str(error.__cause__) == "Intentional error"
 
 
 class TestDeserialize:
@@ -217,7 +223,12 @@ class TestDeserialize:
 
         error = exc_info.value
         assert "Failed to deserialize" in str(error)
-        assert "Intentional error" in error.context["error"]
+        # `context` used to carry `data` as well — the whole payload being
+        # decoded, echoed back into the error about failing to decode it.
+        assert "Intentional error" not in str(error)
+        assert "key" not in error.context
+        assert error.context["error_type"] == "ValueError"
+        assert str(error.__cause__) == "Intentional error"
 
 
 class TestSerializeList:

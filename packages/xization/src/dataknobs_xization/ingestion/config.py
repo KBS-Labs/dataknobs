@@ -157,8 +157,15 @@ class KnowledgeBaseConfig:
         try:
             data = cls._load_file(config_path)
         except Exception as e:
+            # Bounded message, matching what `dataknobs_config` does for the
+            # same failure: `config_path` is resolved, so relaying it maps the
+            # server's filesystem, and a parser reports a syntax error by
+            # quoting the line it choked on — an unterminated quote on an
+            # `api_key` puts the key in the text. The file name says which
+            # config; __cause__ carries the parser's own words to the logs.
             raise IngestionConfigError(
-                f"Failed to load config from {config_path}: {e}"
+                f"Failed to load config from '{config_path.name}' "
+                f"({type(e).__name__})"
             ) from e
 
         return cls.from_dict(data, default_name=directory.name)
