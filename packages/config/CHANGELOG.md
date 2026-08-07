@@ -167,7 +167,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass it the name you passed `load`. An already-resolved name is mapped a
   second time — harmless for a lookup table, which leaves a name it has no
   entry for alone, but a prefixing resolver double-prefixes and the call
-  clears nothing. Nothing is raised; the log line names what was cleared.
+  clears nothing. Nothing is raised; the debug log reports the names it
+  targeted **and** how many cached entries that removed, so
+  `Cleared 0 cache entries for: domains/domains/child` is the sign.
 
 - **`InheritableConfigLoader.available_names()`** — the names `load` accepts,
   for this deployment's layout. `list_available()` now delegates to it, and
@@ -191,15 +193,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           return f"domains/{name}"
 
       def available_names(self) -> list[str]:
-          return sorted(
-              path.stem
-              for path in (self.config_dir / "domains").glob("*.yaml")
-              if path.is_file()
-          )
+          return self.stems_in(self.config_dir / "domains")
   ```
 
   A flat layout is unchanged: with no resolver and no override, the default
   is exactly what `list_available` returned before.
+
+- **`InheritableConfigLoader.stems_in(directory)`** — the default
+  `available_names` body, taking a directory, public so an override can point
+  it somewhere else. It globs the extensions `load` itself probes, read from
+  the one shared list, so enumeration cannot fall behind loading. Writing the
+  glob by hand is the quiet way to get an override wrong: covering `*.yaml`
+  alone omits every `.json` config from the listing while leaving each one
+  perfectly loadable.
 
 ### Changed
 

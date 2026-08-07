@@ -289,12 +289,14 @@ class DomainLoader(InheritableConfigLoader):
         return f"domains/{name}"
 
     def available_names(self) -> list[str]:
-        return sorted(
-            path.stem
-            for path in (self.config_dir / "domains").glob("*.yaml")
-            if path.is_file()
-        )
+        return self.stems_in(self.config_dir / "domains")
 ```
+
+`stems_in` is the default's own body, taking a directory. Reusing it is not
+just brevity: it globs the extensions `load` probes, from the one shared
+list. Hand-rolling the glob against `*.yaml` is the quiet way to get an
+override wrong — nothing raises, the `.json` configs just never come up, and
+they are loadable the whole time.
 
 The default is the stems of the files directly under `config_dir`, which is
 the set of loadable names only while `resolve_name` is identity. Leaving it
@@ -329,8 +331,13 @@ loader.load_from_file("./somewhere-else/svc.yaml")
 `load` does, so **pass the name you passed `load`**. Handing it an
 already-resolved name maps it a second time — harmless for a lookup table,
 which leaves an unknown name alone, but a prefixing resolver double-prefixes
-and the call clears nothing. Nothing is raised; the log line names what was
-cleared.
+and the call clears nothing. Nothing is raised; the debug log reports the
+names it targeted **and** how many cached entries that removed, so a clear
+that removed none is the sign:
+
+```
+Cleared 0 cache entries for: domains/domains/child
+```
 
 ## API Reference
 
@@ -365,6 +372,14 @@ class InheritableConfigLoader:
         Default: stems of the files directly under config_dir, which is
         the loadable set only while `resolve_name` is identity. The
         mapping is one-way, so override this alongside it.
+        """
+
+    @staticmethod
+    def stems_in(directory: Path) -> list[str]:
+        """Loadable names from one directory, for an override to reuse.
+
+        The default `available_names` applied to `config_dir`. Globs
+        the extensions `load` probes, from the one shared list.
         """
 
     def load(

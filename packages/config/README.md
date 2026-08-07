@@ -451,6 +451,12 @@ class InheritableConfigLoader:
     # identity -- the mapping is one-way, so override this alongside it.
     def available_names(self) -> list[str]
 
+    # The default's body, taking a directory: an override is this pointed
+    # somewhere else. Globs the extensions load() probes, from the one
+    # shared list, so enumeration cannot fall behind loading.
+    @staticmethod
+    def stems_in(directory: Path) -> list[str]
+
     # Load configuration with inheritance
     def load(
         self,
@@ -474,6 +480,8 @@ class InheritableConfigLoader:
 
     # Clear cache. Pass the name you passed load() -- this resolves it
     # the same way, so an already-resolved name is mapped a second time.
+    # The debug log reports how many entries that removed; zero is the
+    # sign it missed.
     def clear_cache(self, name: str | None = None) -> None
 ```
 
@@ -512,6 +520,18 @@ The mapping is one-way — nothing runs a resolver backwards — so a deployment
 that governs it also has to say which names exist. Override `available_names`
 alongside `resolve_name`; leaving it alone under a resolver does not raise,
 it reports the wrong thing quietly (`[]`, for a layout one directory down).
+Build the override out of `stems_in`, which globs the extensions `load`
+probes — hand-rolling it against `*.yaml` alone silently omits every `.json`
+config while leaving them perfectly loadable.
+
+```python
+class DomainLoader(InheritableConfigLoader):
+    def resolve_name(self, name: str) -> str:
+        return f"domains/{name}"
+
+    def available_names(self) -> list[str]:
+        return self.stems_in(self.config_dir / "domains")
+```
 
 ### Convenience Function
 

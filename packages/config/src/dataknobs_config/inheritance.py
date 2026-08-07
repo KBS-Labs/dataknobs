@@ -47,6 +47,7 @@ from typing import Any
 
 from dataknobs_common import ResourceResolver
 from dataknobs_common.config_loading import (
+    DEFAULT_CONFIG_EXTENSIONS,
     ConfigLoadError,
     find_config_file,
     load_yaml_or_json,
@@ -686,8 +687,9 @@ class InheritableConfigLoader:
         other. Passing an already-resolved name instead maps it a second time:
         harmless for a lookup-table resolver, which leaves a name it has no
         entry for alone, but a prefixing one double-prefixes and the call
-        clears nothing. Nothing is raised -- the log line names what was
-        cleared, which is how to tell.
+        clears nothing. Nothing is raised -- the debug log reports the names
+        it targeted *and* how many cached entries that removed, and a clear
+        that removed none is the sign.
 
         Clearing a name clears every substitution variant cached under it --
         the config, not one of the two forms it may have been stored in.
@@ -722,11 +724,21 @@ class InheritableConfigLoader:
                 stale.add(current)
                 pending.extend(self._dependents.get(current, ()))
 
-            for key in [k for k in self._cache if k[0] in stale]:
+            removed = [k for k in self._cache if k[0] in stale]
+            for key in removed:
                 del self._cache[key]
             for gone in stale:
                 self._dependents.pop(gone, None)
-            logger.debug("Cleared cache for: %s", ", ".join(sorted(stale)))
+            # The count, not just the names. The names are what was targeted,
+            # and a call that targets a name nothing is cached under removes
+            # nothing -- so naming them alone reads identically whether the
+            # call worked, which is useless for the one failure this log is
+            # here to expose: a doubly-resolved name clearing nothing.
+            logger.debug(
+                "Cleared %d cache entries for: %s",
+                len(removed),
+                ", ".join(sorted(stale)),
+            )
         else:
             self._cache.clear()
             self._dependents.clear()
@@ -761,27 +773,42 @@ class InheritableConfigLoader:
                     return f"domains/{name}"
 
                 def available_names(self) -> list[str]:
-                    domains = self.config_dir / "domains"
-                    return sorted(
-                        {
-                            path.stem
-                            for pattern in ("*.yaml", "*.yml", "*.json")
-                            for path in domains.glob(pattern)
-                            if path.is_file()
-                        }
-                    )
+                    return self.stems_in(self.config_dir / "domains")
             ```
         """
-        if not self.config_dir.exists():
+        return self.stems_in(self.config_dir)
+
+    @staticmethod
+    def stems_in(directory: Path) -> list[str]:
+        """Loadable names from one directory's files, deduplicated and sorted.
+
+        The default :meth:`available_names` is this, applied to
+        ``config_dir``; it is public because an override is the same thing
+        applied to a different directory, and rewriting it by hand is quiet
+        to get wrong. Globbing only ``*.yaml`` enumerates a subset of what
+        :meth:`load` accepts -- nothing raises, the ``.json`` configs just
+        never come up, and they are loadable the whole time. The extensions
+        here are the ones ``load`` itself probes, read from the one shared
+        list, so enumeration cannot fall behind loading.
+
+        Args:
+            directory: Where to look; a missing one yields no names
+
+        Returns:
+            File stems, sorted, with a name present in more than one
+            supported extension reported once
+        """
+        if not directory.exists():
             return []
 
-        configs = set()
-        for pattern in ["*.yaml", "*.yml", "*.json"]:
-            for file in self.config_dir.glob(pattern):
-                if file.is_file():
-                    configs.add(file.stem)
-
-        return sorted(configs)
+        return sorted(
+            {
+                path.stem
+                for extension in DEFAULT_CONFIG_EXTENSIONS
+                for path in directory.glob(f"*{extension}")
+                if path.is_file()
+            }
+        )
 
     def list_available(self) -> list[str]:
         """List all available configuration names.

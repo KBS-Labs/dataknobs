@@ -1,5 +1,6 @@
 """Tests for configuration inheritance utilities."""
 
+import logging
 import warnings
 from pathlib import Path
 
@@ -1177,6 +1178,32 @@ class TestResolvedNameIsTheOneIdentity:
 
         assert loader.load("child")["b"] == 99
 
+    def test_a_clear_that_removed_nothing_says_so(self, aliased, caplog):
+        """The documented way to notice a clear that silently did nothing.
+
+        Passing an already-resolved name to a prefixing resolver resolves it
+        a second time and matches no cached entry. Nothing raises, by design
+        -- so the debug line has to distinguish it from a clear that worked,
+        which naming only the target cannot do.
+        """
+        # A *prefixing* resolver, not this class's lookup table: a table
+        # leaves a name it has no entry for alone, so the resolved spelling
+        # resolves to itself and the clear works. Prefixing is the case that
+        # silently misses.
+        loader = InheritableConfigLoader(
+            aliased, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+        loader.load("child")
+
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_config.inheritance"):
+            loader.clear_cache("domains/child")
+        assert "Cleared 0 cache entries" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_config.inheritance"):
+            loader.clear_cache("child")
+        assert "Cleared 1 cache entries" in caplog.text
+
     def test_inheritance_edges_use_resolved_names(self, aliased):
         """Clearing a parent must still reach a child cached under an alias.
 
@@ -1351,6 +1378,9 @@ class TestEnumerationIsTheOtherHalfOfTheMapping:
         (tmp_path / "domains" / "child.yaml").write_text(
             yaml.dump({"extends": "parent", "b": 2})
         )
+        # Not YAML: `load` accepts every extension in the shared list, so an
+        # override enumerating only one of them reports a subset.
+        (tmp_path / "domains" / "extra.json").write_text('{"c": 3}')
         return tmp_path
 
     def test_the_default_is_the_stems_under_config_dir(self, tmp_path):
@@ -1388,9 +1418,35 @@ class TestEnumerationIsTheOtherHalfOfTheMapping:
         assert loader.available_names() == []
 
     def test_an_override_makes_every_reported_name_loadable(self, nested):
-        """The property that matters: what it lists, `load` accepts."""
+        """The property that matters: what it lists, `load` accepts.
+
+        Including the ``.json`` config -- the override reuses the same
+        extension list ``load`` probes, so it cannot enumerate a subset of
+        what loads.
+        """
 
         class DomainLoader(InheritableConfigLoader):
+            def resolve_name(self, name: str) -> str:
+                return f"domains/{name}"
+
+            def available_names(self) -> list[str]:
+                return self.stems_in(self.config_dir / "domains")
+
+        loader = DomainLoader(nested)
+
+        assert loader.available_names() == ["child", "extra", "parent"]
+        for name in loader.available_names():
+            assert loader.load(name)
+
+    def test_a_yaml_only_override_enumerates_a_subset_of_what_loads(self, nested):
+        """Why the shared helper exists, pinned as the thing it prevents.
+
+        Hand-rolling the glob against one extension is the quiet way to get
+        an override wrong: nothing raises, the ``.json`` config just never
+        comes up, and the name is loadable the whole time.
+        """
+
+        class YamlOnly(InheritableConfigLoader):
             def resolve_name(self, name: str) -> str:
                 return f"domains/{name}"
 
@@ -1401,11 +1457,10 @@ class TestEnumerationIsTheOtherHalfOfTheMapping:
                     if path.is_file()
                 )
 
-        loader = DomainLoader(nested)
+        loader = YamlOnly(nested)
 
-        assert loader.available_names() == ["child", "parent"]
-        for name in loader.available_names():
-            assert loader.load(name)
+        assert "extra" not in loader.available_names()
+        assert loader.load("extra")["c"] == 3
 
 
 class TestBothModesAtOnceIsReported:
