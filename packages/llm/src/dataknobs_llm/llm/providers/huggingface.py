@@ -270,14 +270,10 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 getattr(exc, "headers", None)
             )
             return self._dataknobs_error_for_status(
-                exc.status,
-                f"HuggingFace API error: {exc}",
-                retry_after=retry_after,
+                exc.status, str(exc), retry_after=retry_after
             )
         if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
-            return self._dataknobs_error_for_status(
-                None, f"HuggingFace API error: {exc}"
-            )
+            return self._dataknobs_error_for_status(None, str(exc))
         return None
 
     def _build_hf_parameters(self, runtime_config: LLMConfig) -> Dict[str, Any]:

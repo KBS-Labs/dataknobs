@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **`ObjectBuilder._load_class` no longer puts an arbitrary import failure's
+  message into the `ConfigError` it raises.** Resolving a dotted class path
+  calls `importlib.import_module`, which *executes* the target module, so the
+  non-`ImportError` branch was interpolating text produced by module-level
+  code the deployment supplied — a module that connects on import raises with
+  its connection URL in the message. `ConfigError` is a
+  `dataknobs_common.exceptions.ConfigurationError`, which the `dataknobs-bots`
+  API layer renders at the HTTP boundary, so that string could reach a
+  response body.
+
+  The message now names the class path (which comes from the config, not from
+  the exception) and the exception type; the original travels on `__cause__`.
+  The `ImportError` branch is untouched — its text is module and attribute
+  names — as are the `except TypeError` instantiation branches, whose text is
+  a constructor signature mismatch.
+
+- **A config file's resolved path and contents no longer reach the error
+  message.** `Config` resolves a path to an absolute one before reporting it,
+  so "configuration file not found" doubled as a map of the server's
+  filesystem; and a parse failure relayed the parser's own text, which quotes
+  the line it choked on — an unterminated quote on an `api_key` put the key
+  itself in the message. Both types are rendered at the HTTP boundary by the
+  `dataknobs-bots` API layer with their message shown (a 404 and a 422
+  respectively), and bots are built lazily on the request path.
+
+  A not-found error now names the file and carries the resolved path in
+  `context`, which that type does not disclose and which a library caller
+  reads directly. A parse failure names the file and the error class, with the
+  parser's text on `__cause__`. The unsupported-extension case is rebuilt from
+  the path rather than relayed, since the underlying message names the full
+  path too.
+
+  Both loaders route through one private reader, so the decision is made once;
+  the duplicate existence check in `_load_file` went with it, which means an
+  unreadable config no longer leaves `config_root` set — an object the raised
+  exception already made unusable.
+
 ## v0.4.4 - 2026-07-29
 
 ## v0.4.3 - 2026-07-20

@@ -1667,9 +1667,16 @@ class WizardResponder:
 
             stage_name = stage.get("name", "?")
             hint = _maybe_strict_signature_hint(e, forwarded)
+            # Bounded message: this constructs a strategy named by consumer
+            # config, so `e` is whatever that constructor raised -- a strategy
+            # holding a database or an LLM client raises with its URL in the
+            # message, and ConfigurationError is rendered at the HTTP boundary.
+            # The strategy name, stage name, and exception type are bounded,
+            # and `hint` is authored text plus collaborator *names*. The
+            # original travels on __cause__.
             raise ConfigurationError(
                 f"Failed to create strategy '{name}' for wizard "
-                f"stage '{stage_name}': {e}{hint}",
+                f"stage '{stage_name}' ({type(e).__name__}){hint}",
                 context={"stage": stage_name, "strategy": name},
             ) from e
 

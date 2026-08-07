@@ -384,7 +384,9 @@ flowchart TD
 **2. Depth Limit Check**
 - Maximum network stack depth is enforced (default: 10 levels)
 - Prevents infinite recursion in network hierarchies
-- Throws `StateTransitionError` if depth exceeded
+- Logs an error and declines the push if depth exceeded — the push arc
+  returns `False` and the engine tries the next available arc, the same as
+  every other push failure. No exception is raised.
 
 **3. Resource Context Preservation**
 - Parent state resources are saved before pushing
@@ -437,7 +439,7 @@ flowchart TD
 
     CheckErrors -->|Network Not Found| PopReturn[Pop Stack & Return False]
     CheckErrors -->|State Not Found| PopReturn
-    CheckErrors -->|Depth Exceeded| ThrowError[Throw StateTransitionError]
+    CheckErrors -->|Depth Exceeded| PopReturn
     CheckErrors -->|Context Error| PopReturn
     CheckErrors -->|Subnetwork Failed| UpdateFailed[Update with Failure Result]
     CheckErrors -->|Success| UpdateSuccess[Update with Success Result]

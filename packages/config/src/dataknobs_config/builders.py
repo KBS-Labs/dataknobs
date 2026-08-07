@@ -312,7 +312,15 @@ class ObjectBuilder:
         except ImportError as e:
             raise ConfigError(f"Failed to import {class_path}: {e}") from e
         except Exception as e:
-            raise ConfigError(f"Failed to load class {class_path}: {e}") from e
+            # Bounded message, unlike the ImportError branch above: importing
+            # a module executes it, so `e` here can come from arbitrary
+            # module-level code and is not text this project controls.
+            # ConfigError is a ConfigurationError, which the bots API layer
+            # renders at the HTTP boundary. The class path is from the config
+            # and the type name is a class name; __cause__ carries the rest.
+            raise ConfigError(
+                f"Failed to load class {class_path} ({type(e).__name__})"
+            ) from e
 
     def clear_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.

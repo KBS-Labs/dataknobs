@@ -514,7 +514,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         )
         return self._dataknobs_error_for_status(
             status,
-            f"OpenAI API error: {exc}",
+            str(exc),
             retry_after=retry_after,
             code=getattr(exc, "code", None),
         )

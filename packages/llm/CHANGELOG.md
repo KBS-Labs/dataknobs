@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ResponseValidator` reported a schema failure by interpolating pydantic's
+  whole rendering into the message — a multi-line blob carrying each field's
+  `input_value` and a versioned docs URL — while leaving `validation_errors`,
+  the parameter the error class has for exactly this list, empty. The message
+  now says how many fields failed, `validation_errors` names them, and
+  pydantic's rendering stays reachable on `__cause__`.
+
 - Schema extraction attributed records to a munged class name rather than to
   the provider family. It read a private `_provider_name` attribute that no
   provider sets, then fell back to lower-casing the class name and stripping
@@ -97,6 +104,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CVE floor declared below rather than an unconstrained aiohttp.
 
 ### Security
+
+- **A translated vendor error no longer carries the vendor's own rendering in
+  its message.** Every provider built the message as `f"<Vendor> API error:
+  {exc}"`, and two of the types translation produces —
+  `dataknobs_common.exceptions.ValidationError` and `RateLimitError` — are
+  rendered *with their message shown* at an HTTP boundary by the
+  `dataknobs-bots` API layer, at 422 and 429. So the vendor rendering reached
+  the response body: `aiohttp.ClientResponseError` renders the endpoint URL
+  verbatim (on a self-hosted deployment, an internal hostname and port), the
+  OpenAI and Anthropic SDKs relay the response body, and botocore names the
+  AWS operation.
+
+  The message is now written by the shared dispatcher from the provider family
+  and the status — `"openai API error (HTTP 400)"`, or `"ollama API error"`
+  when the transport gave no status. A context-window overflow appends
+  `": request exceeds the model's context window"`, the one 400 worth telling
+  apart in the text because the caller can act on it; naming it needs none of
+  the vendor's words, since `ContextLengthExceededError` has already been
+  chosen by then. The rendering stays on `__cause__`, which every translating
+  call site already preserved.
+
+  This is a behaviour change for anyone matching on the text of a translated
+  error rather than on its type; the type mapping, `retry_after`, and
+  context-window-overflow detection are all unchanged.
+
+  `_dataknobs_error_for_status`'s second parameter is renamed `message` →
+  `detail` to say what it now is: classification material — overflow detection
+  reads it — that is never disclosed. A provider cannot influence the message
+  at all, which is what extends the fix to a provider this package has never
+  seen, rather than only to the five it ships.
 
 - Bumped minimum `aiohttp` requirement (extras: `ollama`,
   `huggingface`) from `>=3.14.1` to `>=3.14.3` to extend the prior

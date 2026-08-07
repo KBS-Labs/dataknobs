@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`assert_no_broad_except_in_error_text`** (`dataknobs_common.testing`) —
+  a source guard that fails when a broad `except ... as exc` reaches a `raise`
+  of a named error type whose message interpolates `exc`. The text of an
+  exception caught by `except Exception` comes from whatever ran in the `try`,
+  including consumer code, so it can carry a connection URL or a credential —
+  and several of these types are rendered at an HTTP boundary by the
+  `dataknobs-bots` API layer.
+
+  `f"...{exc}"` and `f"...{str(exc)}"` are flagged; `f"...({type(exc).__name__})"`
+  is not, since it yields a class name. The distinction is structural rather
+  than a substring search, so the corrected form does not read as the defect.
+  Returns every site in one failure, and `ignore={"module.py:120"}` exempts a
+  site reviewed and judged bounded.
+
+### Security
+
+- **A failing custom pack reducer no longer has its message interpolated into
+  the `ConfigurationError` that wraps it.** The reducer is consumer code, the
+  wrap catches `Exception`, and what a reducer folds *is* config — so a
+  failure quoting the value it choked on quoted a config value. That error is
+  rendered at the HTTP boundary by the `dataknobs-bots` API layer.
+
+  The message now names the field, the packs being folded, and the exception
+  type; the original travels on `__cause__`.
+
 ### Fixed
 
 - **A `SyncLoopBridge.close()` that raised deadlocked every later

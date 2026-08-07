@@ -3628,6 +3628,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             if isinstance(tool_config, dict)
             else False
         )
+        # Bound before the try so the instantiation handler below can name the
+        # spec that failed even when the failure happened before the direct
+        # branch assigned it.
+        class_path: str | None = None
 
         try:
             # Handle xref string format
@@ -3781,11 +3785,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 return None
             raise ConfigurationError(msg) from e
         except Exception as e:
-            msg = f"Failed to instantiate tool: {e}"
+            detail = f"Failed to instantiate tool: {e}"
             if optional:
-                logger.warning("Skipping optional tool: %s", msg)
+                logger.warning("Skipping optional tool: %s", detail)
                 return None
-            raise ConfigurationError(msg) from e
+            # Bounded message: this catches ANY constructor, so `e` is
+            # third-party text the deployment does not control -- a database
+            # or cache client raises with its connection URL in the message,
+            # and ConfigurationError is rendered at the HTTP boundary. Keep
+            # the class path (from the config) and the exception type (a
+            # class name); let __cause__ carry the rest to the logs.
+            named = f" {class_path!r}" if class_path else ""
+            raise ConfigurationError(
+                f"Failed to instantiate tool{named} ({type(e).__name__})"
+            ) from e
 
     # Middleware spec resolution lives in
     # :mod:`dataknobs_bots.middleware.factory` so anything assembling

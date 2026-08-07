@@ -13,7 +13,7 @@ import numpy as np
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import SyncDatabase, enforce_content_version
-from ..exceptions import DuplicateRecordError, RecordValidationError
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
@@ -25,6 +25,7 @@ from .sql_base import (
     SQLQueryBuilder,
     SQLRecordSerializer,
     SQLTableManager,
+    constraint_violation_error,
     is_duplicate_key_error,
 )
 from .sqlite_mixins import SQLiteVectorSupport
@@ -218,7 +219,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(storage_id) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error(storage_id) from e
         finally:
             cursor.close()
 
@@ -463,7 +464,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(colliding) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error() from e
         except Exception:
             self.conn.rollback()
             raise

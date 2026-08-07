@@ -7,7 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **The `dataknobs_fsm.functions.base` exceptions now join the shared
+  hierarchy.** That module predates the migration of this package's exceptions
+  onto `dataknobs_common` and was left behind by it, so it formed a second
+  hierarchy rooted at a plain `Exception` — reusing four names
+  (`FSMError`, `ValidationError`, `ResourceError`, `ConfigurationError`) that
+  `dataknobs_fsm.core.exceptions` also defines as unrelated types.
+
+  Each is now also the common type that describes what happened:
+  `ValidationError` is a `dataknobs_common` `ValidationError`, `ResourceError`
+  a `ResourceError`, and `TransformError`, `StateTransitionError` and the
+  `FSMError` base are `OperationError`, `OperationError` and `DataknobsError`
+  respectively. Two things follow. `except DataknobsError` now reaches the 60
+  raise sites in the resource backends, the transform library and the
+  validators, where before it reached none of them. And anything that
+  *classifies* an exception rather than just reporting it — retry logic keyed
+  on a base, a boundary mapping types onto HTTP statuses — reads the same
+  answer here as everywhere else: under the `dataknobs-bots` API layer's
+  default policy a resource failure is now `503` and a validation failure
+  `422`, where every one of them was previously an indistinguishable `500`.
+
+  `except FSMError` against the `functions.base` name catches exactly what it
+  caught before. The per-class attributes (`validation_errors`,
+  `resource_name`/`operation`, `from_state`/`to_state`) are unchanged and are
+  now also on `.context`, where generic renderers look.
+
+- **`CircuitBreakerError` is now a `ResourceError`, not a
+  `ConcurrencyError`.** An open breaker means a dependency is failing and we
+  are refusing to call it — "resource acquisition failures" and "connection
+  errors", which is what `ResourceError` documents — and none of the lock
+  contention, transaction conflicts, or optimistic-locking failures
+  `ConcurrencyError` documents.
+
+  The base was doing work. Retry logic keyed on `ConcurrencyError` treats a
+  failure as a contended write worth re-attempting at once, which is precisely
+  what a breaker exists to prevent; and a caller mapping exception types onto
+  HTTP statuses rendered it `409 Conflict`, which tells a client its request
+  conflicts with the resource's current state and would succeed if changed.
+  Nothing about the request is wrong — the answer is "not now". It now
+  resolves to `503` under the `dataknobs-bots` API layer's default policy.
+
+  `except CircuitBreakerError` is unaffected. `except ConcurrencyError` no
+  longer catches it, and `except ResourceError` now does.
+
+- **`CircuitBreakerError.retry_after`** — the wait, under the name the rest of
+  the codebase reads it by. `RateLimitError` carries `retry_after` and
+  consumers pick the hint up with `getattr(exc, "retry_after", None)`; the
+  `dataknobs-bots` API layer turns it into a `Retry-After` header, which it
+  emits regardless of whether the error's message is disclosed. A breaker that
+  had already computed the wait was filing it under a spelling only it knew.
+  `wait_time` still answers.
+
+### Deprecated
+
+- **`functions.base.FSMError`, `ConfigurationError`, and
+  `StateTransitionError` (with its `FunctionError` alias)** — the three that
+  nothing in the package raises, and that duplicate a `core.exceptions` name.
+  Constructing one emits a `DeprecationWarning`; they remain exported, and
+  `FSMError` remains the base of the types above, so nothing breaks.
+
+  `FunctionError` is the sharpest reason to move: here it aliases
+  `StateTransitionError`, while `core.exceptions.FunctionError` is about a
+  user-supplied function failing. Same name, two conditions, depending on
+  which module you imported from. Prefer `core.exceptions.TransitionError`
+  for a failed transition and `core.exceptions.FunctionError` for a failed
+  function; catch `DataknobsError` in place of `FSMError`, and
+  `dataknobs_common.ConfigurationError` — which the deprecated one now
+  extends, and which every `raise ConfigurationError` in this package already
+  used.
+
 ### Fixed
+
+- **Docs: a push arc that exceeds the depth limit does not throw.**
+  `FSM_PROCESSING_FLOW.md` said it raises `StateTransitionError`, in both the
+  prose and the flowchart. It logs an error and returns `False`, so the engine
+  tries the next available arc — the same as every other push failure. A
+  reader following the doc would have written a handler for an exception that
+  never arrives, and missed that the push silently fell through.
 
 - **`aclose()` stalled the caller's event loop.** `AdvancedFSM.aclose()`
   is `async def`, but it closed the FSM inline — and that stops the

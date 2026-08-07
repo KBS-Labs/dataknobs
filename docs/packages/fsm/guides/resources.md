@@ -782,6 +782,19 @@ except ResourceError as e:
     # Use fallback or retry
 ```
 
+This is also a `dataknobs_common.exceptions.ResourceError`, so a caller that
+handles failures generically can catch that — or `DataknobsError` — and reach
+it without knowing the FSM package's own names. The resource and the operation
+are on `e.context` as well as on the attributes above, which is where anything
+rendering the error generically will look for them.
+
+Two consequences worth knowing. Code that maps exception types onto HTTP
+statuses will render this as `503 Service Unavailable`, which is what you want:
+the deployment could not reach something, and the request itself was fine. And
+the message on these carries whatever the driver said — for a failed connect
+that is frequently a connection string, credentials included — so mask it
+rather than returning it to an untrusted caller.
+
 ## Common Pitfalls
 
 ### 1. Resource Leaks

@@ -227,7 +227,13 @@ async def create_bot(bot_id: str, config: dict, manager: BotManagerDep):
         bot = await manager.get_or_create(bot_id, config=config)
         return {"bot_id": bot_id, "created": True}
     except Exception as e:
-        raise BotCreationError(bot_id, str(e))
+        # Keep `reason` authored, and let `from e` carry the underlying
+        # error to the logs. Building it from `str(e)` puts whatever a tool
+        # or middleware constructor raised — a driver error naming its
+        # connection URL, for instance — into an exception the caller may
+        # see. `BotCreationError` is masked in responses for exactly that
+        # reason, so the detail below is logged, not returned.
+        raise BotCreationError(bot_id, "configuration could not be loaded") from e
 ```
 
 **Error Response Format:**
@@ -291,47 +297,143 @@ variants to get a useful status.
 Resolution is by MRO, so a subclass inherits the nearest listed ancestor's row:
 `RecordNotFoundError` returns 404 without appearing in the table at all.
 
-| DataKnobs error | Status | Message and `detail` disclosed? |
-|---|---|---|
-| `ValidationError` | 422 | yes |
-| `NotFoundError` | 404 | yes |
-| `ConsentRequiredError` | 403 | yes |
-| `ConcurrencyError` | 409 | yes |
-| `RateLimitError` | 429 | yes |
-| `TimeoutError` | 504 | yes |
-| `ConfigurationError` | 500 | yes — see below |
-| `ResourceError` | 503 | no — masked |
-| `SerializationError` | 500 | no — masked |
-| `OperationError` | 500 | no — masked |
-| `DataknobsError` | 500 | no — masked (terminal fallback) |
+The prerequisite is that the type is a `DataknobsError` at all — the table is
+keyed on that hierarchy, and Starlette picks a handler the same way. An error
+rooted at a plain `Exception` never reaches `dataknobs_error_handler`; it lands
+on the `Exception` catch-all and comes back as a generic 500, whatever
+happened. So when you define your own error type, subclass the common type that
+describes the condition rather than `Exception`, and you inherit a sensible
+status without writing a row. That choice also governs how *libraries* treat
+it: retry logic keyed on `OperationError` or `ConcurrencyError` reads the same
+base, so pick it for what happened, and use a row here only when the right
+library base and the right status disagree.
 
-A masked error returns `"An unexpected error occurred"` with an empty `detail`.
-Its real message and context are logged instead, so the diagnostic is
-relocated rather than lost.
+**These cover your routes, not your whole ASGI stack.** Starlette builds
+`ServerErrorMiddleware` → your middleware → `ExceptionMiddleware` → router, and
+only `ExceptionMiddleware` consults the per-type handlers `register_exception_handlers`
+adds. An error raised in an `app.add_middleware` layer is above that: it reaches
+`ServerErrorMiddleware`, which holds the `Exception` catch-all alone, and comes
+back as a generic 500. A tenant-resolving middleware raising `BotNotFoundError`
+gets 500, not 404 — and this applies to `APIError` too, not just the
+`DataknobsError` handler. Middleware that wants a status should return the
+response instead of raising:
 
-**`ConfigurationError` is disclosed by default, and that is an exposure some
-deployments will not want.** A config diagnostic is written for whoever wrote
-the config — masking it is what made the original defect invisible — but a
-route serving unauthenticated traffic hands that diagnostic to anyone who can
-reach it. Mask it with one line:
+```python
+class TenantMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        try:
+            tenant = await resolve_tenant(request)
+        except APIError as exc:
+            return await api_error_handler(request, exc)
+        return await call_next(request)
+```
+
+A route dependency is the other option — those run inside the router, so an
+error raised there is handled normally.
+
+Message and `detail` are decided separately, because the types disagree about
+which half is safe — and in both directions. `NotFoundError`'s message is the
+caller's own key echoed back while its `context` enumerates a registry's whole
+keyspace; `ValidationError`'s `context` is the caller's own field names and
+values while its message can be a database driver's.
+
+| DataKnobs error | Status | Message disclosed? | `detail` disclosed? |
+|---|---|---|---|
+| `ValidationError` | 422 | yes | yes |
+| `ConsentRequiredError` | 403 | yes | yes |
+| `ConcurrencyError` | 409 | yes | yes |
+| `InvalidTransitionError` | 409 | yes | yes |
+| `RateLimitError` | 429 | yes | yes |
+| `NotFoundError` | 404 | yes | no — the context lists a registry's keys |
+| `TimeoutError` | 504 | yes | no — the context can carry a query |
+| `ConfigurationError` | 500 | no — masked, see below | no |
+| `ResourceError` | 503 | no — masked | no |
+| `SerializationError` | 500 | no — masked | no |
+| `OperationError` | 500 | no — masked | no |
+| `DataknobsError` | 500 | no — masked (terminal fallback) | no |
+
+A withheld message is replaced by `"An unexpected error occurred"`, and a
+withheld `detail` by `{}`. Both halves are logged in full whichever way the row
+falls, so a diagnostic is relocated rather than lost.
+
+**`ConfigurationError` is masked by default, and many deployments will want it
+disclosed.** Most config diagnostics are authored — a key name, a sorted list
+of the valid ones — and are exactly what you want back from a failing config
+route. But that type is also where the funnels that wrap a third-party
+*constructor* or *module import* land, and their text is unbounded: a database
+or cache client raises with its connection URL, credentials included. DataKnobs
+bounds its own funnels (they name the class path and the exception type, and
+let `raise ... from e` carry the rest to the logs), but it cannot audit yours,
+and bots are built lazily on the request path. So the default is closed.
+
+Turn it on with one line when the route is not public — an admin API, an
+internal control plane:
 
 ```python
 from dataknobs_bots.api import ErrorPolicy, register_exception_handlers
 from dataknobs_common.exceptions import ConfigurationError
 
 register_exception_handlers(
-    app, error_policy={ConfigurationError: ErrorPolicy(500, False)}
+    app, error_policy={ConfigurationError: ErrorPolicy(500, True, True)}
 )
 ```
 
+Masked or not, the diagnostic is logged in full, with its `context` — so it is
+relocated rather than lost, and a config typo is diagnosable from the server
+logs without disclosing anything. The line also carries `__cause__` when the
+error was raised `from` another one. That matters most for the rows that are
+*disclosed*: a library wrapping a failure it must not repeat leaves a
+deliberately thin message and puts the real one on `__cause__` — a provider
+translating a vendor error raises `ValidationError("openai API error (HTTP
+400)")` with the vendor's response body chained beneath it. Logging only the
+outer message would make every such failure read alike.
+
 The same parameter gives your own `DataknobsError` subclasses a policy —
-`error_policy={TenantQuotaError: ErrorPolicy(402, True)}` — and is merged over
-the defaults, so rows you do not mention keep working.
+`error_policy={TenantQuotaError: ErrorPolicy(402, True, True)}` — and is merged
+over the defaults, so rows you do not mention keep working. The third argument
+defaults to `False`, so a row written as `ErrorPolicy(402, True)` discloses the
+message and withholds the `context`: forgetting to think about `context` fails
+closed.
 
 **Adding a row means reading what that type's raise sites put in `context`, not
-only what its message says.** `client_safe` is a single bit gating both, so a
-type whose message is harmless but whose context can carry a query string or a
-credential is not client-safe.
+only what its message says.** They are separate arguments precisely because the
+answer differs — a type whose message is authored for the caller may still
+carry a query string or a credential in its `context`, and a type whose
+`context` is the caller's own input may still relay a third party's text in its
+message.
+
+A `context` value the JSON encoder cannot represent — a `Path`, an object, a
+`float("inf")` — is rendered with `str()` rather than expanded into its
+attributes. It neither breaks the response (an encoder error inside the handler
+would surface as the generic 500 the handler exists to replace) nor discloses
+more than the value's own `__str__` says.
+
+**The table does not govern the `dataknobs_bots.api` classes.** `APIError`
+precedes every common base in their MROs, so they reach `api_error_handler`
+instead — deliberately, since they are the one family authored *for* the HTTP
+boundary, carrying a per-instance `status_code` and a public, overridable
+`to_dict()`. Their equivalent is a `client_safe` class attribute, `True` on
+`APIError` so a subclass of your own is disclosed without opting in:
+
+```python
+class TenantQuotaExceeded(APIError):
+    """Disclosed, like every APIError subclass, unless it says otherwise."""
+```
+
+`BotCreationError` is the one that says otherwise. Its whole payload is a
+free-text `reason`, and bots are built lazily on the request path, so a tool or
+middleware constructor that fails puts *its* error text into that field. It is
+masked; the reason is logged. Set `client_safe = True` on a subclass if you
+author the `reason` yourself and want it returned.
+
+This one stays a single bit where the table's is two, on purpose. A subclass
+writes its message and its `detail` in the same constructor for the same
+audience, so both halves have one author — unlike a table row, which governs a
+type raised across several packages by people not thinking about HTTP. And
+`to_dict()` is yours to override and returns whatever you put in it, so
+disclosing *part* of it could only mean allow-listing keys, which would
+silently drop one you added. If you want a message without a `detail`, author
+the message and leave `detail` empty.
 
 A 429 carries a `Retry-After` header — integer seconds, rounded up — whenever
 the exception was given a `retry_after`, from either the API or the common
@@ -341,8 +443,12 @@ the exception was given a `retry_after`, from either the API or the common
 catch-all so the ASGI server sees the failure, but not after a handler
 registered for a narrower type. DataKnobs errors now take the narrower path, so
 they no longer reach the server as unhandled exceptions. A deployment alerting
-on that signal will see it drop; the handler logs every error it handles, at
-`warning` when disclosed and `exception` when masked.
+on that signal will see it drop; the handlers log every error they handle
+instead — a 4xx at `info`, a 5xx at `error` with the traceback. The level
+follows the status, not whether the error was masked: a 404 is a routine
+outcome of serving traffic even when a policy override hides its message, and
+a 504 is a server-side fault even though it is disclosed. Alert on the 5xx
+lines.
 
 **Registering your own handler runs the other way round.** The advice above is
 for `except` clauses; handler *registration* resolves by a different rule.

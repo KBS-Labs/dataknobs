@@ -9,6 +9,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
 - [Factory Parity Helpers](#factory-parity-helpers)
+- [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
@@ -582,6 +583,62 @@ first two — together they pin both the dataclass↔ctor parity and the
 factory↔ctor parity, so drift in either direction fails the test. For a
 `StructuredConfigConsumer` adopter, `assert_structured_config_consumer`
 bundles them into a single call.
+
+---
+
+## Error Text Disclosure Guard
+
+An error message built from a caught exception is only as bounded as the
+exception is. When the `except` clause names a specific type the text is
+predictable — `ImportError` yields module names, a `TypeError` from a call
+yields a signature mismatch. When it catches `Exception`, the text comes from
+whatever ran inside the `try`, and if that includes consumer code — a
+constructor, a module import, a callback — the message can carry anything the
+consumer's own dependencies put in *theirs*. Database and cache clients
+routinely put the connection URL, credentials included, in theirs.
+
+That matters because some of these types are rendered at an HTTP boundary:
+`dataknobs_bots.api` maps `dataknobs_common.exceptions` types to statuses and
+decides per type whether the message reaches the caller. A message assembled
+from an arbitrary third-party exception is a disclosure channel that no single
+raise site looks like it is opening.
+
+The fix at each site is to name what failed — an identifier the project already
+had, plus `type(exc).__name__` — and let `raise ... from exc` carry the original
+to the logs.
+
+### `assert_no_broad_except_in_error_text`
+
+```python
+from pathlib import Path
+
+from dataknobs_common.testing import assert_no_broad_except_in_error_text
+
+_SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_no_broad_except_feeds_a_rendered_error_message():
+    assert_no_broad_except_in_error_text(
+        _SRC,
+        error_names={"ConfigurationError", "ValidationError"},
+    )
+```
+
+Scans `*.py` under each root and fails if a broad `except ... as exc` reaches a
+`raise` of one of `error_names` whose message interpolates `exc`. Both
+`f"...{exc}"` and `f"...{str(exc)}"` are flagged; `f"...({type(exc).__name__})"`
+is not, because it yields a class name. That distinction is checked
+structurally rather than by searching for the identifier, so the corrected form
+does not read as the defect.
+
+`error_names` matches the bare class name at the raise site, so an aliased
+import is covered by listing the alias. `ignore={"module.py:120"}` exempts a
+site reviewed and judged bounded — pair each entry with a comment saying why.
+The failure lists every site, so one run reports the whole surface.
+
+It is a source scan rather than a runtime check because the defect is a shape
+in the code, and the runtime path reaching any given site may need a real
+failing dependency to trigger.
 
 ---
 

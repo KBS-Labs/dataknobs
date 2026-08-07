@@ -92,10 +92,24 @@ class TestStatusDispatch:
         err = provider._dataknobs_error_for_status(None, "connection reset")
         assert type(err) is OperationError
 
-    def test_message_is_preserved(self) -> None:
+    def test_the_detail_is_not_the_message(self) -> None:
+        """The second argument is classification material, not disclosed text.
+
+        It used to become the message verbatim, which is how each provider's
+        ``f"... {exc}"`` — an endpoint URL from ``aiohttp``, a relayed response
+        body from the OpenAI and Anthropic SDKs — ended up in a 422 body. The
+        message is written here now, from the provider family and the status;
+        see ``test_vendor_error_disclosure.py`` for the end-to-end sweep.
+        """
         provider = _provider()
-        err = provider._dataknobs_error_for_status(400, "the exact message")
-        assert "the exact message" in str(err)
+        err = provider._dataknobs_error_for_status(400, "the exact vendor text")
+        assert "the exact vendor text" not in str(err)
+        assert str(err) == "test API error (HTTP 400)"
+
+    def test_a_statusless_failure_names_no_status(self) -> None:
+        provider = _provider()
+        err = provider._dataknobs_error_for_status(None, "connection reset")
+        assert str(err) == "test API error"
 
 
 class TestRetryAfterFromHeaders:

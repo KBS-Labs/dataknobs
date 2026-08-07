@@ -12,14 +12,19 @@ import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, enforce_content_version
-from ..exceptions import DuplicateRecordError, RecordValidationError
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncSQLiteDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLTableManager, is_duplicate_key_error
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLTableManager,
+    constraint_violation_error,
+    is_duplicate_key_error,
+)
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -204,7 +209,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(params[0]) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error(params[0]) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
@@ -422,7 +427,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                         colliding = record.id
                         break
                 raise DuplicateRecordError(colliding) from e
-            raise RecordValidationError(str(e)) from e
+            raise constraint_violation_error() from e
         except Exception:
             if own_tx:
                 await self.db.rollback()
