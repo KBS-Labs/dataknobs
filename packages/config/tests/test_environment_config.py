@@ -1,6 +1,7 @@
 """Tests for EnvironmentConfig class."""
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -511,14 +512,38 @@ class TestSubstitutionProvenance:
             is False
         )
 
-    def test_load_of_absent_file_is_unsubstituted(self, tmp_path):
-        """An empty config holds no values, so nothing has been expanded.
+    def test_load_of_absent_file_reports_what_was_asked_of_it(self, tmp_path):
+        """An empty config holds no values, so either answer is vacuous.
 
-        Reporting ``True`` here would be defensible but pointless, and would
-        make the flag mean "a substitution pass ran" rather than "these
-        values are expanded" — the latter is what callers act on.
+        What settles it is the sibling path: ``from_dict({})`` has always
+        reported ``True``, so reporting ``False`` here made two empty configs
+        built from the same request disagree — and made the documented truth
+        table ("``load(...)`` default → ``True``") wrong on a path it does
+        not carve out.
         """
-        assert EnvironmentConfig.load("absent", tmp_path).substituted is False
+        assert EnvironmentConfig.load("absent", tmp_path).substituted is True
+        assert EnvironmentConfig.from_dict({}).substituted is True
+
+    def test_absent_and_raw_disagree_the_way_mixed_provenance_should(
+        self, tmp_path, monkeypatch
+    ):
+        """The consequence of the above, stated rather than discovered.
+
+        An absent-file config now reports ``True``, so merging it with a
+        directly-constructed (raw) one is a *mixed*-provenance merge, and
+        normalization expands the raw side — which can raise, exactly as
+        :meth:`merge` documents. Previously both sides read ``False`` and the
+        merge left the raw refs alone.
+        """
+        monkeypatch.delenv("ABSENT_MERGE_VAR", raising=False)
+        absent = EnvironmentConfig.load("absent", tmp_path)
+        raw = EnvironmentConfig(
+            name="raw",
+            resources={"databases": {"main": {"dsn": "${ABSENT_MERGE_VAR}"}}},
+        )
+
+        with pytest.raises(ValueError, match="ABSENT_MERGE_VAR"):
+            absent.merge(raw)
 
     def test_direct_construction_is_unsubstituted(self):
         """The path that keeps the downstream passes load-bearing."""
@@ -799,7 +824,12 @@ class TestMergeNormalizationCanRaise:
             substituted.merge(raw)
 
     def test_the_raise_is_documented(self):
-        assert "Raises:" in EnvironmentConfig.merge.__doc__
+        """Named, not just present: any ``Raises:`` block satisfied the latter."""
+        doc = EnvironmentConfig.merge.__doc__ or ""
+        raises_section = doc.partition("Raises:")[2]
+
+        assert "ValueError" in raises_section
+        assert "substituted" in raises_section
 
 
 class TestSubstitutedIsProvenanceNotAnAssertion:
@@ -837,3 +867,154 @@ class TestSubstitutedIsProvenanceNotAnAssertion:
             .get_resource("databases", "b")["dsn"]
             == "postgres://late"
         )
+
+
+class TestCopyingPreservesLeafIdentity:
+    """Isolating the caller means copying the *structure*, not the values.
+
+    ``get_resource`` had to stop handing out aliased nested containers, but a
+    deep copy overshoots: it duplicates the leaves too. A resource assembled
+    in Python — the supported path, and the one where downstream substitution
+    stays load-bearing — can legitimately hold a live object, and duplicating
+    a connection pool or raising on a lock is a worse failure than the
+    aliasing that motivated the copy.
+
+    The bound is set by what the substitution pass did when it was
+    incidentally providing this isolation: it rebuilds dicts and lists and
+    returns every other value by identity.
+    """
+
+    def test_a_live_object_is_handed_back_not_duplicated(self):
+        sentinel = object()
+        env = EnvironmentConfig(
+            name="test",
+            resources={"databases": {"main": {"client": sentinel}}},
+        )
+
+        assert env.get_resource("databases", "main")["client"] is sentinel
+
+    def test_an_uncopyable_value_does_not_raise(self):
+        """A lock is not deep-copyable; reading a resource must not care."""
+        lock = threading.Lock()
+        env = EnvironmentConfig(
+            name="test",
+            resources={"databases": {"main": {"handle": lock}}},
+        )
+
+        assert env.get_resource("databases", "main")["handle"] is lock
+
+    def test_defaults_are_copied_the_same_way(self):
+        sentinel = object()
+        env = EnvironmentConfig(name="test", resources={})
+
+        got = env.get_resource("databases", "absent", {"client": sentinel})
+
+        assert got["client"] is sentinel
+
+    def test_nested_containers_are_still_isolated(self):
+        """The structural half of the copy is what the aliasing fix needs."""
+        env = EnvironmentConfig(
+            name="test",
+            resources={"databases": {"main": {"pool": {"max": 5}}}},
+        )
+
+        got = env.get_resource("databases", "main")
+        got["pool"]["max"] = 999
+
+        assert env.resources["databases"]["main"]["pool"]["max"] == 5
+
+
+class TestEveryHandOutIsolatesNestedStructure:
+    """``get_resource`` was not the only method promising a copy.
+
+    ``merge`` and ``to_dict`` copy one level, so every nested container in
+    what they return is still the receiver's own object — the same defect,
+    one and two methods away. Fixing only the one it was discovered in is how
+    it gets rediscovered from a different caller.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig(
+            name="a",
+            resources={"databases": {"main": {"pool": {"max": 5}}}},
+            settings={"limits": {"rps": 10}},
+        )
+
+    def test_merge_does_not_alias_nested_structure(self, env):
+        other = EnvironmentConfig(name="b", resources={"caches": {"r": {}}})
+
+        merged = env.merge(other)
+        merged.resources["databases"]["main"]["pool"]["max"] = 999
+
+        assert env.resources["databases"]["main"]["pool"]["max"] == 5
+
+    def test_merge_does_not_alias_the_argument_either(self, env):
+        other = EnvironmentConfig(
+            name="b", resources={"caches": {"r": {"opts": {"ttl": 1}}}}
+        )
+
+        merged = env.merge(other)
+        merged.resources["caches"]["r"]["opts"]["ttl"] = 999
+
+        assert other.resources["caches"]["r"]["opts"]["ttl"] == 1
+
+    def test_to_dict_does_not_alias_nested_structure(self, env):
+        emitted = env.to_dict()
+
+        emitted["resources"]["databases"]["main"]["pool"]["max"] = 999
+        emitted["settings"]["limits"]["rps"] = 999
+
+        assert env.resources["databases"]["main"]["pool"]["max"] == 5
+        assert env.settings["limits"]["rps"] == 10
+
+    def test_merge_preserves_leaf_identity(self, env):
+        """Same bound as ``get_resource``: structure copied, values are not."""
+        sentinel = object()
+        other = EnvironmentConfig(
+            name="b", resources={"caches": {"r": {"client": sentinel}}}
+        )
+
+        merged = env.merge(other)
+
+        assert merged.resources["caches"]["r"]["client"] is sentinel
+
+
+class TestProvenanceIsRecordedOnEveryConstructionPath:
+    """A missing environment file is still a config that was built somehow.
+
+    ``load`` short-circuits to an empty config before it reaches the
+    construction that records provenance, so it reported ``substituted=False``
+    however it was called. Harmless while the config is empty, and a flag that
+    lies about how it was built the moment one is merged or amended — the
+    exact failure the flag exists to prevent.
+    """
+
+    def test_a_missing_file_records_that_substitution_was_requested(
+        self, tmp_path
+    ):
+        cfg = EnvironmentConfig.load("absent", config_dir=tmp_path)
+
+        assert cfg.substituted is True
+
+    def test_a_missing_file_records_when_it_was_not(self, tmp_path):
+        cfg = EnvironmentConfig.load(
+            "absent", config_dir=tmp_path, substitute_vars=False
+        )
+
+        assert cfg.substituted is False
+
+    def test_the_flag_survives_a_merge_with_a_raw_config(self, tmp_path):
+        """What the lie would cost: the merge skips the pass it needed."""
+        absent = EnvironmentConfig.load("absent", config_dir=tmp_path)
+        raw = EnvironmentConfig(
+            name="raw", resources={"databases": {"main": {"dsn": "${MERGE_DSN}"}}}
+        )
+        os.environ["MERGE_DSN"] = "postgres://real"
+        try:
+            merged = absent.merge(raw)
+        finally:
+            del os.environ["MERGE_DSN"]
+
+        assert merged.substituted is True
+        assert merged.resources["databases"]["main"]["dsn"] == "postgres://real"

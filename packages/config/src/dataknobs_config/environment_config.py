@@ -54,7 +54,6 @@ Environment file format (config/environments/production.yaml):
 
 from __future__ import annotations
 
-import copy
 import logging
 import os
 from dataclasses import dataclass, field, replace
@@ -68,6 +67,26 @@ from dataknobs_common.config_loading import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_structure(value: Any) -> Any:
+    """Copy nested containers; pass every other value through by identity.
+
+    What every hand-out from this class needs, and the exact bound the
+    substitution pass set while it was incidentally providing this isolation:
+    it rebuilds dicts and lists and returns everything else unchanged.
+
+    ``copy.deepcopy`` would overshoot. A resource assembled in Python may hold
+    a live object — a connection pool, a prebuilt provider, a lock — and
+    duplicating one silently gives the factory a second pool, while a value
+    that cannot be pickled raises out of what is meant to be a dict read.
+    Neither is a risk the aliasing this copy prevents justifies taking.
+    """
+    if isinstance(value, dict):
+        return {key: _copy_structure(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_structure(item) for item in value]
+    return value
 
 
 class EnvironmentConfigError(Exception):
@@ -237,7 +256,11 @@ class EnvironmentConfig:
                 f"No environment config found for '{environment}' in {config_dir}, "
                 "using empty configuration"
             )
-            return cls(name=environment)
+            # Records provenance like every other path out of this method.
+            # Vacuous while the config is empty, and load-bearing the moment
+            # one is merged: a stale ``False`` would send the merge looking
+            # for variables to expand in a config that asked to be expanded.
+            return cls(name=environment, substituted=substitute_vars)
 
         data = cls._load_file(config_path)
 
@@ -349,14 +372,13 @@ class EnvironmentConfig:
         type_resources = self.resources.get(resource_type, {})
 
         if logical_name in type_resources:
-            # Deep copy: a shallow one leaves every nested container in the
-            # returned config pointing at the environment's own object, so a
-            # consumer adjusting a nested section writes through into an
-            # environment that outlives the resolution. Callers that ran a
-            # substitution pass afterwards were incidentally isolated by it
-            # -- substitute_env_vars rebuilds the structure -- which is not
-            # a property to depend on from here.
-            config = copy.deepcopy(type_resources[logical_name])
+            # A shallow copy leaves every nested container in the returned
+            # config pointing at the environment's own object, so a consumer
+            # adjusting a nested section writes through into an environment
+            # that outlives the resolution. Callers that ran a substitution
+            # pass afterwards were incidentally isolated by it -- which is
+            # not a property to depend on from here.
+            config = _copy_structure(type_resources[logical_name])
 
             # Apply defaults for missing keys
             if defaults:
@@ -366,7 +388,7 @@ class EnvironmentConfig:
             return config
 
         if defaults is not None:
-            return copy.deepcopy(defaults)
+            return _copy_structure(defaults)
 
         raise ResourceNotFoundError(
             f"Resource '{logical_name}' of type '{resource_type}' "
@@ -474,13 +496,10 @@ class EnvironmentConfig:
             result["description"] = self.description
 
         if self.settings:
-            result["settings"] = self.settings.copy()
+            result["settings"] = _copy_structure(self.settings)
 
         if self.resources:
-            result["resources"] = {
-                rtype: {name: config.copy() for name, config in resources.items()}
-                for rtype, resources in self.resources.items()
-            }
+            result["resources"] = _copy_structure(self.resources)
 
         return result
 
@@ -511,17 +530,22 @@ class EnvironmentConfig:
         """
         # Normalize mixed provenance before merging so the result's single
         # ``substituted`` flag is true of every value in it.
+        #
+        # This expands the whole config, where the resolution layer expands
+        # only the resources a build references. The asymmetry is forced by
+        # the single flag: a merge has to make provenance uniform across
+        # every value, so there is no per-resource provenance to consult and
+        # no subset it would be sound to skip. It is why this is the one path
+        # that can raise on an unset variable.
         if self.substituted != other.substituted:
             return self.substituted_view().merge(other.substituted_view())
 
-        # Deep merge resources
-        merged_resources: dict[str, dict[str, dict[str, Any]]] = {}
-
-        # Start with self's resources
-        for rtype, resources in self.resources.items():
-            merged_resources[rtype] = {
-                name: config.copy() for name, config in resources.items()
-            }
+        # Deep merge resources. Copied structurally, like every other hand-out
+        # from this class: a one-level copy would leave each nested section of
+        # the result aliasing one of the two inputs, both of which outlive it.
+        merged_resources: dict[str, dict[str, dict[str, Any]]] = (
+            _copy_structure(self.resources)
+        )
 
         # Merge in other's resources
         for rtype, resources in other.resources.items():
@@ -530,13 +554,15 @@ class EnvironmentConfig:
             for name, config in resources.items():
                 if name in merged_resources[rtype]:
                     # Merge configs
-                    merged_resources[rtype][name].update(config)
+                    merged_resources[rtype][name].update(
+                        _copy_structure(config)
+                    )
                 else:
-                    merged_resources[rtype][name] = config.copy()
+                    merged_resources[rtype][name] = _copy_structure(config)
 
         # Merge settings
-        merged_settings = self.settings.copy()
-        merged_settings.update(other.settings)
+        merged_settings: dict[str, Any] = _copy_structure(self.settings)
+        merged_settings.update(_copy_structure(other.settings))
 
         return EnvironmentConfig(
             name=other.name,

@@ -14,6 +14,13 @@ environment values a second time — reinterpreting the *content* of a value as
 a template. :attr:`EnvironmentConfig.substituted` is what makes the
 environment's provenance knowable rather than guessed.
 
+Two things are separable for longer than that, and so are expanded later: an
+environment resource, which is expanded as it is spliced rather than with the
+environment as a whole, and a reference's inline defaults, which the splice
+discards wherever the environment supplies the key. Both follow the same rule
+— expanding either earlier reads values the build then throws away, and an
+unset required ``${VAR}`` among them aborts a build that never used it.
+
 Example:
     ```python
     # Load with auto-detected environment
@@ -64,6 +71,45 @@ from .environment_config import EnvironmentConfig
 from .inheritance import substitute_env_vars
 
 logger = logging.getLogger(__name__)
+
+#: Keys of a ``$resource`` block that select and constrain the resource
+#: rather than supplying a default for it. Everything else in the block is an
+#: inline default, kept raw by the entry pass and expanded at the splice.
+RESOURCE_MARKER_KEYS = frozenset({"$resource", "type", "$requires"})
+
+
+def _substitute_app_refs(config: Any, *, in_defaults: bool = False) -> Any:
+    """Expand app-authored ``${VAR}`` refs, holding inline defaults back.
+
+    Everything in the app config is expanded here except the inline defaults
+    of a ``$resource`` block, which stay separable until the splice decides
+    which of them the environment overrides. Their markers *are* expanded, so
+    a reference can still select its resource by variable.
+
+    A ``$resource`` block nested inside a default is left whole: if that
+    default survives, the splice expands it — markers and all — exactly once,
+    and if it is discarded, nothing expands it at all.
+    """
+    if isinstance(config, dict):
+        if "$resource" in config:
+            return {
+                key: (
+                    substitute_env_vars(value)
+                    if key in RESOURCE_MARKER_KEYS
+                    else value
+                )
+                for key, value in config.items()
+            }
+        return {
+            key: _substitute_app_refs(value, in_defaults=in_defaults)
+            for key, value in config.items()
+        }
+    if isinstance(config, list):
+        return [
+            _substitute_app_refs(item, in_defaults=in_defaults)
+            for item in config
+        ]
+    return config if in_defaults else substitute_env_vars(config)
 
 
 class EnvironmentAwareConfigError(Exception):
@@ -280,8 +326,13 @@ class EnvironmentAwareConfig:
         # when it was not) -- substituting after the splice would expand
         # them a second time, reinterpreting the *content* of a value as a
         # template. See the module docstring.
+        #
+        # Inline defaults are held back: the splice discards every one the
+        # environment supplies, so expanding them here would read values the
+        # build is about to throw away -- the same argument that keeps this
+        # from expanding the whole environment, applied to the other source.
         if resolve_env_vars:
-            config = substitute_env_vars(config)
+            config = _substitute_app_refs(config)
 
         # Resolve logical resource references. Each resource is substituted
         # as it is spliced, not the environment as a whole: a resource is
@@ -319,11 +370,12 @@ class EnvironmentAwareConfig:
             config: Configuration to process
             environment: Environment to resolve against. Defaults to this
                 config's own environment.
-            substitute: Whether to expand ``${VAR}`` refs in each resource as
-                it is spliced in. Applies to the environment's contribution
-                only — inline defaults arrive already expanded, so merging
-                them after the pass is what keeps every value at exactly one
-                expansion.
+            substitute: Whether to expand ``${VAR}`` refs as each resource is
+                spliced in — both the environment's contribution and whichever
+                inline defaults survive the merge. Defaults arrive raw
+                (:func:`_substitute_app_refs` holds them back) and are
+                expanded here, once each, only if the environment did not
+                supply the key.
 
         Returns:
             Configuration with resource references resolved
@@ -341,7 +393,7 @@ class EnvironmentAwareConfig:
                 defaults = {
                     k: v
                     for k, v in config.items()
-                    if k not in ("$resource", "type", "$requires")
+                    if k not in RESOURCE_MARKER_KEYS
                 }
                 requires = config.get("$requires", [])
 
@@ -368,22 +420,31 @@ class EnvironmentAwareConfig:
                     # keyword arguments. Making the branch reachable must not
                     # also make its never-exercised return value live.
                     #
-                    # Defaults are app-authored, so they are already expanded
-                    # and do not go through the substitution below. They still
-                    # fall through to the shared tail: a degraded config is
-                    # still config, and gets the same $requires check and the
-                    # same recursive walk as a found one.
-                    resolved = defaults
+                    # Nothing overrides them here, so every default survives
+                    # and every one is expanded. They still fall through to
+                    # the shared tail: a degraded config is still config, and
+                    # gets the same $requires check and the same recursive
+                    # walk as a found one.
+                    resolved = (
+                        substitute_env_vars(defaults) if substitute else defaults
+                    )
                 else:
                     resolved = environment.get_resource(
                         resource_type, resource_name
                     )
                     if substitute and not environment.substituted:
                         resolved = substitute_env_vars(resolved)
-                    # Inline defaults fill gaps *after* the pass above, so
-                    # they are never handed to a second expansion.
+                    # Inline defaults fill gaps *after* the pass above, and
+                    # each is expanded only once it is known to survive --
+                    # so no value is handed to a second expansion, and none
+                    # is expanded that the environment overrode.
                     for key, value in defaults.items():
-                        resolved.setdefault(key, value)
+                        if key not in resolved:
+                            resolved[key] = (
+                                substitute_env_vars(value)
+                                if substitute
+                                else value
+                            )
 
                 # Validate $requires against capabilities metadata
                 if requires and isinstance(resolved, dict):

@@ -901,7 +901,38 @@ class TestCacheParticipationIsAllOrNothing:
         loader = InheritableConfigLoader(config_dir=configured)
         loader.load_from_file(elsewhere / "svc.yaml")
 
-        assert loader.load("base")["origin"] == "configured"
+        # Read back in the form the recursion would have stored: it loads a
+        # parent with substitute_vars=False, so asserting through the default
+        # True would miss on the key alone and pass without the write gate.
+        assert (
+            loader.load("base", substitute_vars=False)["origin"] == "configured"
+        )
+
+    def test_a_bypassing_load_records_no_inheritance_edge(self, tmp_path):
+        """Not participating in the cache means not recording edges for it.
+
+        ``load_from_file`` rebinds ``config_dir``, and the edge would be filed
+        under a bare parent name that means something else in the configured
+        directory — so a later ``clear_cache`` there would evict a config that
+        never inherited from it.
+        """
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (elsewhere / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 1})
+        )
+        (configured / "base.yaml").write_text(yaml.dump({"origin": "conf"}))
+        (configured / "svc.yaml").write_text(yaml.dump({"port": 9}))
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+        loader.load("svc")
+        loader.clear_cache("base")
+
+        assert loader._cache.get(("svc", True)) is not None
 
 
 class TestClearingAParentClearsWhatInheritedFromIt:

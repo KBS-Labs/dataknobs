@@ -422,8 +422,14 @@ class InheritableConfigLoader:
                 # Load parent configuration (recursively handles inheritance)
                 parent_config = self.load(parent_name, use_cache=use_cache, substitute_vars=False)
 
-                # Record the edge so clearing the parent reaches this child.
-                self._dependents.setdefault(parent_name, set()).add(name)
+                # Record the edge so clearing the parent reaches this child --
+                # but only when this load is taking part in the cache at all.
+                # A bypassing load stores nothing for an edge to invalidate,
+                # and `load_from_file` bypasses with `config_dir` rebound, so
+                # recording there would file an edge under a bare name from
+                # another directory and over-clear the configured one.
+                if use_cache:
+                    self._dependents.setdefault(parent_name, set()).add(name)
 
                 # Deep merge: child overrides parent
                 raw_config = deep_merge(parent_config, raw_config)

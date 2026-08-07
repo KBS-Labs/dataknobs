@@ -67,6 +67,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scales with the size of the environment rather than with the subset
   actually referenced.
 
+- **An overridden inline default no longer has to resolve.** A `$resource`
+  reference's inline defaults are app config, and the splice discards every
+  one the environment supplies — but they were expanded on entry along with
+  the rest of the app config, so a dev-time fallback such as
+  `password: ${LOCAL_DB_PASSWORD}` still had to be set in production, where
+  the environment overrides it. The build aborted on a value it was about to
+  throw away. Defaults are now expanded at the splice, once each, and only
+  once known to survive; a default that *is* used still raises when its
+  variable is unset, exactly as before. The mirror of the preceding entry,
+  applied to the other source.
+
+- **`EnvironmentConfig.get_resource` no longer duplicates the values it
+  copies.** Isolating the caller requires copying the nested *structure*, not
+  the leaves. A resource assembled in Python can hold a live object — a
+  connection pool, a prebuilt provider, a lock — and a deep copy silently
+  handed the factory a second pool, or raised `TypeError` on a value that
+  cannot be pickled. Containers are copied; every other value is passed
+  through by identity, which is the same bound the substitution pass set
+  while it was incidentally providing this isolation.
+
+- **`merge()` and `to_dict()` handed out aliased nested containers.** Both
+  copied one level, so `env.to_dict()["resources"][...]["pool"]` was the
+  live config's own dict and writing to it wrote through. The same defect as
+  the `get_resource` aliasing fixed above, one and two methods away; all
+  three now share one structural copy.
+
+- **`EnvironmentConfig.load()` reported the wrong provenance when the
+  environment file was absent.** It short-circuits to an empty config before
+  reaching the construction that records `substituted`, so it always reported
+  `False` — while `from_dict({})` reported `True` for the same request. Two
+  empty configs built the same way disagreed, and the documented truth table
+  carved out no such case. Note the consequence: an absent-file config is now
+  a *substituted* config, so merging one with a directly-constructed config
+  is a mixed-provenance merge and can raise on an unset variable.
+
 - **`InheritableConfigLoader` returned a different config depending on what
   had been loaded before it.** Resolving `extends:` loads the parent without
   substitution and expands the merged result at the end, but both forms were
@@ -137,7 +172,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_from_file()` reads with `config_dir` rebound to another directory —
   and since the cache key carries no directory, the entry it left behind
   answered later `load()` calls for the directory the loader was actually
-  configured for.
+  configured for. Inheritance edges are recorded on the same condition, so a
+  bypassing load no longer files a dependent under a bare parent name from
+  another directory either.
+
+  Note for callers using `use_cache=False` as a reload: it is a bypass, not a
+  refresh. It reads fresh but leaves the stored entry in place, so subsequent
+  `load()` calls still get the cached one. To make a reload visible to other
+  callers, `clear_cache(name)` and then `load(name)`.
 
 - **`InheritableConfigLoader.clear_cache(name)` now clears dependents.**
   A cached child holds its parent's content merged in, so clearing only the

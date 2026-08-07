@@ -668,7 +668,7 @@ class TestResolveForBuildSubstitutionOrder:
         assert resolved["temperature"] == "0.9"
         assert resolved["db"]["password"] == "p${ORDER_INNER}ss"
 
-    def test_resolve_env_vars_false_substitutes_nothing(self, app):
+    def test_resolve_env_vars_false_expands_nothing_at_this_layer(self, app):
         resolved = app.resolve_for_build(resolve_env_vars=False)
 
         assert resolved["temperature"] == "${ORDER_TEMP}"
@@ -683,12 +683,13 @@ class TestResolveForBuildSubstitutionOrder:
         assert resolved["temperature"] == "0.9"
         assert resolved["db"] == {"$resource": "main", "type": "databases"}
 
-    def test_nested_refs_read_the_same_environment_view(self):
-        """The substituted view covers the whole recursive walk.
+    def test_nested_refs_are_expanded_exactly_once_at_any_depth(self):
+        """A resource reached through another resource is still one source.
 
-        A resource whose own config contains another ``$resource`` ref is
-        resolved through the same environment object, so a value reached at
-        any depth is expanded exactly once.
+        Each is expanded as it is spliced, so the inner one is expanded by
+        its own splice rather than by a pass over the outer's already-spliced
+        result — which is what a value reached at depth being expanded twice
+        would look like.
         """
         env = EnvironmentConfig(
             name="test",
@@ -967,3 +968,140 @@ class TestOnlyReferencedResourcesAreExpanded:
 
         assert env.resources["databases"]["main"]["dsn"] == "${WANTED_DSN}"
         assert env.substituted is False
+
+
+class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
+    """The app-config mirror of :class:`TestOnlyReferencedResourcesAreExpanded`.
+
+    A ``$resource`` reference's inline defaults are app config, and the splice
+    discards every one the environment supplies. Substituting the whole app
+    config on entry reads them all, so a dev-time fallback that production
+    overrides still has to resolve in production — the build aborts on a value
+    it was about to throw away.
+
+    Inline defaults stay separable until ``setdefault`` decides which survive,
+    so that is the latest point they can be expanded, and therefore where they
+    are. Same rule as the environment side, applied to the other source.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "prod",
+                "resources": {
+                    "databases": {
+                        "main": {"host": "db.prod", "password": "realsecret"}
+                    }
+                },
+            }
+        )
+
+    def test_an_overridden_default_does_not_have_to_resolve(
+        self, env, monkeypatch
+    ):
+        monkeypatch.delenv("LOCAL_DB_PASSWORD", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["password"] == "realsecret"
+
+    def test_a_surviving_default_is_still_expanded(self, env, monkeypatch):
+        """Deferring the pass must not become skipping it."""
+        monkeypatch.setenv("LOCAL_POOL_SIZE", "7")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["pool_size"] == "7"
+
+    def test_a_surviving_default_is_expanded_exactly_once(
+        self, env, monkeypatch
+    ):
+        monkeypatch.setenv("LOCAL_POOL_SIZE", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["pool_size"] == "p${x}ss"
+
+    def test_an_unset_var_in_a_surviving_default_still_raises(
+        self, env, monkeypatch
+    ):
+        """The deferral moves the pass; it does not suppress its errors."""
+        monkeypatch.delenv("LOCAL_POOL_SIZE", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "main",
+                    "type": "databases",
+                    "pool_size": "${LOCAL_POOL_SIZE}",
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ValueError, match="LOCAL_POOL_SIZE"):
+            app.resolve_for_build()
+
+    def test_a_degraded_reference_expands_the_defaults_it_falls_back_to(
+        self, env, monkeypatch
+    ):
+        """Nothing overrides them, so every one survives — and must resolve."""
+        monkeypatch.setenv("LOCAL_DB_PASSWORD", "devsecret")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "password": "${LOCAL_DB_PASSWORD}",
+                }
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["password"] == "devsecret"
+
+    def test_ordinary_app_values_are_untouched_by_the_deferral(
+        self, env, monkeypatch
+    ):
+        """Only inline defaults defer; the rest of the app config does not."""
+        monkeypatch.setenv("APP_NAME", "billing")
+
+        app = EnvironmentAwareConfig(
+            config={
+                "name": "${APP_NAME}",
+                "db": {"$resource": "main", "type": "databases"},
+            },
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["name"] == "billing"
