@@ -106,13 +106,24 @@ from dataknobs_common.testing.postgres_fixtures import (
     postgres_connection_params,
     wait_for_postgres,
 )
+from dataknobs_common.testing.threads import (
+    DK_AITER_PUMP_THREAD,
+    DK_DAEMON_THREAD_NAMES,
+    DK_SYNC_BRIDGE_THREAD,
+    assert_no_leaked_bridge_threads,
+    live_dk_daemon_threads,
+)
 
 __all__ = [
+    "DK_AITER_PUMP_THREAD",
+    "DK_DAEMON_THREAD_NAMES",
+    "DK_SYNC_BRIDGE_THREAD",
     "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
     "assert_no_blocking",
+    "assert_no_leaked_bridge_threads",
     "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",
     "assert_structured_config_roundtrip",
@@ -138,6 +149,7 @@ __all__ = [
     "is_package_available",
     "is_postgres_available",
     "is_redis_available",
+    "live_dk_daemon_threads",
     "localstack_endpoint",
     "make_elasticsearch_test_index",
     "make_localstack_s3_bucket",

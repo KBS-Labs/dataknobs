@@ -305,6 +305,40 @@ stages:
 
 All loaded subflows are stored in `WizardFSM._subflow_registry`, a dict mapping subflow names to `WizardFSM` instances.
 
+### Subflow lifecycle and ownership
+
+A `WizardFSM` driven through its synchronous `step()` allocates a daemon
+event-loop thread, so a wizard with subflows holds one per stepped flow.
+Closing the parent releases them:
+
+```python
+with loader.load_from_dict(wizard_config) as fsm:
+    fsm.step({"answer": "yes"})
+# parent and every owned subflow released here
+```
+
+`close()` (and its async counterpart `aclose()`) cascades to the subflows
+the parent **owns**. Every subflow the loader builds is parent-owned,
+which covers the configuration-driven case entirely. Each child's close is
+error-isolated, so one failing subflow cannot orphan the siblings
+registered after it.
+
+A subflow registered at runtime declares its ownership explicitly:
+
+```python
+# Default: the parent owns it and closes it.
+parent.register_subflow("verify_kb", subflow_fsm)
+
+# The caller built this one and still holds it — the parent's close
+# leaves it alone.
+parent.register_subflow("shared_lookup", subflow_fsm, owns=False)
+```
+
+Pass `owns=False` when the subflow's lifecycle belongs to the caller —
+closing an FSM that another holder is still stepping would tear it down
+mid-flight. Re-registering a name replaces both the subflow and its
+ownership, so a name is owned iff its most recent registration said so.
+
 ## Nested Subflows
 
 Because `WizardState.subflow_stack` is a list, subflows can trigger other subflows. When a nested subflow completes, control returns to its immediate parent (not the root wizard).

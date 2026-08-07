@@ -87,18 +87,18 @@ class TestTupleReturnHandling:
         def return_false_tuple(data, context=None):
             return (False, None)
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_false_tuple": return_false_tuple}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        # Execute step - should stay at start because condition is False
-        fsm.execute_step_sync(ctx)
+            # Execute step - should stay at start because condition is False
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "start", (
-            "FSM should stay at 'start' when condition returns (False, None). "
-            f"Got: {ctx.current_state}"
-        )
+            assert ctx.current_state == "start", (
+                "FSM should stay at 'start' when condition returns (False, None). "
+                f"Got: {ctx.current_state}"
+            )
 
     def test_tuple_true_none_should_transition(self):
         """Verify (True, None) tuple correctly triggers transition."""
@@ -107,17 +107,17 @@ class TestTupleReturnHandling:
         def return_true_tuple(data, context=None):
             return (True, "condition met")
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_true_tuple": return_true_tuple}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "end", (
-            "FSM should transition to 'end' when condition returns (True, ...). "
-            f"Got: {ctx.current_state}"
-        )
+            assert ctx.current_state == "end", (
+                "FSM should transition to 'end' when condition returns (True, ...). "
+                f"Got: {ctx.current_state}"
+            )
 
     def test_plain_false_should_not_transition(self):
         """Verify plain False return does not trigger transition."""
@@ -126,14 +126,14 @@ class TestTupleReturnHandling:
         def return_false(data, context=None):
             return False
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_false": return_false}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "start"
+            assert ctx.current_state == "start"
 
     def test_plain_true_should_transition(self):
         """Verify plain True return triggers transition."""
@@ -142,14 +142,14 @@ class TestTupleReturnHandling:
         def return_true(data, context=None):
             return True
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_true": return_true}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "end"
+            assert ctx.current_state == "end"
 
     def test_empty_tuple_should_not_transition(self):
         """Verify empty tuple () is treated as falsy."""
@@ -158,15 +158,15 @@ class TestTupleReturnHandling:
         def return_empty_tuple(data, context=None):
             return ()  # Empty tuple is falsy
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_empty_tuple": return_empty_tuple}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        # Empty tuple should be falsy, so no transition
-        assert ctx.current_state == "start"
+            # Empty tuple should be falsy, so no transition
+            assert ctx.current_state == "start"
 
     def test_none_should_not_transition(self):
         """Verify None return does not trigger transition."""
@@ -175,14 +175,14 @@ class TestTupleReturnHandling:
         def return_none(data, context=None):
             return None
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_none": return_none}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "start"
+            assert ctx.current_state == "start"
 
     def test_zero_should_not_transition(self):
         """Verify 0 return does not trigger transition."""
@@ -191,14 +191,14 @@ class TestTupleReturnHandling:
         def return_zero(data, context=None):
             return 0
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_zero": return_zero}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "start"
+            assert ctx.current_state == "start"
 
     def test_empty_string_should_not_transition(self):
         """Verify empty string return does not trigger transition."""
@@ -207,14 +207,14 @@ class TestTupleReturnHandling:
         def return_empty_string(data, context=None):
             return ""
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"return_empty_string": return_empty_string}
-        )
-        ctx = fsm.create_context({})
+        ) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        assert ctx.current_state == "start"
+            assert ctx.current_state == "start"
 
     def test_tuple_with_false_first_element_should_not_transition(self):
         """Verify tuple with False as first element does not transition.
@@ -230,19 +230,19 @@ class TestTupleReturnHandling:
                 return (True, "User approved")
             return (False, "User has not approved")
 
-        fsm = create_advanced_fsm(
+        with create_advanced_fsm(
             config, custom_functions={"check_condition": check_condition}
-        )
+        ) as fsm:
 
-        # Test without approval - should not transition
-        ctx = fsm.create_context({"approved": False})
-        fsm.execute_step_sync(ctx)
-        assert ctx.current_state == "start", "Should not transition without approval"
+            # Test without approval - should not transition
+            ctx = fsm.create_context({"approved": False})
+            fsm.execute_step_sync(ctx)
+            assert ctx.current_state == "start", "Should not transition without approval"
 
-        # Test with approval - should transition
-        ctx2 = fsm.create_context({"approved": True})
-        fsm.execute_step_sync(ctx2)
-        assert ctx2.current_state == "end", "Should transition with approval"
+            # Test with approval - should transition
+            ctx2 = fsm.create_context({"approved": True})
+            fsm.execute_step_sync(ctx2)
+            assert ctx2.current_state == "end", "Should transition with approval"
 
 
 class TestDataAccessInConditions:
@@ -256,17 +256,17 @@ class TestDataAccessInConditions:
         """Verify inline conditions can access the data dict."""
         config = make_inline_condition_config("return data.get('value') == 'correct'")
 
-        fsm = create_advanced_fsm(config)
+        with create_advanced_fsm(config) as fsm:
 
-        # Test with wrong value - should not transition
-        ctx = fsm.create_context({"value": "wrong"})
-        fsm.execute_step_sync(ctx)
-        assert ctx.current_state == "start"
+            # Test with wrong value - should not transition
+            ctx = fsm.create_context({"value": "wrong"})
+            fsm.execute_step_sync(ctx)
+            assert ctx.current_state == "start"
 
-        # Test with correct value - should transition
-        ctx2 = fsm.create_context({"value": "correct"})
-        fsm.execute_step_sync(ctx2)
-        assert ctx2.current_state == "end"
+            # Test with correct value - should transition
+            ctx2 = fsm.create_context({"value": "correct"})
+            fsm.execute_step_sync(ctx2)
+            assert ctx2.current_state == "end"
 
     def test_inline_condition_with_missing_data_key(self):
         """Verify inline conditions handle missing data keys gracefully."""
@@ -275,12 +275,12 @@ class TestDataAccessInConditions:
             "return data.get('nonexistent') is not None"
         )
 
-        fsm = create_advanced_fsm(config)
-        ctx = fsm.create_context({})  # Empty data
+        with create_advanced_fsm(config) as fsm:
+            ctx = fsm.create_context({})  # Empty data
 
-        # Should not raise an error, just return False
-        fsm.execute_step_sync(ctx)
-        assert ctx.current_state == "start"
+            # Should not raise an error, just return False
+            fsm.execute_step_sync(ctx)
+            assert ctx.current_state == "start"
 
     def test_inline_condition_with_nested_data(self):
         """Verify inline conditions can access nested data structures."""
@@ -288,22 +288,22 @@ class TestDataAccessInConditions:
             "return data.get('user', {}).get('confirmed') == True"
         )
 
-        fsm = create_advanced_fsm(config)
+        with create_advanced_fsm(config) as fsm:
 
-        # Test without nested data - should not transition
-        ctx = fsm.create_context({"user": {}})
-        fsm.execute_step_sync(ctx)
-        assert ctx.current_state == "start"
+            # Test without nested data - should not transition
+            ctx = fsm.create_context({"user": {}})
+            fsm.execute_step_sync(ctx)
+            assert ctx.current_state == "start"
 
-        # Test with confirmed=False - should not transition
-        ctx2 = fsm.create_context({"user": {"confirmed": False}})
-        fsm.execute_step_sync(ctx2)
-        assert ctx2.current_state == "start"
+            # Test with confirmed=False - should not transition
+            ctx2 = fsm.create_context({"user": {"confirmed": False}})
+            fsm.execute_step_sync(ctx2)
+            assert ctx2.current_state == "start"
 
-        # Test with confirmed=True - should transition
-        ctx3 = fsm.create_context({"user": {"confirmed": True}})
-        fsm.execute_step_sync(ctx3)
-        assert ctx3.current_state == "end"
+            # Test with confirmed=True - should transition
+            ctx3 = fsm.create_context({"user": {"confirmed": True}})
+            fsm.execute_step_sync(ctx3)
+            assert ctx3.current_state == "end"
 
 
 class TestEdgeCaseTruthyValues:
@@ -339,14 +339,14 @@ class TestEdgeCaseTruthyValues:
         def test_func(data, context=None):
             return return_value
 
-        fsm = create_advanced_fsm(config, custom_functions={"test_func": test_func})
-        ctx = fsm.create_context({})
+        with create_advanced_fsm(config, custom_functions={"test_func": test_func}) as fsm:
+            ctx = fsm.create_context({})
 
-        fsm.execute_step_sync(ctx)
+            fsm.execute_step_sync(ctx)
 
-        expected_state = "end" if should_transition else "start"
-        assert ctx.current_state == expected_state, (
-            f"Return value {return_value!r} (truthy={bool(return_value)}) "
-            f"should {'transition' if should_transition else 'not transition'}. "
-            f"Got state: {ctx.current_state}"
-        )
+            expected_state = "end" if should_transition else "start"
+            assert ctx.current_state == expected_state, (
+                f"Return value {return_value!r} (truthy={bool(return_value)}) "
+                f"should {'transition' if should_transition else 'not transition'}. "
+                f"Got state: {ctx.current_state}"
+            )

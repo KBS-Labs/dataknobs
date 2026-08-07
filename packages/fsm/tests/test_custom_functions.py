@@ -109,19 +109,19 @@ class TestSimpleFSMCustomFunctions:
             data["value"] = data.get("value", 0) * 2
             return data
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             simple_config,
             custom_functions={
                 "custom_transform": custom_transform
             }
-        )
+        ) as fsm:
         
-        result = fsm.process({"value": 5})
+            result = fsm.process({"value": 5})
         
-        assert result["success"] is True
-        assert result["final_state"] == "end"
-        assert result["data"]["transformed"] is True
-        assert result["data"]["value"] == 10
+            assert result["success"] is True
+            assert result["final_state"] == "end"
+            assert result["data"]["transformed"] is True
+            assert result["data"]["value"] == 10
     
     def test_create_fsm_with_custom_functions(self, simple_config):
         """Test create_fsm factory with custom functions."""
@@ -130,17 +130,17 @@ class TestSimpleFSMCustomFunctions:
             data["doubled"] = data.get("input", 0) * 2
             return data
         
-        fsm = create_fsm(
+        with create_fsm(
             simple_config,
             custom_functions={
                 "custom_transform": custom_transform
             }
-        )
+        ) as fsm:
         
-        result = fsm.process({"input": 7})
+            result = fsm.process({"input": 7})
         
-        assert result["success"] is True
-        assert result["data"]["doubled"] == 14
+            assert result["success"] is True
+            assert result["data"]["doubled"] == 14
     
     def test_multiple_custom_functions(self):
         """Test FSM with multiple custom functions."""
@@ -189,19 +189,19 @@ class TestSimpleFSMCustomFunctions:
             data["second"] = "processed"
             return data
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={
                 "first_func": first_func,
                 "second_func": second_func
             }
-        )
+        ) as fsm:
         
-        result = fsm.process({})
+            result = fsm.process({})
         
-        assert result["success"] is True
-        assert result["data"]["first"] == "processed"
-        assert result["data"]["second"] == "processed"
+            assert result["success"] is True
+            assert result["data"]["first"] == "processed"
+            assert result["data"]["second"] == "processed"
 
 
 class TestValidationPipeline:
@@ -257,23 +257,23 @@ class TestValidationPipeline:
             data["validation_message"] = "Valid" if data["is_valid"] else "Invalid: value must be positive"
             return data
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={"validate_data": validate_data}
-        )
+        ) as fsm:
         
-        # Test valid data
-        result = fsm.process({"value": 10})
-        assert result["success"] is True
-        assert result["final_state"] == "valid_end"
-        assert result["data"]["is_valid"] is True
+            # Test valid data
+            result = fsm.process({"value": 10})
+            assert result["success"] is True
+            assert result["final_state"] == "valid_end"
+            assert result["data"]["is_valid"] is True
         
-        # Test invalid data
-        result = fsm.process({"value": -5})
-        assert result["success"] is True
-        assert result["final_state"] == "invalid_end"
-        assert result["data"]["is_valid"] is False
-        assert "Invalid" in result["data"]["validation_message"]
+            # Test invalid data
+            result = fsm.process({"value": -5})
+            assert result["success"] is True
+            assert result["final_state"] == "invalid_end"
+            assert result["data"]["is_valid"] is False
+            assert "Invalid" in result["data"]["validation_message"]
     
     def test_multi_field_validation(self):
         """Test validating multiple fields with result aggregation."""
@@ -329,31 +329,31 @@ class TestValidationPipeline:
             
             return data
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={"validate_fields": validate_fields}
-        )
+        ) as fsm:
         
-        # Test with all valid data
-        result = fsm.process({"email": "user@example.com", "age": 25})
-        assert result["success"] is True
-        assert result["data"]["all_valid"] is True
-        assert result["data"]["validations"]["email"]["valid"] is True
-        assert result["data"]["validations"]["age"]["valid"] is True
+            # Test with all valid data
+            result = fsm.process({"email": "user@example.com", "age": 25})
+            assert result["success"] is True
+            assert result["data"]["all_valid"] is True
+            assert result["data"]["validations"]["email"]["valid"] is True
+            assert result["data"]["validations"]["age"]["valid"] is True
         
-        # Test with invalid email
-        result = fsm.process({"email": "invalid", "age": 25})
-        assert result["success"] is True
-        assert result["data"]["all_valid"] is False
-        assert result["data"]["validations"]["email"]["valid"] is False
-        assert result["data"]["validations"]["email"]["error"] == "Invalid email format"
+            # Test with invalid email
+            result = fsm.process({"email": "invalid", "age": 25})
+            assert result["success"] is True
+            assert result["data"]["all_valid"] is False
+            assert result["data"]["validations"]["email"]["valid"] is False
+            assert result["data"]["validations"]["email"]["error"] == "Invalid email format"
         
-        # Test with invalid age
-        result = fsm.process({"email": "user@example.com", "age": 15})
-        assert result["success"] is True
-        assert result["data"]["all_valid"] is False
-        assert result["data"]["validations"]["age"]["valid"] is False
-        assert result["data"]["validations"]["age"]["error"] == "Age must be between 18 and 100"
+            # Test with invalid age
+            result = fsm.process({"email": "user@example.com", "age": 15})
+            assert result["success"] is True
+            assert result["data"]["all_valid"] is False
+            assert result["data"]["validations"]["age"]["valid"] is False
+            assert result["data"]["validations"]["age"]["error"] == "Age must be between 18 and 100"
 
 
 class TestCustomFunctionErrors:
@@ -424,22 +424,22 @@ class TestCustomFunctionErrors:
         def failing_state_transform(state):
             raise ValueError("Intentional state transform error")
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={"failing_state_transform": failing_state_transform}
-        )
+        ) as fsm:
         
-        result = fsm.process({})
+            result = fsm.process({})
 
-        # A failing state transform does not halt traversal — the FSM still
-        # flows to the end state — but the failure is now surfaced as a record
-        # failure (success is False) rather than being silently swallowed and
-        # reported as a success. Swallowing it was the silent-data-loss bug:
-        # a record whose transform/load raised would be reported as processed.
-        assert result["success"] is False
-        assert result["final_state"] == "end"
-        # The transform_state should be in the path even though its transform failed
-        assert "transform_state" in result["path"]
+            # A failing state transform does not halt traversal — the FSM still
+            # flows to the end state — but the failure is now surfaced as a record
+            # failure (success is False) rather than being silently swallowed and
+            # reported as a success. Swallowing it was the silent-data-loss bug:
+            # a record whose transform/load raised would be reported as processed.
+            assert result["success"] is False
+            assert result["final_state"] == "end"
+            # The transform_state should be in the path even though its transform failed
+            assert "transform_state" in result["path"]
     
     def test_arc_transform_exception_handling(self):
         """Test handling of exceptions in arc transform functions.
@@ -475,15 +475,15 @@ class TestCustomFunctionErrors:
         def failing_arc_transform(data, context):
             raise ValueError("Intentional arc transform error")
         
-        fsm = SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={"failing_arc_transform": failing_arc_transform}
-        )
+        ) as fsm:
         
-        result = fsm.process({})
+            result = fsm.process({})
         
-        # Arc transform failure should prevent transition to middle
-        # FSM should try alternative path or stop at start
-        assert "middle" not in result["path"]
-        # Should either reach end via alternative path or stop at start
-        assert result["final_state"] in ["start", "end"]
+            # Arc transform failure should prevent transition to middle
+            # FSM should try alternative path or stop at start
+            assert "middle" not in result["path"]
+            # Should either reach end via alternative path or stop at start
+            assert result["final_state"] in ["start", "end"]

@@ -203,9 +203,11 @@ See Also:
     - :mod:`dataknobs_fsm.patterns.file_processing`: File processing patterns
 """
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 from dataknobs_data import Record
 
@@ -757,8 +759,44 @@ class SimpleFSM:
         self._fsm.close()
 
     async def aclose(self) -> None:
-        """Async version of close for use in async contexts."""
+        """Async version of close for use in async contexts.
+
+        Releases everything :meth:`close` releases, including the shared
+        async→sync bridge thread. Omitting that made the async form — the one
+        async callers are told to prefer — leak the daemon thread its sync
+        sibling reclaims.
+
+        The join is offloaded rather than run inline: joining the bridge
+        thread waits for its loop to finish shutting down, which inline would
+        stall the caller's event loop. Awaiting the offload keeps the
+        guarantee that the thread is gone when this returns.
+        """
         await self._async_fsm.close()
+
+        # Stop and join the shared async→sync bridge's event-loop thread.
+        await asyncio.to_thread(self._fsm.close)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 def create_fsm(

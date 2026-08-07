@@ -14,16 +14,16 @@ from __future__ import annotations
 import asyncio
 import threading
 import traceback
+from collections.abc import Callable
 
 import pytest
 
 from dataknobs_common import SyncLoopBridge, run_coro_sync
-from dataknobs_common.sync_bridge import _THREAD_NAME
-
-
-def _bridge_threads_alive() -> list[str]:
-    """Names of any live bridge loop threads (empty after teardown)."""
-    return [t.name for t in threading.enumerate() if t.name == _THREAD_NAME]
+from dataknobs_common.testing import (
+    DK_SYNC_BRIDGE_THREAD,
+    assert_no_blocking,
+    blocking_error_type,
+)
 
 
 def test_run_returns_coroutine_value() -> None:
@@ -84,18 +84,18 @@ async def test_run_works_from_inside_a_running_loop() -> None:
         bridge.close()
 
 
-def test_close_joins_thread() -> None:
+def test_close_joins_thread(new_dk_daemon_threads: Callable[..., list[str]]) -> None:
     bridge = SyncLoopBridge()
-    assert _bridge_threads_alive() != []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) != []
     bridge.close()
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
-def test_close_is_idempotent() -> None:
+def test_close_is_idempotent(new_dk_daemon_threads: Callable[..., list[str]]) -> None:
     bridge = SyncLoopBridge()
     bridge.close()
     bridge.close()  # must not raise or hang
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
 def test_run_after_close_raises() -> None:
@@ -110,33 +110,37 @@ def test_run_after_close_raises() -> None:
         bridge.run(coro)
 
 
-def test_context_manager_closes_on_exit() -> None:
+def test_context_manager_closes_on_exit(new_dk_daemon_threads: Callable[..., list[str]]) -> None:
     async def work() -> int:
         await asyncio.sleep(0)
         return 42
 
     with SyncLoopBridge() as bridge:
         assert bridge.run(work()) == 42
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
-def test_run_coro_sync_oneshot_runs_and_cleans_up() -> None:
+def test_run_coro_sync_oneshot_runs_and_cleans_up(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     async def work() -> int:
         await asyncio.sleep(0)
         return 7
 
     assert run_coro_sync(work()) == 7
     # The throwaway bridge's thread is torn down before returning.
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
-async def test_run_coro_sync_from_inside_a_running_loop() -> None:
+async def test_run_coro_sync_from_inside_a_running_loop(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     async def work() -> str:
         await asyncio.sleep(0)
         return "ok"
 
     assert run_coro_sync(work()) == "ok"
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
 def test_run_times_out_and_bridge_stays_usable() -> None:
@@ -160,14 +164,16 @@ def test_run_times_out_and_bridge_stays_usable() -> None:
         bridge.close()
 
 
-def test_run_coro_sync_times_out_and_cleans_up() -> None:
+def test_run_coro_sync_times_out_and_cleans_up(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     async def slow() -> None:
         await asyncio.sleep(30)
 
     with pytest.raises(TimeoutError):
         run_coro_sync(slow(), timeout=0.05)
     # The throwaway bridge is still torn down on the timeout path.
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
 def test_concurrent_run_from_multiple_threads() -> None:
@@ -207,7 +213,9 @@ def test_concurrent_run_from_multiple_threads() -> None:
     assert results == {i: i * i for i in range(8)}
 
 
-def test_concurrent_close_all_callers_wait_for_teardown() -> None:
+def test_concurrent_close_all_callers_wait_for_teardown(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     """Every concurrent ``close`` returns only after the thread is joined."""
     bridge = SyncLoopBridge()
     start = threading.Barrier(4)
@@ -223,10 +231,12 @@ def test_concurrent_close_all_callers_wait_for_teardown() -> None:
         t.join()
 
     # All four returned; the loop thread is gone for every one of them.
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
-def test_close_from_within_coroutine_raises_clear_error() -> None:
+def test_close_from_within_coroutine_raises_clear_error(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     """Self-close from the loop thread fails loudly instead of deadlocking."""
     bridge = SyncLoopBridge()
     try:
@@ -238,10 +248,12 @@ def test_close_from_within_coroutine_raises_clear_error() -> None:
             bridge.run(closes_self())
     finally:
         bridge.close()
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
-def test_run_from_within_coroutine_raises_clear_error() -> None:
+def test_run_from_within_coroutine_raises_clear_error(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     """Re-entrant run() from the loop thread fails loudly instead of deadlocking.
 
     Reproduce-first: a coroutine running ON the bridge loop calls run() again
@@ -263,7 +275,7 @@ def test_run_from_within_coroutine_raises_clear_error() -> None:
             bridge.run(reenters(), timeout=5)
     finally:
         bridge.close()
-    assert _bridge_threads_alive() == []
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
 def test_construction_failure_closes_loop(
@@ -289,3 +301,52 @@ def test_construction_failure_closes_loop(
 
     assert created, "expected a loop to have been created"
     assert created[0].is_closed(), "the loop must be closed on the failure path"
+
+
+def test_close_stays_idempotent_after_a_failed_teardown(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
+    """A ``close()`` that raises must not deadlock every later ``close()``.
+
+    Reproduce-first. ``close()`` claims idempotence and promises that
+    "concurrent callers all block until teardown completes". It implemented
+    that with a ``_closed`` flag plus a ``_closed_event`` the *first* closer
+    sets once the thread is joined; every later closer waits on that event.
+
+    Nothing guaranteed the event was ever set. An exception between claiming
+    teardown and setting it — a ``KeyboardInterrupt`` during shutdown, a
+    provider raising, the blocking detector firing on the join — left the
+    flag claimed and the event clear, so every subsequent ``close()`` waited
+    on it *forever*. The bridge's documented safety net became a permanent
+    hang, and the first caller's exception was the only clue.
+
+    The second close runs on its own thread with a bounded wait so a
+    regression surfaces here as a failed assertion rather than as a hung
+    suite (same discipline as the re-entrancy test above).
+    """
+    bridge = SyncLoopBridge()
+
+    # Make the first close raise partway through, using the shipped blocking
+    # detector: `close()` joins the loop thread, which the detector reports
+    # as a blocking call. A real exception at a real point in teardown.
+    async def _close_under_detector() -> None:
+        with assert_no_blocking():
+            bridge.close()
+
+    with pytest.raises(blocking_error_type()):
+        asyncio.run(_close_under_detector())
+
+    finished = threading.Event()
+
+    def _second_close() -> None:
+        bridge.close()
+        finished.set()
+
+    closer = threading.Thread(target=_second_close, daemon=True)
+    closer.start()
+
+    assert finished.wait(timeout=10.0), (
+        "close() deadlocked after an earlier close() raised: the waiter is "
+        "blocked on a _closed_event that the failed teardown never set."
+    )
+    assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []

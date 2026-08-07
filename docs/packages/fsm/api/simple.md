@@ -390,6 +390,41 @@ else:
     print(f"Order processing failed: {result.get('error')}")
 ```
 
+## Lifecycle
+
+`SimpleFSM` drives an asynchronous engine, so its synchronous methods run
+through a bridge that owns a background event-loop thread. That thread is
+created on first use and released by `close()`, so a `SimpleFSM` that is
+built, used, and dropped leaves the thread alive for the life of the
+process.
+
+Prefer the context-manager form, which closes it for you on any exit path:
+
+```python
+with SimpleFSM("workflow.yaml") as fsm:
+    result = fsm.process({"value": 10})
+```
+
+### From async code
+
+`SimpleFSM.process()` is synchronous — it blocks the calling thread until the
+run finishes. Called straight from an `async def`, that thread is the caller's
+event loop, so it stalls every other task on it. **Prefer
+[`AsyncSimpleFSM`](async_simple.md) and `await fsm.process(...)` when your
+caller is already async.**
+
+`SimpleFSM` still supports `async with`, for async code that owns one but
+drives it off the loop. It routes teardown through `aclose()`, which releases
+the background thread without blocking the loop the way `close()` would:
+
+```python
+async with SimpleFSM("workflow.yaml") as fsm:
+    result = await asyncio.to_thread(fsm.process, {"value": 10})
+```
+
+Calling `close()` / `await aclose()` directly is equivalent; both are
+idempotent.
+
 ## Error Handling
 
 SimpleFSM provides error handling through:

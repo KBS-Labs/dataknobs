@@ -60,52 +60,52 @@ def _state_fail_config() -> dict:
 
 @pytest.mark.asyncio
 async def test_async_step_surfaces_state_transform_failure() -> None:
-    advanced = create_advanced_fsm(
+    async with create_advanced_fsm(
         _state_fail_config(), custom_functions={"boom_state": _boom_state}
-    )
-    context = advanced.create_context({"id": "1"})
+    ) as advanced:
+        context = advanced.create_context({"id": "1"})
 
-    # Step 1: start -> middle, whose state transform raises.
-    result = await advanced.execute_step_async(context)
+        # Step 1: start -> middle, whose state transform raises.
+        result = await advanced.execute_step_async(context)
 
-    assert isinstance(result, StepResult)
-    assert result.to_state == "middle"
-    assert result.success is False, (
-        "a state transform that raised was reported as a successful step"
-    )
-    assert result.failed_states == ["middle"]
-    assert "middle" in (result.error or "")
+        assert isinstance(result, StepResult)
+        assert result.to_state == "middle"
+        assert result.success is False, (
+            "a state transform that raised was reported as a successful step"
+        )
+        assert result.failed_states == ["middle"]
+        assert "middle" in (result.error or "")
 
 
 def test_sync_step_surfaces_state_transform_failure() -> None:
-    advanced = create_advanced_fsm(
+    with create_advanced_fsm(
         _state_fail_config(), custom_functions={"boom_state": _boom_state}
-    )
-    context = advanced.create_context({"id": "1"})
+    ) as advanced:
+        context = advanced.create_context({"id": "1"})
 
-    result = advanced.execute_step_sync(context)
+        result = advanced.execute_step_sync(context)
 
-    assert result.to_state == "middle"
-    assert result.success is False, (
-        "a state transform that raised was reported as a successful step"
-    )
-    assert result.failed_states == ["middle"]
-    assert "middle" in (result.error or "")
+        assert result.to_state == "middle"
+        assert result.success is False, (
+            "a state transform that raised was reported as a successful step"
+        )
+        assert result.failed_states == ["middle"]
+        assert "middle" in (result.error or "")
 
 
 @pytest.mark.asyncio
 async def test_run_until_breakpoint_stops_on_state_transform_failure() -> None:
     """The aggregating driver stops and returns the failing step."""
-    advanced = create_advanced_fsm(
+    async with create_advanced_fsm(
         _state_fail_config(), custom_functions={"boom_state": _boom_state}
-    )
-    context = advanced.create_context({"id": "1"})
+    ) as advanced:
+        context = advanced.create_context({"id": "1"})
 
-    result = await advanced.run_until_breakpoint(context)
+        result = await advanced.run_until_breakpoint(context)
 
-    assert result is not None
-    assert result.success is False
-    assert result.failed_states == ["middle"]
+        assert result is not None
+        assert result.success is False
+        assert result.failed_states == ["middle"]
 
 
 def test_step_run_on_failure_state_runs_and_surfaces_accumulated_failure() -> None:
@@ -161,32 +161,32 @@ def test_step_run_on_failure_state_runs_and_surfaces_accumulated_failure() -> No
             }
         ],
     }
-    advanced = create_advanced_fsm(
+    with create_advanced_fsm(
         config,
         custom_functions={"boom_state": _boom_state, "spy_cleanup": _spy_cleanup},
-    )
-    context = advanced.create_context({"id": "1"})
+    ) as advanced:
+        context = advanced.create_context({"id": "1"})
 
-    # Step 1: start -> fail, whose transform raises.
-    step1 = advanced.execute_step_sync(context)
-    assert step1.to_state == "fail"
-    assert step1.success is False
-    assert step1.failed_states == ["fail"]
+        # Step 1: start -> fail, whose transform raises.
+        step1 = advanced.execute_step_sync(context)
+        assert step1.to_state == "fail"
+        assert step1.success is False
+        assert step1.failed_states == ["fail"]
 
-    # Step 2: fail -> cleanup. cleanup is run_on_failure, so its transform RUNS
-    # despite the prior failure; the step succeeds (cleanup did not itself fail)
-    # but still surfaces the accumulated failure.
-    step2 = advanced.execute_step_sync(context)
-    assert step2.to_state == "cleanup"
-    assert "cleanup" in calls, (
-        "a run_on_failure state's transform must run in the step-driver path too"
-    )
-    assert step2.success is True, (
-        "the step into a clean run_on_failure state should report success=True"
-    )
-    assert step2.failed_states == ["fail"], (
-        "the accumulated upstream failure must still surface on a success=True step"
-    )
+        # Step 2: fail -> cleanup. cleanup is run_on_failure, so its transform RUNS
+        # despite the prior failure; the step succeeds (cleanup did not itself fail)
+        # but still surfaces the accumulated failure.
+        step2 = advanced.execute_step_sync(context)
+        assert step2.to_state == "cleanup"
+        assert "cleanup" in calls, (
+            "a run_on_failure state's transform must run in the step-driver path too"
+        )
+        assert step2.success is True, (
+            "the step into a clean run_on_failure state should report success=True"
+        )
+        assert step2.failed_states == ["fail"], (
+            "the accumulated upstream failure must still surface on a success=True step"
+        )
 
 
 def test_clean_state_transform_still_succeeds() -> None:
@@ -202,11 +202,11 @@ def test_clean_state_transform_still_succeeds() -> None:
     config["networks"][0]["states"][1]["functions"] = {
         "transform": {"type": "registered", "name": "stamp"}
     }
-    advanced = create_advanced_fsm(config, custom_functions={"stamp": _stamp})
-    context = advanced.create_context({"id": "1"})
+    with create_advanced_fsm(config, custom_functions={"stamp": _stamp}) as advanced:
+        context = advanced.create_context({"id": "1"})
 
-    result = advanced.execute_step_sync(context)
+        result = advanced.execute_step_sync(context)
 
-    assert result.success is True
-    assert result.failed_states is None
-    assert result.to_state == "middle"
+        assert result.success is True
+        assert result.failed_states is None
+        assert result.to_state == "middle"

@@ -38,7 +38,7 @@ from examples.advanced_debugging import (
 @pytest.fixture
 def fsm():
     """Create an AdvancedFSM instance with the debug workflow."""
-    return create_advanced_fsm(
+    with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
             'validate_input': validate_input,
@@ -49,7 +49,8 @@ def fsm():
             'check_processing': check_processing
         },
         execution_mode=ExecutionMode.STEP_BY_STEP
-    )
+    ) as fsm:
+        yield fsm
 
 
 @pytest.fixture

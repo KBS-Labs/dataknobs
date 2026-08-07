@@ -429,7 +429,7 @@ def main():
     import tempfile
     
     # Create FSM with custom functions
-    fsm = SimpleFSM(
+    with SimpleFSM(
         config,
         data_mode=DataHandlingMode.REFERENCE,  # Use REFERENCE mode
         custom_functions={
@@ -441,89 +441,89 @@ def main():
             'mark_success': mark_success,
             'mark_failure': mark_failure
         }
-    )
+    ) as fsm:
     
-    print("Large File Processor Example")
-    print("=" * 70)
+        print("Large File Processor Example")
+        print("=" * 70)
     
-    # Test with different file types
-    file_types = ['jsonl', 'csv', 'text']
+        # Test with different file types
+        file_types = ['jsonl', 'csv', 'text']
     
-    for file_type in file_types:
-        print(f"\nProcessing {file_type.upper()} file")
-        print("-" * 50)
+        for file_type in file_types:
+            print(f"\nProcessing {file_type.upper()} file")
+            print("-" * 50)
         
-        # Create temporary sample file
-        with tempfile.NamedTemporaryFile(
-            mode='w',
-            suffix=f'.{file_type if file_type != "text" else "txt"}',
-            delete=False
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
+            # Create temporary sample file
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix=f'.{file_type if file_type != "text" else "txt"}',
+                delete=False
+            ) as tmp_file:
+                tmp_path = Path(tmp_file.name)
         
-        try:
-            # Create sample file
-            create_sample_file(tmp_path, file_type, num_lines=5000)
-            print(f"Created sample file: {tmp_path.name}")
-            print(f"File size: {tmp_path.stat().st_size:,} bytes")
+            try:
+                # Create sample file
+                create_sample_file(tmp_path, file_type, num_lines=5000)
+                print(f"Created sample file: {tmp_path.name}")
+                print(f"File size: {tmp_path.stat().st_size:,} bytes")
             
-            # Simulate chunked processing
-            chunks = simulate_chunked_reading(tmp_path, file_type, chunk_size=1000)
-            print(f"Split into {len(chunks)} chunks")
+                # Simulate chunked processing
+                chunks = simulate_chunked_reading(tmp_path, file_type, chunk_size=1000)
+                print(f"Split into {len(chunks)} chunks")
             
-            # Process the file
-            # Note: In a real implementation, chunks would be streamed
-            # For this demo, we'll process the first chunk
-            result = fsm.process({
-                'file_reference': str(tmp_path),
-                'chunk_data': chunks[0] if chunks else []
-            })
+                # Process the file
+                # Note: In a real implementation, chunks would be streamed
+                # For this demo, we'll process the first chunk
+                result = fsm.process({
+                    'file_reference': str(tmp_path),
+                    'chunk_data': chunks[0] if chunks else []
+                })
             
-            if result['success']:
-                print(f"✓ Processing succeeded")
-                print(f"Final State: {result['final_state']}")
+                if result['success']:
+                    print(f"✓ Processing succeeded")
+                    print(f"Final State: {result['final_state']}")
                 
-                summary = result['data'].get('summary', {})
-                if summary:
-                    print("\nProcessing Summary:")
-                    print(f"  • File: {summary['file_name']}")
-                    print(f"  • Type: {summary['file_type']}")
-                    print(f"  • Size: {summary['file_size']:,} bytes")
-                    print(f"  • Lines Processed: {summary['processed_lines']}")
-                    print(f"  • Lines Failed: {summary['failed_lines']}")
-                    print(f"  • Success Rate: {summary['success_rate']}")
+                    summary = result['data'].get('summary', {})
+                    if summary:
+                        print("\nProcessing Summary:")
+                        print(f"  • File: {summary['file_name']}")
+                        print(f"  • Type: {summary['file_type']}")
+                        print(f"  • Size: {summary['file_size']:,} bytes")
+                        print(f"  • Lines Processed: {summary['processed_lines']}")
+                        print(f"  • Lines Failed: {summary['failed_lines']}")
+                        print(f"  • Success Rate: {summary['success_rate']}")
                     
-                    if summary.get('statistics'):
-                        stats = summary['statistics']
-                        print("\nStatistics:")
-                        print(f"  • Min: {stats['min']}")
-                        print(f"  • Max: {stats['max']}")
-                        print(f"  • Avg: {stats['avg']:.2f}")
-                        print(f"  • Sum: {stats['sum']:.2f}")
-                        print(f"  • Count: {stats['count']}")
+                        if summary.get('statistics'):
+                            stats = summary['statistics']
+                            print("\nStatistics:")
+                            print(f"  • Min: {stats['min']}")
+                            print(f"  • Max: {stats['max']}")
+                            print(f"  • Avg: {stats['avg']:.2f}")
+                            print(f"  • Sum: {stats['sum']:.2f}")
+                            print(f"  • Count: {stats['count']}")
                 
-                if result['data'].get('file_hash'):
-                    print(f"\nFile Hash: {result['data']['file_hash'][:16]}...")
-            else:
-                print(f"✗ Processing failed")
-                print(f"Error: {result.get('error', 'Unknown error')}")
+                    if result['data'].get('file_hash'):
+                        print(f"\nFile Hash: {result['data']['file_hash'][:16]}...")
+                else:
+                    print(f"✗ Processing failed")
+                    print(f"Error: {result.get('error', 'Unknown error')}")
         
-        finally:
-            # Clean up temporary file
-            if tmp_path.exists():
-                tmp_path.unlink()
-                print(f"Cleaned up temporary file")
+            finally:
+                # Clean up temporary file
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                    print(f"Cleaned up temporary file")
     
-    print("\n" + "=" * 70)
-    print("Example complete!")
+        print("\n" + "=" * 70)
+        print("Example complete!")
     
-    # Demonstrate REFERENCE mode benefits
-    print("\n📊 REFERENCE Mode Benefits:")
-    print("  • Memory efficient - doesn't load entire file")
-    print("  • Supports streaming processing")
-    print("  • Can handle files larger than available RAM")
-    print("  • Enables parallel chunk processing")
-    print("  • Maintains file references instead of copying data")
+        # Demonstrate REFERENCE mode benefits
+        print("\n📊 REFERENCE Mode Benefits:")
+        print("  • Memory efficient - doesn't load entire file")
+        print("  • Supports streaming processing")
+        print("  • Can handle files larger than available RAM")
+        print("  • Enables parallel chunk processing")
+        print("  • Maintains file references instead of copying data")
 
 
 if __name__ == "__main__":

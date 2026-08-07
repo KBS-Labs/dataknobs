@@ -134,21 +134,21 @@ class TestExecutionEngineReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Test high value path
-            result = fsm.process({'value': 75})
-            if not result['success']:
-                print(f"High value test failed: {result}")
-            assert result['success'], f"Failed with error: {result.get('error')}"
-            assert result['data']['result'] == 'high'
-            assert result['final_state'] == 'end'
+                # Test high value path
+                result = fsm.process({'value': 75})
+                if not result['success']:
+                    print(f"High value test failed: {result}")
+                assert result['success'], f"Failed with error: {result.get('error')}"
+                assert result['data']['result'] == 'high'
+                assert result['final_state'] == 'end'
 
-            # Test low value path
-            result = fsm.process({'value': 25})
-            assert result['success']
-            assert result['data']['result'] == 'low'
-            assert result['final_state'] == 'end'
+                # Test low value path
+                result = fsm.process({'value': 25})
+                assert result['success']
+                assert result['data']['result'] == 'low'
+                assert result['final_state'] == 'end'
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -196,17 +196,17 @@ class TestExecutionEngineReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Test valid data
-            result = fsm.process({'required_field': 'present'})
-            assert result['success']
-            assert result['final_state'] == 'success'
+                # Test valid data
+                result = fsm.process({'required_field': 'present'})
+                assert result['success']
+                assert result['final_state'] == 'success'
 
-            # Test invalid data
-            result = fsm.process({'other_field': 'value'})
-            assert result['success']  # Execution succeeded even if ended in error state
-            assert result['final_state'] == 'error'
+                # Test invalid data
+                result = fsm.process({'other_field': 'value'})
+                assert result['success']  # Execution succeeded even if ended in error state
+                assert result['final_state'] == 'error'
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -246,23 +246,23 @@ class TestBatchExecutorReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Process batch
-            batch_data = [
-                {'id': 1, 'value': 'a'},
-                {'id': 2, 'value': 'b'},
-                {'id': 3, 'value': 'c'}
-            ]
+                # Process batch
+                batch_data = [
+                    {'id': 1, 'value': 'a'},
+                    {'id': 2, 'value': 'b'},
+                    {'id': 3, 'value': 'c'}
+                ]
 
-            results = fsm.process_batch(batch_data, batch_size=2, max_workers=2)
+                results = fsm.process_batch(batch_data, batch_size=2, max_workers=2)
             
-            # Verify results
-            assert len(results) == 3
-            for i, result in enumerate(results):
-                assert result['success'], f"Result {i} failed: {result}"
-                assert result['data']['processed'] is True
-                assert result['data']['id'] == (i + 1) * 10
+                # Verify results
+                assert len(results) == 3
+                for i, result in enumerate(results):
+                    assert result['success'], f"Result {i} failed: {result}"
+                    assert result['data']['processed'] is True
+                    assert result['data']['id'] == (i + 1) * 10
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -310,25 +310,25 @@ class TestBatchExecutorReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Process batch with mixed validity
-            batch_data = [
-                {'id': 1, 'valid': True},
-                {'id': 2, 'valid': False},
-                {'id': 3, 'valid': True}
-            ]
+                # Process batch with mixed validity
+                batch_data = [
+                    {'id': 1, 'valid': True},
+                    {'id': 2, 'valid': False},
+                    {'id': 3, 'valid': True}
+                ]
 
-            results = fsm.process_batch(batch_data)
+                results = fsm.process_batch(batch_data)
 
-            # Verify results
-            assert len(results) == 3
-            assert results[0]['success']
-            assert results[0]['final_state'] == 'end'
-            assert results[1]['success']
-            assert results[1]['final_state'] == 'error'
-            assert results[2]['success']
-            assert results[2]['final_state'] == 'end'
+                # Verify results
+                assert len(results) == 3
+                assert results[0]['success']
+                assert results[0]['final_state'] == 'end'
+                assert results[1]['success']
+                assert results[1]['final_state'] == 'error'
+                assert results[2]['success']
+                assert results[2]['final_state'] == 'end'
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -507,20 +507,20 @@ class TestAdvancedExecutionReal:
 
         try:
             # Use SimpleFSM which has async capabilities
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Process data asynchronously
-            import asyncio
+                # Process data asynchronously
+                import asyncio
             
-            async def run_test():
-                result = fsm.process({'test': 'data'})
-                return result
+                async def run_test():
+                    result = fsm.process({'test': 'data'})
+                    return result
 
-            result = asyncio.run(run_test())
+                result = asyncio.run(run_test())
             
-            assert result['success']
-            assert 'timestamp' in result['data']
-            assert result['final_state'] == 'end'
+                assert result['success']
+                assert 'timestamp' in result['data']
+                assert result['final_state'] == 'end'
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -555,11 +555,11 @@ class TestAdvancedExecutionReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Execute with sufficient timeout - should succeed
-            result = fsm.process({'test': 'data'}, timeout=1.0)
-            assert result['success']
+                # Execute with sufficient timeout - should succeed
+                result = fsm.process({'test': 'data'}, timeout=1.0)
+                assert result['success']
 
             # Note: Actual timeout interruption would require threading/async
             # which SimpleFSM doesn't fully support yet
@@ -604,23 +604,23 @@ class TestAdvancedExecutionReal:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Process should loop and accumulate
-            # The FSM should:
-            # 1. Start at 'start'
-            # 2. Move to 'accumulate' with count=0
-            # 3. Loop in 'accumulate': count=1, count=2, count=3
-            # 4. When count=3, condition count>=3 is true, move to 'end'
-            # Increase max_transitions since we need several self-loops
-            result = fsm.process({'initial': 'value'}, timeout=10.0)
-            if not result['success']:
-                print(f"Process failed: {result}")
-                print(f"Path taken: {result.get('path', [])}")
-                print(f"Final data: {result.get('data', {})}")
-            assert result['success'], f"Process failed: {result.get('error', 'Unknown error')}"
-            assert result['data']['count'] == 3
-            assert result['final_state'] == 'end'
+                # Process should loop and accumulate
+                # The FSM should:
+                # 1. Start at 'start'
+                # 2. Move to 'accumulate' with count=0
+                # 3. Loop in 'accumulate': count=1, count=2, count=3
+                # 4. When count=3, condition count>=3 is true, move to 'end'
+                # Increase max_transitions since we need several self-loops
+                result = fsm.process({'initial': 'value'}, timeout=10.0)
+                if not result['success']:
+                    print(f"Process failed: {result}")
+                    print(f"Path taken: {result.get('path', [])}")
+                    print(f"Final data: {result.get('data', {})}")
+                assert result['success'], f"Process failed: {result.get('error', 'Unknown error')}"
+                assert result['data']['count'] == 3
+                assert result['final_state'] == 'end'
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -658,14 +658,14 @@ class TestExecutionMetrics:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Execute
-            result = fsm.process({'test': 'data'})
+                # Execute
+                result = fsm.process({'test': 'data'})
 
-            # Check execution path
-            assert result['success']
-            assert result['path'] == ['start', 'middle', 'end']
+                # Check execution path
+                assert result['success']
+                assert result['path'] == ['start', 'middle', 'end']
 
         finally:
             Path(config_file).unlink(missing_ok=True)
@@ -693,15 +693,15 @@ class TestExecutionMetrics:
             config_file = f.name
 
         try:
-            fsm = SimpleFSM(config_file)
+            with SimpleFSM(config_file) as fsm:
 
-            # Measure execution time
-            start_time = time.time()
-            result = fsm.process({'test': 'data'})
-            execution_time = time.time() - start_time
+                # Measure execution time
+                start_time = time.time()
+                result = fsm.process({'test': 'data'})
+                execution_time = time.time() - start_time
 
-            assert result['success']
-            assert execution_time < 1.0  # Should be fast for simple FSM
+                assert result['success']
+                assert execution_time < 1.0  # Should be fast for simple FSM
 
         finally:
             Path(config_file).unlink(missing_ok=True)

@@ -12,21 +12,19 @@ generator is the real collaborator.
 from __future__ import annotations
 
 import asyncio
-import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
 from dataknobs_common import aiter_sync_in_thread
-from dataknobs_common.async_iter import _THREAD_NAME
+from dataknobs_common.testing import (
+    DK_AITER_PUMP_THREAD,
+)
 
 
-def _pump_threads_alive() -> list[str]:
-    """Names of any live pump threads (should be empty after teardown)."""
-    return [t.name for t in threading.enumerate() if t.name == _THREAD_NAME]
-
-
-async def test_happy_path_drains_all_items_in_order() -> None:
+async def test_happy_path_drains_all_items_in_order(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     def make_iter() -> Iterator[int]:
         return iter(range(5))
 
@@ -35,10 +33,12 @@ async def test_happy_path_drains_all_items_in_order() -> None:
     assert got == [0, 1, 2, 3, 4]
     # Wait briefly for the joined producer thread to clear from the table.
     await asyncio.sleep(0)
-    assert _pump_threads_alive() == []
+    assert new_dk_daemon_threads(DK_AITER_PUMP_THREAD) == []
 
 
-async def test_teardown_on_abandonment_closes_source_and_thread() -> None:
+async def test_teardown_on_abandonment_closes_source_and_thread(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     closed = {"flag": False}
 
     def make_iter() -> Iterator[int]:
@@ -64,10 +64,12 @@ async def test_teardown_on_abandonment_closes_source_and_thread() -> None:
     # Source generator's ``finally`` ran -> handle released.
     assert closed["flag"] is True
     # Producer thread was joined -> none left alive.
-    assert _pump_threads_alive() == []
+    assert new_dk_daemon_threads(DK_AITER_PUMP_THREAD) == []
 
 
-async def test_error_during_iteration_propagates() -> None:
+async def test_error_during_iteration_propagates(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     def make_iter() -> Iterator[int]:
         def gen() -> Iterator[int]:
             yield 1
@@ -82,10 +84,12 @@ async def test_error_during_iteration_propagates() -> None:
 
     assert got == [1]
     await asyncio.sleep(0)
-    assert _pump_threads_alive() == []
+    assert new_dk_daemon_threads(DK_AITER_PUMP_THREAD) == []
 
 
-async def test_error_during_setup_propagates() -> None:
+async def test_error_during_setup_propagates(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     def make_iter() -> Iterator[int]:
         # ``make_iter`` itself raises (e.g. a malformed source the
         # generator factory rejects before producing anything).
@@ -96,7 +100,7 @@ async def test_error_during_setup_propagates() -> None:
             pass
 
     await asyncio.sleep(0)
-    assert _pump_threads_alive() == []
+    assert new_dk_daemon_threads(DK_AITER_PUMP_THREAD) == []
 
 
 @pytest.mark.parametrize("bad_buffer", [0, -1])
@@ -108,7 +112,9 @@ async def test_zero_or_negative_max_buffer_rejected(bad_buffer: int) -> None:
             pass
 
 
-async def test_many_concurrent_streams_do_not_starve_each_other() -> None:
+async def test_many_concurrent_streams_do_not_starve_each_other(
+    new_dk_daemon_threads: Callable[..., list[str]],
+) -> None:
     # A waiting consumer parks on an ``asyncio.Event`` (no executor polling),
     # so far more concurrent streams than the default thread-pool size can run
     # without deadlock. A polling design would wedge once the pool saturated.
@@ -128,7 +134,7 @@ async def test_many_concurrent_streams_do_not_starve_each_other() -> None:
 
     assert all(r == list(range(per_stream)) for r in results)
     await asyncio.sleep(0)
-    assert _pump_threads_alive() == []
+    assert new_dk_daemon_threads(DK_AITER_PUMP_THREAD) == []
 
 
 async def test_backpressure_bounds_producer_lookahead() -> None:

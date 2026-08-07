@@ -334,8 +334,16 @@ def test_hybrid_forwards_prompt_resolver_to_grounded_child() -> None:
 # ``extraction_config``, ``artifacts``, ``review_protocols`` — consumed only
 # by ``from_config`` to build the FSM/collaborators) are covered by the
 # ctor's ``**config_overrides`` variadic.
+# ``_owns_fsm`` joins them for a different reason: it is not a setting but a
+# statement about who is responsible for the injected ``wizard_fsm``'s
+# teardown. It travels with the collaborator, not with the config, and
+# serializing it would be meaningless. It is NOT added to the guard's own
+# default-ignore set (``self`` / ``config`` / ``_components`` /
+# ``_forwarded_components``), which names framework slots — exempting a
+# consumer-specific parameter there would exempt that name everywhere.
 _WIZARD_IGNORE_PARAMS = {
     "wizard_fsm",
+    "_owns_fsm",
     "extractor",
     "auto_advance_filled_stages",
     "context_template",

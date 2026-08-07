@@ -208,6 +208,11 @@ class SyncLoopBridge:
         :class:`RuntimeError` rather than deadlocking. Concurrent callers all
         block until teardown completes — every ``close`` returns only once the
         loop thread is actually gone.
+
+        If teardown itself raises, the exception propagates to *this* caller
+        and the waiters are released rather than left blocked: an exception
+        during shutdown is a problem for the closer to handle, not grounds to
+        strand every other holder of the bridge forever.
         """
         if threading.current_thread() is self._thread:
             raise RuntimeError(
@@ -222,9 +227,18 @@ class SyncLoopBridge:
             # also returns only after the thread has been joined.
             self._closed_event.wait()
             return
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join()
-        self._closed_event.set()
+        # The event must be set on *every* exit from here, not just the happy
+        # one. This caller has already claimed teardown by setting `_closed`,
+        # so every later `close()` is committed to waiting on the event; if an
+        # exception between here and the set skipped it, that wait would never
+        # end. The failure would present as a permanent hang in an unrelated
+        # caller, with the real cause — an exception raised over here — long
+        # since propagated somewhere else.
+        try:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join()
+        finally:
+            self._closed_event.set()
 
     def __enter__(self) -> Self:
         return self

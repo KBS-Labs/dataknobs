@@ -7,8 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A `SyncLoopBridge.close()` that raised deadlocked every later
+  `close()`.** Teardown claimed ownership by setting a closed flag, then
+  joined the loop thread, then set the event that concurrent closers wait
+  on. Nothing guaranteed that last step ran: any exception in between — a
+  `KeyboardInterrupt` during shutdown, a failure inside the loop, the
+  blocking detector firing on the join — left the flag claimed and the
+  event clear, so every subsequent `close()` waited on it forever. The
+  documented idempotence became a permanent hang, and the first caller's
+  exception was the only clue. The event is now set on every exit from
+  teardown, so the exception reaches the caller that can act on it and the
+  waiters are released.
+
+- **`assert_no_leaked_bridge_threads(names=...)` silently disabled itself
+  for a one-shot iterable.** `names` is typed `Iterable[str]` and was
+  consumed twice — once to sample on entry, once to check on exit. A list
+  or frozenset survives that; a generator does not, leaving the exit check
+  watching nothing and the guard passing forever. It is now normalized
+  once on entry.
+
+### Changed
+
+- **The owned-vs-injected close helpers now log when an owned collaborator
+  exposes no way to close it.** Each helper probes exactly one method name
+  and skips when it is absent, so reaching for `aclose_if_owned` on a
+  plain `close()`-only collaborator closed *nothing* — silently, and a
+  worse outcome than either sibling's, since one raises loudly and the
+  other at least closes something. Skipping is still correct (a
+  collaborator that legitimately needs no teardown must stay holdable),
+  but it is now recorded at DEBUG rather than passing in silence. DEBUG
+  rather than WARNING because, unlike a misspelled registry key, "no
+  teardown method" has a legitimate shape.
+
 ### Added
 
+- **`aclose_if_owned`** (`dataknobs_common.lifecycle`, re-exported from the
+  top-level namespace) — the third member of the owned-vs-injected close
+  guard family, for a collaborator that mirrors the sync/async lifecycle
+  pair: a synchronous `close()` alongside an `aclose()` that awaits
+  coroutine cleanup the sync form skips. For that shape neither existing
+  sibling is correct rather than merely suboptimal — `close_if_owned`
+  would `await` a synchronous `close()`'s `None` return and raise
+  `TypeError`, while `close_if_owned_sync` would succeed *silently*
+  through the lossy half. The selection rows are not disjoint and need not
+  be: a collaborator whose `close()` is itself `async` and whose
+  `aclose()` merely aliases it is served correctly by either helper. The ownership guard, the `on_error` isolation
+  contract, and the set of exceptions never swallowed (`CancelledError`,
+  `KeyboardInterrupt`, `SystemExit`) are identical to its siblings; only
+  the probed method differs, which is what makes the `hasattr` check the
+  discriminator between a dual-method collaborator and a plain one. The
+  selection rule is now stated once in the module docstring and in the API
+  reference: sync `close()` → `close_if_owned_sync`; async `close()` →
+  `close_if_owned`; both, closed from async → `aclose_if_owned`.
+  `close_if_owned` is deliberately **not** taught to prefer `aclose` —
+  that would change behavior at every shipped call site to serve a case
+  none of them has.
+- **`assert_no_leaked_bridge_threads`** (`dataknobs_common.testing`), with
+  `live_dk_daemon_threads`, `DK_DAEMON_THREAD_NAMES`,
+  `DK_SYNC_BRIDGE_THREAD`, and `DK_AITER_PUMP_THREAD` — a context manager
+  that fails when the block leaks a dataknobs daemon thread (a
+  `SyncLoopBridge` event loop or an `aiter_sync_in_thread` producer). It
+  measures a **delta**, so a thread leaked by an unrelated earlier test
+  cannot fail a later, well-behaved one and name the wrong culprit. The
+  covered names are read from the modules that create them, so a rename
+  cannot leave the guard watching for a thread that no longer exists. It
+  covers both names deliberately: a bridge-only helper would have
+  guaranteed a fresh copy of the idiom the first time anyone needed the
+  pump, which is how three near-identical copies came to exist across
+  packages.
 - **`dataknobs_common.packs`** — ordered, precedence-resolved composition of
   named declaration bundles. A *pack* is a named, frozen, partial
   declaration; a *binding* selects packs for one deployment and may tune

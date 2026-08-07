@@ -367,39 +367,77 @@ class ResourceManager:
                     pass
             raise ResourceError(f"Failed to acquire resources: {e}", resource_name="multiple", operation="configure") from e
     
-    def close(self) -> None:
-        """Close the resource manager and release all resources."""
-        self._closed = True
-        
+    def _release_acquired_and_close_pools(self) -> None:
+        """Return every acquired resource and close every pool.
+
+        Shared by :meth:`close` and :meth:`cleanup` so the two halves of the
+        lifecycle cannot drift. They already had: the async half cleared
+        ``_pools`` without closing the pools, so a pool's resources were
+        never handed back to their provider and its connections stayed open
+        until garbage collection — while the sync half released them
+        correctly.
+
+        Ordering is load-bearing: resources are released *before* providers
+        are closed, since releasing hands them back to the provider that
+        issued them.
+        """
         with self._lock:
             # Release all acquired resources
             for owner_id in {key.split(":")[0] for key in self._resources.keys()}:
                 self.release_all(owner_id)
-            
+
             # Close all pools
             for pool in self._pools.values():
                 pool.close()
             self._pools.clear()
-            
+
+    def close(self) -> None:
+        """Close the resource manager and release all resources.
+
+        Terminal: a closed manager rejects further :meth:`acquire` calls.
+        Use :meth:`cleanup` from async code — it does everything this does
+        and additionally awaits providers whose cleanup is a coroutine.
+        """
+        self._closed = True
+        self._release_acquired_and_close_pools()
+
+        with self._lock:
             # Close all providers
             for provider in self._providers.values():
                 if hasattr(provider, 'close'):
                     provider.close()
             self._providers.clear()
-            
+
             self._resources.clear()
             self._resource_owners.clear()
-    
+
     async def cleanup(self) -> None:
         """Async cleanup of all resource providers.
-        
+
         This method performs async cleanup of resources that support it,
         while falling back to sync cleanup for those that don't.
+
+        A strict superset of :meth:`close`: it releases the same acquired
+        resources, closes the same pools, and leaves the manager equally
+        closed — then additionally awaits providers exposing an ``aclose`` /
+        ``cleanup`` coroutine. That is what makes "prefer ``aclose()`` from
+        async code" safe advice; while this skipped the release, the pool
+        close, and the closed flag, the async form was in some ways the
+        *weaker* one, and the two even reported a later ``acquire`` failure
+        with different messages for the same underlying state.
         """
         import asyncio
         import logging
         logger = logging.getLogger(__name__)
-        
+
+        # Claim closure up front exactly as `close` does, so the terminal
+        # state does not depend on which half the caller reached for.
+        self._closed = True
+
+        # Off the event loop: releasing resources and closing pools calls
+        # into provider code that may block.
+        await asyncio.to_thread(self._release_acquired_and_close_pools)
+
         cleanup_tasks = []
         sync_providers = []
         

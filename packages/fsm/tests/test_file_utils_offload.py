@@ -24,6 +24,7 @@ import pytest
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 from dataknobs_fsm.utils import file_utils as _module
+from dataknobs_common.testing import DK_AITER_PUMP_THREAD
 from dataknobs_fsm.utils.file_utils import (
     create_file_reader,
     read_csv_file,
@@ -130,7 +131,7 @@ async def test_read_jsonl_opens_on_worker_thread(
     await _drain(read_jsonl_file(path))
     assert threads, "open() was never called"
     assert threading.current_thread().name not in threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_read_csv_opens_on_worker_thread(
@@ -142,7 +143,7 @@ async def test_read_csv_opens_on_worker_thread(
     monkeypatch.setattr(_module, "open", _thread_recording_open(threads), raising=False)
     await _drain(read_csv_file(path))
     assert threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 async def test_read_text_opens_on_worker_thread(
@@ -154,7 +155,7 @@ async def test_read_text_opens_on_worker_thread(
     monkeypatch.setattr(_module, "open", _thread_recording_open(threads), raising=False)
     await _drain(read_text_file(path))
     assert threads
-    assert all(name.startswith("dk-aiter-sync-pump") for name in threads)
+    assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
 # --------------------------------------------------------------------------

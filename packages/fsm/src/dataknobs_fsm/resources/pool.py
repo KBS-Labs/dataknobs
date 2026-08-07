@@ -21,6 +21,17 @@ from dataknobs_fsm.resources.base import (
 
 logger = logging.getLogger(__name__)
 
+_AT_CAPACITY: Any = object()
+"""Returned by :meth:`ResourcePool._create_if_under_capacity` when the pool
+may not grow.
+
+A distinct object rather than ``None`` because ``None`` is a value a provider
+may legitimately produce as the resource itself — ``IResourceProvider.acquire``
+is typed ``-> Any``. Conflating the two would lose that resource after it had
+already been booked into the active set, and hand the caller a timeout for a
+pool that was never full.
+"""
+
 
 @dataclass(frozen=True)
 class PoolConfig(StructuredConfig):
@@ -125,7 +136,9 @@ class ResourcePool(StructuredConfigConsumer[PoolConfig]):
         self.provider: IResourceProvider = self.components["provider"]
         self.metrics = ResourceMetrics()
 
-        self._pool: queue.Queue = queue.Queue(maxsize=self.config.max_size)
+        self._pool: queue.Queue[PooledResource] = queue.Queue(
+            maxsize=self.config.max_size
+        )
         self._active_resources: set = set()
         self._lock = threading.RLock()
         self._closed = False
@@ -159,63 +172,134 @@ class ResourcePool(StructuredConfigConsumer[PoolConfig]):
     
     def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a resource from the pool.
-        
+
         Args:
-            timeout: Acquisition timeout in seconds.
-            
+            timeout: Maximum seconds to wait for a resource to become
+                available. ``None`` (the default) uses the configured
+                ``acquire_timeout``; ``0`` means do not wait at all. The wait
+                applies only when the pool is at ``max_size`` — see
+                :meth:`_obtain_resource`.
+
         Returns:
             The acquired resource.
-            
+
         Raises:
             ResourceError: If acquisition fails.
         """
         if self._closed:
             raise ResourceError("Pool is closed", resource_name=self.provider.name, operation="acquire")
-        
-        timeout = timeout or self.config.acquire_timeout
+
+        # Not ``timeout or self.config.acquire_timeout``: a caller passing 0 is
+        # asking not to wait, and truthiness cannot tell that from an omitted
+        # argument — it would silently substitute the configured default and
+        # block for it.
+        timeout = self.config.acquire_timeout if timeout is None else timeout
         start_time = datetime.now()
-        
-        # Try to get from pool
-        try:
-            pooled = self._pool.get(timeout=timeout)
-            
-            # Validate the resource
-            if not self._validate_pooled_resource(pooled):
-                # Resource is invalid, create a new one
-                self._release_pooled_resource(pooled)
-                return self._create_new_resource()
-            
-            # Update metadata
-            pooled.last_used = datetime.now()
-            pooled.use_count += 1
-            
-            with self._lock:
-                self._active_resources.add(id(pooled.resource))
-            
-            # Track acquisition time
-            acquisition_time = (datetime.now() - start_time).total_seconds()
-            self.metrics.record_acquisition(acquisition_time)
-            return pooled.resource
-            
-        except queue.Empty:
-            # Pool is empty, try to create new resource if under max
-            with self._lock:
-                if len(self._active_resources) < self.config.max_size:
-                    resource = self._create_new_resource()
-                    # Track acquisition time for newly created resource
-                    acquisition_time = (datetime.now() - start_time).total_seconds()
-                    self.metrics.record_acquisition(acquisition_time)
-                    return resource
-            
-            # Record timeout event
+
+        resource = self._obtain_resource(timeout)
+
+        # One recording point for every way of obtaining a resource. Recording
+        # it per branch is how the "took one from the pool" and "created one"
+        # paths came to be counted while the "replaced an invalid one" path was
+        # not.
+        self.metrics.record_acquisition((datetime.now() - start_time).total_seconds())
+        return resource
+
+    def _obtain_resource(self, timeout: float) -> Any:
+        """Produce a resource, waiting only when waiting is the only option.
+
+        The pool may make a caller wait exactly when every resource it is
+        allowed to create is already out on loan, because then a release by
+        another holder is the only thing that can satisfy this caller. In
+        every other case a resource is either sitting idle or creatable now,
+        and blocking first would spend the whole ``timeout`` before reaching a
+        branch that never needed to wait — a resource delivered 30 seconds
+        late by default.
+
+        Args:
+            timeout: Seconds to wait once at capacity.
+
+        Returns:
+            The resource.
+
+        Raises:
+            ResourceError: If the pool is at capacity for the whole timeout.
+        """
+        pooled = self._take_idle()
+
+        if pooled is None:
+            resource = self._create_if_under_capacity()
+            if resource is not _AT_CAPACITY:
+                return resource
+            # At capacity: wait for a holder to give one back.
+            pooled = self._take_idle(timeout=timeout)
+
+        if pooled is None:
+            # Capacity can be freed *without* anything reaching the queue: a
+            # resource past its max lifetime is retired on release rather than
+            # returned, so nothing wakes a waiter. Re-check before giving up.
+            resource = self._create_if_under_capacity()
+            if resource is not _AT_CAPACITY:
+                return resource
+
             self.metrics.record_timeout()
-            
             raise ResourceError(
                 f"Failed to acquire resource within {timeout} seconds",
                 resource_name=self.provider.name,
                 operation="acquire"
-            ) from None
-    
+            )
+
+        if not self._validate_pooled_resource(pooled):
+            # Resource is invalid, create a new one
+            self._release_pooled_resource(pooled)
+            return self._create_new_resource()
+
+        # Update metadata
+        pooled.last_used = datetime.now()
+        pooled.use_count += 1
+
+        with self._lock:
+            self._active_resources.add(id(pooled.resource))
+
+        return pooled.resource
+
+    def _take_idle(self, timeout: float | None = None) -> PooledResource | None:
+        """Take an idle resource from the queue.
+
+        Args:
+            timeout: Seconds to wait for one. ``None`` (the default) polls
+                without blocking.
+
+        Returns:
+            The pooled resource, or ``None`` if none became available.
+        """
+        try:
+            if timeout is None:
+                return self._pool.get_nowait()
+            return self._pool.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _create_if_under_capacity(self) -> Any:
+        """Create a resource if the pool is below ``max_size``.
+
+        The check and the creation share one hold of the lock, so two callers
+        arriving at the last free slot cannot both pass the check and
+        over-allocate past ``max_size``.
+
+        Returns:
+            The new resource, or :data:`_AT_CAPACITY` if the pool may not
+            grow. Sentinel rather than ``None``; see that constant.
+
+        Raises:
+            ResourceError: If the provider fails to produce a resource.
+        """
+        with self._lock:
+            if len(self._active_resources) >= self.config.max_size:
+                return _AT_CAPACITY
+            return self._create_new_resource()
+
+
     def release(self, resource: Any) -> None:
         """Return a resource to the pool.
         

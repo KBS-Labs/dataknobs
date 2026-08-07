@@ -10,15 +10,15 @@ Bug context (2026-02-02):
 - Fix: Pass data in globals dict so _test() can access it
 """
 
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 import pytest
 
-from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
 
 class TestWizardConditionEvaluation:
     """Tests for wizard condition function creation and evaluation."""
 
-    def test_simple_data_access(self):
+    def test_simple_data_access(self, wizard_loader: WizardConfigLoader):
         """Verify condition can access data.get() pattern."""
         wizard_config = {
             "name": "test-wizard",
@@ -42,8 +42,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Without ready flag - should stay at start
         fsm.step({"ready": False})
@@ -54,7 +53,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"ready": True})
         assert fsm.current_stage == "end"
 
-    def test_missing_key_returns_false(self):
+    def test_missing_key_returns_false(self, wizard_loader: WizardConfigLoader):
         """Verify condition handles missing keys gracefully."""
         wizard_config = {
             "name": "test-wizard",
@@ -78,14 +77,13 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Missing key should not cause error, just evaluate to False
         fsm.step({})
         assert fsm.current_stage == "start"
 
-    def test_nested_data_access(self):
+    def test_nested_data_access(self, wizard_loader: WizardConfigLoader):
         """Verify condition can access nested data structures."""
         wizard_config = {
             "name": "test-wizard",
@@ -109,8 +107,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Without nested confirmed - stay at start
         fsm.step({"user": {}})
@@ -121,7 +118,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"user": {"confirmed": True}})
         assert fsm.current_stage == "end"
 
-    def test_condition_with_boolean_comparison(self):
+    def test_condition_with_boolean_comparison(self, wizard_loader: WizardConfigLoader):
         """Verify condition handles boolean comparisons correctly."""
         wizard_config = {
             "name": "test-wizard",
@@ -146,8 +143,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # confirmed=False should not transition
         fsm.step({"confirmed": False})
@@ -158,7 +154,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"confirmed": True})
         assert fsm.current_stage == "end"
 
-    def test_condition_with_truthy_check(self):
+    def test_condition_with_truthy_check(self, wizard_loader: WizardConfigLoader):
         """Verify condition handles truthy checks (without explicit comparison)."""
         wizard_config = {
             "name": "test-wizard",
@@ -183,8 +179,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Empty string is falsy
         fsm.step({"value": ""})
@@ -195,7 +190,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"value": "something"})
         assert fsm.current_stage == "end"
 
-    def test_condition_with_numeric_check(self):
+    def test_condition_with_numeric_check(self, wizard_loader: WizardConfigLoader):
         """Verify condition handles numeric comparisons."""
         wizard_config = {
             "name": "test-wizard",
@@ -219,8 +214,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # count=3 should not transition (3 > 5 is False)
         fsm.step({"count": 3})
@@ -231,7 +225,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"count": 10})
         assert fsm.current_stage == "end"
 
-    def test_condition_with_in_operator(self):
+    def test_condition_with_in_operator(self, wizard_loader: WizardConfigLoader):
         """Verify condition handles 'in' operator checks."""
         wizard_config = {
             "name": "test-wizard",
@@ -255,8 +249,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # status=pending should not transition
         fsm.step({"status": "pending"})
@@ -267,7 +260,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"status": "approved"})
         assert fsm.current_stage == "end"
 
-    def test_multiple_transitions_with_conditions(self):
+    def test_multiple_transitions_with_conditions(self, wizard_loader: WizardConfigLoader):
         """Verify multiple transitions with different conditions work correctly."""
         wizard_config = {
             "name": "test-wizard",
@@ -302,8 +295,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Test approved path
         fsm.step({"status": "approved"})
@@ -319,7 +311,7 @@ class TestWizardConditionEvaluation:
         fsm.step({"status": "pending"})
         assert fsm.current_stage == "start"
 
-    def test_condition_error_returns_false(self):
+    def test_condition_error_returns_false(self, wizard_loader: WizardConfigLoader):
         """Verify condition errors are caught and return False."""
         wizard_config = {
             "name": "test-wizard",
@@ -344,14 +336,13 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Should not crash, just return False and stay at start
         fsm.step({})  # Will try int('not_a_number') which raises ValueError
         assert fsm.current_stage == "start"
 
-    def test_data_variable_is_accessible(self):
+    def test_data_variable_is_accessible(self, wizard_loader: WizardConfigLoader):
         """Explicitly test that the 'data' variable is accessible in conditions.
 
         This was the core bug - exec() scope issues prevented 'data' from being
@@ -380,8 +371,7 @@ class TestWizardConditionEvaluation:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Should transition because data dict has 'key'
         fsm.step({"key": "value"})
@@ -394,7 +384,7 @@ class TestWizardConditionEvaluation:
 class TestWizardTransitionLogic:
     """Tests for wizard state transition logic."""
 
-    def test_stay_at_stage_without_matching_condition(self):
+    def test_stay_at_stage_without_matching_condition(self, wizard_loader: WizardConfigLoader):
         """Verify FSM stays at current stage if no conditions match."""
         wizard_config = {
             "name": "test-wizard",
@@ -418,8 +408,7 @@ class TestWizardTransitionLogic:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Step multiple times without confirmed - should stay at review
         fsm.step({"some_data": "value"})
@@ -435,7 +424,7 @@ class TestWizardTransitionLogic:
         fsm.step({"confirmed": True})
         assert fsm.current_stage == "save"
 
-    def test_unconditional_transition(self):
+    def test_unconditional_transition(self, wizard_loader: WizardConfigLoader):
         """Verify unconditional transitions work."""
         wizard_config = {
             "name": "test-wizard",
@@ -459,8 +448,7 @@ class TestWizardTransitionLogic:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # Should immediately transition
         fsm.step({})
@@ -485,7 +473,7 @@ class TestYamlBooleanLiterals:
             ("false", "start"),
         ],
     )
-    def test_boolean_literal_variants(self, condition, expected_stage):
+    def test_boolean_literal_variants(self, condition, expected_stage, wizard_loader: WizardConfigLoader):
         """Both Python and YAML boolean literals work in conditions."""
         wizard_config = {
             "name": "test-wizard",
@@ -502,8 +490,7 @@ class TestYamlBooleanLiterals:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
         fsm.step({})
         assert fsm.current_stage == expected_stage
 
@@ -515,7 +502,7 @@ class TestYamlBooleanLiterals:
             ("None", "start"),  # Python None, which is falsy
         ],
     )
-    def test_null_none_literal_variants(self, condition, expected_stage):
+    def test_null_none_literal_variants(self, condition, expected_stage, wizard_loader: WizardConfigLoader):
         """null/none/None all evaluate to Python None (falsy)."""
         wizard_config = {
             "name": "test-wizard",
@@ -532,12 +519,11 @@ class TestYamlBooleanLiterals:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
         fsm.step({})
         assert fsm.current_stage == expected_stage
 
-    def test_lowercase_true_with_data_expression(self):
+    def test_lowercase_true_with_data_expression(self, wizard_loader: WizardConfigLoader):
         """Lowercase true works in compound expressions."""
         wizard_config = {
             "name": "test-wizard",
@@ -557,8 +543,7 @@ class TestYamlBooleanLiterals:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         # ready=False should not match `== true`
         fsm.step({"ready": False})
@@ -569,7 +554,7 @@ class TestYamlBooleanLiterals:
         fsm.step({"ready": True})
         assert fsm.current_stage == "end"
 
-    def test_no_collision_with_variable_names(self):
+    def test_no_collision_with_variable_names(self, wizard_loader: WizardConfigLoader):
         """Variables like 'is_true' are not affected by the aliases."""
         wizard_config = {
             "name": "test-wizard",
@@ -589,8 +574,7 @@ class TestYamlBooleanLiterals:
             ],
         }
 
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(wizard_config)
+        fsm = wizard_loader.load_from_dict(wizard_config)
 
         fsm.step({"is_true": "yes"})
         assert fsm.current_stage == "end"

@@ -30,7 +30,7 @@ class TestDataValidationPipeline:
     @pytest.fixture
     def fsm(self):
         """Create FSM with custom validation functions."""
-        return SimpleFSM(
+        with SimpleFSM(
             config,
             custom_functions={
                 'normalize_input': normalize_input,
@@ -39,7 +39,8 @@ class TestDataValidationPipeline:
                 'validate_age': validate_age,
                 'calculate_validation_summary': calculate_validation_summary
             }
-        )
+        ) as fsm:
+            yield fsm
     
     def test_all_valid_data(self, fsm):
         """Test with all valid data."""
