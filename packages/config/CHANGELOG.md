@@ -124,10 +124,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method.
 
   Two ways to use it, and they are **alternatives, not layers.** An override
-  replaces the default implementation, so a loader given both silently
-  ignores the injected resolver — unless the override delegates to
+  replaces the default implementation, so a loader given both ignores the
+  injected resolver — unless the override delegates to
   `super().resolve_name(...)`, in which case both mappings apply in sequence
-  and a prefixing pair looks for `domains/domains/x.yaml`. Pick one:
+  and a prefixing pair looks for `domains/domains/x.yaml`. Constructing that
+  combination warns, because the first outcome is otherwise silent: the
+  loader reads a file the caller did not configure and says nothing. It is a
+  warning rather than an error, since overriding to normalize or log *and*
+  delegating to `super()` is a legitimate use of both. Pick one:
 
   ```python
   from dataknobs_common import CallableResolver, MappingResolver
@@ -158,6 +162,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there would look for its location beneath a directory the caller chose
   instead. The suppression is honored where resolution is invoked, so
   overriding `resolve_name` does not defeat it.
+
+  `clear_cache` resolves the name it is given, the same way `load` does, so
+  pass it the name you passed `load`. An already-resolved name is mapped a
+  second time — harmless for a lookup table, which leaves a name it has no
+  entry for alone, but a prefixing resolver double-prefixes and the call
+  clears nothing. Nothing is raised; the log line names what was cleared.
+
+- **`InheritableConfigLoader.available_names()`** — the names `load` accepts,
+  for this deployment's layout. `list_available()` now delegates to it, and
+  it is the one to override.
+
+  It exists because `resolve_name` is one-way. A resolver answers "where does
+  this name live"; nothing runs it backwards to recover the names from the
+  locations, so a deployment that governs the mapping has to govern
+  enumeration too. The default — the stems of the files directly under
+  `config_dir` — is the loadable set only while `resolve_name` is identity,
+  and leaving it alone under a resolver does not raise, it reports the wrong
+  thing quietly. Under a layout one directory down it returns `[]`, so the
+  natural `for name in ...: load(name)` loop runs zero times; a layout mixing
+  depths is worse than empty, because the stems it does find are *locations*,
+  and mapping a location through `resolve_name` addresses something else
+  again.
+
+  ```python
+  class DomainLoader(InheritableConfigLoader):
+      def resolve_name(self, name: str) -> str:
+          return f"domains/{name}"
+
+      def available_names(self) -> list[str]:
+          return sorted(
+              path.stem
+              for path in (self.config_dir / "domains").glob("*.yaml")
+              if path.is_file()
+          )
+  ```
+
+  A flat layout is unchanged: with no resolver and no override, the default
+  is exactly what `list_available` returned before.
 
 ### Changed
 

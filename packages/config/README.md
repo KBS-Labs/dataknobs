@@ -446,6 +446,11 @@ class InheritableConfigLoader:
     # Not applied under load_from_file.
     def resolve_name(self, name: str) -> str
 
+    # The names load() accepts. Defaults to the stems directly under
+    # config_dir, which is the loadable set only while resolve_name is
+    # identity -- the mapping is one-way, so override this alongside it.
+    def available_names(self) -> list[str]
+
     # Load configuration with inheritance
     def load(
         self,
@@ -461,13 +466,14 @@ class InheritableConfigLoader:
         substitute_vars: bool = True,
     ) -> dict[str, Any]
 
-    # List available configurations
+    # List available configurations (delegates to available_names)
     def list_available(self) -> list[str]
 
     # Validate a configuration
     def validate(self, name: str) -> tuple[bool, str | None]
 
-    # Clear cache
+    # Clear cache. Pass the name you passed load() -- this resolves it
+    # the same way, so an already-resolved name is mapped a second time.
     def clear_cache(self, name: str | None = None) -> None
 ```
 
@@ -476,8 +482,9 @@ class InheritableConfigLoader:
 `resolve_name` governs how a config *name* maps to a location, including for
 `extends:` targets — so a tree whose children name their parents bare still
 loads. Two modes, which are **alternatives, not layers**: an override
-replaces the default, so a loader given both silently ignores the injected
-resolver (or applies both mappings, if the override calls `super()`).
+replaces the default, so a loader given both ignores the injected resolver
+(or applies both mappings, if the override calls `super()`). Constructing
+that combination warns, since the first outcome is otherwise silent.
 
 ```python
 from dataknobs_common import CallableResolver, MappingResolver
@@ -500,6 +507,11 @@ The resolved name is what keys the cache, the cycle-detection set, the
 `extends:` invalidation edges, and `clear_cache`, so two spellings of one
 config are one entry. `load_from_file` suppresses resolution for the file and
 its whole `extends:` subtree, since it rebinds `config_dir`.
+
+The mapping is one-way — nothing runs a resolver backwards — so a deployment
+that governs it also has to say which names exist. Override `available_names`
+alongside `resolve_name`; leaving it alone under a resolver does not raise,
+it reports the wrong thing quietly (`[]`, for a layout one directory down).
 
 ### Convenience Function
 

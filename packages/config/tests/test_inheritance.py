@@ -1,5 +1,6 @@
 """Tests for configuration inheritance utilities."""
 
+import warnings
 from pathlib import Path
 
 import pytest
@@ -1086,17 +1087,19 @@ class TestNameResolution:
         """The two modes are alternatives; using both is not additive.
 
         An override replaces the default implementation, so the resolver is
-        never consulted -- silently, which is why it is documented rather
-        than left to be discovered.
+        never consulted. The outcome would otherwise be silent -- the loader
+        reads a file the caller did not configure and says nothing -- which
+        is why construction warns.
         """
 
         class DomainAware(InheritableConfigLoader):
             def resolve_name(self, name):
                 return f"domains/{name}"
 
-        loader = DomainAware(
-            domains, resolver=MappingResolver({"child": "somewhere-else"})
-        )
+        with pytest.warns(UserWarning, match="alternatives, not layers"):
+            loader = DomainAware(
+                domains, resolver=MappingResolver({"child": "somewhere-else"})
+            )
 
         assert loader.resolve_name("child") == "domains/child"
 
@@ -1107,9 +1110,10 @@ class TestNameResolution:
             def resolve_name(self, name):
                 return f"domains/{super().resolve_name(name)}"
 
-        loader = Stacked(
-            tmp_path, resolver=CallableResolver(lambda n: f"domains/{n}")
-        )
+        with pytest.warns(UserWarning, match="alternatives, not layers"):
+            loader = Stacked(
+                tmp_path, resolver=CallableResolver(lambda n: f"domains/{n}")
+            )
 
         assert loader.resolve_name("child") == "domains/domains/child"
 
@@ -1294,10 +1298,152 @@ class TestLoadFromFileIgnoresResolution:
 
         assert loader.load("child")["b"] == 2
 
-    def test_resolution_is_restored_after_a_failure(self, tree):
+    def test_a_missing_file_is_rejected_before_anything_is_rebound(self, tree):
+        """The early exit, which is not a test of the ``finally``.
+
+        This raise happens above the swap, so neither ``config_dir`` nor the
+        suppression flag has been touched when it fires. Restoration is not
+        exercised here at all -- see the next test, which fails after the
+        swap, for that.
+        """
         loader = self._prefixing(tree)
 
-        with pytest.raises(InheritanceError):
+        with pytest.raises(InheritanceError, match="not found"):
             loader.load_from_file(tree / "domains" / "missing.yaml")
 
         assert loader.load("child")["b"] == 2
+
+    def test_resolution_is_restored_after_a_failure(self, tree):
+        """A failure *after* the swap still restores both fields.
+
+        The entry file exists, so the swap happens; its ``extends:`` target
+        does not, so the load raises with the flag set and ``config_dir``
+        rebound. A leaked flag is the worse of the two: it disables the
+        layout convention for every later load on this loader, and surfaces
+        as file-not-found on an unresolved path, a long way from the cause.
+        """
+        (tree / "domains" / "orphan.yaml").write_text(
+            yaml.dump({"extends": "no-such-parent", "c": 3})
+        )
+        loader = self._prefixing(tree)
+
+        with pytest.raises(InheritanceError, match="no-such-parent"):
+            loader.load_from_file(tree / "domains" / "orphan.yaml")
+
+        assert loader._bypass_resolution is False
+        assert loader.config_dir == tree
+        assert loader.load("child")["b"] == 2
+
+
+class TestEnumerationIsTheOtherHalfOfTheMapping:
+    """``resolve_name`` is one-way, so enumeration cannot be derived from it.
+
+    A resolver answers "where does this name live". Nothing runs it backwards
+    to recover the names from the locations, so a deployment that governs the
+    mapping has to govern enumeration too -- which is what
+    ``available_names`` is for.
+    """
+
+    @pytest.fixture
+    def nested(self, tmp_path):
+        (tmp_path / "domains").mkdir()
+        (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"a": 1}))
+        (tmp_path / "domains" / "child.yaml").write_text(
+            yaml.dump({"extends": "parent", "b": 2})
+        )
+        return tmp_path
+
+    def test_the_default_is_the_stems_under_config_dir(self, tmp_path):
+        (tmp_path / "one.yaml").write_text(yaml.dump({"a": 1}))
+        (tmp_path / "two.json").write_text('{"b": 2}')
+
+        assert InheritableConfigLoader(tmp_path).available_names() == ["one", "two"]
+
+    def test_list_available_delegates(self, tmp_path):
+        """The old entry point routes through the new seam.
+
+        An override has to take effect for every caller, not only the ones
+        that learned the new name.
+        """
+        (tmp_path / "real.yaml").write_text(yaml.dump({"a": 1}))
+
+        class Fixed(InheritableConfigLoader):
+            def available_names(self):
+                return ["declared"]
+
+        assert Fixed(tmp_path).list_available() == ["declared"]
+
+    def test_the_default_reports_nothing_under_a_resolver(self, nested):
+        """The gap the seam exists to close, pinned so it stays deliberate.
+
+        Every config is a directory down, so the top-level glob finds none of
+        them and the natural enumerate-then-load loop runs zero times. It is
+        the default being wrong for this layout, not a failure to load.
+        """
+        loader = InheritableConfigLoader(
+            nested, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+
+        assert loader.load("child")["b"] == 2
+        assert loader.available_names() == []
+
+    def test_an_override_makes_every_reported_name_loadable(self, nested):
+        """The property that matters: what it lists, `load` accepts."""
+
+        class DomainLoader(InheritableConfigLoader):
+            def resolve_name(self, name: str) -> str:
+                return f"domains/{name}"
+
+            def available_names(self) -> list[str]:
+                return sorted(
+                    path.stem
+                    for path in (self.config_dir / "domains").glob("*.yaml")
+                    if path.is_file()
+                )
+
+        loader = DomainLoader(nested)
+
+        assert loader.available_names() == ["child", "parent"]
+        for name in loader.available_names():
+            assert loader.load(name)
+
+
+class TestBothModesAtOnceIsReported:
+    """An override *replaces* ``resolve_name``, so a loader given both modes
+    ignores the injected resolver -- silently, and it then reads a different
+    file than the caller configured. Warn rather than raise: overriding to
+    normalize or log *and* delegating to ``super()`` is a legitimate use of
+    both, and raising would break it.
+    """
+
+    def test_override_plus_resolver_warns(self, tmp_path):
+        class Overriding(InheritableConfigLoader):
+            def resolve_name(self, name: str) -> str:
+                return f"domains/{name}"
+
+        with pytest.warns(UserWarning, match="alternatives, not layers"):
+            Overriding(tmp_path, resolver=MappingResolver({"a": "b"}))
+
+    def test_an_override_alone_is_silent(self, tmp_path):
+        class Overriding(InheritableConfigLoader):
+            def resolve_name(self, name: str) -> str:
+                return f"domains/{name}"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            Overriding(tmp_path)
+
+    def test_a_resolver_alone_is_silent(self, tmp_path):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            InheritableConfigLoader(tmp_path, resolver=MappingResolver({"a": "b"}))
+
+    def test_a_subclass_that_does_not_touch_resolve_name_is_silent(self, tmp_path):
+        """Subclassing is not the trigger -- overriding the method is."""
+
+        class Unrelated(InheritableConfigLoader):
+            pass
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            Unrelated(tmp_path, resolver=MappingResolver({"a": "b"}))

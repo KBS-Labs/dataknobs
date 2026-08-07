@@ -255,8 +255,7 @@ class DomainAwareLoader(InheritableConfigLoader):
 ```
 
 The two modes are **alternatives, not layers.** An override replaces the
-default implementation, so a loader given both silently ignores the injected
-resolver:
+default implementation, so a loader given both ignores the injected resolver:
 
 ```python
 class DomainAwareLoader(InheritableConfigLoader):
@@ -268,9 +267,50 @@ loader = DomainAwareLoader("./configs", resolver=MappingResolver({"tutor": "x"})
 loader.resolve_name("tutor")   # "domains/tutor", not "x"
 ```
 
-Delegating to `super()` inside the override is the other half of the same
-trap: both mappings then apply in sequence, and a prefixing pair looks for
-`domains/domains/child.yaml`. Pick one mode.
+Constructing that combination warns, because the outcome is otherwise silent
+— the loader reads a file you did not configure and says nothing. It is a
+warning rather than an error: overriding to normalize or log *and* delegating
+to `super()` is a legitimate use of both.
+
+Delegating to `super()` is the other half of the same trap: both mappings then
+apply in sequence, and a prefixing pair looks for `domains/domains/child.yaml`.
+Pick one mode.
+
+### Enumeration is the other half of the mapping
+
+A resolver answers *"where does this name live"*. Nothing runs it backwards,
+so the loader cannot recover the names from the locations — which means
+`available_names()` does not follow from `resolve_name()` and has to be
+overridden alongside it:
+
+```python
+class DomainLoader(InheritableConfigLoader):
+    def resolve_name(self, name: str) -> str:
+        return f"domains/{name}"
+
+    def available_names(self) -> list[str]:
+        return sorted(
+            path.stem
+            for path in (self.config_dir / "domains").glob("*.yaml")
+            if path.is_file()
+        )
+```
+
+The default is the stems of the files directly under `config_dir`, which is
+the set of loadable names only while `resolve_name` is identity. Leaving it
+alone under a resolver does not raise — it reports the wrong thing quietly.
+Under the layout above every config is a directory down, so the default
+returns `[]` and the natural loop runs zero times:
+
+```python
+for name in loader.available_names():   # zero iterations, no error
+    loader.load(name)
+```
+
+A layout that mixes depths is worse than empty: the stems the default does
+find are *locations*, and mapping a location through `resolve_name` addresses
+something else again. `list_available()` delegates here, so an override
+reaches both callers.
 
 ### What resolution does not cover
 
@@ -284,6 +324,13 @@ there would look for its location beneath a directory you did not choose:
 # beside the file, which is what "loads directly from the path" means.
 loader.load_from_file("./somewhere-else/svc.yaml")
 ```
+
+`clear_cache` is the mirror case: it resolves the name you give it, exactly as
+`load` does, so **pass the name you passed `load`**. Handing it an
+already-resolved name maps it a second time — harmless for a lookup table,
+which leaves an unknown name alone, but a prefixing resolver double-prefixes
+and the call clears nothing. Nothing is raised; the log line names what was
+cleared.
 
 ## API Reference
 
@@ -310,6 +357,14 @@ class InheritableConfigLoader:
         Applied to the requested config AND every `extends:` target.
         Default: consult `resolver`, falling back to identity.
         Not applied under `load_from_file`.
+        """
+
+    def available_names(self) -> list[str]:
+        """The names `load` accepts, for this deployment's layout.
+
+        Default: stems of the files directly under config_dir, which is
+        the loadable set only while `resolve_name` is identity. The
+        mapping is one-way, so override this alongside it.
         """
 
     def load(
@@ -344,7 +399,10 @@ class InheritableConfigLoader:
         """
 
     def list_available(self) -> list[str]:
-        """List all available configuration names."""
+        """List all available configuration names.
+
+        Delegates to `available_names`, which is the one to override.
+        """
 
     def validate(self, name: str) -> tuple[bool, str | None]:
         """Validate a configuration.
@@ -354,7 +412,10 @@ class InheritableConfigLoader:
         """
 
     def clear_cache(self, name: str | None = None) -> None:
-        """Clear configuration cache."""
+        """Clear configuration cache.
+
+        Pass the name you passed `load` -- this resolves it the same way.
+        """
 ```
 
 ### Utility Functions

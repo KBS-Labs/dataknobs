@@ -41,6 +41,7 @@ Example:
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -345,7 +346,9 @@ class InheritableConfigLoader:
 
     Configuration *names* are mapped to locations under ``config_dir`` by
     :meth:`resolve_name`, which a deployment can govern -- see that method
-    and the ``resolver`` argument.
+    and the ``resolver`` argument. That mapping is one-way, so a deployment
+    that governs it also has to say which names exist: see
+    :meth:`available_names`.
 
     A loader mutates instance state while :meth:`load_from_file` runs
     (``config_dir`` and resolution suppression are saved and restored around
@@ -377,6 +380,24 @@ class InheritableConfigLoader:
         """
         self.config_dir = Path(config_dir) if config_dir else Path("./configs")
         self._resolver = resolver
+        # An override *replaces* `resolve_name`, so a loader given both modes
+        # ignores this resolver unless the override delegates to `super()`.
+        # Silence is the whole problem -- the loader then reads a different
+        # file than the caller configured, with no diagnostic -- so say it
+        # once, here, where both inputs are visible. A warning rather than an
+        # error: overriding to normalize or log *and* delegating is a
+        # legitimate use of both, and raising would break it.
+        if resolver is not None and type(self).resolve_name is not (
+            InheritableConfigLoader.resolve_name
+        ):
+            warnings.warn(
+                f"{type(self).__name__} overrides resolve_name(), which replaces "
+                "the implementation that consults `resolver`. The injected "
+                "resolver is ignored unless the override delegates to "
+                "super().resolve_name(), in which case both mappings apply in "
+                "sequence. These are alternatives, not layers -- pick one.",
+                stacklevel=2,
+            )
         # Suppresses name resolution for the duration of `load_from_file`,
         # which rebinds config_dir out from under any layout convention.
         self._bypass_resolution = False
@@ -412,9 +433,11 @@ class InheritableConfigLoader:
         Subclasses may override this method instead of injecting a resolver.
         The two modes are **alternatives, not layers** -- an override replaces
         this implementation, so a loader given both ignores the injected
-        resolver entirely, silently, unless the override delegates to
+        resolver entirely unless the override delegates to
         ``super().resolve_name(...)``, in which case both mappings apply in
-        sequence. Neither is likely to be what was meant; pick one mode.
+        sequence. Neither is likely to be what was meant; pick one mode. A
+        loader constructed with both warns, since the first of those two
+        outcomes is otherwise silent.
 
         Not applied under :meth:`load_from_file`, which rebinds ``config_dir``
         to the file's own directory; a ``config_dir``-relative convention
@@ -439,6 +462,18 @@ class InheritableConfigLoader:
             return name
         resolved = self._resolver.resolve(name)
         return name if resolved is None else resolved
+
+    def _resolved(self, name: str) -> str:
+        """The name to operate on: resolved, or left alone under bypass.
+
+        Every site that turns a caller's or an ``extends:`` name into the one
+        this loader keys and reads by goes through here, so the suppression
+        :meth:`load_from_file` sets is honored by construction rather than by
+        two copies of the check agreeing. It is also why a subclass overriding
+        :meth:`resolve_name` cannot defeat that suppression: under bypass the
+        override is not called at all.
+        """
+        return name if self._bypass_resolution else self.resolve_name(name)
 
     def load(
         self,
@@ -476,7 +511,7 @@ class InheritableConfigLoader:
             config = loader.load("my-domain")
             ```
         """
-        resolved = name if self._bypass_resolution else self.resolve_name(name)
+        resolved = self._resolved(name)
         cache_key = (resolved, substitute_vars)
 
         # Check cache
@@ -518,17 +553,14 @@ class InheritableConfigLoader:
                 #
                 # Keyed on the *resolved* parent, to stay in `_cache`'s
                 # namespace. That means resolving `parent_name` here as well
-                # as in the recursion below -- two invocations on the same
+                # as in the recursion above -- two invocations on the same
                 # input, which a `ResourceResolver` is required to answer
                 # identically, and not the same thing as applying the mapping
-                # to an already-mapped name.
+                # to an already-mapped name. A resolver that does real work
+                # per call pays for both; `CachedResolver` from
+                # `dataknobs_common` is the remedy.
                 if use_cache:
-                    resolved_parent = (
-                        parent_name
-                        if self._bypass_resolution
-                        else self.resolve_name(parent_name)
-                    )
-                    self._dependents.setdefault(resolved_parent, set()).add(resolved)
+                    self._dependents.setdefault(self._resolved(parent_name), set()).add(resolved)
 
                 # Deep merge: child overrides parent
                 raw_config = deep_merge(parent_config, raw_config)
@@ -588,10 +620,17 @@ class InheritableConfigLoader:
 
         # Temporarily change config_dir to file's directory for inheritance,
         # and suppress name resolution for as long as it is rebound. The flag
-        # is honored at the single site `load` resolves from, so a subclass
-        # overriding `resolve_name` cannot defeat it -- the override is simply
-        # not called.
+        # is read in `_resolved`, which every resolution site goes through, so
+        # a subclass overriding `resolve_name` cannot defeat the suppression --
+        # the override is simply not called.
+        #
+        # Both are saved and restored rather than set and hard-cleared, so the
+        # pair stays correct if this ever runs nested. Hard-clearing the flag
+        # would be equivalent today and wrong the moment it is not, and the
+        # failure is silent: the layout convention stops applying for every
+        # later load, which surfaces as file-not-found on an unresolved path.
         old_config_dir = self.config_dir
+        old_bypass = self._bypass_resolution
         self.config_dir = filepath.parent
         self._bypass_resolution = True
 
@@ -599,7 +638,7 @@ class InheritableConfigLoader:
             return self.load(filepath.stem, use_cache=False, substitute_vars=substitute_vars)
         finally:
             self.config_dir = old_config_dir
-            self._bypass_resolution = False
+            self._bypass_resolution = old_bypass
 
     def _load_file(self, name: str) -> dict[str, Any]:
         """Load raw configuration file.
@@ -641,8 +680,14 @@ class InheritableConfigLoader:
     def clear_cache(self, name: str | None = None) -> None:
         """Clear configuration cache.
 
-        The name is mapped through :meth:`resolve_name` first, so clearing a
-        config clears what loading it stored -- under either spelling.
+        Pass the name you passed :meth:`load`. It is mapped through
+        :meth:`resolve_name` the same way, so clearing a config clears what
+        loading it stored, and two names the resolver maps together clear each
+        other. Passing an already-resolved name instead maps it a second time:
+        harmless for a lookup-table resolver, which leaves a name it has no
+        entry for alone, but a prefixing one double-prefixes and the call
+        clears nothing. Nothing is raised -- the log line names what was
+        cleared, which is how to tell.
 
         Clearing a name clears every substitution variant cached under it --
         the config, not one of the two forms it may have been stored in.
@@ -664,6 +709,11 @@ class InheritableConfigLoader:
             # recorded across loads, so a config edited to extend its own
             # descendant between two loads would otherwise loop here.
             stale: set[str] = set()
+            # `resolve_name`, not `_resolved`: this walks `_cache`, and that
+            # is always the resolved namespace. A bypassing load writes
+            # nothing to it -- `load_from_file` passes `use_cache=False` --
+            # so there is no bypassed entry here to find, and honoring the
+            # flag would only mean failing to clear a resolved one.
             pending = [self.resolve_name(name)]
             while pending:
                 current = pending.pop()
@@ -682,11 +732,45 @@ class InheritableConfigLoader:
             self._dependents.clear()
             logger.debug("Cleared all cached configurations")
 
-    def list_available(self) -> list[str]:
-        """List all available configuration files.
+    def available_names(self) -> list[str]:
+        """The names :meth:`load` accepts, for this deployment's layout.
+
+        Default: the stems of the files directly under ``config_dir``, which
+        is the set of loadable names only while :meth:`resolve_name` is
+        identity. A deployment that governs the name->location mapping has to
+        govern this too, because the mapping is one-way: a resolver answers
+        "where does this name live", and nothing can run it backwards to
+        recover the names from the locations.
+
+        Override this alongside :meth:`resolve_name`. Leaving it alone under a
+        resolver does not raise -- it reports the wrong thing quietly. Under
+        the layout the ``resolve_name`` example describes, every config is a
+        directory down and the default returns ``[]``, so the natural
+        ``for name in ...: load(name)`` loop runs zero times. A layout that
+        mixes depths is worse than empty: the stems it does find are
+        *locations*, and mapping a location through ``resolve_name`` addresses
+        something else again.
 
         Returns:
-            List of configuration names (without extensions)
+            Configuration names, each valid to pass to :meth:`load`
+
+        Example:
+            ```python
+            class DomainLoader(InheritableConfigLoader):
+                def resolve_name(self, name: str) -> str:
+                    return f"domains/{name}"
+
+                def available_names(self) -> list[str]:
+                    domains = self.config_dir / "domains"
+                    return sorted(
+                        {
+                            path.stem
+                            for pattern in ("*.yaml", "*.yml", "*.json")
+                            for path in domains.glob(pattern)
+                            if path.is_file()
+                        }
+                    )
+            ```
         """
         if not self.config_dir.exists():
             return []
@@ -698,6 +782,16 @@ class InheritableConfigLoader:
                     configs.add(file.stem)
 
         return sorted(configs)
+
+    def list_available(self) -> list[str]:
+        """List all available configuration names.
+
+        Delegates to :meth:`available_names`, which is the method to override.
+
+        Returns:
+            List of configuration names (without extensions)
+        """
+        return self.available_names()
 
     def validate(self, name: str) -> tuple[bool, str | None]:
         """Validate a configuration file.
