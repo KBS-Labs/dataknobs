@@ -161,6 +161,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`dataknobs_bots.api.RateLimitError` is now also an `OperationError` and
+  reaches `DataknobsError` by a second route.** This follows from the
+  subclassing fix above and is the intended semantics — a rate limit *is* an
+  operation failure, which is why the common class is shaped that way — but
+  it widens what an existing `except` clause catches:
+
+  ```python
+  try:
+      raise dataknobs_bots.api.RateLimitError(retry_after=30)
+  except dataknobs_common.exceptions.OperationError:
+      ...   # NEW: previously fell through
+  ```
+
+  A consumer with an `except OperationError` block that previously did not
+  see API rate-limit errors will start seeing them. Relying on the old
+  non-relationship seems unlikely to be deliberate, but unlikely is not
+  impossible, which is why this is disclosed here rather than filed only
+  under "Fixed".
+
 - **The `provider` value in turn logs and in `after_message` middleware
   kwargs is now the canonical provider family key rather than the provider
   class name** — `"openai"` where it previously read `"OpenAIProvider"`. A
@@ -214,6 +233,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value for it — a consumer schema may name a registry a newer DK supplies.
 
 ### Fixed
+
+- **`dataknobs_bots.api.RateLimitError` was not a subclass of
+  `dataknobs_common.exceptions.RateLimitError`.** It was a *sibling*, so
+  `except RateLimitError` written against the common name — the name
+  DataKnobs' own `RateLimitMiddleware` raises — silently never fired for the
+  API variant. Six of the seven `bots.api` exception classes already
+  subclassed their common counterpart; this was the one that did not, which
+  is why the gap read as a working pattern right up until it dropped an
+  error. It is now `RateLimitError(APIError, CommonRateLimitError)`, so one
+  `except` against the common name covers both.
+
+  `retry_after` is now also exposed as an **attribute** (the structured form
+  the common hierarchy defines) alongside the existing `detail["retry_after"]`
+  serialized field, and its type widened from `int | None` to `float | None`
+  to match both the common class and the `RateLimitStatus.reset_after` value
+  the middleware supplies. Existing `int` callers are unaffected.
+
+  Handler dispatch is unchanged: `APIError` still precedes the common base in
+  the MRO, so `register_exception_handlers` routes the API variant to
+  `api_error_handler` exactly as before — same 429, same body. A parametrized
+  test now pins every API exception to the common class it should subclass,
+  so a future divergence in the family fails at the source rather than in a
+  consumer's `except` clause.
 
 - **A synchronously-stepped wizard leaked a daemon thread with no way to
   release it.** `WizardFSM` wraps an `AdvancedFSM`, which allocates a

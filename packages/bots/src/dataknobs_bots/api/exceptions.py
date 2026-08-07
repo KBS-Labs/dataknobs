@@ -39,6 +39,9 @@ from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
+    RateLimitError as CommonRateLimitError,
+)
+from dataknobs_common.exceptions import (
     ValidationError as CommonValidationError,
 )
 
@@ -161,22 +164,34 @@ class ConfigurationError(APIError, CommonConfigurationError):
         )
 
 
-class RateLimitError(APIError):
-    """Exception raised when rate limit is exceeded."""
+class RateLimitError(APIError, CommonRateLimitError):
+    """Exception raised when rate limit is exceeded.
+
+    Subclasses the common ``RateLimitError`` so that
+    ``except dataknobs_common.exceptions.RateLimitError`` catches both this
+    API-layer variant and the one ``RateLimitMiddleware`` raises internally —
+    matching every other twinned pair in this module.
+    """
 
     def __init__(
         self,
         message: str = "Rate limit exceeded",
-        retry_after: int | None = None,
+        retry_after: float | None = None,
     ):
-        detail = {}
+        detail: dict[str, Any] = {}
         if retry_after:
             detail["retry_after"] = retry_after
-        super().__init__(
+        APIError.__init__(
+            self,
             message=message,
             status_code=429,
             detail=detail,
         )
+        # Must follow APIError.__init__: with the widened base list, that
+        # call reaches CommonRateLimitError.__init__ through the MRO, which
+        # sets self.retry_after = None (its own default). Assigning before
+        # the call would be silently clobbered.
+        self.retry_after = retry_after
 
 
 # Exception Handlers
