@@ -360,6 +360,10 @@ class InheritableConfigLoader:
         # a config's value depend on load order.
         self._cache: dict[tuple[str, bool], dict[str, Any]] = {}
         self._loading: set[str] = set()  # Track configs being loaded to detect cycles
+        # parent name -> names that reached it through `extends:`. A cached
+        # child holds its parent's content merged in, so clearing the parent
+        # has to reach the children or the stale copy keeps answering.
+        self._dependents: dict[str, set[str]] = {}
 
     def load(
         self,
@@ -418,6 +422,9 @@ class InheritableConfigLoader:
                 # Load parent configuration (recursively handles inheritance)
                 parent_config = self.load(parent_name, use_cache=use_cache, substitute_vars=False)
 
+                # Record the edge so clearing the parent reaches this child.
+                self._dependents.setdefault(parent_name, set()).add(name)
+
                 # Deep merge: child overrides parent
                 raw_config = deep_merge(parent_config, raw_config)
 
@@ -428,8 +435,13 @@ class InheritableConfigLoader:
             if substitute_vars:
                 raw_config = substitute_env_vars(raw_config)
 
-            # Cache the result
-            self._cache[cache_key] = raw_config
+            # Cache the result. Gated on use_cache: bypassing the cache means
+            # not taking part in it at all, in both directions. `validate` is
+            # a dry run, and `load_from_file` reads with config_dir rebound to
+            # another directory -- the key carries no directory, so a write
+            # from there would answer later reads for the configured one.
+            if use_cache:
+                self._cache[cache_key] = raw_config
             logger.info("Loaded configuration: %s", name)
 
             return raw_config
@@ -507,15 +519,37 @@ class InheritableConfigLoader:
         Leaving a variant behind would re-create the load-order dependence the
         keying exists to prevent.
 
+        It also clears, transitively, every config that reached this one
+        through ``extends:``. A cached child holds its parent's content merged
+        in, so clearing only the parent leaves that copy answering -- the
+        staleness the call was made to resolve, surviving the call.
+        Invalidation runs down the inheritance edges, never up: a child's
+        parent is unaffected.
+
         Args:
             name: Specific config to clear, or None to clear all
         """
         if name:
-            for key in [k for k in self._cache if k[0] == name]:
+            # Walk the recorded edges with a seen-set: the edges are data
+            # recorded across loads, so a config edited to extend its own
+            # descendant between two loads would otherwise loop here.
+            stale: set[str] = set()
+            pending = [name]
+            while pending:
+                current = pending.pop()
+                if current in stale:
+                    continue
+                stale.add(current)
+                pending.extend(self._dependents.get(current, ()))
+
+            for key in [k for k in self._cache if k[0] in stale]:
                 del self._cache[key]
-            logger.debug("Cleared cache for: %s", name)
+            for gone in stale:
+                self._dependents.pop(gone, None)
+            logger.debug("Cleared cache for: %s", ", ".join(sorted(stale)))
         else:
             self._cache.clear()
+            self._dependents.clear()
             logger.debug("Cleared all cached configurations")
 
     def list_available(self) -> list[str]:

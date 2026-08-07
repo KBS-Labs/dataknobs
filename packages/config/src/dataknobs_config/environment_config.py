@@ -54,6 +54,7 @@ Environment file format (config/environments/production.yaml):
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from dataclasses import dataclass, field, replace
@@ -133,6 +134,20 @@ class EnvironmentConfig:
 
     Excluded from equality: two configs holding the same values are the same
     environment regardless of which layer expanded them.
+
+    Describes the values **as constructed**. Writing into :attr:`resources` or
+    :attr:`settings` afterwards does not update it, and a downstream layer
+    reading a stale ``True`` will skip the pass those new values needed --
+    handing a literal ``${VAR}`` to a factory. Build the config you want
+    instead of amending one, or re-mark an amended config explicitly::
+
+        env = dataclasses.replace(env, substituted=False)
+
+    The dataclass is deliberately left mutable rather than frozen: it is
+    public, and freezing it would break any consumer assembling an
+    environment field by field. The contract is therefore stated rather than
+    enforced -- amending a constructed config is out of contract, not merely
+    discouraged.
     """
 
     @classmethod
@@ -334,8 +349,14 @@ class EnvironmentConfig:
         type_resources = self.resources.get(resource_type, {})
 
         if logical_name in type_resources:
-            # Copy to avoid mutation
-            config = type_resources[logical_name].copy()
+            # Deep copy: a shallow one leaves every nested container in the
+            # returned config pointing at the environment's own object, so a
+            # consumer adjusting a nested section writes through into an
+            # environment that outlives the resolution. Callers that ran a
+            # substitution pass afterwards were incidentally isolated by it
+            # -- substitute_env_vars rebuilds the structure -- which is not
+            # a property to depend on from here.
+            config = copy.deepcopy(type_resources[logical_name])
 
             # Apply defaults for missing keys
             if defaults:
@@ -345,7 +366,7 @@ class EnvironmentConfig:
             return config
 
         if defaults is not None:
-            return defaults.copy()
+            return copy.deepcopy(defaults)
 
         raise ResourceNotFoundError(
             f"Resource '{logical_name}' of type '{resource_type}' "
@@ -405,6 +426,13 @@ class EnvironmentConfig:
         :meth:`get_resource` reads keeps the config it asked for, even when
         a resolution layer reads through it.
 
+        Every field is covered, not just ``resources`` and ``settings``:
+        :meth:`load` and :meth:`from_dict` substitute the whole raw document
+        before constructing, so a view that skipped ``name`` and
+        ``description`` would set the same flag over a narrower claim, and
+        the two ways of reaching ``substituted=True`` would disagree about
+        what it means.
+
         Returns:
             ``self`` if already substituted, otherwise a substituted copy.
 
@@ -419,6 +447,8 @@ class EnvironmentConfig:
 
         return replace(
             self,
+            name=substitute_env_vars(self.name),
+            description=substitute_env_vars(self.description),
             resources=substitute_env_vars(self.resources),
             settings=substitute_env_vars(self.settings),
             substituted=True,
@@ -472,6 +502,12 @@ class EnvironmentConfig:
 
         Returns:
             New merged EnvironmentConfig
+
+        Raises:
+            ValueError: If the two sides disagree on :attr:`substituted` and
+                the unsubstituted side holds a required ``${VAR}`` ref with
+                no default and no value in the environment. Merging two sides
+                that agree touches no environment variables and cannot raise.
         """
         # Normalize mixed provenance before merging so the result's single
         # ``substituted`` flag is true of every value in it.

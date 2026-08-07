@@ -283,15 +283,16 @@ class EnvironmentAwareConfig:
         if resolve_env_vars:
             config = substitute_env_vars(config)
 
-        # Resolve logical resource references
+        # Resolve logical resource references. Each resource is substituted
+        # as it is spliced, not the environment as a whole: a resource is
+        # still separable at the splice point, which is the latest point it
+        # can be expanded, and expanding the whole environment would read
+        # values no reference names -- so an unset required ${VAR} in an
+        # unrelated resource would abort a build that never looked at it.
         if resolve_resources:
-            environment = self._environment
-            if resolve_env_vars:
-                # No-op when the environment was already substituted at load;
-                # non-mutating either way, so the caller's own config is
-                # never changed underneath them.
-                environment = environment.substituted_view()
-            config = self._resolve_resource_refs(config, environment)
+            config = self._resolve_resource_refs(
+                config, self._environment, substitute=resolve_env_vars
+            )
 
         return config
 
@@ -299,6 +300,7 @@ class EnvironmentAwareConfig:
         self,
         config: Any,
         environment: EnvironmentConfig | None = None,
+        substitute: bool = False,
     ) -> Any:
         """Resolve logical resource references in configuration.
 
@@ -316,9 +318,12 @@ class EnvironmentAwareConfig:
         Args:
             config: Configuration to process
             environment: Environment to resolve against. Defaults to this
-                config's own environment. ``resolve_for_build`` passes a
-                substituted view so the whole recursive walk — including
-                nested refs — reads values that were expanded exactly once.
+                config's own environment.
+            substitute: Whether to expand ``${VAR}`` refs in each resource as
+                it is spliced in. Applies to the environment's contribution
+                only — inline defaults arrive already expanded, so merging
+                them after the pass is what keeps every value at exactly one
+                expansion.
 
         Returns:
             Configuration with resource references resolved
@@ -354,7 +359,7 @@ class EnvironmentAwareConfig:
                         f"not found in environment '{environment.name}', "
                         f"using defaults"
                     )
-                    # Return the inline defaults only -- matching what
+                    # Degrade to the inline defaults only -- matching what
                     # get_resource returned on this path all along. The
                     # unreachable branch this replaced fell back to the
                     # reference dict itself when there were no defaults,
@@ -362,11 +367,23 @@ class EnvironmentAwareConfig:
                     # into the resolved config and hand them to a factory as
                     # keyword arguments. Making the branch reachable must not
                     # also make its never-exercised return value live.
-                    return defaults
-
-                resolved = environment.get_resource(
-                    resource_type, resource_name, defaults
-                )
+                    #
+                    # Defaults are app-authored, so they are already expanded
+                    # and do not go through the substitution below. They still
+                    # fall through to the shared tail: a degraded config is
+                    # still config, and gets the same $requires check and the
+                    # same recursive walk as a found one.
+                    resolved = defaults
+                else:
+                    resolved = environment.get_resource(
+                        resource_type, resource_name
+                    )
+                    if substitute and not environment.substituted:
+                        resolved = substitute_env_vars(resolved)
+                    # Inline defaults fill gaps *after* the pass above, so
+                    # they are never handed to a second expansion.
+                    for key, value in defaults.items():
+                        resolved.setdefault(key, value)
 
                 # Validate $requires against capabilities metadata
                 if requires and isinstance(resolved, dict):
@@ -385,16 +402,25 @@ class EnvironmentAwareConfig:
                             )
 
                 # Recursively resolve any nested references in the resolved config
-                return self._resolve_resource_refs(resolved, environment)
+                return self._resolve_resource_refs(
+                    resolved, environment, substitute=substitute
+                )
             else:
                 # Regular dict - recurse into values
                 return {
-                    key: self._resolve_resource_refs(value, environment)
+                    key: self._resolve_resource_refs(
+                        value, environment, substitute=substitute
+                    )
                     for key, value in config.items()
                 }
         elif isinstance(config, list):
             # Recurse into list items
-            return [self._resolve_resource_refs(item, environment) for item in config]
+            return [
+                self._resolve_resource_refs(
+                    item, environment, substitute=substitute
+                )
+                for item in config
+            ]
         else:
             # Return other types unchanged
             return config

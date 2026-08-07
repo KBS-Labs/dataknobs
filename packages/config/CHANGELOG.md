@@ -31,9 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `EnvironmentConfig` now records whether its values have been substituted,
   and both layers substitute a source exactly once. Configs built directly
-  via the dataclass constructor, or loaded with `substitute_vars=False`, are
-  unchanged: they carry raw refs, and the resolution layers still expand
-  them.
+  via the dataclass constructor, or loaded with `substitute_vars=False`,
+  still carry raw refs and are still expanded by the resolution layers — but
+  they are not otherwise untouched: `resolve_for_build` now expands them per
+  resource as each is spliced rather than as a whole document, which is what
+  the `$resource: ${VAR}` entry under **Changed** describes, and `merge()`
+  can now raise for them.
+
+  `substituted` describes the values a config was *built* with. Writing into
+  `resources` or `settings` afterwards does not update it, and a layer
+  reading a stale `True` will skip the pass those new values needed. Build
+  the config you want rather than amending one; if you must amend, re-mark
+  it with `dataclasses.replace(env, substituted=False)`. The dataclass is
+  deliberately left mutable — freezing it would break consumers that
+  assemble an environment field by field — so this is a stated contract
+  rather than an enforced one.
 
 - **A `$resource` reference naming a resource that does not exist now logs a
   warning.** The warning existed but was unreachable — it sat in an
@@ -41,7 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults instead of raising whenever a defaults dict is passed, which that
   call site always does. A mistyped binding name therefore degraded to an
   empty config in complete silence. The fallback behaviour itself is
-  unchanged.
+  unchanged: a degraded config is still config, so it gets the same
+  `$requires` check and the same recursive walk a found one does — which is
+  what resolves a nested `$resource` inside the reference's inline defaults,
+  and what keeps that nested reference's `$resource` / `type` marker keys
+  from reaching a factory as keyword arguments.
+
+- **An unreferenced resource can no longer abort a build.**
+  `resolve_for_build` expands an unsubstituted environment per resource, as
+  each is spliced in, rather than expanding the environment as a whole
+  beforehand. Expanding it whole reads values no reference names, so an unset
+  required `${VAR}` in a resource the app never mentions would raise. It also
+  scales with the size of the environment rather than with the subset
+  actually referenced.
 
 - **`InheritableConfigLoader` returned a different config depending on what
   had been loaded before it.** Resolving `extends:` loads the parent without
@@ -90,6 +114,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsubstituted side during the merge and returns a substituted result,
   rather than producing a config whose single flag is wrong for half its
   values. Merging two configs that agree is unchanged.
+
+  That normalization runs a substitution pass, so `merge()` — previously pure
+  data manipulation with no dependency on the process environment — can now
+  raise `RequiredEnvVarError` when the two sides disagree and the
+  unsubstituted one holds an unset required `${VAR}`. Merging two sides that
+  agree still touches no environment variables and cannot raise.
+
+- **`EnvironmentConfig.get_resource()` now copies deeply.** It always
+  documented that it copies "to avoid mutation", but the copy was shallow, so
+  every nested container in the returned config was the environment's own
+  object and a consumer adjusting a nested section wrote through into an
+  environment that outlives the resolution. This was masked wherever a
+  substitution pass ran afterwards — `substitute_env_vars` rebuilds the
+  structure through comprehensions, isolating the result incidentally — and
+  surfaced once that pass was correctly skipped for an already-substituted
+  environment.
+
+- **`InheritableConfigLoader.load(use_cache=False)` no longer writes to the
+  cache.** Bypassing the cache now means not taking part in it in either
+  direction. Two callers depend on this: `validate()` is a dry run, and
+  `load_from_file()` reads with `config_dir` rebound to another directory —
+  and since the cache key carries no directory, the entry it left behind
+  answered later `load()` calls for the directory the loader was actually
+  configured for.
+
+- **`InheritableConfigLoader.clear_cache(name)` now clears dependents.**
+  A cached child holds its parent's content merged in, so clearing only the
+  parent left that copy answering — the staleness the call was made to
+  resolve, surviving the call. Clearing a name now transitively clears every
+  config that reached it through `extends:`. Invalidation runs down the
+  inheritance edges, never up: clearing a child leaves its parent cached.
 
 ### Security
 

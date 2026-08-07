@@ -667,3 +667,173 @@ class TestMergeProvenance:
         assert left.substituted is False
         assert left.get_resource("databases", "one")["password"] == "${MERGE_PW}"
         assert right.substituted is True
+
+
+class TestGetResourceHandsOutIsolatedConfig:
+    """"Copy to avoid mutation" has to mean the whole config.
+
+    ``get_resource`` copies the resource dict, but shallowly, so every
+    nested container in the returned config is the environment's own object.
+    A consumer that adjusts a nested section writes through into the
+    environment, and the environment outlives the resolution — later reads
+    see the adjusted value.
+
+    This was masked wherever a substitution pass happened to run afterwards:
+    ``substitute_env_vars`` rebuilds the structure through comprehensions, so
+    it incidentally isolated the result. Skipping that pass for an
+    already-substituted environment — correct on its own terms — removed the
+    accident and left the shallow copy on its own.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {
+                        "main": {
+                            "backend": "postgres",
+                            "pool": {"min": 1, "max": 10},
+                            "tags": ["primary"],
+                        }
+                    }
+                },
+            }
+        )
+
+    def test_mutating_a_nested_dict_does_not_reach_the_environment(self, env):
+        config = env.get_resource("databases", "main")
+        config["pool"]["max"] = 999
+
+        assert env.get_resource("databases", "main")["pool"]["max"] == 10
+
+    def test_mutating_a_nested_list_does_not_reach_the_environment(self, env):
+        config = env.get_resource("databases", "main")
+        config["tags"].append("clobbered")
+
+        assert env.get_resource("databases", "main")["tags"] == ["primary"]
+
+    def test_defaults_are_isolated_too(self, env):
+        """The not-found path hands back the caller's own dict otherwise."""
+        defaults = {"pool": {"min": 0}}
+
+        config = env.get_resource("databases", "absent", defaults)
+        config["pool"]["min"] = 42
+
+        assert defaults["pool"]["min"] == 0
+
+
+class TestSubstitutedViewCoversEveryField:
+    """The flag describes the config, so the view has to cover the config.
+
+    ``load`` and ``from_dict`` substitute the entire raw document — ``name``
+    and ``description`` included — and then set the flag. ``substituted_view``
+    sets the same flag having covered only ``resources`` and ``settings``, so
+    the two constructors of a ``substituted=True`` config disagree about what
+    the flag is claiming. ``merge`` carries ``description`` across, which is
+    how an unsubstituted value ends up inside a config marked substituted.
+    """
+
+    def test_the_view_substitutes_description(self, monkeypatch):
+        monkeypatch.setenv("ENV_BLURB", "production west")
+        env = EnvironmentConfig(
+            name="test", description="${ENV_BLURB}", substituted=False
+        )
+
+        assert env.substituted_view().description == "production west"
+
+    def test_the_view_substitutes_name(self, monkeypatch):
+        monkeypatch.setenv("ENV_LABEL", "prod-west")
+        env = EnvironmentConfig(name="${ENV_LABEL}", substituted=False)
+
+        assert env.substituted_view().name == "prod-west"
+
+    def test_the_view_matches_what_load_would_have_produced(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("ENV_BLURB", "production west")
+        path = tmp_path / "prod.yaml"
+        path.write_text(
+            yaml.dump(
+                {
+                    "name": "prod",
+                    "description": "${ENV_BLURB}",
+                    "resources": {"databases": {"main": {"dsn": "fixed"}}},
+                }
+            )
+        )
+
+        loaded = EnvironmentConfig.load("prod", config_dir=tmp_path)
+        raw = EnvironmentConfig.load(
+            "prod", config_dir=tmp_path, substitute_vars=False
+        )
+
+        assert raw.substituted_view() == loaded
+        assert raw.substituted_view().description == loaded.description
+
+
+class TestMergeNormalizationCanRaise:
+    """Normalizing mixed provenance runs a substitution pass.
+
+    ``merge`` used to be pure data manipulation with no dependency on the
+    process environment at all. Normalizing the unsubstituted side means a
+    merge can now fail on an unset variable, which is a widened exception
+    contract on a public method and belongs in its docstring.
+    """
+
+    def test_merging_a_raw_side_with_an_unset_var_raises(self, monkeypatch):
+        monkeypatch.delenv("UNSET_FOR_MERGE", raising=False)
+        substituted = EnvironmentConfig.from_dict(
+            {"name": "base", "resources": {"databases": {"a": {"dsn": "x"}}}}
+        )
+        raw = EnvironmentConfig.from_dict(
+            {
+                "name": "overlay",
+                "resources": {"databases": {"b": {"dsn": "${UNSET_FOR_MERGE}"}}},
+            },
+            substitute_vars=False,
+        )
+
+        with pytest.raises(ValueError, match="UNSET_FOR_MERGE"):
+            substituted.merge(raw)
+
+    def test_the_raise_is_documented(self):
+        assert "Raises:" in EnvironmentConfig.merge.__doc__
+
+
+class TestSubstitutedIsProvenanceNotAnAssertion:
+    """The flag records how a config was built, not what it currently holds.
+
+    Amending a constructed config is out of contract; these pin what happens
+    when you do, so the boundary is explicit rather than folklore. The
+    dataclass stays mutable on purpose — it is public, and freezing it would
+    break consumers that assemble an environment field by field — which makes
+    the contract worth stating in a test.
+    """
+
+    def test_amending_a_substituted_config_leaves_the_flag_stale(self):
+        env = EnvironmentConfig.from_dict(
+            {"name": "test", "resources": {"databases": {"a": {"dsn": "x"}}}}
+        )
+        env.resources["databases"]["b"] = {"dsn": "${LATE_ADDITION}"}
+
+        # Still True: the flag was not re-derived, and cannot be.
+        assert env.substituted is True
+
+    def test_replace_is_the_supported_way_to_re_mark(self, monkeypatch):
+        import dataclasses
+
+        monkeypatch.setenv("LATE_ADDITION", "postgres://late")
+        env = EnvironmentConfig.from_dict(
+            {"name": "test", "resources": {"databases": {"a": {"dsn": "x"}}}}
+        )
+        env.resources["databases"]["b"] = {"dsn": "${LATE_ADDITION}"}
+
+        remarked = dataclasses.replace(env, substituted=False)
+
+        assert (
+            remarked.substituted_view()
+            .get_resource("databases", "b")["dsn"]
+            == "postgres://late"
+        )

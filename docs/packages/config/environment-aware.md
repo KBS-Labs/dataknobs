@@ -235,8 +235,17 @@ re-reading the content of a value as a template. See
 
 An environment built directly (`EnvironmentConfig(name=..., resources=...)`)
 or loaded with `substitute_vars=False` has not been expanded, so
-`resolve_for_build` expands it — once — before resolving against it. Your own
-`EnvironmentConfig` is never mutated by this.
+`resolve_for_build` expands it — once. It does so **per resource, as each one
+is spliced in**, not over the environment as a whole: a resource is still
+separable at the splice point, which is the latest point it can be expanded.
+Expanding the whole environment up front would read values no reference names,
+so an unset required `${VAR}` in an unrelated resource would abort a build that
+never looked at it. Your own `EnvironmentConfig` is never mutated by this.
+
+A reference's inline defaults are app-authored, so they were already expanded
+in step 1 and are merged in *after* the resource's own pass — which is what
+keeps every value at exactly one expansion regardless of which side supplied
+it.
 
 Because step 1 runs first, the `$resource` and `type` values are themselves
 substituted, so resource *selection* can be bound to an environment variable:

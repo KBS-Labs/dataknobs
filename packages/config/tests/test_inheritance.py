@@ -846,3 +846,129 @@ class TestLoadConfigWithInheritance:
 
         result = load_config_with_inheritance(config_file, substitute_vars=False)
         assert result["key"] == "${VAR}"
+
+
+class TestCacheParticipationIsAllOrNothing:
+    """``use_cache=False`` has to mean "not part of the cache", both ways.
+
+    The cache write was unconditional, so a caller that asked to bypass the
+    cache still populated it. Two callers do exactly that for a reason:
+    ``validate`` is a dry run, and ``load_from_file`` temporarily rebinds
+    ``config_dir`` to another directory. The second is the damaging one --
+    the key holds no directory, so the entry it leaves behind answers later
+    ``load()`` calls for a loader configured to read somewhere else.
+    """
+
+    def test_validate_does_not_warm_the_cache(self, tmp_path):
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"port": 1}))
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        loader.validate("svc")
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"port": 2}))
+
+        assert loader.load("svc")["port"] == 2
+
+    def test_load_from_file_does_not_answer_for_another_directory(
+        self, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "svc.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (configured / "svc.yaml").write_text(yaml.dump({"origin": "configured"}))
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+
+        assert loader.load("svc")["origin"] == "configured"
+
+    def test_a_parent_pulled_in_by_load_from_file_is_not_cached_either(
+        self, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        configured = tmp_path / "configured"
+        configured.mkdir()
+        (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
+        (elsewhere / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 1})
+        )
+        (configured / "base.yaml").write_text(
+            yaml.dump({"origin": "configured"})
+        )
+
+        loader = InheritableConfigLoader(config_dir=configured)
+        loader.load_from_file(elsewhere / "svc.yaml")
+
+        assert loader.load("base")["origin"] == "configured"
+
+
+class TestClearingAParentClearsWhatInheritedFromIt:
+    """A cached child holds a copy of its parent's content, merged in.
+
+    Clearing the parent alone leaves that copy answering, so the next read of
+    the child returns content the parent no longer has -- which is the exact
+    staleness ``clear_cache`` is called to resolve, surviving the call.
+    """
+
+    def test_clearing_a_parent_reloads_the_child(self, tmp_path):
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
+        (tmp_path / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 8080})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        assert loader.load("svc")["timeout"] == 30
+
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 60}))
+        loader.clear_cache("base")
+
+        assert loader.load("svc")["timeout"] == 60
+
+    def test_clearing_a_grandparent_reaches_the_grandchild(self, tmp_path):
+        (tmp_path / "root.yaml").write_text(yaml.dump({"region": "us-east"}))
+        (tmp_path / "mid.yaml").write_text(
+            yaml.dump({"extends": "root", "tier": "std"})
+        )
+        (tmp_path / "leaf.yaml").write_text(
+            yaml.dump({"extends": "mid", "name": "leaf"})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+
+        assert loader.load("leaf")["region"] == "us-east"
+
+        (tmp_path / "root.yaml").write_text(yaml.dump({"region": "eu-west"}))
+        loader.clear_cache("root")
+
+        assert loader.load("leaf")["region"] == "eu-west"
+
+    def test_clearing_a_child_leaves_its_parent_cached(self, tmp_path):
+        """Invalidation runs down the inheritance edges, not up them."""
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
+        (tmp_path / "svc.yaml").write_text(
+            yaml.dump({"extends": "base", "port": 8080})
+        )
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+        loader.load("svc")
+
+        (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 60}))
+        loader.clear_cache("svc")
+
+        # The parent was not cleared, so its cached form still answers.
+        assert loader.load("svc")["timeout"] == 30
+
+    def test_a_cycle_in_the_edges_does_not_hang_the_clear(self, tmp_path):
+        """Recorded edges are walked, so the walk needs its own guard."""
+        (tmp_path / "a.yaml").write_text(yaml.dump({"v": 1}))
+        (tmp_path / "b.yaml").write_text(yaml.dump({"extends": "a", "w": 2}))
+        loader = InheritableConfigLoader(config_dir=tmp_path)
+        loader.load("b")
+
+        # Forge a cycle directly: reachable only if a config were edited to
+        # extend its own descendant between loads.
+        loader._dependents.setdefault("b", set()).add("a")
+
+        loader.clear_cache("a")
+
+        assert loader._cache == {}

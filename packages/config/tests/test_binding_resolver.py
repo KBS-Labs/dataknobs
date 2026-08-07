@@ -608,11 +608,38 @@ class TestSubstitutionProvenance:
 
         assert built["password"] == "${PROV_PW}"
 
-    def test_overrides_do_not_mutate_the_caller_mapping(self):
-        """Substituting overrides must not write through to the caller."""
+    def test_resolving_does_not_mutate_the_environment(self):
+        """The environment outlives the resolution and must come out intact.
+
+        This replaces a test that asserted a caller's ``**overrides`` mapping
+        was unmodified. ``resolve(**overrides)`` materializes a fresh dict per
+        call, so nothing downstream could ever have written through to the
+        caller's own mapping and the assertion could not fail. The property
+        actually at risk is one layer over: the resolved config is derived
+        from the environment's stored values, and the environment is reused.
+        """
         env = EnvironmentConfig.from_dict(self._payload())
-        overrides = {"password": "${PROV_PW}"}
 
-        self._resolve_through_factory(env, **overrides)
+        first = self._resolve_through_factory(env, password="override")
+        second = self._resolve_through_factory(env)
 
-        assert overrides == {"password": "${PROV_PW}"}
+        assert first["password"] == "override"
+        assert second["password"] == self.SECRET
+
+    def test_a_factory_adjusting_a_nested_section_cannot_reach_the_env(self):
+        """``get_resource`` copies deeply, so a factory owns what it is given.
+
+        A shallow copy leaves nested containers pointing at the environment's
+        own objects. It went unnoticed while a substitution pass always ran
+        afterwards -- rebuilding the structure through comprehensions isolated
+        the result incidentally -- and surfaced once that pass was correctly
+        skipped for an already-substituted environment.
+        """
+        payload = self._payload()
+        payload["resources"]["databases"]["main"]["pool"] = {"max": 10}
+        env = EnvironmentConfig.from_dict(payload)
+
+        first = self._resolve_through_factory(env)
+        first["pool"]["max"] = 999
+
+        assert self._resolve_through_factory(env)["pool"]["max"] == 10

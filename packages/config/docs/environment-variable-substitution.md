@@ -136,9 +136,23 @@ view = raw.substituted_view()                  # a substituted copy
 raw.substituted                                # still False
 ```
 
+`substituted_view()` covers every field, `name` and `description` included,
+because `load()` / `from_dict()` substitute the whole raw document before
+constructing — a view covering less would set the same flag over a narrower
+claim.
+
 `merge()` keeps this uniform: merging a substituted config with an
 unsubstituted one expands the unsubstituted side during the merge, rather
-than producing a config whose single flag is wrong for half its values.
+than producing a config whose single flag is wrong for half its values. That
+pass reads the process environment, so a merge of two sides that *disagree*
+can raise `RequiredEnvVarError` on an unset variable. Merging two sides that
+agree touches no environment variables and cannot raise.
+
+`substituted` records how a config was built, not what it currently holds.
+Writing into `resources` or `settings` after construction does not update it,
+and a downstream layer reading a stale `True` skips the pass those new values
+needed. Build the config you want rather than amending one; if you must
+amend, re-mark it with `dataclasses.replace(env, substituted=False)`.
 
 ### `InheritableConfigLoader`: provenance in the cache key
 

@@ -781,3 +781,189 @@ class TestResourceNameFromEnvVar:
 
         with pytest.raises(ValueError, match="MISSING_BINDING"):
             app.resolve_for_build()
+
+
+class TestMissingResourceStillResolvesItsDefaults:
+    """Degrading to inline defaults must not stop treating them as config.
+
+    The missing-resource branch used to reach the shared tail — ``$requires``
+    validation and the recursive walk — because ``get_resource`` returned the
+    supplied defaults instead of raising, so ``resolved`` was simply the
+    defaults and execution continued. Testing membership explicitly made the
+    branch reachable but also made it return early, dropping both.
+
+    The recursive walk is what resolves a nested ``$resource`` *inside* the
+    defaults and what rebuilds the structure so the returned config does not
+    alias the environment. Returning the reference's own marker keys to a
+    factory is the failure the branch's comment says it was avoiding; without
+    the walk it happens one level down instead of at the top.
+    """
+
+    @pytest.fixture
+    def env(self):
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {
+                        "fallback": {"backend": "sqlite", "path": ":memory:"}
+                    }
+                },
+            }
+        )
+
+    def test_nested_reference_in_defaults_is_resolved(self, env):
+        """A ``$resource`` inside the inline defaults must still resolve."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["spare"] == {
+            "backend": "sqlite",
+            "path": ":memory:",
+        }
+
+    def test_nested_marker_keys_never_reach_the_result(self, env):
+        """The markers are the reference's syntax, never a factory kwarg."""
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert "$resource" not in resolved["db"]["spare"]
+        assert "type" not in resolved["db"]["spare"]
+
+    def test_requires_is_validated_against_inline_defaults(self, env):
+        """``$requires`` was checked on the degraded config before, too."""
+        from dataknobs_config.exceptions import ConfigError
+
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "$requires": ["transactions"],
+                    "capabilities": ["reads"],
+                }
+            },
+            environment=env,
+        )
+
+        with pytest.raises(ConfigError, match="transactions"):
+            app.resolve_for_build()
+
+    def test_degraded_result_does_not_alias_the_environment(self, env):
+        """The walk rebuilds the structure it returns.
+
+        ``resolve_for_build`` deep-copies the app config on the way in, so
+        the defaults themselves are already safe; what the walk protects is
+        anything spliced in from the environment during the recursion.
+        """
+        app = EnvironmentAwareConfig(
+            config={
+                "db": {
+                    "$resource": "typo",
+                    "type": "databases",
+                    "spare": {"$resource": "fallback", "type": "databases"},
+                }
+            },
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+        resolved["db"]["spare"]["path"] = "/tmp/clobbered"
+
+        assert env.resources["databases"]["fallback"]["path"] == ":memory:"
+
+
+class TestOnlyReferencedResourcesAreExpanded:
+    """An environment holds resources this app never asked for.
+
+    Substituting the environment as a whole before the splice reads every
+    value in it, so an unset required ``${VAR}`` in a resource no reference
+    names aborts a build that would never have looked at it. The pre-change
+    pass ran *after* the splice and so covered exactly the values spliced in.
+
+    The invariant is "each source exactly once", not "every source eagerly";
+    a resource is still separable at the point it is spliced, which is the
+    latest point it can be substituted.
+    """
+
+    @pytest.fixture
+    def env(self):
+        # Loaded unsubstituted: the deliberate late-binding path, and the
+        # only one where the downstream pass is load-bearing.
+        return EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"main": {"dsn": "${WANTED_DSN}"}},
+                    "warehouses": {"analytics": {"dsn": "${NEVER_REFERENCED}"}},
+                },
+                "settings": {"unused": "${ALSO_NEVER_REFERENCED}"},
+            },
+            substitute_vars=False,
+        )
+
+    def test_an_unreferenced_resource_does_not_abort_the_build(
+        self, env, monkeypatch
+    ):
+        monkeypatch.setenv("WANTED_DSN", "postgres://real")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        resolved = app.resolve_for_build()
+
+        assert resolved["db"]["dsn"] == "postgres://real"
+
+    def test_the_referenced_resource_is_still_expanded_exactly_once(
+        self, env, monkeypatch
+    ):
+        """The value's own ``${...}`` text stays literal — the whole point."""
+        monkeypatch.setenv("WANTED_DSN", "p${x}ss")
+        monkeypatch.setenv("x", "INJECTED")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+
+        assert app.resolve_for_build()["db"]["dsn"] == "p${x}ss"
+
+    def test_the_environment_itself_is_never_mutated(self, env, monkeypatch):
+        monkeypatch.setenv("WANTED_DSN", "postgres://real")
+        monkeypatch.delenv("NEVER_REFERENCED", raising=False)
+        monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
+
+        app = EnvironmentAwareConfig(
+            config={"db": {"$resource": "main", "type": "databases"}},
+            environment=env,
+        )
+        app.resolve_for_build()
+
+        assert env.resources["databases"]["main"]["dsn"] == "${WANTED_DSN}"
+        assert env.substituted is False
