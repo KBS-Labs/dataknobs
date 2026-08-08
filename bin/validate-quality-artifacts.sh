@@ -37,6 +37,15 @@ print_fail() {
     echo -e "  ${RED}✗${NC} $1"
 }
 
+# For a check that reports a concern it will not fail the build over. Every
+# print_fail must reach VALIDATION_FAILED or exit — a red ✗ on a run that then
+# reports success is indistinguishable from a passing run, and both times that
+# has happened here it went unnoticed for months. Guarded by
+# tests/test_quality_artifact_contract.py.
+print_warn() {
+    echo -e "  ${YELLOW}!${NC} $1"
+}
+
 print_info() {
     echo -e "  ${BLUE}ℹ${NC} $1"
 }
@@ -183,7 +192,9 @@ fi
 # Read from the summary rather than from coverage.xml, which is no longer
 # committed. The number this reports has always been advisory — no branch below
 # sets VALIDATION_FAILED — so it never justified carrying a multi-megabyte
-# generated report through every merge.
+# generated report through every merge. It says so with print_warn: announcing
+# a failure it will not act on is how the signature check below spent its
+# entire life reporting a defect nobody could see.
 print_check "Code coverage"
 COVERAGE=$(python3 -c "
 import json
@@ -203,7 +214,7 @@ if [ -z "$COVERAGE" ]; then
 elif (( $(echo "$COVERAGE >= $REQUIRED_COVERAGE" | bc -l 2>/dev/null || echo 0) )); then
     print_pass "Coverage: ${COVERAGE}% (minimum: ${REQUIRED_COVERAGE}%)"
 else
-    print_fail "Coverage: ${COVERAGE}% (below minimum: ${REQUIRED_COVERAGE}%)"
+    print_warn "Coverage: ${COVERAGE}% (below minimum: ${REQUIRED_COVERAGE}%)"
     print_info "Low coverage is a warning, not a failure"
 fi
 
@@ -224,14 +235,20 @@ if [ -f "$ARTIFACTS_DIR/signature.sha256" ]; then
     if [ "$CURRENT_SIG" = "$STORED_SIG" ]; then
         print_pass "Artifact signature valid"
     else
-        print_fail "Artifact signature mismatch - files may have been modified"
-        print_info "This could happen if artifacts were manually edited"
-        # Don't fail on signature mismatch as files might be legitimately updated
+        print_fail "Artifact signature mismatch - artifacts do not match their signature"
+        print_info "Usually a merge or rebase that spliced two runs together,"
+        print_info "or a file added to or dropped from the committed set."
+        print_info "Re-run: ./bin/dk pr"
+        VALIDATION_FAILED=1
     fi
-    
+
     cd "$PROJECT_ROOT"
 else
+    # Unreachable while signature.sha256 is in REQUIRED_FILES above, which exits
+    # first. Accounted for anyway: the day it leaves that list, a missing
+    # signature must not become the one artifact whose absence is tolerated.
     print_fail "Signature file not found"
+    VALIDATION_FAILED=1
 fi
 
 # Final summary
