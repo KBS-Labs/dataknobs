@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-08T20:09:55Z",
+  "timestamp": "2026-08-08T21:02:21Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/adopt-canonical-dotted-resolver",
-  "git_commit": "0d2420919725eb04bc0468dd95f527c145984ad3",
+  "git_commit": "b8acb8243e1ff5ac97db53580449f3183ba79311",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
