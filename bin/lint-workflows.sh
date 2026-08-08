@@ -25,6 +25,17 @@ fi
 
 errors=0
 
+# Report whatever has been counted so far. Called from the paths that abort
+# before the summary at the bottom, so an aborted run still says how many issues
+# it had found; silent when there are none, so an abort with a clean slate is
+# not dressed up as a finding.
+report_pending_errors() {
+    if [ $errors -gt 0 ]; then
+        echo ""
+        echo -e "${RED}Found $errors workflow issue(s) before stopping${NC}"
+    fi
+}
+
 # Check workflow directory exists
 if [ ! -d "$WORKFLOW_DIR" ]; then
     echo -e "${YELLOW}No .github/workflows/ directory found — skipping${NC}"
@@ -73,14 +84,23 @@ fi
 #
 # This is also what the dependency rules require of a tool we invoke as a
 # subprocess: gate its presence explicitly and fail, never warn and continue.
+# Check 1 has already run and may have counted errors, and these branches exit
+# before reaching the summary at the bottom, so they report the running total
+# themselves — otherwise a run that found mutable refs and then hit a missing
+# tool would print its ✗ lines and stop without ever saying how many. The exit
+# stays in the branch rather than falling through to a shared one: continuing
+# past a missing tool is the defect being prevented, and the guard in
+# tests/test_quality_gate_accounting.py reads each branch for it.
 if ! command -v shellcheck >/dev/null 2>&1; then
     echo -e "  ${RED}✗${NC} shellcheck is required but not installed"
     echo "    macOS:  brew install shellcheck"
     echo "    Debian: apt-get install shellcheck"
+    report_pending_errors
     exit 1
 elif ! command -v uv >/dev/null 2>&1; then
     echo -e "  ${RED}✗${NC} uv is required but not installed"
     echo "    Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    report_pending_errors
     exit 1
 else
     echo "Running shellcheck on workflow run: blocks..."

@@ -132,6 +132,12 @@ because it also reports success.
 Install it with `brew install shellcheck` (macOS) or `apt-get install shellcheck`
 (Debian/Ubuntu).
 
+The workflow lint is not gated by run mode or package selection, so this applies
+to every local gate run — a single-package `bin/dk check` as much as a full
+`bin/dk pr`. It does **not** apply to CI: the workflow there validates the
+committed artifacts and never invokes the gate, so no runner needs `shellcheck`
+installed.
+
 ## Required Services
 
 The quality checks require these Docker services:

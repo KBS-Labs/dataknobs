@@ -71,20 +71,30 @@ GATE_SCRIPTS = (
 def _accounts(line: str, verdict: str) -> bool:
     """Whether this line carries a check's outcome somewhere it can be seen.
 
-    The gate has six ways of doing that and they are all legitimate, so all six
-    are recognised here — a guard that knew only about plain assignment flagged
-    the docs check and the unit-test helper, both of which account correctly:
+    The gate has five ways of doing that and they are all legitimate, so all
+    five are recognised here — a guard that knew only about plain assignment
+    flagged the docs check and the unit-test helper, both of which account
+    correctly:
 
     * ``X=1`` — plain assignment
     * ``cmd || X=$?`` — assignment on the failure path
     * ``read -r X Y Z <<< "$codes"`` — three statuses from one sub-run
     * ``exit`` — abort the whole gate
-    * ``return $rc`` — a helper handing its outcome to its caller, which is
-      then checked in the caller's own section
+    * ``return $rc`` — a helper handing its outcome to its caller
+
+    The first two share a pattern below, so five idioms need four branches.
 
     ``return 0`` is deliberately not accounting: a helper that prints a failure
     and returns success has thrown the outcome away just as thoroughly as one
     that assigns nothing.
+
+    The ``return`` branch is the weak one, and it is not self-sufficient: it
+    accepts the hand-off without checking that anyone catches it, so a helper
+    whose caller drops the status would satisfy it while discarding the outcome
+    just as completely as ``return 0``. That second half is enforced separately,
+    by :func:`test_a_helper_that_returns_its_outcome_has_it_caught`. Neither
+    test is sufficient alone; do not delete one and leave the other reading as
+    though the case were closed.
     """
     return bool(
         re.search(rf"\b{verdict}\b\s*=", line)
@@ -160,6 +170,100 @@ def test_every_check_that_reports_a_failure_can_fail_the_gate():
         "these checks print a failure the gate never sees, so they report '✗' "
         f"and pass: {silent}. Capture the exit status into a verdict variable, "
         "or use the warning helper if the check is genuinely advisory."
+    )
+
+
+def _shell_functions(path: Path) -> dict[str, list[str]]:
+    """Shell function definitions as ``name -> body``.
+
+    Matched at any indentation on purpose: the one function this applies to is
+    defined inside a block, and a guard that only saw column-zero definitions
+    would find nothing and pass while checking it.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    bodies: dict[str, list[str]] = {}
+    for i, line in enumerate(lines):
+        match = re.match(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", line)
+        if not match:
+            continue
+        indent = len(match.group(1))
+        body = []
+        for following in lines[i + 1 :]:
+            closing = following.strip() == "}"
+            if closing and len(following) - len(following.lstrip()) == indent:
+                break
+            body.append(following)
+        bodies[match.group(2)] = body
+    return bodies
+
+
+def _drops_the_status(call: str, name: str) -> bool:
+    """Whether this call line throws the callee's exit status away."""
+    return not (
+        re.search(rf"\b{name}\b[^&|]*(\|\||&&)", call)  # handled on failure
+        or re.match(rf"^\s*(if|elif|while|until)\s+!?\s*{name}\b", call)  # the condition
+        or re.search(rf"=\s*\$\(\s*{name}\b", call)  # captured by substitution
+        or re.search(rf"\b{name}\b.*&\s*$", call)  # backgrounded; the wait carries it
+    )
+
+
+def test_a_helper_that_returns_its_outcome_has_it_caught():
+    """``return $rc`` only accounts for a check if the caller catches it.
+
+    ``_accounts`` takes the ``return`` on trust — it sees one line and cannot
+    see the call sites — so on its own it would accept a helper that reports a
+    failure, returns it, and is then called bare, which discards the status as
+    thoroughly as the ``return 0`` that branch is careful to reject. That is the
+    same shape as the defect this whole file exists for: an outcome produced and
+    then dropped on the way to somewhere it counts.
+
+    Backgrounded calls are accepted here and checked below instead: ``cmd &``
+    cannot capture anything by itself, and the status arrives through ``wait``.
+    """
+    offenders = []
+    checked = []
+    for script in GATE_SCRIPTS:
+        lines = script.path.read_text(encoding="utf-8").splitlines()
+        for name, body in _shell_functions(script.path).items():
+            if not any(re.match(r"^\s*return\s+(?!0\s*(?:#.*)?$)", ln) for ln in body):
+                continue
+            checked.append(f"{rel(script.path)}:{name}")
+            definition = rf"^\s*{name}\(\)"
+            calls = [
+                (i + 1, ln)
+                for i, ln in enumerate(lines)
+                if re.search(rf"\b{name}\b", ln)
+                and not re.match(definition, ln)
+                and not ln.strip().startswith("#")
+            ]
+            assert calls, (
+                f"{name} in {rel(script.path)} returns a status and is never "
+                "called — either it is dead, or this guard stopped finding its "
+                "call sites and is now checking nothing"
+            )
+            offenders += [
+                f"{rel(script.path)}:{line} — {name}"
+                for line, ln in calls
+                if _drops_the_status(ln, name)
+            ]
+            if any(re.search(rf"\b{name}\b.*&\s*$", ln) for _, ln in calls):
+                assert any(
+                    re.match(r"^\s*wait\b", ln) and "||" in ln for ln in lines
+                ), (
+                    f"{name} is backgrounded in {rel(script.path)}, but no "
+                    "'wait' there catches a failing job — so the status of "
+                    "every concurrent run is discarded"
+                )
+    assert checked, (
+        "no function in the gate scripts returns a non-zero status, so this "
+        "guard compared nothing. Either the ``return`` branch of _accounts is "
+        "now dead and both should go, or the extraction stopped finding shell "
+        "function definitions — re-point it rather than leaving it passing."
+    )
+    assert not offenders, (
+        "these calls discard the status of a helper that returns one, so a "
+        f"failure it reported goes nowhere: {offenders}. Capture it with "
+        "'|| STATUS=$?', or test it as a condition."
     )
 
 
@@ -302,12 +406,19 @@ def test_every_status_that_gates_the_verdict_reaches_the_artifact():
 # --- a check whose tool is missing must fail, not skip ---
 
 #: Scoped to the gate's own scripts rather than all of ``bin/``, because a
-#: negative ``command -v`` probe means three different things there and only one
-#: of them is a defect. Seven of the nine outside this scope are install-on-
-#: demand (``not found → uv pip install → carry on``), which is fine; the
-#: positive form used for sha256sum/shasum is alternative selection, also fine.
-#: Widening this to the rest of ``bin/`` needs a way to tell those apart that is
-#: better than a keyword search for "install".
+#: negative ``command -v`` probe does not mean the same thing everywhere. Of the
+#: nine outside this scope, six are install-on-demand (``not found → uv pip
+#: install → carry on``) and the other three already exit — audit-floor.sh for
+#: uv and osv-scanner, publish-test.sh for uv. So none of the nine is a defect
+#: today, and widening the scope would find nothing; the positive form used for
+#: sha256sum/shasum is alternative selection, also fine.
+#:
+#: Which is the actual reason to leave the scope alone: the cost of widening is
+#: not the three that would pass anyway but the six that would not, and telling
+#: install-on-demand from a genuine requirement needs something better than a
+#: keyword search for "install". Worth revisiting if a third gate script arrives
+#: with its own tool requirement, since that is the case this narrow scope would
+#: quietly fail to cover.
 TOOL_PROBE_SCRIPTS = (GATE, WORKFLOW_LINT)
 
 
