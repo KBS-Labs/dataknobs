@@ -204,7 +204,7 @@ def main():
             for error in errors:
                 print(f"  {error}")
         else:
-            print(f"  ✅ All packages properly referenced")
+            print("  ✅ All packages properly referenced")
         print()
 
     # Summary

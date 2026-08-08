@@ -137,9 +137,23 @@ uv run bin/validate.sh [package-name]
 # Run type checking
 uv run mypy packages/[package-name]/src
 
-# Run both with detailed output
-uv run bin/validate.sh [package-name] --verbose
+# Show per-rule error counts instead of the errors themselves
+uv run bin/validate.sh [package-name] --stats
 ```
+
+### What runs with no arguments
+
+Every package's `src`, plus the code that belongs to no package: `tests/`
+(the workspace guards), `bin/` (the scripts that decide whether a pull
+request passes), `src/`, and the root `conftest.py`. Anything outside that
+set is declared, with its size, in `DEFERRED_FROM_DEFAULT_LINT` in
+`tests/test_toolchain_consistency.py` — which compares the list against every
+tracked `*.py`, so a new directory of Python fails there rather than silently
+joining the set nothing checks.
+
+`--workspace` selects only the no-package half. That is what the quality gate
+passes when a pull request changed no package, and it asks by name so the gate
+does not carry a second copy of the list.
 
 ## Package-Specific Checklists
 

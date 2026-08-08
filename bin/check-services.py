@@ -2,10 +2,8 @@
 """Helper script to check if services are available."""
 
 import sys
-import time
 import os
 import json
-from typing import Dict, Any
 
 def check_postgres(host: str = "postgres", port: int = 5432) -> bool:
     """Check if PostgreSQL is available."""

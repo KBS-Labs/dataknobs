@@ -586,8 +586,15 @@ if [ "$SKIP_STYLE" != "yes" ]; then
         # Same hole as the test block, one step earlier: this branch is keyed
         # by package too, so a change to the workspace guards produced no
         # arguments and was read as "nothing to validate" — leaving the edited
-        # files unlinted and un-type-checked. validate.sh takes a directory.
-        VALIDATE_ARGS="tests"
+        # files unlinted and un-type-checked.
+        #
+        # Ask for the set by name rather than naming a directory. It was "tests"
+        # when tests/ was the only code belonging to no package; bin/ and the
+        # root conftest are in it now, so a literal here would have left a
+        # bin-only pull request — the shape this very script is edited by — with
+        # its own changes unlinted, which is the defect one line up, restated.
+        # validate.sh owns the list; this asks which list.
+        VALIDATE_ARGS="--workspace"
     fi
 
     # Skip if no packages to validate in PR mode (e.g., only docs changed)

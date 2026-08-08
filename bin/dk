@@ -16,6 +16,14 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The code belonging to no package, which the lint and style shortcuts below
+# would otherwise miss while reporting success. Invoked rather than sourced:
+# package-discovery.sh sets -u and -o pipefail, and sourcing it would impose
+# both on every other command in this file, which sets only -e.
+workspace_targets() {
+    "$SCRIPT_DIR/package-discovery.sh" workspace-targets
+}
+
 # Colors for output
 if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM}" != "dumb" ]; then
     RED='\033[0;31m'
@@ -253,13 +261,25 @@ main() {
             run_command "Checking all packages (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev
             ;;
+        # Each linter call stays on one physical line: the guard in
+        # tests/test_dev_script_config_resolution.py reads the config flag from
+        # the line naming the tool, so splitting one hides its own --config.
+        #
+        # Only style gets the workspace targets, and the asymmetry is deliberate.
+        # ruff is the linter the quality gate runs, so a shortcut reporting green
+        # over a narrower set than the gate checks is a shortcut that lets you
+        # push a failure. pylint is advisory and in no gate, so pointing it at
+        # dev tooling adds 292 findings and closes nothing.
         lint|l)
             run_from_root "Running linting checks" \
                 uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         style|s)
+            # SC2046: the word splitting is the point — workspace_targets emits
+            # several target paths and each has to arrive as its own argument.
+            # shellcheck disable=SC2046
             run_from_root "Running style checks" \
-                uv run ruff check "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+                uv run ruff check "$PROJECT_ROOT"/packages/*/src $(workspace_targets) --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
         validate-pkgs|validate-packages|vp)
             run_command "Validating package references" \

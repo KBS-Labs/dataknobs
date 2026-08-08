@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import configparser
 import re
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -431,33 +432,234 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes():
     )
 
 
-def test_workspace_tests_are_linted_and_type_checked():
-    """Being *run* is not the same as being *checked*.
+#: Directories of first-party Python that ``bin/validate.sh`` does not reach
+#: when run with no arguments, each with the size that makes it a project rather
+#: than an edit. Deferring is a legitimate answer; deferring *silently* is not,
+#: and silence is what kept ``bin/`` — which holds the checkers deciding whether
+#: a pull request passes — outside every lint invocation in this repo for as
+#: long as it has had one. Counts are from the root ruff config.
+#:
+#: Two rules keep this from becoming the excuse list it would otherwise decay
+#: into, both enforced below: an entry matching no tracked file is an error, and
+#: so is an entry matching a file that *is* linted — because the cheapest way to
+#: silence the coverage test is to drop a directory from the targets and add it
+#: here, and that must not be a passing move.
+DEFERRED_FROM_DEFAULT_LINT = {
+    "packages/*/tests": "~1,790 findings; wants each package's src cleared first",
+    "packages/*/examples": "241 findings, ~90% of them under data/ and fsm/",
+    "packages/*/scripts": "9 findings",
+    "packages/*/benchmarks": "2 findings",
+    "packages/*/docs": "7 findings, all in a single fsm/ module",
+}
 
-    ``bin/validate.sh`` builds its default target list by looping ``packages/*``
-    and appending each ``src`` directory, so this directory — which belongs to
-    no package — was outside every lint and type-check invocation in the repo.
-    The modules here are the ones asserting that the toolchain is coherent, and
-    nothing was asserting anything about theirs.
 
-    Read from the target computation rather than from a comment, because the
-    comment cannot stop being true.
+def _tracked_python() -> list[PurePosixPath]:
+    """Every ``*.py`` git keeps, as repo-relative paths."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-z", "*.py"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout.decode()
+    return [PurePosixPath(name) for name in listing.split("\0") if name]
+
+
+#: The scripts that build a default set of things to lint. Each used to answer
+#: "which code do we check" for itself, and the copies agreed by accident while
+#: there was one directory to name. ``workspace_targets`` in
+#: bin/package-discovery.sh is the single answer now; this is who has to be
+#: asking it.
+WORKSPACE_TARGET_CONSUMERS = ("bin/validate.sh", "bin/fix.sh", "bin/dk")
+
+
+def _workspace_targets() -> list[str]:
+    """The first-party code belonging to no package, from the one declaration.
+
+    Executed rather than parsed. The declaration is four filesystem tests, so
+    reading it as text would report what it says while the question is what it
+    returns.
     """
-    validate = ROOT / "bin" / "validate.sh"
-    here = Path(__file__).resolve().parent
+    listing = subprocess.run(
+        [str(ROOT / "bin" / "package-discovery.sh"), "workspace-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
 
+
+def _default_validate_targets() -> list[str]:
+    """Every path ``bin/validate.sh`` validates when given no arguments.
+
+    Three append forms are read. One names a directory outright; one
+    interpolates ``$package`` and is expanded over the packages that exist,
+    because a guard reading only literals would call the whole
+    ``packages/*/src`` tree unlinted and be wrong about the bulk of the repo;
+    one is the loop variable over ``workspace_targets``, resolved by running it.
+    An interpolation this does not recognise raises rather than being skipped —
+    quietly dropping a target it cannot parse is the exact failure this guard
+    exists to report.
+    """
+    validate = (ROOT / "bin" / "validate.sh").read_text(encoding="utf-8")
     default_block = re.search(
-        r"if \[\[ \$\{#TARGETS\[@\]\} -eq 0 \]\]; then(.*?)\nelse", validate.read_text(), re.DOTALL
+        r"if \[\[ \$\{#TARGETS\[@\]\} -eq 0 \]\]; then(.*?)\nelse", validate, re.DOTALL
     )
     assert default_block is not None, (
         "bin/validate.sh: could not find the default-target branch — either it "
         "was restructured or this guard stopped recognising it"
     )
+    block = default_block.group(1)
 
-    named = re.findall(r'VALIDATE_TARGETS\+=\("([^"$]+)"\)', default_block.group(1))
-    assert any((ROOT / name).resolve() == here for name in named), (
-        f"bin/validate.sh validates {named or 'nothing'} by default, which does not "
-        f"include {_rel(here)} — the workspace guards would go unlinted and untyped"
+    loop = re.search(r"for\s+(\w+)\s+in\s+\$\(workspace_targets\)", block)
+    assert loop is not None, (
+        "bin/validate.sh's default branch no longer loops over "
+        "workspace_targets, so it has stopped reading the shared declaration of "
+        "the code belonging to no package"
+    )
+
+    packages = [path.parent.name for path in pyprojects() if path.parent != ROOT]
+    targets: list[str] = []
+    for raw in re.findall(r'VALIDATE_TARGETS\+=\("([^"]+)"\)', block):
+        if raw == f"${loop.group(1)}":
+            targets.extend(_workspace_targets())
+        elif "$package" in raw:
+            targets.extend(raw.replace("$package", name) for name in packages)
+        elif "$" in raw:
+            raise AssertionError(
+                f"bin/validate.sh appends the default target {raw!r}, whose "
+                "interpolation this guard cannot expand. Teach it the new form; "
+                "skipping it would report the target's contents as unlinted."
+            )
+        else:
+            targets.append(raw)
+    return targets
+
+
+def _linted_by(path: PurePosixPath, targets: list[str]) -> bool:
+    """Whether some default target is this file, or a directory containing it."""
+    name = str(path)
+    return any(name == target or name.startswith(f"{target}/") for target in targets)
+
+
+def _deferred_by(path: PurePosixPath, patterns: set[str]) -> bool:
+    """Whether any ancestor directory of this file matches a deferral pattern."""
+    return any(
+        PurePosixPath(*path.parts[:depth]).match(pattern)
+        for depth in range(1, len(path.parts))
+        for pattern in patterns
+    )
+
+
+def test_every_first_party_python_file_is_linted_by_default():
+    """Being *run* is not the same as being *checked*, and neither is being *shipped*.
+
+    ``bin/validate.sh`` builds its default target list by looping ``packages/*``
+    and appending each ``src`` directory. Everything else was therefore outside
+    every lint and type-check invocation in the repo, and nothing said so: the
+    workspace guards asserting the toolchain is coherent, and ``bin/`` itself —
+    the scripts that decide whether a pull request passes, including the two
+    that enforce documentation mirroring and internal-label hygiene.
+
+    The first version of this guard asserted that one directory was in the
+    target set, keyed to its own location. That is the shape that let the same
+    omission survive one directory over, so it reads the whole tracked set now
+    and takes the exceptions as declared data.
+    """
+    targets = _default_validate_targets()
+    deferred = set(DEFERRED_FROM_DEFAULT_LINT)
+
+    uncovered = sorted(
+        str(path)
+        for path in _tracked_python()
+        if not _linted_by(path, targets) and not _deferred_by(path, deferred)
+    )
+    assert not uncovered, (
+        f"bin/validate.sh validates {targets} by default, which reaches none of "
+        f"these tracked files:\n"
+        + "\n".join(f"  - {name}" for name in uncovered)
+        + "\nAdd the directory to the default targets, or record it in "
+        "DEFERRED_FROM_DEFAULT_LINT with the size that makes deferring honest."
+    )
+
+
+def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
+    """A second copy of the target list is a second thing to forget.
+
+    When no package changed, the gate validates the workspace half alone — and
+    it named that half literally, as ``tests``, back when ``tests/`` was all of
+    it. Adding a directory to ``bin/validate.sh`` therefore left a pull request
+    touching only that directory validating something else entirely, which is
+    the failure this file already records one layer up.
+
+    The fix is a flag: validate.sh owns the list, the gate says which list it
+    wants. This asserts the gate keeps asking rather than answering — anything
+    that is neither a variable nor an option is a hardcoded target set.
+    """
+    gate = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
+    assignments = re.findall(r'^\s*VALIDATE_ARGS="([^"]*)"', gate, re.MULTILINE)
+    assert assignments, (
+        "bin/run-quality-checks.sh no longer assigns VALIDATE_ARGS — if the "
+        "variable was renamed, update this guard rather than deleting it"
+    )
+
+    literal = sorted(
+        value
+        for value in assignments
+        if value and "$" not in value and not value.startswith("-")
+    )
+    assert not literal, (
+        f"bin/run-quality-checks.sh passes {literal} to validate.sh as a literal "
+        "target list, which stops tracking validate.sh's own the moment either "
+        "changes. Pass --workspace, or a variable holding the packages."
+    )
+
+    unread = sorted(
+        name
+        for name in WORKSPACE_TARGET_CONSUMERS
+        if "workspace_targets" not in (ROOT / name).read_text(encoding="utf-8")
+    )
+    assert not unread, (
+        f"{unread} build a default set of things to check without reading "
+        "workspace_targets, so each carries its own idea of which code belongs "
+        "to no package. That is how bin/ ended up in none of them."
+    )
+
+
+def test_the_lint_deferrals_still_describe_the_repository():
+    """A deferral list nobody rechecks is how the omission it records becomes permanent.
+
+    Both directions are wrong and only one of them is obvious. An entry matching
+    nothing is stale, and leaves the reader believing a gap exists that closed.
+    An entry matching something already linted is worse: it is the cheapest way
+    to silence the test above — drop a directory from the targets, name it here,
+    and coverage is lost with every check still green.
+    """
+    tracked = _tracked_python()
+    targets = _default_validate_targets()
+
+    stale = sorted(
+        pattern
+        for pattern in DEFERRED_FROM_DEFAULT_LINT
+        if not any(_deferred_by(path, {pattern}) for path in tracked)
+    )
+    assert not stale, (
+        f"DEFERRED_FROM_DEFAULT_LINT records {stale}, which matches no tracked "
+        "Python file. Drop the entry — a gap that no longer exists reads as one "
+        "that does."
+    )
+
+    contradicted = sorted(
+        pattern
+        for pattern in DEFERRED_FROM_DEFAULT_LINT
+        if any(
+            _deferred_by(path, {pattern}) and _linted_by(path, targets) for path in tracked
+        )
+    )
+    assert not contradicted, (
+        f"DEFERRED_FROM_DEFAULT_LINT records {contradicted} as unlinted, but "
+        "bin/validate.sh does lint files there. Either the entry is obsolete and "
+        "should go, or a default target was removed and should come back."
     )
 
 

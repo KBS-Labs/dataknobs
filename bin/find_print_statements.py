@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Find print statements in Python code using AST parsing.
+"""Find print statements in Python code using AST parsing.
 
 This tool parses Python source files and identifies print() function calls
 in executable code, ignoring comments, docstrings, and string literals.
@@ -113,8 +112,7 @@ class PrintStatementFinder(ast.NodeVisitor):
 
 
 def find_prints_in_file(filepath: Path) -> List[Tuple[int, int, str]]:
-    """
-    Find all print statements in a Python file.
+    """Find all print statements in a Python file.
 
     Args:
         filepath: Path to the Python file
@@ -123,7 +121,7 @@ def find_prints_in_file(filepath: Path) -> List[Tuple[int, int, str]]:
         List of tuples containing (line_number, column_offset, filepath)
     """
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, encoding='utf-8') as f:
             source = f.read()
 
         # Parse the source code into an AST
@@ -135,7 +133,7 @@ def find_prints_in_file(filepath: Path) -> List[Tuple[int, int, str]]:
 
         return finder.print_statements
 
-    except SyntaxError as e:
+    except SyntaxError:
         # If the file has syntax errors, skip it (will be caught by other checks)
         return []
     except Exception as e:
@@ -182,7 +180,7 @@ def main():
         for line_num, col_offset, filepath in all_prints:
             # Read the actual line content
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, encoding='utf-8') as f:
                     lines = f.readlines()
                     if line_num <= len(lines):
                         line_content = lines[line_num - 1].strip()

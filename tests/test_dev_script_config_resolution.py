@@ -138,8 +138,12 @@ def test_every_linter_invocation_names_an_absolute_config():
         elif not re.search(rf'{re.escape(flag)}[= ]"?\$PROJECT_ROOT/', cmd):
             violations.append(f"bin/dk:{line}: {tool} {flag} is not $PROJECT_ROOT-anchored")
 
-    assert not violations, "Config resolved against the caller's directory:\n" + "\n".join(
-        f"  - {v}" for v in violations
+    assert not violations, (
+        "Config resolved against the caller's directory:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+        + "\n(The flag is read from the line naming the tool. A command split "
+        "across a line continuation reports as missing one it does carry — "
+        "keep the invocation on one physical line.)"
     )
 
 

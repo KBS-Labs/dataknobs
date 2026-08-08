@@ -26,6 +26,31 @@ discover_packages() {
     echo "${sorted[@]}"
 }
 
+# Function to list the first-party code that belongs to no package
+#
+# The loop above answers "which packages are there", and every caller that
+# wanted "which code do we check" had to answer the rest for itself. There was
+# only one such directory for a long time, so each caller wrote it out and the
+# copies agreed by accident. They stopped: bin/ — the scripts deciding whether a
+# pull request passes — was in none of them, and adding it to one would have
+# left the others behind.
+#
+# Emitted as a plain word list, in the shape callers already build their target
+# arrays from. Order is stable and deliberate: tests/ first, as the widest and
+# the one that was already here.
+workspace_targets() {
+    local targets=()
+
+    [[ -d "$ROOT_DIR/tests" ]] && targets+=("tests")
+    [[ -d "$ROOT_DIR/bin" ]] && targets+=("bin")
+    [[ -d "$ROOT_DIR/src" ]] && targets+=("src")
+    [[ -f "$ROOT_DIR/conftest.py" ]] && targets+=("conftest.py")
+
+    # An empty result is legitimate — a checkout with none of these — and must
+    # not look like failure to a caller running under `set -e`.
+    echo "${targets[@]:-}"
+}
+
 # Function to get packages in dependency order
 # This reads from pyproject.toml to determine dependencies
 get_packages_in_order() {
@@ -123,6 +148,9 @@ else
         ordered)
             get_packages_in_order
             ;;
+        workspace-targets)
+            workspace_targets
+            ;;
         exists)
             if [[ -z "${2:-}" ]]; then
                 echo "Usage: $0 exists <package-name>"
@@ -144,11 +172,12 @@ else
             get_package_version "$2"
             ;;
         *)
-            echo "Usage: $0 {list|ordered|exists <package>|version <package>}"
+            echo "Usage: $0 {list|ordered|workspace-targets|exists <package>|version <package>}"
             echo ""
             echo "Commands:"
             echo "  list              List all discovered packages"
             echo "  ordered           List packages in dependency order"
+            echo "  workspace-targets List the first-party code belonging to no package"
             echo "  exists <package>  Check if a package exists"
             echo "  version <package> Get package version"
             echo ""

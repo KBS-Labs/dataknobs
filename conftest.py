@@ -1,5 +1,4 @@
-"""
-Root conftest.py for pytest configuration.
+"""Root conftest.py for pytest configuration.
 Automatically adds all package src directories to Python path using package-discovery.sh.
 """
 import sys

@@ -23,6 +23,7 @@ QUICK=false
 FIX=false
 STATS=false
 ALL_ERRORS=false
+WORKSPACE_ONLY=false
 
 # Usage function
 usage() {
@@ -43,6 +44,9 @@ usage() {
     echo "  -f, --fix             Attempt to auto-fix issues"
     echo "  -s, --stats           Show detailed error statistics"
     echo "  -a, --all-errors      Show all errors (bypass suppression rules)"
+    echo "  -w, --workspace       Validate only the code belonging to no package"
+    echo "                        (tests/, bin/, src/, conftest.py) — what the"
+    echo "                        quality gate checks when no package changed"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -75,6 +79,10 @@ while [[ $# -gt 0 ]]; do
             ALL_ERRORS=true
             shift
             ;;
+        -w|--workspace)
+            WORKSPACE_ONLY=true
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -95,18 +103,29 @@ VALIDATE_PACKAGES=()
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     # No targets specified, validate all packages
-    VALIDATE_PACKAGES=("${ALL_PACKAGES[@]}")
-    for package in "${ALL_PACKAGES[@]}"; do
-        if [[ -d "packages/$package/src" ]]; then
-            VALIDATE_TARGETS+=("packages/$package/src")
-        fi
-    done
-    # The workspace guards belong to no package, so a loop over packages/*
-    # never reached them. They are the code that asserts the toolchain is
-    # coherent, and until now nothing checked theirs.
-    if [[ -d "$ROOT_DIR/tests" ]]; then
-        VALIDATE_TARGETS+=("tests")
+    if [[ "$WORKSPACE_ONLY" != true ]]; then
+        VALIDATE_PACKAGES=("${ALL_PACKAGES[@]}")
+        for package in "${ALL_PACKAGES[@]}"; do
+            if [[ -d "packages/$package/src" ]]; then
+                VALIDATE_TARGETS+=("packages/$package/src")
+            fi
+        done
     fi
+    # The code belonging to no package, so a loop over packages/* reached none
+    # of it: the workspace guards asserting the toolchain is coherent, the root
+    # conftest every test run imports, the workspace shim, and bin/ — which
+    # holds the checkers deciding whether a pull request passes, among them the
+    # documentation-mirror and internal-label guards. Nothing linted the
+    # linters.
+    #
+    # Declared once in package-discovery.sh because fix.sh and dk need the same
+    # answer. tests/test_toolchain_consistency.py compares it against every
+    # tracked *.py, so a new directory of first-party Python fails there rather
+    # than quietly joining the set nothing checks; what stays out is declared in
+    # that file, with its size.
+    for workspace_target in $(workspace_targets); do
+        VALIDATE_TARGETS+=("$workspace_target")
+    done
 else
     # Process specified targets
     for target in "${TARGETS[@]}"; do
@@ -369,6 +388,16 @@ PRINT_EXCEPTIONS=(
     "*/api/advanced.py"            # Debugger class needs user output
     "*/prompts/syntax.py"          # CLI tool for prompt syntax conversion/detection
     "*/tooling/model_limits.py"    # CLI maintainer tool: stdout is its product (drift report / status)
+    # Every script in bin/ is a developer tool whose stdout is its product, and
+    # for several it is the *return value*: run-quality-checks.sh captures
+    # changed-packages.py and package-hashes.py into shell variables, and
+    # validate.sh reads find_print_statements.py line by line a few dozen lines
+    # below this comment. Routing those through logging would not improve the
+    # output, it would empty it and break the caller.
+    "bin/*.py"
+    # Imported by pytest before any logging is configured, so a logger call here
+    # goes nowhere. print is the mechanism conftest has.
+    "conftest.py"
 )
 
 # Function to check if a file should be excluded

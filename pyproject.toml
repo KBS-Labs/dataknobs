@@ -321,8 +321,11 @@ ignore = [
                  # per-function rewrite would fragment the shared name.
 ]
 
-# Allow these names that would normally be flagged by N
-allowed-confusables = ["α", "β", "γ", "δ", "ε", "θ", "λ", "μ", "σ", "φ", "ω"]
+# Characters RUF001-003 would otherwise report as homoglyphs. The Greek letters
+# are mathematical notation; "ℹ" is the information emoji used as a status
+# prefix by the CLI tools in bin/, alongside "✅" and "⚠️" — deliberate output,
+# and the reason this setting exists rather than a per-file suppression.
+allowed-confusables = ["α", "β", "γ", "δ", "ε", "θ", "λ", "μ", "σ", "φ", "ω", "ℹ"]
 
 # Allow unused variables when underscore-prefixed
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
