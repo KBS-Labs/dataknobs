@@ -14,6 +14,12 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PACKAGES=""
 SKIP_STYLE="no"
 SKIP_TESTS="no"
+# Skips the per-package suites while leaving the workspace guards running.
+# Distinct from SKIP_TESTS because "no package changed" and "nothing that
+# affects a quality result changed" are different answers: the guards under
+# tests/ belong to no package, so a change to them produces the first and used
+# to be read as the second — skipping the suite the change edited.
+SKIP_PACKAGE_TESTS="no"
 PYTEST_ARGS=""
 KEEP_SERVICES="false"
 PR_MODE="auto"  # auto, yes, no
@@ -223,6 +229,9 @@ print(" ".join(data["packages"]))
 print(str(data["docs_changed"]).lower())
 print(data.get("mode", "all"))
 print(json.dumps(data["packages"]))
+# Default "packages", not "none": an older detector that does not emit this
+# field must fall back to running something, never to running nothing.
+print(data.get("test_scope", "packages"))
 '); then
             print_error "Failed to parse change-detection output; aborting so"
             print_error "the test suite is not silently skipped. Raw output:"
@@ -237,17 +246,29 @@ print(json.dumps(data["packages"]))
         DOCS_CHANGED="${_changed_fields[1]}"
         CHANGE_MODE="${_changed_fields[2]}"
         TESTED_PACKAGES_JSON="${_changed_fields[3]}"
+        TEST_SCOPE="${_changed_fields[4]}"
 
-        if [ -n "$CHANGED_PACKAGES" ]; then
-            PACKAGES="$CHANGED_PACKAGES"
-            print_success "Changed packages: $PACKAGES"
-            if [ "$CHANGE_MODE" = "all" ]; then
-                print_status "Global files changed — testing all packages"
-            fi
-        else
-            print_success "No package changes detected — skipping tests"
-            SKIP_TESTS="yes"
-        fi
+        # Three answers, not two. An empty package list is correct for a change
+        # to the workspace guards — they belong to no package — but reading it
+        # as "nothing to test" skipped the suite that change edited, and the
+        # run reported success. changed-packages.py names the cases apart.
+        case "$TEST_SCOPE" in
+            packages)
+                PACKAGES="$CHANGED_PACKAGES"
+                print_success "Changed packages: $PACKAGES"
+                if [ "$CHANGE_MODE" = "all" ]; then
+                    print_status "Global files changed — testing all packages"
+                fi
+                ;;
+            workspace)
+                print_success "No package changes detected — running workspace guards only"
+                SKIP_PACKAGE_TESTS="yes"
+                ;;
+            *)
+                print_success "No package or workspace changes detected — skipping tests"
+                SKIP_TESTS="yes"
+                ;;
+        esac
     fi
 
     if [ "$DOCS_CHANGED" = "true" ]; then
@@ -410,8 +431,13 @@ else
 fi
 print_success "Packages synced"
 
-# Start services if needed (only on host)
-if [ "$IN_DOCKER" = false ] && [ "$SKIP_TESTS" != "yes" ]; then
+# Start services if needed (only on host).
+# Not needed for a workspace-only run: the guards under tests/ read files, and
+# the one directory there that would need a service is excluded from the run
+# and asserted empty (tests/test_toolchain_consistency.py).
+if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+    print_status "Skipping service startup (workspace guards need no services)"
+elif [ "$IN_DOCKER" = false ] && [ "$SKIP_TESTS" != "yes" ]; then
     print_status "Ensuring test services are running..."
     if ! "$SCRIPT_DIR/manage-services.sh" ensure; then
         print_error "Failed to start services"
@@ -548,6 +574,12 @@ if [ "$SKIP_STYLE" != "yes" ]; then
     VALIDATE_ARGS=""
     if [ -n "$PACKAGES" ]; then
         VALIDATE_ARGS="$PACKAGES"
+    elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+        # Same hole as the test block, one step earlier: this branch is keyed
+        # by package too, so a change to the workspace guards produced no
+        # arguments and was read as "nothing to validate" — leaving the edited
+        # files unlinted and un-type-checked. validate.sh takes a directory.
+        VALIDATE_ARGS="tests"
     fi
 
     # Skip if no packages to validate in PR mode (e.g., only docs changed)
@@ -699,9 +731,14 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             fi
         }
 
-        # Determine packages to test
+        # Determine packages to test. The empty case is load-bearing: it is
+        # what makes the loops below iterate zero times while the workspace
+        # block that follows them still runs. Gated here rather than around
+        # each loop so a new per-package step cannot miss the distinction.
         PACKAGES_TO_TEST=""
-        if [ -n "$PACKAGES" ]; then
+        if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+            print_status "No package changed — running workspace guards only"
+        elif [ -n "$PACKAGES" ]; then
             PACKAGES_TO_TEST="$PACKAGES"
         else
             for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
@@ -1091,7 +1128,7 @@ if [ "$PR_MODE" = "yes" ]; then
     "integration_tests": {
       "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $INTEGRATION_TEST_STATUS,
-      "skipped": $([ "$SKIP_TESTS" = "yes" ] && echo "true" || echo "false")
+      "skipped": $(if [ "$SKIP_TESTS" = "yes" ] || [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then echo "true"; else echo "false"; fi)
     }
   }
 }
@@ -1234,6 +1271,17 @@ if [ "$PR_MODE" = "yes" ]; then
     if [ "$SKIP_TESTS" = "yes" ]; then
         echo -e "  Unit Tests:        ${CYAN}⊘ SKIPPED${NC}"
         echo -e "  Integration Tests: ${CYAN}⊘ SKIPPED${NC}"
+    elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+        # Named apart rather than reported as two passing suites: no package
+        # suite ran, and "Unit Tests: PASSED" for a run that collected none is
+        # the same green-for-work-not-done this branch exists to end. The
+        # workspace guards did run, and their status is folded into the unit one.
+        if [ $UNIT_TEST_STATUS -eq 0 ]; then
+            echo -e "  Workspace Guards:  ${GREEN}✓ PASSED${NC}"
+        else
+            echo -e "  Workspace Guards:  ${RED}✗ FAILED${NC}"
+        fi
+        echo -e "  Package Tests:     ${CYAN}⊘ SKIPPED (no package changed)${NC}"
     else
         if [ $UNIT_TEST_STATUS -eq 0 ]; then
             echo -e "  Unit Tests:        ${GREEN}✓ PASSED${NC}"

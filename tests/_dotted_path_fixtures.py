@@ -31,21 +31,43 @@ from dataknobs_llm.tools import Tool
 # instantiated, checked, threw the instance away and returned the class would
 # pass every behavioral assertion. The counter is what makes it observable.
 
-instantiations = 0
+
+class _InstantiationCounter:
+    """A count that lives in an attribute rather than a module global.
+
+    Rebinding a module-level ``int`` would work, but the name is exported,
+    and a rebound global is invisible to anyone who imported the *name*
+    instead of the module: ``from tests._dotted_path_fixtures import
+    instantiations`` would freeze at whatever the value was on import and
+    never move again, so a reader asserting on it would assert on a
+    constant. An object with a field cannot be read that way by accident.
+    """
+
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def bump(self) -> None:
+        self.count += 1
+
+    def reset(self) -> None:
+        self.count = 0
+
+
+instantiations = _InstantiationCounter()
 
 
 def reset_instantiations() -> None:
     """Zero the counter. Call in a fixture, not inline — see the guard."""
-    global instantiations
-    instantiations = 0
+    instantiations.reset()
 
 
 class _Counted:
     """Base that records every construction."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        global instantiations
-        instantiations += 1
+        instantiations.bump()
 
 
 # ── Resolvable targets ────────────────────────────────────────────────
