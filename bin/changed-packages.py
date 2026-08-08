@@ -125,6 +125,7 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "bin/run-quality-checks.sh",  # writes the artifact CI validates
     "bin/validate-quality-artifacts.sh",  # the checks CI actually runs
     "bin/docs-update-versions.sh",  # the documentation_versions check it records
+    "bin/lint-workflows.sh",  # the workflow_lint check it records
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only
