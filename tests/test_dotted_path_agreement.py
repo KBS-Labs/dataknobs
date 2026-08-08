@@ -7,14 +7,21 @@ constructing it, and whether a typo is fatal at all. They are one
 implementation now (``dataknobs_common.imports``), and this is what keeps them
 that way.
 
-The guard drives each surviving entry point through its **public** API rather
-than through the shared helper. That distinction is the whole point: a site
-that stops delegating and re-inlines a copy would still pass any test written
-against ``dataknobs_common.imports``, and would be caught here only because its
-observable behavior changed.
+The table has since grown past ``bots``: ``config``'s ``class:``/``factory:``
+key, ``fsm``'s custom-resource ``class:``, and ``xization``'s ``chunker:`` key
+were the same operation written three more times, and are rows here now.
+
+The guard drives each entry point through its **public** API wherever there is
+one, rather than through the shared helper. That distinction is the whole
+point: a site that stops delegating and re-inlines a copy would still pass any
+test written against ``dataknobs_common.imports``, and would be caught here
+only because its observable behavior changed. ``FSMBuilder._create_resource``
+is the one row driven through a private method — its public route is a full
+``FSMConfig`` with networks and a main network, which is a great deal of
+unrelated construction between the caller and the one line under test.
 
 Filed at the workspace root rather than in ``common`` or ``bots`` because the
-subject is agreement *between* packages — a copy of it inside either one is a
+subject is agreement *between* packages — a copy of it inside any one is a
 copy that can be deleted by a refactor of that package alone.
 
 **Two of these assertions are deliberately written against a computed value
@@ -164,6 +171,43 @@ def _via_resolve_tool(ref: str) -> Any:
     return DynaBot._resolve_tool({"class": ref}, {})
 
 
+def _via_config_build_object(ref: str) -> Any:
+    """``Config.build_object`` — the ``class:`` key of an object-graph config.
+
+    Resolves unchecked (``resolve_dotted``), because the same method serves
+    ``factory:``, which deliberately accepts a module-level function. So this
+    row is a callable-target row and never joins the wrong-shape check below.
+    """
+    from dataknobs_config import Config
+
+    config = Config({"widget": [{"name": "w", "class": ref}]})
+    return config.build_object("xref:widget[w]")
+
+
+def _via_fsm_custom_resource(ref: str) -> Any:
+    """``FSMBuilder._create_resource`` — a ``custom`` resource's ``class:``."""
+    from dataknobs_fsm.config.builder import FSMBuilder
+    from dataknobs_fsm.config.schema import ResourceConfig
+
+    return FSMBuilder()._create_resource(
+        ResourceConfig(name="fixture", type="custom", config={"class": ref})
+    )
+
+
+def _via_create_chunker(ref: str) -> Any:
+    """``create_chunker`` — the ``chunker:`` key of a chunking config."""
+    from dataknobs_xization.chunking.registry import chunker_registry, create_chunker
+
+    try:
+        return create_chunker({"chunker": ref})
+    finally:
+        # The factory registers a resolved dotted path under its own key, so
+        # a successful call leaves state behind that the next parametrization
+        # would hit instead of re-resolving.
+        if chunker_registry.is_registered(ref):
+            chunker_registry.unregister(ref)
+
+
 #: ``(name, adapter, fixture attribute a valid path must name)``.
 #: The third element is what makes one table cover both the callable-resolving
 #: and class-resolving halves of the family.
@@ -185,6 +229,13 @@ ENTRY_POINTS: list[tuple[str, Callable[[str], Any], str]] = [
     ("parse_derivation_rules", _via_derivation_rules, "ConformingFieldTransform"),
     ("resolve_middleware_from_spec", _via_middleware_factory, "ConformingMiddleware"),
     ("DynaBot._resolve_tool", _via_resolve_tool, "ConformingTool"),
+    ("Config.build_object", _via_config_build_object, "resolvable_function"),
+    (
+        "FSMBuilder._create_resource",
+        _via_fsm_custom_resource,
+        "ConformingResourceProvider",
+    ),
+    ("create_chunker", _via_create_chunker, "ConformingChunker"),
 ]
 
 IDS = [name for name, _, _ in ENTRY_POINTS]

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `llm` and `vector_store` resource types now report as unsupported
+  instead of failing on an internal import.** `ResourceType` offers both, but
+  neither has a module behind it: the `llm` resource moved to `dataknobs-llm`
+  (see `dataknobs_llm.fsm_integration`), and `vector_store` was never written —
+  the builder's table named a module no commit ever added. Configuring either
+  raised `ModuleNotFoundError` naming a `dataknobs_fsm.resources.*` path that
+  does not exist, which reads as a broken installation rather than a config
+  mistake. Both now raise the `ValueError: Unsupported resource type` the
+  method documents. For the former, use a `custom` resource with
+  `class: dataknobs_llm.fsm_integration:LLMResource`, which satisfies
+  `IResourceProvider` and so passes the shape check described below.
+
 - **The `dataknobs_fsm.functions.base` exceptions now join the shared
   hierarchy.** That module predates the migration of this package's exceptions
   onto `dataknobs_common` and was left behind by it, so it formed a second
@@ -101,6 +113,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used.
 
 ### Fixed
+
+- **A `custom` resource's `class:` was imported and instantiated with no check
+  that it is a resource provider at all.** `FSMBuilder._create_resource`
+  resolved the path, called it, and registered whatever came back. A path
+  pointing at the wrong class therefore ran that class's `__init__` — arbitrary
+  code, with whatever side effects it has — and the build *succeeded*; the
+  mistake surfaced later and opaquely, at acquisition, far from the config line
+  that caused it.
+
+  The class is now checked before it is constructed, so a wrong-shape path is
+  rejected without running anything. The failure is a `DottedPathError` (path
+  unresolvable) or `DottedPathTypeError` (resolved, wrong shape) — both
+  `ConfigurationError` subclasses, where before this site raised a bare
+  `ModuleNotFoundError` or `AttributeError` that `except ConfigurationError`
+  did not catch. `module.path:Name` is now accepted alongside
+  `module.path.Name`.
+
+- **A `custom` resource provider was constructed with the `class` path that
+  named it.** `_create_resource` read `class` out of the resource config and
+  then passed that same config through as keyword arguments, so every custom
+  provider received a stray `class="my_pkg:MyProvider"`. It can never be a
+  declared parameter — `class` is a reserved word — so the only providers that
+  worked were those absorbing `**kwargs`; one declaring its parameters, as
+  both built-in `filesystem` and `http` do, failed with `TypeError: __init__()
+  got an unexpected keyword argument 'class'`. The key selects the provider
+  and is no longer forwarded to it.
+
+- **A resource provider that declares no `__init__` of its own crashed the
+  build.** `IResourceProvider` is a method-only Protocol, so a conforming
+  provider need not define a constructor; such a class inherits
+  `object.__init__`, a slot wrapper. Deciding whether to pass `name=` read
+  `resource_class.__init__.__code__.co_varnames`, and a slot wrapper has no
+  `__code__` — an `AttributeError` before construction was attempted.
+  `inspect.signature` answers the same question for every callable, and falls
+  back to not passing `name=` when a signature cannot be read at all. (A
+  provider *inheriting* a Python `__init__`, from `BaseResourceProvider` or
+  anywhere else, was never affected: that supplies a `__code__` to read.)
 
 - **`ConfigLoader.merge_configs` accumulated list-valued fields instead of
   replacing them, so merging two configurations produced a config neither one

@@ -53,6 +53,65 @@ class TestClassLoadingDisclosure:
         assert "ValueError" in message
 
 
+class TestClassPathResolution:
+    """``class:`` is a dotted path, resolved the way every other one is.
+
+    ``_load_class`` used to import and ``getattr`` for itself, which cost it
+    the ``:`` separator the rest of the workspace accepts and cost its callers
+    two messages it took care to write — see the double-wrap test below.
+    """
+
+    @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
+    def test_a_class_path_resolves_by_either_separator(self, separator):
+        """``module:Name`` and ``module.Name`` name the same class.
+
+        This site accepted only ``.``, so a ``class:`` value valid under one
+        spelling was invalid under the other for no reason a config author
+        could see.
+        """
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": f"dataknobs_config.examples{separator}PlainWidget",
+                    }
+                ]
+            }
+        )
+
+        assert isinstance(config.build_object("xref:widget[w]"), PlainWidget)
+
+    @pytest.mark.parametrize(
+        ("class_path", "expected"),
+        [
+            ("NoSeparatorAtAll", "NoSeparatorAtAll"),
+            ("dataknobs_config.examples.NoSuchWidget", "NoSuchWidget"),
+        ],
+        ids=["malformed", "missing attribute"],
+    )
+    def test_a_resolution_failure_says_what_was_wrong(self, class_path, expected):
+        """The specific diagnosis reaches the caller, not a generic wrapper.
+
+        Both failures were raised *inside* the method's own ``try``, so its
+        trailing ``except Exception`` caught them and replaced each with
+        ``"Failed to load class <path> (<type>)"``. The messages existed and
+        were never seen: a caller asking why got told the class failed to
+        load, which they knew, and the exception type of the report they were
+        already reading.
+        """
+        config = Config({"widget": [{"name": "w", "class": class_path}]})
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.build_object("xref:widget[w]")
+
+        message = str(excinfo.value)
+        assert expected in message
+        assert "Failed to load class" not in message, (
+            f"the generic wrapper replaced the diagnosis: {message}"
+        )
+
+
 class TestConfigFileDisclosure:
     """A config file's path and contents are the server's, not the caller's.
 

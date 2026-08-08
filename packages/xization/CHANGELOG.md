@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **A `chunker:` or transform key written `module.path:Name` now resolves
+  instead of failing as an unregistered plugin.** The gate deciding whether a
+  key names a class to import or a registry entry tested only for `.`, so a
+  path using the other separator this workspace accepts was never handed to the
+  resolver at all — it fell through to a registry lookup and reported that no
+  such plugin was registered, which is not what went wrong. Both separators are
+  recognised now. Registry keys are plain identifiers (`markdown_tree`,
+  `merge_small`) and contain neither, and a registered key wins in any case:
+  a path is resolved only for a key the registry does not already hold, so
+  widening the gate cannot shadow an existing entry.
+
+- **Resolving one of those keys fails as a `ConfigurationError`.** This site
+  raised `ImportError`, `AttributeError` or `TypeError` depending on how the
+  path was wrong, so a caller wrapping chunker construction in
+  `except ConfigurationError` — which catches every other dotted-path fault in
+  the workspace — caught none of them. They are now `DottedPathError` (path
+  unresolvable) and `DottedPathTypeError` (resolved, not a `Chunker` /
+  `ChunkTransform` subclass), both `ConfigurationError` subclasses, raised by
+  the shared `dataknobs_common.imports` resolver rather than a local copy of
+  it. Catch the old three and you catch nothing; catch `ConfigurationError`.
+
 ### Security
 
 - **A config file's resolved path and the parser's text no longer reach the

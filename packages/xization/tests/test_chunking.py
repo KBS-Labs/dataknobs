@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigurationError
+
 from dataknobs_xization.chunking import (
     ChunkTransform,
     Chunker,
@@ -254,13 +256,44 @@ class TestChunkerRegistry:
             if chunker_registry.is_registered(path):
                 chunker_registry.unregister(path)
 
+    @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
+    def test_dotted_import_accepts_either_separator(self, separator):
+        """``module:Name`` and ``module.Name`` name the same chunker.
+
+        This site accepted only ``.``, so the same class was nameable under
+        one spelling and not the other — a distinction a config author has no
+        way to predict from the key they are writing under.
+        """
+        path = f"{PlaintextChunker.__module__}{separator}PlaintextChunker"
+        try:
+            assert isinstance(create_chunker({"chunker": path}), PlaintextChunker)
+        finally:
+            if chunker_registry.is_registered(path):
+                chunker_registry.unregister(path)
+
     def test_dotted_import_invalid_path(self):
-        with pytest.raises(Exception):
+        """A typo in ``chunker`` is catchable as the config fault it is.
+
+        ``ConfigurationError`` rather than ``Exception``: this raised a bare
+        ``ImportError``, so a caller wrapping chunker construction in
+        ``except ConfigurationError`` — which catches every other dotted-path
+        fault in the workspace — did not catch this one. Asserting
+        ``Exception`` passes against any of those states and so distinguishes
+        none of them.
+        """
+        with pytest.raises(ConfigurationError):
             create_chunker({"chunker": "no_such_module.NoSuchClass"})
+
+    def test_dotted_import_missing_attribute(self):
+        """The other half of a typo: right module, wrong name."""
+        with pytest.raises(ConfigurationError):
+            create_chunker(
+                {"chunker": f"{PlaintextChunker.__module__}:NoSuchChunker"}
+            )
 
     def test_dotted_import_not_chunker_subclass(self):
         # int is not a Chunker subclass
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigurationError):
             create_chunker({"chunker": "builtins.int"})
 
     def test_dotted_import_race_safe(self):
@@ -816,6 +849,50 @@ class TestTransformRegistry:
             assert transform_registry.is_registered("upper_test")
         finally:
             transform_registry.unregister("upper_test")
+
+    @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
+    def test_a_transform_resolves_by_dotted_path_under_either_separator(
+        self, separator
+    ):
+        """``transforms`` takes a dotted path too, and by the same rules.
+
+        ``_ensure_registered`` serves both registries, so the gate deciding
+        "path or registry key" is shared — but every test of it went through
+        ``chunker``, and a shared implementation is not the same as shared
+        coverage. This is the key ``create_chunker``'s own docstring
+        advertises (``{"my_project.transforms.Custom": {...}}``) and nothing
+        exercised it.
+        """
+        path = f"{MergeSmallChunks.__module__}{separator}MergeSmallChunks"
+        try:
+            chunker = create_chunker({
+                "transforms": [{path: {"min_size": 100}}],
+            })
+            assert isinstance(chunker, CompositeChunker)
+            # The registration is the resolution: `_ensure_registered` puts the
+            # resolved class under its own path, so this is what distinguishes
+            # "the path was imported" from "a wrapper was built around
+            # something". `CompositeChunker` exposes no transform list, and a
+            # test has no business reading its private one.
+            assert transform_registry.is_registered(path)
+        finally:
+            if transform_registry.is_registered(path):
+                transform_registry.unregister(path)
+
+    def test_an_unresolvable_transform_path_is_a_configuration_error(self):
+        """The chunker half's contract, on the half that shares its resolver.
+
+        This raised a bare ``ImportError`` for the same reason and is fixed by
+        the same change, so it is worth an assertion of its own rather than an
+        assumption that the shared call site makes it true.
+        """
+        with pytest.raises(ConfigurationError):
+            create_chunker({"transforms": [{"no_such_module:NoSuchTransform": {}}]})
+
+    def test_a_wrong_shape_transform_path_is_a_configuration_error(self):
+        """``int`` resolves and is not a ``ChunkTransform``."""
+        with pytest.raises(ConfigurationError):
+            create_chunker({"transforms": [{"builtins:int": {}}]})
 
 
 # ---------------------------------------------------------------------------

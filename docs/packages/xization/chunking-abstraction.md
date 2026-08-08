@@ -29,9 +29,18 @@ chunks = chunker.chunk("# Title\nBody text.")
 # Explicit selection
 chunker = create_chunker({"chunker": "markdown_tree", "max_chunk_size": 800})
 
-# Custom implementation via dotted import path
+# Custom implementation via dotted import path.
+# Either separator works; `:` says which half is the module.
+chunker = create_chunker({"chunker": "my_project.chunkers:RFCChunker"})
 chunker = create_chunker({"chunker": "my_project.chunkers.RFCChunker"})
 ```
+
+A path that cannot be resolved, or that resolves to something which is not a
+`Chunker` subclass, raises a `ConfigurationError` subclass
+(`DottedPathError` / `DottedPathTypeError`) — the same type every other
+dotted-path key in the workspace raises, so one `except ConfigurationError`
+around construction covers them all. The class is checked *before* it is
+instantiated, so a mistyped path cannot run an unrelated class's `__init__`.
 
 ## Configuration
 

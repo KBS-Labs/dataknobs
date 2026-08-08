@@ -17,6 +17,8 @@ import inspect
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
 
+from dataknobs_common.imports import resolve_class
+
 from dataknobs_fsm.config.schema import (
     ArcConfig,
     FSMConfig,
@@ -36,11 +38,11 @@ from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
     IEndStateTestFunction,
-    IResource,
     IStateTestFunction,
     ITransformFunction,
     IValidationFunction,
 )
+from dataknobs_fsm.resources.base import IResourceProvider
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.functions.manager import (
     FunctionManager,
@@ -320,28 +322,43 @@ class FSMBuilder:
             resource = self._create_resource(resource_config)
             self._resource_manager.register_provider(resource_config.name, resource)
 
-    def _create_resource(self, config: ResourceConfig) -> IResource:
+    def _create_resource(self, config: ResourceConfig) -> IResourceProvider:
         """Create a resource instance from configuration.
-        
+
         Args:
             config: Resource configuration.
-            
+
         Returns:
-            Resource instance.
-            
+            Resource provider instance.
+
         Raises:
             ValueError: If resource type is not supported.
+            DottedPathError: If a ``custom`` resource's ``class`` cannot be
+                resolved.
+            DottedPathTypeError: If it resolves to something that is not an
+                :class:`IResourceProvider`.
         """
-        # Map resource types to classes
+        # `IResourceProvider`, not the similarly-named `IResource` in
+        # `functions.base`: the two are unrelated hierarchies, and the one
+        # every resource here actually satisfies — and the one
+        # `ResourceManager.register_provider` declares as its parameter — is
+        # this one. The annotation used to name the other, which typed as
+        # correct only because `getattr` returned `Any`.
+        #
+        # `llm` and `vector_store` are deliberately absent. `ResourceType`
+        # still offers both, but neither has a module to point at: `llm`
+        # moved to `dataknobs-llm` (see `dataknobs_llm.fsm_integration`), and
+        # `vector_store` was never written — the entry named a module that has
+        # no commit adding it. Both raised `ModuleNotFoundError` naming an
+        # internal path. Falling through to the `ValueError` below is the
+        # error this method documents, and the one a caller can act on.
         resource_classes = {
-            "database": "dataknobs_fsm.resources.database.DatabaseResourceAdapter",
-            "async_database": "dataknobs_fsm.resources.database.AsyncDatabaseResourceAdapter",
-            "filesystem": "dataknobs_fsm.resources.filesystem.FileSystemResource",
-            "http": "dataknobs_fsm.resources.http.HTTPServiceResource",
-            "llm": "dataknobs_fsm.resources.llm.LLMResource",
-            "vector_store": "dataknobs_fsm.resources.vector_store.VectorStoreResource",
+            "database": "dataknobs_fsm.resources.database:DatabaseResourceAdapter",
+            "async_database": "dataknobs_fsm.resources.database:AsyncDatabaseResourceAdapter",
+            "filesystem": "dataknobs_fsm.resources.filesystem:FileSystemResource",
+            "http": "dataknobs_fsm.resources.http:HTTPServiceResource",
         }
-        
+
         if config.type == "custom":
             # Custom resource must be in configuration
             if "class" not in config.config:
@@ -351,15 +368,33 @@ class FSMBuilder:
             class_path = resource_classes.get(config.type)
             if not class_path:
                 raise ValueError(f"Unsupported resource type: {config.type}")
-        
-        # Import and instantiate resource class
-        module_path, class_name = class_path.rsplit(".", 1)
-        module = importlib.import_module(module_path)
-        resource_class = getattr(module, class_name)
-        
-        # Create resource with configuration, adding name if needed
-        kwargs = config.config.copy()
-        if hasattr(resource_class, "__init__") and "name" in resource_class.__init__.__code__.co_varnames:
+
+        # Resolved through the canonical resolver, which returns the class and
+        # leaves construction here — so a mistyped `class:` is rejected before
+        # its `__init__` runs. This site used to import, `getattr`, and
+        # instantiate with no shape check at all, and returned whatever came
+        # back: a class that was not a provider was built successfully and
+        # only failed later, opaquely, at acquisition.
+        resource_class = resolve_class(class_path, IResourceProvider)
+
+        # Create resource with configuration, adding name if needed.
+        # `inspect.signature` rather than `__init__.__code__.co_varnames`,
+        # which does not exist on a slot-wrapper `__init__` — a provider that
+        # declares no constructor of its own inherits `object.__init__` — and
+        # raised `AttributeError` for such a provider.
+        #
+        # `class` names the provider; it is not one of its arguments, and it
+        # cannot be: `class` is a reserved word, so no `__init__` can declare
+        # it. Passing it through meant only providers absorbing `**kwargs`
+        # could be built at all. The sibling site in `dataknobs_config` drops
+        # it the same way.
+        kwargs = {key: value for key, value in config.config.items() if key != "class"}
+        try:
+            accepts_name = "name" in inspect.signature(resource_class).parameters
+        except (TypeError, ValueError):
+            # Signature unavailable (a builtin or C extension). Assume not.
+            accepts_name = False
+        if accepts_name:
             kwargs["name"] = config.name
         return resource_class(**kwargs)
 
@@ -855,6 +890,15 @@ class FSMBuilder:
                 # attribute as a clear ValueError (parity with the builtin
                 # "not found" message), not a bare ModuleNotFoundError /
                 # AttributeError leaking from importlib.
+                #
+                # Deliberately a different family from `_create_resource`,
+                # which raises `ConfigurationError` for the same class of
+                # typo: the raises here match the `ValueError` the "registered
+                # function not found" branches above use, and consistency
+                # within this method was judged to matter more than
+                # consistency with a method 500 lines away. Reopen the
+                # question for the whole function-resolution family, not for
+                # this branch alone.
                 try:
                     module = importlib.import_module(func_ref.module)
                 except ImportError as exc:
@@ -1011,8 +1055,11 @@ def build_fsm(
     :class:`FSMBuilder` before building so that all string references
     in state definitions and arcs resolve correctly.
 
-    All three public FSM APIs (SimpleFSM, AsyncSimpleFSM, AdvancedFSM)
-    delegate to this function for consistent build behaviour.
+    ``AsyncSimpleFSM`` calls this directly and ``SimpleFSM`` reaches it by
+    wrapping ``AsyncSimpleFSM``. ``AdvancedFSM`` does **not** — it calls
+    :meth:`FSMBuilder.build` itself, so it does not get the custom-function
+    registration this function performs and takes its functions by another
+    route.
 
     Args:
         config: Path to a YAML/JSON config file, or a config dictionary.

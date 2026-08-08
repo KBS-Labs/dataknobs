@@ -209,6 +209,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `class:` or `factory:` path may now be written `module.path:Name`, and a
+  failure to resolve one says what actually went wrong.** Both keys resolve
+  through `dataknobs_common.imports` rather than a local copy, so they accept
+  the same two separators as every other dotted path in the workspace and
+  report the same way.
+
+  `ObjectBuilder._load_class` previously wrapped every failure in
+  `Failed to load class {path} ({ExceptionType})`, which named the type of the
+  underlying error but discarded its distinctions — a module that is not
+  installed, a module that raised while importing, and a module missing the
+  named attribute were one message. They are now separate `DottedPathError`
+  reasons. The error type is unchanged in practice: `DottedPathError` is a
+  `ConfigurationError`, which is what `ConfigError` already aliases, so
+  `except ConfigError` catches exactly what it caught before.
+
 - **A `$resource` name or `type` containing `${VAR}` now resolves.**
   `resolve_for_build` substitutes the app config before splicing in resource
   references, and a reference's marker keys — `$resource`, `type`,
