@@ -197,6 +197,83 @@ def test_the_gate_reads_the_scope_change_detection_computes():
     )
 
 
+#: A ``bin/`` script named inside a workflow ``run:`` block, i.e. one CI executes.
+#: Prose mentions elsewhere in a workflow — a failure comment telling a developer
+#: what to run — are not executions and carry no staleness.
+_RUN_STEP_SCRIPT_RE = re.compile(r"(bin/[A-Za-z0-9_.-]+\.(?:sh|py))")
+
+
+def _ci_executed_bin_scripts() -> set[str]:
+    """Every ``bin/`` script a workflow actually runs, read from its run: blocks."""
+    found: set[str] = set()
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        in_run = False
+        run_indent = 0
+        for raw in workflow.read_text(encoding="utf-8").splitlines():
+            stripped = raw.strip()
+            indent = len(raw) - len(raw.lstrip())
+            if re.match(r"^-?\s*run:\s*\|?\s*$", stripped) or stripped.startswith("run: "):
+                in_run = True
+                run_indent = indent
+                found |= set(_RUN_STEP_SCRIPT_RE.findall(stripped))
+                continue
+            # A run: block ends at the first line indented no further than the
+            # key itself. Blank lines inside it are not the end.
+            if in_run and stripped and indent <= run_indent:
+                in_run = False
+            if in_run:
+                found |= set(_RUN_STEP_SCRIPT_RE.findall(raw))
+    return found
+
+
+def test_every_script_ci_executes_is_covered_by_a_hash_scope():
+    """A gate script outside every hash scope lets its own edit go unvalidated.
+
+    The artifact records a verdict, and these scripts are what computed it. Edit
+    one and the packages are untouched — every suite that passed still passes —
+    but the recorded verdict was produced under different rules, and the stored
+    hashes have no way to say so. The pull request that changes the gate is
+    exactly the one the gate cannot check, and it reports green.
+
+    That is not hypothetical: ``bin/`` covers only ``*.py`` in the hash scope, so
+    every shell script here sat outside it, including the two that write and
+    verify the artifact.
+
+    Coverage is asked through ``workspace_scope_files`` — the function the hash
+    itself uses — rather than by re-deriving which paths an entry expands to. A
+    second implementation of that rule could answer for a rule nothing follows.
+
+    Scoped to what CI *executes*, so adding a developer convenience to ``bin/``
+    costs nothing, while adding a script to a workflow forces the decision at
+    review time.
+    """
+    # Both tiers are scopes — _GLOBAL_QUALITY_INPUTS *is* WORKSPACE_QUALITY_INPUTS
+    # ["toolchain"] — so one pass over the scopes covers global and workspace-only
+    # alike, and a script promoted between tiers stays covered without an edit here.
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        _rel(path)
+        for scope in WORKSPACE_QUALITY_INPUTS
+        for path in hashes.workspace_scope_files(scope)
+    }
+
+    executed = _ci_executed_bin_scripts()
+    assert executed, (
+        "no bin/ script was found in any workflow run: block — the extraction "
+        "broke, and this guard would pass by checking nothing"
+    )
+
+    uncovered = sorted(name for name in executed if name not in covered)
+    assert not uncovered, (
+        "CI executes these scripts, but no hash scope covers them, so editing "
+        "one leaves every stored hash intact and its own change unvalidated:\n"
+        + "\n".join(f"  - {name}" for name in uncovered)
+        + "\n\nAdd each to _GLOBAL_QUALITY_INPUTS (if it moves every package's "
+        "result) or _WORKSPACE_ONLY_QUALITY_INPUTS (if it only decides what the "
+        "gate checks or records) in bin/changed-packages.py."
+    )
+
+
 def test_no_workspace_test_is_filed_where_nothing_runs_it():
     """``tests/integration/`` is reached by no entry point, in either mode.
 
