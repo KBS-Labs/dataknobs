@@ -102,6 +102,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ConfigLoader.merge_configs` accumulated list-valued fields instead of
+  replacing them, so merging two configurations produced a config neither one
+  described.** Its docstring said "Later configurations override earlier
+  ones," and for scalars it did. For lists it *extended* — and an FSM's whole
+  substance is list-shaped, so the promise was false for exactly the fields
+  carrying the state machine.
+
+  Two configurations each declaring one network named `main` merged into **two
+  networks both named `main`**, with the first configuration's states and the
+  second's sitting side by side. `validate_config` on the way out accepted the
+  result, so nothing surfaced until the FSM was built and behaved as though a
+  fragment it had been told to override were still in effect.
+
+  Lists are now replaced by the later configuration, matching
+  `dataknobs_config.deep_merge`, matching `apply_template` on the same kind of
+  data in this same package, and matching what the docstring always claimed.
+
+  The replacement happens at `networks`, so the merge never descends into a
+  network: a later `main` does not combine with an earlier `main`, it stands
+  in place of it. `states` and `arcs` are therefore not replaced *by a rule* —
+  they go wherever their network goes.
+
+  **If you relied on the accumulation** — layering fragments that each
+  contribute networks or states, expecting the union — the old behavior is not
+  recoverable through `merge_configs`, which takes `FSMConfig` instances and
+  dumps them internally, leaving no seam to splice at. Do the accumulation
+  yourself against the dicts:
+
+  ```python
+  from dataknobs_config import deep_merge
+  from dataknobs_fsm.config.schema import validate_config
+
+  first, second = base.model_dump(exclude_unset=True), overlay.model_dump(exclude_unset=True)
+  second["networks"] = first.get("networks", []) + second.get("networks", [])
+  merged = validate_config(deep_merge(first, second))
+  ```
+
+  Note that `validate_config` accepts duplicate network names, so concatenating
+  two fragments that both declare `main` reproduces the old defect on purpose —
+  key your fragments on distinct network names. The loader's own `$include`
+  composes fragments across files but has the same limitation: it fills in
+  top-level keys the including file omits and does not merge lists either.
+
+  The private merge helpers behind `merge_configs` and `apply_template` are
+  deleted; both now call the exported `dataknobs_config.deep_merge`, which is
+  why the two can no longer disagree.
+
+- **`merge_configs` overrode fields the later configuration never mentioned.**
+  Found while fixing the above, and made reachable by it. The merge dumped
+  every field of every configuration, defaults included, so a fragment silent
+  about a field still contributed that field's default — and once lists
+  replace rather than extend, a silent `resources: []` overwrote an earlier
+  configuration's resources with nothing.
+
+  `resources` is where this bites hardest: its entries are independently
+  named, so accumulating them was *sane*, and it is the one list field whose
+  loss the list-replace fix would have introduced rather than corrected.
+  Scalars were affected too, and had been all along — an overlay that never
+  set `max_transitions` still reset it to `1000`.
+
+  A later configuration now overrides the fields it **declares**; fields it
+  never mentions keep the earlier value. A configuration parsed from a file
+  has exactly that file's keys marked as set, so silence in the file is
+  silence in the merge. Explicitly restating a default still overrides — the
+  rule keys on what was declared, not on what the value is.
+
 - **Docs: a push arc that exceeds the depth limit does not throw.**
   `FSM_PROCESSING_FLOW.md` said it raises `StateTransitionError`, in both the
   prose and the flowchart. It logs an error and returns `False`, so the engine

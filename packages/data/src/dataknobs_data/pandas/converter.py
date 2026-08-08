@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from dataknobs_config import deep_merge
+
 from dataknobs_data.fields import Field
 from dataknobs_data.records import Record
 
@@ -44,22 +46,24 @@ class ConversionOptions:
 
     def merge_metadata(self, meta1: dict[str, Any], meta2: dict[str, Any]) -> dict[str, Any]:
         """Merge two metadata dictionaries.
-        
+
+        Nested dicts merge recursively; every other value, lists included, is
+        replaced by ``meta2``'s. Delegates to :func:`dataknobs_config.deep_merge`,
+        the one dict-deep-merge in the workspace -- this used to be a private
+        reimplementation of it, and a reimplementation is free to drift.
+
+        Neither argument is mutated, but the copy is shallow: see
+        :func:`~dataknobs_config.deep_merge` for what the result shares with
+        its inputs.
+
         Args:
             meta1: First metadata dict
             meta2: Second metadata dict (overwrites meta1 on conflicts)
-            
+
         Returns:
             Merged metadata dictionary
         """
-        result = meta1.copy()
-        for key, value in meta2.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                # Recursively merge nested dicts
-                result[key] = self.merge_metadata(result[key], value)
-            else:
-                result[key] = value
-        return result
+        return deep_merge(meta1, meta2)
 
 
 class DataFrameConverter:

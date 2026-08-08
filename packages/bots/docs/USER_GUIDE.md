@@ -1373,19 +1373,42 @@ order).
 ```python
 from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
 
-def deep_merge(target, source):
+def merge_in_place(target, source):
     for k, v in source.items():
         if isinstance(v, dict) and isinstance(target.get(k), dict):
-            deep_merge(target[k], v)
+            merge_in_place(target[k], v)
         else:
             target[k] = v
 
 config = WizardReasoningConfig(
     wizard_config=...,
     manager_metadata_inbox_key="_inbox",
-    inbox_merge_fn=deep_merge,
+    inbox_merge_fn=merge_in_place,
 )
 ```
+
+> **Caveat — `inbox_merge_fn` mutates; `dataknobs_config.deep_merge`
+> returns.** The signature is `Callable[[dict, dict], None]`: the merger
+> writes into `target`, and its return value is discarded.
+> `dataknobs_config.deep_merge` is the codebase's canonical dict merge, but
+> it is deliberately *non-mutating*, so passing it here leaves the inbox
+> payload silently unapplied with nothing raised. Wrap it to get its
+> semantics:
+>
+> ```python
+> from dataknobs_config import deep_merge
+>
+> def apply_deep_merge(target, source):
+>     target.update(deep_merge(target, source))
+> ```
+>
+> One difference from the hand-rolled version above, if anything holds a
+> reference to a nested section: `deep_merge` builds a *new* dict wherever
+> both sides supply one, so `update` **rebinds** `target`'s nested values
+> rather than merging into them. A caller holding `target["section"]` from
+> before the call keeps seeing the pre-merge contents. The recursive version
+> above writes into that same dict, so the holder sees the update. Neither is
+> more correct; the wizard itself holds no such reference.
 
 **Writer helper** — for consumer code (pipeline steps, custom
 logic) that publishes to the inbox for the NEXT turn:

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-07T23:46:07Z",
+  "timestamp": "2026-08-08T02:24:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.2 (Homebrew 2026-08-05 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/config-loader-name-resolution",
-  "git_commit": "04addf85b1310e7e7d10b33ee22db5e96ed60822",
+  "git_branch": "sbk/deep-merge-consolidation",
+  "git_commit": "335a3914e625254a61d1081b2c2a5452ea9568b7",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

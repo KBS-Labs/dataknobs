@@ -90,6 +90,40 @@ class TestDeepMerge:
         assert deep_merge({"a": 1}, {}) == {"a": 1}
         assert deep_merge({}, {}) == {}
 
+    def test_neither_input_is_mutated(self):
+        """The documented guarantee: a merge leaves both arguments untouched.
+
+        This is the property the three deleted reimplementations broke -- two
+        of them wrote into `base` in place -- so it is worth asserting
+        directly rather than inferring it from the returned value.
+        """
+        base = {"a": {"x": 1}, "keep": [1, 2], "scalar": "before"}
+        override = {"a": {"y": 2}, "keep": [3], "scalar": "after"}
+
+        result = deep_merge(base, override)
+
+        assert base == {"a": {"x": 1}, "keep": [1, 2], "scalar": "before"}
+        assert override == {"a": {"y": 2}, "keep": [3], "scalar": "after"}
+        assert result == {"a": {"x": 1, "y": 2}, "keep": [3], "scalar": "after"}
+
+    def test_the_result_shares_untouched_values_by_reference(self):
+        """Non-mutation is a top-level guarantee, not deep isolation.
+
+        The copy at each level is shallow, so a value present in only one
+        input is carried into the result by reference. Asserted deliberately
+        and in the *affirmative*, so that anyone deepening the copy has to
+        come here and change a test that says what the contract is -- rather
+        than finding an absence and reading it as an oversight.
+
+        A caller needing isolation copies first; `apply_template` in
+        `dataknobs_fsm` is the in-tree example of why.
+        """
+        base = {"shared": {"deep": 1}}
+
+        result = deep_merge(base, {"other": 2})
+
+        assert result["shared"] is base["shared"]
+
 
 class TestSubstituteEnvVars:
     """Test environment variable substitution."""

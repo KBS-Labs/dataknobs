@@ -64,8 +64,25 @@ class InheritanceError(Exception):
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge two dictionaries.
 
-    Recursively merges override into base, with override values taking precedence.
-    Nested dictionaries are merged recursively; all other types are replaced.
+    Recursively merges override into base, with override values taking
+    precedence. Nested dictionaries are merged recursively; **every other type,
+    lists included, is replaced** -- a list in ``override`` takes the place of
+    the list in ``base`` rather than extending it. This is the merge semantic
+    for the whole codebase; a caller wanting accumulation concatenates before
+    merging.
+
+    Neither argument is mutated. That guarantee is top-level: the copy at each
+    level is shallow. A fresh dict is built only where *both* sides supply a
+    dict; every other value, at every depth, is shared **by reference** with
+    whichever input supplied it. That includes values under a key both inputs
+    declare -- merging ``{"a": {"x": [1, 2]}}`` with ``{"a": {"y": 3}}``
+    rebuilds ``a`` but hands back the very same ``x`` list.
+
+    So the result is safe to rebind keys on and is **not** deeply isolated
+    from its inputs -- a caller that mutates a nested value reached through
+    the result mutates it in the input too. Callers needing isolation copy
+    first; ``copy.deepcopy`` on the way in is the usual shape, and is why a
+    caller merging into a module-level constant needs one.
 
     Args:
         base: Base dictionary (values used when not overridden)
@@ -75,10 +92,10 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
         New merged dictionary
 
     Example:
-        >>> base = {"a": 1, "nested": {"x": 10, "y": 20}}
-        >>> override = {"a": 2, "nested": {"y": 25, "z": 30}}
+        >>> base = {"a": 1, "nested": {"x": 10, "y": 20}, "items": [1, 2]}
+        >>> override = {"a": 2, "nested": {"y": 25, "z": 30}, "items": [3]}
         >>> deep_merge(base, override)
-        {'a': 2, 'nested': {'x': 10, 'y': 25, 'z': 30}}
+        {'a': 2, 'nested': {'x': 10, 'y': 25, 'z': 30}, 'items': [3]}
     """
     result = base.copy()
 

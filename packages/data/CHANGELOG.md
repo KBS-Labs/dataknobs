@@ -81,6 +81,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reachable from this package. The inline floor comment records the
   refreshed verification date.
 
+### Changed
+
+- **`ConversionOptions.merge_metadata` documents its list behavior, and no
+  longer carries its own merge.** The behavior is unchanged — the
+  implementation was structurally identical to `dataknobs_config.deep_merge`,
+  which it now calls — but the contract was only ever implied by the code.
+  Nested dicts merge key by key; every other value, **lists included**, is
+  replaced by the second argument's rather than extended.
+
+  It was one of five independent copies of the same function in the
+  workspace, one of which had drifted to extending lists and produced merged
+  configurations that neither input described. Consolidating the copies is
+  what keeps that from happening again; `tests/test_deep_merge_agreement.py`
+  fails if any entry point stops agreeing.
+
+  Non-mutation is unchanged and remains a *top-level* guarantee — the copy is
+  shallow, so the result shares nested values with both inputs. See
+  `dataknobs_config.deep_merge` for the exact contract.
+
 ## v0.7.0 - 2026-07-29
 
 ### Added
