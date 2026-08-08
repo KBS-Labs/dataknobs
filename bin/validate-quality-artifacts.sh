@@ -54,12 +54,14 @@ print_pass "Found .quality-artifacts/"
 
 # Check for required files
 print_check "Required artifact files"
+# Every entry here must be a committed file, or this loop fails every pull
+# request rather than the ones with a real problem. A guard in
+# tests/test_quality_artifact_contract.py asserts that against .gitignore.
 REQUIRED_FILES=(
     "quality-summary.json"
     "environment.json"
     "signature.sha256"
     "unit-test-results.xml"
-    "coverage.xml"
 )
 
 for file in "${REQUIRED_FILES[@]}"; do
@@ -177,33 +179,32 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
 fi
 
 # Validate coverage
+#
+# Read from the summary rather than from coverage.xml, which is no longer
+# committed. The number this reports has always been advisory — no branch below
+# sets VALIDATION_FAILED — so it never justified carrying a multi-megabyte
+# generated report through every merge.
 print_check "Code coverage"
-if [ -f "$ARTIFACTS_DIR/coverage.xml" ]; then
-    # Extract coverage percentage from XML
-    if command -v python3 >/dev/null 2>&1; then
-        COVERAGE=$(python3 -c "
-import xml.etree.ElementTree as ET
+COVERAGE=$(python3 -c "
+import json
 try:
-    tree = ET.parse('$ARTIFACTS_DIR/coverage.xml')
-    root = tree.getroot()
-    coverage = float(root.attrib.get('line-rate', 0)) * 100
-    print(f'{coverage:.1f}')
-except:
-    print('0')
-")
-        
-        if (( $(echo "$COVERAGE >= $REQUIRED_COVERAGE" | bc -l 2>/dev/null || echo 0) )); then
-            print_pass "Coverage: ${COVERAGE}% (minimum: ${REQUIRED_COVERAGE}%)"
-        else
-            print_fail "Coverage: ${COVERAGE}% (below minimum: ${REQUIRED_COVERAGE}%)"
-            # Don't fail validation for coverage, just warn
-            print_info "Low coverage is a warning, not a failure"
-        fi
-    else
-        print_info "Could not parse coverage (Python not available)"
-    fi
+    with open('$ARTIFACTS_DIR/quality-summary.json') as fh:
+        value = json.load(fh).get('coverage_percent')
+    print('' if value is None else f'{float(value):.1f}')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+
+if [ -z "$COVERAGE" ]; then
+    # Absent on artifacts written before the field existed, and null when the
+    # run produced no coverage data at all. Neither is a failing condition for a
+    # measure that cannot fail, so this reports what it knows and moves on.
+    print_info "Coverage: not recorded in quality-summary.json"
+elif (( $(echo "$COVERAGE >= $REQUIRED_COVERAGE" | bc -l 2>/dev/null || echo 0) )); then
+    print_pass "Coverage: ${COVERAGE}% (minimum: ${REQUIRED_COVERAGE}%)"
 else
-    print_fail "Coverage report not found"
+    print_fail "Coverage: ${COVERAGE}% (below minimum: ${REQUIRED_COVERAGE}%)"
+    print_info "Low coverage is a warning, not a failure"
 fi
 
 # Verify artifact signature
@@ -211,8 +212,11 @@ print_check "Artifact integrity"
 if [ -f "$ARTIFACTS_DIR/signature.sha256" ]; then
     cd "$ARTIFACTS_DIR"
     
-    # Generate current signature
-    CURRENT_SIG=$(find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs sha256sum 2>/dev/null | sort)
+    # Must enumerate the same way the producer does — the committed set, not
+    # everything on disk — or the two sides compare different file lists and
+    # mismatch unconditionally.
+    CURRENT_SIG=$(git ls-files --cached --others --exclude-standard -- '*.json' '*.xml' \
+        | sed 's|^|./|' | sort | xargs sha256sum 2>/dev/null | sort)
     
     # Read stored signature (excluding the signature file itself)
     STORED_SIG=$(grep -v "signature.sha256" signature.sha256 2>/dev/null | sort)

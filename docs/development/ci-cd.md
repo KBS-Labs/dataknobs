@@ -1,792 +1,245 @@
 # CI/CD Pipeline
 
-This document describes the Continuous Integration and Continuous Deployment (CI/CD) pipeline for the Dataknobs project. Our pipeline ensures code quality, runs comprehensive tests, and automates deployment processes.
+This document describes the GitHub Actions workflows that run against this
+repository. Every workflow named here exists in `.github/workflows/`; nothing
+below is aspirational.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Pipeline Architecture](#pipeline-architecture)
-- [GitHub Actions Workflows](#github-actions-workflows)
-- [Code Quality Checks](#code-quality-checks)
-- [Testing Pipeline](#testing-pipeline)
-- [Build and Package](#build-and-package)
-- [Deployment Strategy](#deployment-strategy)
-- [Security Scanning](#security-scanning)
-- [Monitoring and Alerts](#monitoring-and-alerts)
+- [The unusual part: tests run on your machine](#the-unusual-part-tests-run-on-your-machine)
+- [Workflow inventory](#workflow-inventory)
+- [Pull request checks](#pull-request-checks)
+- [Post-merge checks](#post-merge-checks)
+- [Documentation deployment](#documentation-deployment)
+- [Releases](#releases)
+- [Dependency updates and CVE auditing](#dependency-updates-and-cve-auditing)
+- [Conventions](#conventions)
 - [Troubleshooting](#troubleshooting)
 
-## Overview
+## The unusual part: tests run on your machine
 
-Our CI/CD pipeline is built on GitHub Actions and provides:
+**No workflow in this repository runs the test suite.** The integration suites
+need PostgreSQL, Elasticsearch, and LocalStack, and standing those up for every
+push is slow and expensive. So the heavy work happens locally and CI verifies
+that it happened.
 
-- **Continuous Integration**: Automated testing and quality checks on every commit
-- **Continuous Deployment**: Automated releases and package publishing
-- **Multi-environment Support**: Development, staging, and production deployments
-- **Security Integration**: Automated security scanning and vulnerability detection
-- **Performance Monitoring**: Performance regression detection
-
-## Pipeline Architecture
-
-```mermaid
-flowchart TD
-    A[Code Commit] --> B[Trigger CI Pipeline]
-    B --> C[Code Quality Checks]
-    B --> D[Security Scanning]
-    B --> E[Unit Tests]
-    B --> F[Integration Tests]
-    
-    C --> G[Build Packages]
-    D --> G
-    E --> G
-    F --> G
-    
-    G --> H{Branch Check}
-    H -->|main| I[Deploy to Staging]
-    H -->|develop| J[Deploy to Dev]
-    H -->|release/*| K[Deploy to Production]
-    
-    I --> L[Staging Tests]
-    J --> M[Dev Tests]
-    K --> N[Production Health Check]
-    
-    L --> O[Promote to Production]
-    M --> P[Integration Testing]
-    N --> Q[Monitor & Alert]
-```
-
-## GitHub Actions Workflows
-
-> **Security note:** All GitHub Actions references in these examples are pinned to
-> full commit SHAs, not branch or tag refs. Mutable refs (`@master`, `@v1`) can be
-> redirected if a repository is compromised. Always pin to an immutable SHA and add
-> a version comment for readability.
-
-### Main CI Workflow
-
-```yaml
-# .github/workflows/ci.yml
-name: CI Pipeline
-
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
-  schedule:
-    # Run daily at 6 AM UTC
-    - cron: '0 6 * * *'
-
-env:
-  PYTHON_VERSION: '3.11'
-  POETRY_VERSION: '1.6.1'
-
-jobs:
-  code-quality:
-    name: Code Quality Checks
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-    
-    - name: Install dependencies
-      run: |
-        poetry install --with dev,test
-    
-    - name: Run Black (formatting)
-      run: |
-        poetry run black --check packages/ tests/
-    
-    - name: Run isort (import sorting)
-      run: |
-        poetry run isort --check-only packages/ tests/
-    
-    - name: Run flake8 (linting)
-      run: |
-        poetry run flake8 packages/ tests/
-    
-    - name: Run mypy (type checking)
-      run: |
-        poetry run mypy packages/
-    
-    - name: Run pylint (code analysis)
-      run: |
-        poetry run pylint packages/ --output-format=github
-
-  security-scan:
-    name: Security Scanning
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-    
-    - name: Run Bandit (security linting)
-      run: |
-        pip install bandit[toml]
-        bandit -r packages/ -f json -o bandit-report.json
-    
-    - name: Upload Bandit results
-      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
-      if: always()
-      with:
-        name: bandit-results
-        path: bandit-report.json
-    
-    - name: Run Safety (dependency vulnerabilities)
-      run: |
-        pip install safety
-        safety check --json --output safety-report.json
-    
-    - name: Upload Safety results
-      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
-      if: always()
-      with:
-        name: safety-results
-        path: safety-report.json
-
-  test:
-    name: Test Suite
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.12', '3.13']
-        exclude:
-          # Reduce matrix size for faster builds
-          - os: macos-latest
-            python-version: '3.8'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
-      with:
-        python-version: ${{ matrix.python-version }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-    
-    - name: Install dependencies
-      run: |
-        poetry install --with dev,test
-    
-    - name: Run unit tests
-      run: |
-        poetry run pytest tests/unit/ \
-          --cov=packages/ \
-          --cov-report=xml \
-          --cov-report=term-missing \
-          --junit-xml=junit-unit.xml
-    
-    - name: Run integration tests
-      run: |
-        poetry run pytest tests/integration/ \
-          --junit-xml=junit-integration.xml
-    
-    - name: Upload test results
-      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
-      if: always()
-      with:
-        name: test-results-${{ matrix.os }}-${{ matrix.python-version }}
-        path: |
-          junit-*.xml
-          coverage.xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457  # v3
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: true
-
-  build:
-    name: Build Packages
-    runs-on: ubuntu-latest
-    needs: [code-quality, security-scan, test]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      with:
-        fetch-depth: 0  # Full history for versioning
-    
-    - name: Set up Python
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
-      with:
-        version: ${{ env.POETRY_VERSION }}
-    
-    - name: Build packages
-      run: |
-        cd packages/common && poetry build
-        cd ../structures && poetry build
-        cd ../utils && poetry build
-        cd ../xization && poetry build
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
-      with:
-        name: packages
-        path: packages/*/dist/
-    
-    - name: Test package installation
-      run: |
-        pip install packages/common/dist/*.whl
-        pip install packages/structures/dist/*.whl
-        pip install packages/utils/dist/*.whl
-        pip install packages/xization/dist/*.whl
-        python -c "import dataknobs_common, dataknobs_structures, dataknobs_utils, dataknobs_xization"
-```
-
-### Release Workflow
-
-```yaml
-# .github/workflows/release.yml
-name: Release Pipeline
-
-on:
-  push:
-    tags:
-      - 'v*.*.*'
-  release:
-    types: [published]
-
-jobs:
-  release:
-    name: Build and Publish Release
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      with:
-        fetch-depth: 0
-    
-    - name: Set up Python
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
-      with:
-        version: '1.6.1'
-    
-    - name: Build packages
-      run: |
-        cd packages/common && poetry build
-        cd ../structures && poetry build
-        cd ../utils && poetry build
-        cd ../xization && poetry build
-    
-    - name: Publish to PyPI
-      env:
-        POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
-      run: |
-        cd packages/common && poetry publish
-        cd ../structures && poetry publish
-        cd ../utils && poetry publish
-        cd ../xization && poetry publish
-    
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844  # v1
-      with:
-        files: packages/*/dist/*
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
-
-### Documentation Workflow
-
-```yaml
-# .github/workflows/docs.yml
-name: Documentation
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-    paths: [ 'docs/**', 'packages/**/*.py', 'mkdocs.yml' ]
-
-jobs:
-  docs:
-    name: Build and Deploy Documentation
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        pip install -r docs/requirements.txt
-    
-    - name: Build documentation
-      run: |
-        mkdocs build --strict
-    
-    - name: Deploy to GitHub Pages
-      if: github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847  # v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./site
-```
-
-## Code Quality Checks
-
-### Code Formatting
+You run `bin/dk pr`, which executes the suites and writes an attestation into
+`.quality-artifacts/`. You commit that alongside your code. On the pull request,
+`quality-validation.yml` re-derives a content hash for every package and
+workspace scope from the checkout and compares them against the hashes your
+artifacts recorded. If they disagree, your artifacts describe different code
+than the branch being merged, and the check fails naming the packages that need
+re-validation.
 
 ```bash
-# Black - Code formatting
-black --line-length 88 packages/ tests/
-
-# isort - Import sorting
-isort packages/ tests/
-
-# Configuration in pyproject.toml
-[tool.black]
-line-length = 88
-target-version = ['py38']
-include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
+bin/dk pr                 # changed packages only (the usual case)
+bin/dk pr --all           # every package, in parallel
+git add .quality-artifacts/
 ```
 
-### Linting
+Two consequences worth internalizing:
+
+- **A green pull request means your local run was green** and covered the code
+  being merged. It does not mean a GitHub runner executed anything.
+- **Merging main into a branch requires re-running `bin/dk pr`**, because your
+  attestation no longer describes the merged tree.
+
+[Quality Checks](quality-checks.md) covers the mechanism in full, including
+what is committed, what is not, and why merging main no longer produces an
+artifact conflict.
+
+## Workflow inventory
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `quality-validation.yml` | pull request → `main`, `develop` | Validates the committed quality artifacts; builds docs |
+| `docs-mirror-check.yml` | pull request (doc paths) | Package and site doc trees stay in sync |
+| `docs-version-check.yml` | pull request (version paths) | Doc version tables match the package registry |
+| `ci.yml` | push to `main` | Post-merge packaging sanity check |
+| `docs.yml` | push to `main` (doc paths), manual | Builds and deploys the docs site to GitHub Pages |
+| `release.yml` | release published, manual | Builds and publishes packages to PyPI |
+| `dependency-update.yml` | weekly Monday schedule, manual | Upgrades Python dependencies and audits for CVEs |
+
+Dependabot (`.github/dependabot.yml`) handles GitHub Actions version updates
+separately, grouped into a single weekly pull request.
+
+## Pull request checks
+
+### Quality Validation
+
+`quality-validation.yml` is the gate. It has four jobs:
+
+**`check-changes`** uses a paths filter to decide whether the pull request
+touches code or documentation. The `code` filter deliberately includes
+`.github/workflows/quality-validation.yml` itself — without that, a pull
+request whose only change deletes the filter patterns would match nothing, skip
+the sole quality job, and report green.
+
+**`validate-quality-artifacts`** runs when code changed. It executes
+`bin/validate-package-references.py`, then `bin/validate-quality-artifacts.sh`,
+which:
+
+1. Confirms the required artifact files are present
+2. Runs `bin/package-hashes.py validate` — the check that actually gates
+3. Reads the recorded check statuses out of `quality-summary.json`
+4. Reports the recorded coverage percentage (advisory; never fails the build)
+5. Verifies the artifact signature
+
+On failure it comments on the pull request with the command to run locally.
+
+**`build-docs`** runs when documentation changed, and skips its own expensive
+steps when `bin/package-hashes.py validate` reports no quality-relevant source
+change.
+
+**`all-checks-complete`** always runs and produces the single consistent status
+check, failing if either substantive job failed.
+
+### Documentation Mirror Check
+
+Every package doc has a counterpart under `docs/packages/`, and the two must
+stay in agreement — silent drift is what once let the rendered site teach an API
+that did not exist. `bin/docs-mirror-check.py` verifies each pair against its
+classification in `.dataknobs/docs-mirror-manifest.json`. See the
+[Documentation Guide](documentation-guide.md) and the manifest itself for the
+available classifications.
+
+### Documentation Version Check
+
+Package versions live in `pyproject.toml` files and in `.dataknobs/packages.json`.
+`bin/docs-update-versions.sh --check` confirms the version tables in
+`docs/index.md` and `docs/installation.md` still match. Run it without `--check`
+to fix them.
+
+## Post-merge checks
+
+`ci.yml` runs on pushes to `main` and does one thing: `uv build` for every
+package. Pull-request validation already proves the packages import and the
+tests pass, so this exists solely to catch packaging-only regressions — a file
+missing from an sdist, broken `pyproject.toml` metadata — that only surface when
+a distribution is actually built.
+
+It deliberately does *not* cancel in-flight runs. When two pull requests merge
+back to back, each merge's sanity check completes.
+
+## Documentation deployment
+
+`docs.yml` builds the MkDocs site and deploys it to GitHub Pages. It triggers on
+pushes to `main` that touch `docs/**`, `packages/*/src/**/*.py`, `mkdocs.yml`,
+the workflow itself, `uv.lock`, or the root `pyproject.toml`. Source files are
+included because the API reference is generated from docstrings.
+
+Build it the same way locally before pushing:
 
 ```bash
-# flake8 - Style and error checking
-flake8 packages/ tests/
-
-# pylint - Advanced code analysis
-pylint packages/ --output-format=colorized
-
-# Configuration in setup.cfg
-[flake8]
-max-line-length = 88
-extend-ignore = E203, W503
-exclude = __pycache__,*.egg-info,.tox,.venv
+uv run mkdocs build --strict     # warnings become errors
+uv run mkdocs serve              # preview at http://127.0.0.1:8000
 ```
 
-### Type Checking
+## Releases
 
-```bash
-# mypy - Static type checking
-mypy packages/
+`release.yml` triggers when a GitHub release is published, or manually via
+`workflow_dispatch` with a package choice (any single package, or `all`) and a
+TestPyPI toggle that defaults to on.
 
-# Configuration in pyproject.toml
-[tool.mypy]
-python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-```
+Publishing uses PyPI trusted publishing — the job requests `id-token: write` and
+uploads with `uv publish`, so no API token is stored in the repository.
 
-## Testing Pipeline
+The local side of a release (version bumps, tags, release notes) is driven by
+`bin/release-helper.sh`. See [Release Process](release-process.md) for the full
+sequence.
 
-### Test Execution Strategy
+## Dependency updates and CVE auditing
 
-```bash
-# Unit tests - Fast, isolated
-pytest tests/unit/ -x --ff
+`dependency-update.yml` runs weekly on Monday and can be dispatched manually. It
+upgrades Python dependencies and then audits **two** resolutions with
+`osv-scanner`:
 
-# Integration tests - Slower, component interaction
-pytest tests/integration/ --maxfail=5
+- **The upgraded resolve** (`uv.lock`) — the highest versions all workspace
+  constraints permit.
+- **The floor resolve** (`uv-lowest.lock`) — every direct dependency pinned to
+  its declared lower bound, which is what a fresh consumer install can land on
+  when no inherited pin forces something higher.
 
-# End-to-end tests - Slowest, full workflows
-pytest tests/e2e/ --dist=loadscope
+Both sets of findings go into the pull request body. A finding against the floor
+resolve means a declared lower bound in some `pyproject.toml` needs raising, not
+that the lockfile needs regenerating.
 
-# Performance tests - Benchmark critical paths
-pytest tests/performance/ --benchmark-only
-```
+The workflow handles Python dependencies only. Updating workflow files would
+require `workflows: write`, which is intentionally not granted; GitHub Actions
+versions are Dependabot's job instead.
 
-### Test Configuration
+## Conventions
 
-```toml
-# pyproject.toml
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = [
-    "--strict-markers",
-    "--strict-config",
-    "--cov=packages",
-    "--cov-branch",
-    "--cov-report=term-missing:skip-covered",
-    "--cov-report=html:reports/coverage",
-    "--cov-report=xml",
-    "--junit-xml=reports/junit.xml",
-]
-markers = [
-    "slow: marks tests as slow",
-    "integration: marks tests as integration tests",
-    "e2e: marks tests as end-to-end tests",
-    "performance: marks tests as performance benchmarks",
-]
-```
+**Actions are pinned to commit SHAs, not tags.** Every `uses:` reference carries
+a full SHA with the version in a trailing comment. A mutable ref (`@v4`,
+`@master`) can be repointed if the action's repository is compromised, and the
+next run picks it up silently.
 
-## Build and Package
+**The three pull-request workflows cancel superseded runs**, via a concurrency
+group keyed on workflow and ref, so pushing again supersedes the in-flight run.
+`ci.yml` and `dependency-update.yml` set `cancel-in-progress: false` — for
+`ci.yml` that is the back-to-back-merge case described above. `docs.yml` and
+`release.yml` declare no concurrency group.
 
-### Package Building
-
-```bash
-# Build all packages
-for package in common structures utils xization; do
-    cd packages/$package
-    poetry build
-    cd ../..
-done
-
-# Verify package contents
-tar -tzf packages/structures/dist/dataknobs-structures-*.tar.gz
-
-# Test installation
-pip install packages/structures/dist/*.whl
-python -c "import dataknobs_structures; print('✓ Package imports successfully')"
-```
-
-### Version Management
-
-```bash
-# Semantic versioning with poetry
-poetry version patch    # 1.0.0 -> 1.0.1
-poetry version minor    # 1.0.0 -> 1.1.0
-poetry version major    # 1.0.0 -> 2.0.0
-
-# Automatic versioning with commitizen
-cz bump --changelog
-```
-
-## Deployment Strategy
-
-### Environment Configuration
-
-```yaml
-# environments/development.yml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dataknobs-config-dev
-data:
-  ENVIRONMENT: "development"
-  LOG_LEVEL: "DEBUG"
-  DATABASE_URL: "postgresql://dev-db:5432/dataknobs_dev"
-  ELASTICSEARCH_URL: "http://dev-elasticsearch:9200"
-```
-
-### Deployment Scripts
-
-```bash
-#!/bin/bash
-# scripts/deploy.sh
-
-set -e
-
-ENVIRONMENT=${1:-development}
-VERSION=${2:-latest}
-
-echo "Deploying to $ENVIRONMENT (version: $VERSION)"
-
-# Validate environment
-case $ENVIRONMENT in
-  development|staging|production)
-    echo "Valid environment: $ENVIRONMENT"
-    ;;
-  *)
-    echo "Invalid environment: $ENVIRONMENT"
-    exit 1
-    ;;
-esac
-
-# Deploy packages
-for package in common structures utils xization; do
-    echo "Deploying dataknobs-$package..."
-    pip install --upgrade "dataknobs-$package==$VERSION"
-done
-
-# Health check
-python -c "
-import dataknobs_common, dataknobs_structures, dataknobs_utils, dataknobs_xization
-print('✓ All packages deployed successfully')
-"
-
-echo "Deployment complete!"
-```
-
-### Container Deployment
-
-```dockerfile
-# docker/Dockerfile.prod
-FROM python:3.11-slim
-
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application
-COPY packages/ ./packages/
-
-# Install dataknobs packages
-RUN pip install -e packages/common \
-    && pip install -e packages/structures \
-    && pip install -e packages/utils \
-    && pip install -e packages/xization
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import dataknobs_common, dataknobs_structures, dataknobs_utils, dataknobs_xization" || exit 1
-
-# Run application
-CMD ["python", "-m", "your_application"]
-```
-
-## Security Scanning
-
-### Dependency Scanning
-
-```bash
-# Safety - Check for known vulnerabilities
-safety check
-safety check --json --output safety-report.json
-
-# pip-audit - Alternative vulnerability scanner
-pip-audit --format=json --output=audit-report.json
-```
-
-### Code Security Scanning
-
-```bash
-# Bandit - Security linting
-bandit -r packages/ -f json -o bandit-report.json
-
-# Semgrep - Static analysis security scanner
-semgrep --config=python packages/
-```
-
-### Container Security
-
-```yaml
-# .github/workflows/security.yml
-- name: Run Trivy vulnerability scanner
-  uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284  # v0.34.0
-  with:
-    image-ref: 'dataknobs:latest'
-    format: 'sarif'
-    output: 'trivy-results.sarif'
-
-- name: Upload Trivy scan results
-  uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0  # v3.28.9
-  with:
-    sarif_file: 'trivy-results.sarif'
-```
-
-## Monitoring and Alerts
-
-### Pipeline Monitoring
-
-```yaml
-# Slack notifications for failures
-- name: Notify Slack on failure
-  if: failure()
-  uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
-  with:
-    status: failure
-    channel: '#ci-cd'
-    text: 'CI Pipeline failed for ${{ github.repository }}'
-  env:
-    SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-```
-
-### Performance Monitoring
-
-```python
-# tests/performance/test_benchmarks.py
-import pytest
-
-@pytest.mark.benchmark
-def test_tree_creation_performance(benchmark):
-    """Benchmark tree creation performance."""
-    from dataknobs_structures import Tree
-    
-    def create_large_tree():
-        root = Tree("root")
-        for i in range(1000):
-            child = root.add_child(f"child_{i}")
-            for j in range(10):
-                child.add_child(f"grandchild_{i}_{j}")
-        return root
-    
-    result = benchmark(create_large_tree)
-    assert result.num_children == 1000
-```
-
-### Health Checks
-
-```bash
-#!/bin/bash
-# scripts/health-check.sh
-
-set -e
-
-echo "Running health checks..."
-
-# Check package imports
-python -c "
-import dataknobs_common, dataknobs_structures, dataknobs_utils, dataknobs_xization
-print('✓ All packages import successfully')
-"
-
-# Check basic functionality
-python -c "
-from dataknobs_structures import Tree
-tree = Tree('test')
-child = tree.add_child('child')
-assert tree.num_children == 1
-print('✓ Basic functionality works')
-"
-
-echo "Health checks passed!"
-```
+**Permissions are declared at the narrowest useful scope.** `ci.yml` takes
+`contents: read`; `quality-validation.yml` adds `pull-requests: write` for its
+failure comment; `docs.yml` adds `pages: write` and `id-token: write` for the
+Pages deployment. `release.yml` declares none at the workflow level and requests
+`id-token: write` on its publishing job instead. The remaining workflows declare
+none and inherit the repository default.
 
 ## Troubleshooting
 
-### Common Pipeline Issues
+### "Quality Check Validation Failed"
 
-1. **Test Failures**:
-   ```bash
-   # Debug test failures locally
-   pytest tests/unit/test_failing.py -vv --tb=long
-   
-   # Run tests with same environment as CI
-   docker run --rm -v $(pwd):/app python:3.11-slim bash -c "
-   cd /app && 
-   pip install poetry && 
-   poetry install --with dev,test && 
-   poetry run pytest
-   "
-   ```
-
-2. **Build Failures**:
-   ```bash
-   # Check build locally
-   cd packages/structures
-   poetry build
-   pip install dist/*.whl
-   python -c "import dataknobs_structures"
-   ```
-
-3. **Dependency Conflicts**:
-   ```bash
-   # Check dependency resolution
-   poetry lock --check
-   poetry show --tree
-   
-   # Update dependencies
-   poetry update
-   ```
-
-### Pipeline Debugging
-
-```yaml
-# Add debug step to workflow
-- name: Debug Environment
-  run: |
-    echo "Python version: $(python --version)"
-    echo "Pip version: $(pip --version)"
-    echo "Poetry version: $(poetry --version)"
-    echo "Installed packages:"
-    pip list
-    echo "Environment variables:"
-    env | sort
-```
-
-### Performance Issues
+Your committed artifacts do not match the code in the pull request. The job
+output names either the packages needing re-validation, or the workspace scope
+(`toolchain`, `workspace_tests`) that changed. A workspace scope dirties no
+individual package, so that case reports a changed scope and an empty package
+list.
 
 ```bash
-# Profile test execution
-pytest --profile
-
-# Run tests in parallel
-pytest -n auto
-
-# Use test result caching
-pytest --cache-clear  # Clear cache
-pytest --lf           # Run last failed
-pytest --ff           # Run failures first
+bin/dk pr
+git add .quality-artifacts/ && git commit --amend --no-edit
 ```
 
-## Best Practices
+The usual causes are merging main without re-running, and editing a file after
+the run that produced the artifacts.
 
-### Pipeline Optimization
+### The quality job did not run at all
 
-1. **Parallel Execution**: Run independent jobs in parallel
-2. **Caching**: Cache dependencies and build artifacts
-3. **Fail Fast**: Stop on first critical failure
-4. **Incremental Testing**: Only test changed code when possible
+`check-changes` decided nothing quality-relevant changed. Confirm your paths
+match the `code` filter in `quality-validation.yml`. The filter is mirrored by
+`WORKSPACE_QUALITY_INPUTS` in `bin/changed-packages.py`, and
+`tests/test_toolchain_consistency.py` asserts the two agree — a disagreement
+there is a bug, not something to work around.
 
-### Security Best Practices
+### A documentation check fails on a doc you did not touch
 
-1. **Secret Management**: Use GitHub secrets for sensitive data
-2. **Least Privilege**: Grant minimal required permissions
-3. **Dependency Scanning**: Regularly scan for vulnerabilities
-4. **Code Signing**: Sign releases for authenticity
+The mirror guard reports every unclassified or drifted pair in the package it is
+checking, not only the ones in your diff. Run it locally for the full list:
 
-### Monitoring and Alerting
+```bash
+python3 bin/docs-mirror-check.py
+bin/docs-update-versions.sh --check
+```
 
-1. **Pipeline Metrics**: Track build times and failure rates
-2. **Quality Gates**: Enforce code quality thresholds
-3. **Early Warning**: Alert on degrading metrics
-4. **Post-deployment Monitoring**: Monitor application health
+### Reproducing a workflow locally
+
+Each job is a thin wrapper over a script in `bin/`, so run the script directly:
+
+```bash
+./bin/validate-quality-artifacts.sh      # the pull-request gate
+uv run python bin/validate-package-references.py
+uv run mkdocs build --strict
+python3 bin/docs-mirror-check.py
+```
 
 ## Resources
 
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Poetry Documentation](https://python-poetry.org/docs/)
-- [pytest Documentation](https://docs.pytest.org/)
-- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
-- [Security Scanning Tools](https://github.com/analysis-tools-dev/static-analysis)
-
----
-
-This CI/CD pipeline ensures high code quality, comprehensive testing, and reliable deployments for the Dataknobs project. For questions or improvements, please create an issue or start a discussion on GitHub.
+- [Quality Checks](quality-checks.md) — the artifact mechanism in full
+- [Testing Guide](testing.md) — running suites and services locally
+- [Dependency Updates](dependency-updates.md) — the weekly upgrade and audit
+- [Release Process](release-process.md) — version bumps through publication
+- [dk Command](dk-command.md) — the developer entry point
+- [GitHub Actions documentation](https://docs.github.com/en/actions)

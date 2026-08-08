@@ -269,7 +269,7 @@ def _failure_types(ref: str, names: frozenset[str] | None = None) -> dict[str, s
             continue
         try:
             resolve(ref)
-        except Exception as exc:  # noqa: BLE001 - the type IS the measurement
+        except Exception as exc:
             observed[name] = type(exc).__name__
         else:
             observed[name] = "<did not raise>"
@@ -321,9 +321,26 @@ def test_every_entry_point_raises_a_configuration_error(case: str, ref: str) -> 
     """
     from dataknobs_common.exceptions import ConfigurationError
 
+    # Collected rather than asserted per iteration, so a regression names
+    # every entry point that broke instead of aborting on the first — the
+    # same reason `_failure_types` above reports a table. `_failure_types`
+    # itself cannot serve here: it records the exception's type *name*, and
+    # this claim is about a subclass relationship.
+    escaped: dict[str, str] = {}
     for name, resolve, _ in ENTRY_POINTS:
-        with pytest.raises(ConfigurationError):
+        try:
             resolve(ref)
+        except ConfigurationError:
+            continue
+        except Exception as exc:
+            escaped[name] = type(exc).__name__
+        else:
+            escaped[name] = "<did not raise>"
+
+    assert not escaped, (
+        f"{case}: entry points that did not raise a ConfigurationError:\n"
+        + "\n".join(f"  {n:34} {t}" for n, t in sorted(escaped.items()))
+    )
 
 
 @pytest.mark.parametrize("name", sorted(BLOCK_LOADERS))
@@ -362,14 +379,20 @@ def test_a_wrong_shape_target_is_rejected_before_it_is_constructed(
     would pass against an implementation that constructed the object, checked
     it, threw it away and raised.
     """
+    from dataknobs_common.exceptions import ConfigurationError
     from tests import _dotted_path_fixtures as fixtures
 
-    with pytest.raises(Exception):
+    # `ConfigurationError` rather than bare `Exception`: a wrong-shape target
+    # is a config fault like any other, and the floor asserted by
+    # `test_every_entry_point_raises_a_configuration_error` is the floor here
+    # too. Catching anything would also pass on an `AttributeError` raised by
+    # a typo in the adapter above, which is not what this is testing.
+    with pytest.raises(ConfigurationError):
         resolve(f"{FIXTURES}:BareClass")
 
-    assert fixtures.instantiations == 0, (
+    assert fixtures.instantiations.count == 0, (
         f"{name} constructed the wrong-shape class before rejecting it "
-        f"({fixtures.instantiations} construction(s))"
+        f"({fixtures.instantiations.count} construction(s))"
     )
 
 

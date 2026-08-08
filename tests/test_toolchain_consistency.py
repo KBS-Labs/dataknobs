@@ -130,6 +130,150 @@ def test_workspace_tests_are_reachable():
     )
 
 
+def test_a_change_to_these_guards_still_schedules_them():
+    """A pull request that edits only this directory must still run it.
+
+    Reachability is not only "does an entry point name the path" — the gate
+    runs it inside a block change detection can switch off. These files
+    belong to no package by construction, so a diff touching only ``tests/``
+    maps to an empty package set, and an empty package set used to mean "run
+    no tests at all". The suite that went unrun was the one the PR edited,
+    and the PR reported green.
+
+    Asserted against the decision rather than the file list, because the
+    empty package set is *correct* here — there is genuinely no package to
+    test. What was wrong was reading it as "nothing to test". ``test_scope``
+    is the distinction: no-package-changed and nothing-changed are separate
+    answers, and only the second one skips.
+    """
+    scope = _scopes.plan_for_files(["tests/test_toolchain_consistency.py"])
+
+    assert scope["packages"] == [], (
+        "a workspace guard belongs to no package — mapping one to a package "
+        f"would re-run that package's suite for an unrelated edit, got {scope['packages']}"
+    )
+    assert scope["workspace_changed"] is True
+    assert scope["test_scope"] == "workspace", (
+        "a tests/-only diff must schedule the workspace guards; "
+        f"got test_scope={scope['test_scope']!r}, which the gate reads as 'skip'"
+    )
+
+    # bin/ is the same case from the other direction — the guards read those
+    # scripts, so a change to the gate moves their result and nothing else's.
+    # Left out, the pull request that fixes the gate skips the gate.
+    assert _scopes.plan_for_files(["bin/run-quality-checks.sh"])["test_scope"] == "workspace"
+
+    # The other two answers, so the fix cannot be "always run everything".
+    assert _scopes.plan_for_files(["README.md"])["test_scope"] == "none"
+    assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
+
+
+def test_the_gate_reads_the_scope_change_detection_computes():
+    """The decision above only helps if the gate acts on it.
+
+    Text-matched, and deliberately narrow about what that proves: it pins
+    that the gate reads ``test_scope`` and that its no-package branch turns
+    off the *package* suites rather than the whole test block. It cannot
+    prove the workspace run is reachable at runtime — the guard above owns
+    the decision and ``test_workspace_tests_are_reachable`` owns the run;
+    this is the wire between them, which is the part that was missing.
+    """
+    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
+    violations = []
+
+    if "test_scope" not in gate_text:
+        violations.append(
+            "does not read test_scope from change detection, so it cannot tell "
+            "'no package changed' from 'nothing changed'"
+        )
+    if "SKIP_PACKAGE_TESTS" not in gate_text:
+        violations.append(
+            "has no package-only skip, so the only way to skip the package "
+            "suites is SKIP_TESTS, which also skips the workspace guards"
+        )
+
+    assert not violations, "bin/run-quality-checks.sh:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
+
+
+#: A ``bin/`` script named inside a workflow ``run:`` block, i.e. one CI executes.
+#: Prose mentions elsewhere in a workflow — a failure comment telling a developer
+#: what to run — are not executions and carry no staleness.
+_RUN_STEP_SCRIPT_RE = re.compile(r"(bin/[A-Za-z0-9_.-]+\.(?:sh|py))")
+
+
+def _ci_executed_bin_scripts() -> set[str]:
+    """Every ``bin/`` script a workflow actually runs, read from its run: blocks."""
+    found: set[str] = set()
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        in_run = False
+        run_indent = 0
+        for raw in workflow.read_text(encoding="utf-8").splitlines():
+            stripped = raw.strip()
+            indent = len(raw) - len(raw.lstrip())
+            if re.match(r"^-?\s*run:\s*\|?\s*$", stripped) or stripped.startswith("run: "):
+                in_run = True
+                run_indent = indent
+                found |= set(_RUN_STEP_SCRIPT_RE.findall(stripped))
+                continue
+            # A run: block ends at the first line indented no further than the
+            # key itself. Blank lines inside it are not the end.
+            if in_run and stripped and indent <= run_indent:
+                in_run = False
+            if in_run:
+                found |= set(_RUN_STEP_SCRIPT_RE.findall(raw))
+    return found
+
+
+def test_every_script_ci_executes_is_covered_by_a_hash_scope():
+    """A gate script outside every hash scope lets its own edit go unvalidated.
+
+    The artifact records a verdict, and these scripts are what computed it. Edit
+    one and the packages are untouched — every suite that passed still passes —
+    but the recorded verdict was produced under different rules, and the stored
+    hashes have no way to say so. The pull request that changes the gate is
+    exactly the one the gate cannot check, and it reports green.
+
+    That is not hypothetical: ``bin/`` covers only ``*.py`` in the hash scope, so
+    every shell script here sat outside it, including the two that write and
+    verify the artifact.
+
+    Coverage is asked through ``workspace_scope_files`` — the function the hash
+    itself uses — rather than by re-deriving which paths an entry expands to. A
+    second implementation of that rule could answer for a rule nothing follows.
+
+    Scoped to what CI *executes*, so adding a developer convenience to ``bin/``
+    costs nothing, while adding a script to a workflow forces the decision at
+    review time.
+    """
+    # Both tiers are scopes — _GLOBAL_QUALITY_INPUTS *is* WORKSPACE_QUALITY_INPUTS
+    # ["toolchain"] — so one pass over the scopes covers global and workspace-only
+    # alike, and a script promoted between tiers stays covered without an edit here.
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        _rel(path)
+        for scope in WORKSPACE_QUALITY_INPUTS
+        for path in hashes.workspace_scope_files(scope)
+    }
+
+    executed = _ci_executed_bin_scripts()
+    assert executed, (
+        "no bin/ script was found in any workflow run: block — the extraction "
+        "broke, and this guard would pass by checking nothing"
+    )
+
+    uncovered = sorted(name for name in executed if name not in covered)
+    assert not uncovered, (
+        "CI executes these scripts, but no hash scope covers them, so editing "
+        "one leaves every stored hash intact and its own change unvalidated:\n"
+        + "\n".join(f"  - {name}" for name in uncovered)
+        + "\n\nAdd each to _GLOBAL_QUALITY_INPUTS (if it moves every package's "
+        "result) or _WORKSPACE_ONLY_QUALITY_INPUTS (if it only decides what the "
+        "gate checks or records) in bin/changed-packages.py."
+    )
+
+
 def test_no_workspace_test_is_filed_where_nothing_runs_it():
     """``tests/integration/`` is reached by no entry point, in either mode.
 

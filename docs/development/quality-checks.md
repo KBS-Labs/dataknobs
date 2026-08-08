@@ -133,18 +133,64 @@ docker-compose down
 
 ## Artifact Structure
 
-Quality checks generate these artifacts in `.quality-artifacts/`:
+Quality checks generate these artifacts in `.quality-artifacts/`. Only some are
+committed — the rest are local output for your own inspection:
 
 ```
 .quality-artifacts/
-├── quality-summary.json       # Overall pass/fail status
-├── environment.json           # Python version, OS, git info
-├── unit-test-results.xml      # JUnit format test results
-├── integration-test-results.xml
-├── coverage.xml              # Coverage report
-├── lint-report.json          # Pylint results
-├── style-check.json          # Ruff style check results
-└── signature.sha256          # Integrity checksum
+├── quality-summary.json       # committed — the attestation CI validates
+├── environment.json           # committed — Python version, OS, git info
+├── unit-test-results.xml      # committed — JUnit format test results
+├── integration-test-results.xml   # committed
+├── style-check.json           # committed — Ruff findings
+├── signature.sha256           # committed — checksum of the files above
+├── coverage.xml               # local only — see below
+├── coverage-*.xml             # local only — per-suite reports
+├── htmlcov/                   # local only — browsable coverage
+└── test-coverage-summary.txt  # local only
+```
+
+`quality-summary.json` is the one that gates a pull request. It carries a
+per-package and per-workspace-scope content hash, and CI recomputes those from
+the checkout: if they disagree, your artifacts do not describe the code being
+merged and the check fails, naming the packages that need re-validation.
+
+**Coverage reports are not committed.** The gate's only use for `coverage.xml`
+was its line rate, which it reports as a warning and never fails on, so that
+number is recorded as `coverage_percent` in the summary instead. Committing a
+multi-megabyte generated report to carry one float cost a merge conflict on
+every pull request and a large amount of object history.
+
+## Merging main into a branch
+
+Merging or rebasing onto main requires re-running `bin/dk pr`. That is not
+avoidable ceremony: main's packages now hash differently than your artifacts
+recorded, so your attestation no longer describes the merged tree — and if main
+touched a package yours depends on, your suites genuinely have not run against
+that code.
+
+What *was* avoidable is resolving a merge conflict in the artifacts first. The
+re-run overwrites them wholesale, so nothing you decide during the resolution
+survives it. `.gitattributes` marks `.quality-artifacts/**` as `merge=ours` so
+git keeps one side intact instead of interleaving them:
+
+```bash
+git merge origin/main    # artifacts resolve automatically
+bin/dk pr                # regenerates them against the merged tree
+git add .quality-artifacts/ && git commit
+```
+
+This cannot let a stale artifact through. The hash comparison above runs against
+the working tree, so an artifact that was merged but not regenerated fails
+exactly as loudly as a conflicted one would have.
+
+A merge driver is a *name*, though — git silently falls back to a normal text
+merge when `merge.ours.driver` is unset, and gives no warning that the attribute
+did nothing. `bin/dk` configures it on every invocation. If you drive git
+without `dk`, run it once yourself:
+
+```bash
+bin/setup-git-config.sh
 ```
 
 ## Test Organization
@@ -183,8 +229,13 @@ docker-compose up -d
 
 Common causes:
 - **Artifacts too old** - Re-run `./bin/run-quality-checks.sh`
+- **Merged main without re-running** - Expected; re-run and re-commit
 - **Forgot to commit artifacts** - Run `git add .quality-artifacts/`
 - **Modified artifacts** - Don't edit files in `.quality-artifacts/`
+
+The failure names the packages needing re-validation, or the workspace scope
+(`toolchain`, `workspace_tests`) that changed. A workspace scope dirties no
+package, so that case reports a changed scope and no package list.
 
 ### Integration Tests Fail
 
@@ -308,7 +359,10 @@ A: For PRs to feature branches, you might skip integration tests. For PRs to `ma
 A: Add it to `docker-compose.override.yml`, update `bin/run-quality-checks.sh` to wait for it, and document it here.
 
 **Q: What if artifacts are accidentally modified?**
-A: The signature check will detect this. Re-run `./bin/run-quality-checks.sh` to regenerate valid artifacts.
+A: The signature check reports it, and the content hashes in `quality-summary.json` are what actually fail the build. Re-run `./bin/run-quality-checks.sh` to regenerate valid artifacts.
+
+**Q: Do I have to re-run checks after merging main?**
+A: Yes. Your artifacts attest to a tree that no longer exists, and CI compares their hashes against the merged checkout. You do *not* have to resolve an artifact merge conflict first — see [Merging main into a branch](#merging-main-into-a-branch).
 
 ## Summary
 
