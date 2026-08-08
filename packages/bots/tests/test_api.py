@@ -2,6 +2,7 @@
 
 import json
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,11 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     # Message only: the type's documented example puts a SQL query in context.
     "TimeoutError": (504, True, False),
     "ConfigurationError": (500, False, False),
+    # Bounded messages, unlike their parent — but the missing-attribute text
+    # enumerates the target module's public callables, which is a deployment
+    # inventory to an HTTP caller.
+    "DottedPathError": (500, False, False),
+    "DottedPathTypeError": (500, False, False),
     "ResourceError": (503, False, False),
     "SerializationError": (500, False, False),
     "OperationError": (500, False, False),
@@ -901,6 +907,45 @@ class TestApiErrorDisclosure:
         assert BotCreationError.client_safe is False
 
 
+def _common_exception_names() -> list[str]:
+    """Exception classes exported by ``dataknobs_common.exceptions``.
+
+    The filter matters: that module's ``__all__`` held nothing but exception
+    classes until ``DottedPathReason`` — the ``reason`` vocabulary that lives
+    beside the error carrying it — was added. Without the filter, the guards
+    below demand an HTTP status for an enum, which is not a question with an
+    answer. Filtering on ``BaseException`` keeps their teeth: a new *error*
+    type still has to be given a row.
+    """
+    return [
+        name
+        for name in common_exceptions.__all__
+        if isinstance(getattr(common_exceptions, name), type)
+        and issubclass(getattr(common_exceptions, name), BaseException)
+    ]
+
+
+#: Types in the common hierarchy whose constructor is not the uniform
+#: ``(message, context=...)``. Each builds an instance carrying the same
+#: ``"diagnostic detail"`` message and a ``probe`` context key, so the
+#: end-to-end disclosure assertions read identically whichever way the
+#: instance was made.
+_NON_UNIFORM_CTORS: dict[str, Callable[[type], BaseException]] = {
+    "DottedPathError": lambda cls: cls(
+        "diagnostic detail",
+        ref="a.module:name",
+        reason=common_exceptions.DottedPathReason.MALFORMED,
+        probe="value",
+    ),
+    "DottedPathTypeError": lambda cls: cls(
+        "diagnostic detail",
+        ref="a.module:name",
+        expected=ValueError,
+        probe="value",
+    ),
+}
+
+
 class TestErrorPolicyTable:
     """The policy table covers the hierarchy and resolves by MRO."""
 
@@ -926,7 +971,7 @@ class TestErrorPolicyTable:
         """
         missing = [
             name
-            for name in common_exceptions.__all__
+            for name in _common_exception_names()
             if getattr(common_exceptions, name) not in DEFAULT_ERROR_POLICY
         ]
         assert not missing, (
@@ -966,7 +1011,7 @@ class TestErrorPolicyTable:
         type outside ``dataknobs_common.exceptions``, which the test above
         holds to the same recording requirement.
         """
-        assert set(_EXPECTED_POLICY) >= set(common_exceptions.__all__)
+        assert set(_EXPECTED_POLICY) >= set(_common_exception_names())
 
     def test_the_documented_table_matches_the_declared_contract(self):
         """The published table is the third copy, and the one nobody runs.
@@ -1056,8 +1101,8 @@ class TestDataknobsErrorHandling:
 
     @pytest.mark.parametrize(
         "name",
-        sorted(common_exceptions.__all__),
-        ids=sorted(common_exceptions.__all__),
+        sorted(_common_exception_names()),
+        ids=sorted(_common_exception_names()),
     )
     async def test_each_common_type_end_to_end(self, name):
         """Raised from a route, each type returns its status and disclosure.
@@ -1070,10 +1115,22 @@ class TestDataknobsErrorHandling:
         ``(message, context=...)`` constructor. A row declared for a type
         outside it — `InvalidTransitionError`, whose constructor takes the
         transition — is covered by its own case instead.
+
+        Two types *inside* the hierarchy no longer take that constructor:
+        the dotted-path pair require ``ref=`` and their own discriminator,
+        following ``PackResolutionError``. They are built by
+        ``_NON_UNIFORM_CTORS`` rather than excluded, so every common error
+        type still gets an end-to-end case — an exclusion list is the thing
+        that quietly grows until the guard covers half the hierarchy.
         """
         status, disclose_message, disclose_context = _EXPECTED_POLICY[name]
         cls = getattr(common_exceptions, name)
-        exc = cls("diagnostic detail", context={"probe": "value"})
+        build = _NON_UNIFORM_CTORS.get(name)
+        exc = (
+            build(cls)
+            if build is not None
+            else cls("diagnostic detail", context={"probe": "value"})
+        )
 
         response = await _response_for(exc)
 

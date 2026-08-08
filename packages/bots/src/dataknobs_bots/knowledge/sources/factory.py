@@ -18,6 +18,7 @@ from dataknobs_common.exceptions import (
     NotFoundError,
     OperationError,
 )
+from dataknobs_common.imports import resolve_optional_callable
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_data.sources.base import GroundedSource
 
@@ -124,8 +125,6 @@ def _create_vector_kb_source(
     **_: Any,
 ) -> GroundedSource:
     """Wrap a KnowledgeBase as a VectorKnowledgeSource."""
-    from dataknobs_bots.tools.resolve import resolve_optional_callable
-
     from .vector import VectorKnowledgeSource
 
     if knowledge_base is None:

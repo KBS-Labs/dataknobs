@@ -47,14 +47,15 @@ Configuration example::
 
 from __future__ import annotations
 
-import importlib
 import logging
 import re
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.expressions import safe_eval
+from dataknobs_common.imports import resolve_class
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,9 @@ class DerivationRule:
             ``target_missing`` (default) — derive only when the target
             field is absent or not present.  ``target_empty`` — derive
             when the target is ``None`` or empty string.  ``always`` —
-            always derive, overwriting existing values.
+            always derive, overwriting existing values.  Any other
+            value is rejected by :func:`parse_derivation_rules`; a rule
+            built directly with one derives nothing.
         template: Jinja2 template string used by the ``template``
             transform.  Rendered with the full wizard data dict.
         custom_transform: Loaded :class:`FieldTransform` instance for
@@ -465,26 +468,54 @@ def parse_derivation_rules(
     on every turn.  Regex patterns are pre-compiled and cached on
     the rule.
 
+    An unusable rule is a **fatal** configuration error. Every fault in
+    *config_list* is collected and reported together, so an author with three
+    bad rules learns about three rather than fixing one and re-running to
+    discover the next.
+
+    Until the dotted-path resolvers were consolidated, twelve of these faults
+    logged a WARNING and dropped the rule, which meant a wizard whose config
+    declared six derivations could run five and start cleanly. The silence was
+    uniform and deliberate — twelve faults, eleven pinned by tests — which is
+    why flipping only the dotted-path one would have produced a function where
+    ``custom_class: MyTransfrm`` was fatal and ``transform: cutsom`` on the
+    next line was not.
+
+    An unknown ``when`` is **not** among them: it keeps the rule and runs it
+    under the default guard, with a WARNING. That is its own question — the
+    twelve describe rules that already do nothing, so failing loud costs a
+    deployment nothing it was relying on, whereas a rule with a bad ``when``
+    is running today. Left as it was, deliberately.
+
     Args:
         config_list: List of derivation rule dicts from wizard settings.
 
     Returns:
         Parsed rules ready for :func:`apply_field_derivations`.
+
+    Raises:
+        ConfigurationError: If any rule is unusable as authored.
+
+    Warning:
+        A ``custom_class`` reference is **imported and executed**. See
+        :mod:`dataknobs_common.imports`.
     """
     rules: list[DerivationRule] = []
-    for item in config_list:
+    faults: list[str] = []
+
+    for index, item in enumerate(config_list):
         source = item.get("source", "")
         target = item.get("target", "")
         transform_name = item.get("transform", "copy")
         when = item.get("when", "target_missing")
         template = item.get("template")
+        where = f"rule {index}"
 
         if not source or not target:
-            logger.warning(
-                "Derivation rule missing source or target: %s",
-                item,
-            )
+            faults.append(f"{where}: missing 'source' or 'target' ({item!r})")
             continue
+
+        where = f"rule {index} ({source} → {target})"
 
         if when not in _VALID_WHEN_CONDITIONS:
             logger.warning(
@@ -501,13 +532,10 @@ def parse_derivation_rules(
             and transform_name != "expression"
             and transform_name not in BUILTIN_TRANSFORMS
         ):
-            logger.warning(
-                "Unknown derivation transform %r in rule %s → %s. "
-                "Available: %s, 'template', 'custom', 'expression'.",
-                transform_name,
-                source,
-                target,
-                sorted(BUILTIN_TRANSFORMS),
+            faults.append(
+                f"{where}: unknown transform {transform_name!r} "
+                f"(available: {sorted(BUILTIN_TRANSFORMS)}, "
+                "'template', 'custom', 'expression')"
             )
             continue
 
@@ -515,17 +543,19 @@ def parse_derivation_rules(
         custom_transform: FieldTransform | None = None
         if transform_name == "custom":
             custom_class_path = item.get("custom_class")
-            if custom_class_path:
-                custom_transform = _load_custom_transform(custom_class_path)
-                if custom_transform is None:
-                    continue  # Loading failed — skip this rule
-            else:
-                logger.warning(
-                    "Derivation rule with transform='custom' missing "
-                    "'custom_class': %s → %s",
-                    source,
-                    target,
+            if not custom_class_path:
+                faults.append(
+                    f"{where}: transform='custom' with no 'custom_class'"
                 )
+                continue
+            try:
+                custom_transform = _load_custom_transform(custom_class_path)
+            except ConfigurationError as exc:
+                # Both dotted-path types land here — they are
+                # `ConfigurationError` subclasses — so an unresolvable path
+                # and a wrong-shape class are collected alike. This was the
+                # one fault of the twelve with no test at all.
+                faults.append(f"{where}: {exc}")
                 continue
 
         # Read parameterized transform fields
@@ -538,14 +568,16 @@ def parse_derivation_rules(
         compiled_regex: re.Pattern[str] | None = None
 
         # Validate parameterized fields per transform type
-        if not _validate_transform_params(
-            transform_name, source, target,
+        param_fault = _transform_param_fault(
+            transform_name,
             transform_value=transform_value,
             transform_values=transform_values,
             transform_map=transform_map,
             transform_replacement=transform_replacement,
             expression=expression,
-        ):
+        )
+        if param_fault is not None:
+            faults.append(f"{where}: {param_fault}")
             continue
 
         # Pre-compile regex patterns
@@ -553,12 +585,8 @@ def parse_derivation_rules(
             try:
                 compiled_regex = re.compile(str(transform_value))
             except re.error as exc:
-                logger.warning(
-                    "Invalid regex pattern %r in derivation %s → %s: %s",
-                    transform_value,
-                    source,
-                    target,
-                    exc,
+                faults.append(
+                    f"{where}: invalid regex {transform_value!r} ({exc})"
                 )
                 continue
 
@@ -580,95 +608,61 @@ def parse_derivation_rules(
             )
         )
 
+    if faults:
+        raise ConfigurationError(
+            "Invalid derivation configuration:\n"
+            + "\n".join(f"  - {fault}" for fault in faults),
+            context={"faults": faults},
+        )
+
     return rules
 
 
-def _validate_transform_params(
+def _transform_param_fault(
     transform_name: str,
-    source: str,
-    target: str,
     *,
     transform_value: Any,
     transform_values: Any,
     transform_map: Any,
     transform_replacement: Any,
     expression: Any,
-) -> bool:
-    """Validate required config fields for parameterized transforms.
+) -> str | None:
+    """Check required config fields for parameterized transforms.
 
-    Returns ``True`` if valid, ``False`` if the rule should be skipped.
+    Returns a fault description, or ``None`` when the rule is valid. Returns
+    rather than raises so the caller can collect every fault in the block and
+    report them together.
     """
     if transform_name in ("equals", "not_equals", "contains"):
         if transform_value is None:
-            logger.warning(
-                "Derivation transform %r requires 'transform_value' "
-                "for rule %s → %s",
-                transform_name,
-                source,
-                target,
-            )
-            return False
+            return f"transform {transform_name!r} requires 'transform_value'"
 
     elif transform_name == "map":
         if not isinstance(transform_map, dict):
-            logger.warning(
-                "Derivation transform 'map' requires 'transform_map' "
-                "(dict) for rule %s → %s",
-                source,
-                target,
-            )
-            return False
+            return "transform 'map' requires 'transform_map' (a dict)"
 
     elif transform_name == "one_of":
         if not isinstance(transform_values, list):
-            logger.warning(
-                "Derivation transform 'one_of' requires 'transform_values' "
-                "(list) for rule %s → %s",
-                source,
-                target,
-            )
-            return False
+            return "transform 'one_of' requires 'transform_values' (a list)"
 
     elif transform_name in ("regex_match", "regex_extract"):
         if transform_value is None:
-            logger.warning(
-                "Derivation transform %r requires 'transform_value' "
-                "(regex pattern) for rule %s → %s",
-                transform_name,
-                source,
-                target,
+            return (
+                f"transform {transform_name!r} requires 'transform_value' "
+                "(a regex pattern)"
             )
-            return False
 
     elif transform_name == "regex_replace":
         if transform_value is None:
-            logger.warning(
-                "Derivation transform 'regex_replace' requires "
-                "'transform_value' (pattern) for rule %s → %s",
-                source,
-                target,
-            )
-            return False
+            return "transform 'regex_replace' requires 'transform_value' (a pattern)"
         if transform_replacement is None:
-            logger.warning(
-                "Derivation transform 'regex_replace' requires "
-                "'transform_replacement' for rule %s → %s",
-                source,
-                target,
-            )
-            return False
+            return "transform 'regex_replace' requires 'transform_replacement'"
 
     elif transform_name == "expression":
         if not expression:
-            logger.warning(
-                "Derivation transform 'expression' requires "
-                "'expression' for rule %s → %s",
-                source,
-                target,
-            )
-            return False
+            return "transform 'expression' requires 'expression'"
 
-    return True
+    return None
 
 
 # ── Execution ──
@@ -726,6 +720,11 @@ def apply_field_derivations(
         elif rule.when == "always":
             pass  # No guard — always derive
         else:
+            # Config does not reach here — parse_derivation_rules normalizes
+            # an unknown 'when' to 'target_missing' before building the rule.
+            # A rule constructed directly still can, and skipping is the only
+            # safe reading: every alternative derives under a guard nobody
+            # chose.
             logger.warning(
                 "Unknown 'when' condition %r at execution time for "
                 "rule %s → %s — skipping.",
@@ -918,40 +917,27 @@ def _execute_expression(
     return result.value
 
 
-def _load_custom_transform(dotted_path: str) -> FieldTransform | None:
+def _load_custom_transform(dotted_path: str) -> FieldTransform:
     """Load a custom :class:`FieldTransform` from a dotted import path.
 
     Args:
         dotted_path: Fully qualified path, e.g.
+            ``mypackage.transforms:SubjectToId`` or
             ``mypackage.transforms.SubjectToId``.
 
     Returns:
-        Instantiated transform, or ``None`` on failure.
-    """
-    if not re.match(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)+$", dotted_path):
-        logger.warning(
-            "Invalid dotted path for custom transform: %r",
-            dotted_path,
-        )
-        return None
+        Instantiated transform.
 
-    try:
-        module_path, class_name = dotted_path.rsplit(".", 1)
-        module = importlib.import_module(module_path)
-        cls = getattr(module, class_name)
-        instance = cls()
-        if not isinstance(instance, FieldTransform):
-            logger.warning(
-                "Custom transform %s does not implement FieldTransform "
-                "protocol",
-                dotted_path,
-            )
-            return None
-        return instance
-    except (ImportError, AttributeError, TypeError, ValueError):
-        logger.warning(
-            "Failed to load custom transform %s",
-            dotted_path,
-            exc_info=True,
-        )
-        return None
+    Raises:
+        DottedPathError: The path is malformed or unresolvable.
+        DottedPathTypeError: The class does not implement
+            :class:`FieldTransform`. Checked **before** construction now —
+            the previous implementation instantiated first, so a mistyped
+            path ran an unrelated class's ``__init__`` before rejecting it.
+
+    Note:
+        The regex pre-validation this used to carry is gone: it rejected the
+        ``:`` separator every other resolution site accepted, and the
+        resolver validates the shape of a path itself.
+    """
+    return resolve_class(dotted_path, FieldTransform)()

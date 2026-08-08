@@ -19,11 +19,11 @@ Example:
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.imports import resolve_callable
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
 
 if TYPE_CHECKING:
@@ -48,8 +48,13 @@ class FunctionRegistry:
     """Registry for scoring functions, supporting both direct registration
     and dynamic import from dotted-path references.
 
-    Function references use the format ``"module.path:function_name"``.
-    Functions receive a ``dict[str, Any]`` target and return a ``str`` level_id.
+    Function references use ``"module.path:function_name"`` or
+    ``"module.path.function_name"``. Functions receive a ``dict[str, Any]``
+    target and return a ``str`` level_id.
+
+    Warning:
+        Resolving a reference **imports and executes** the target module. See
+        :mod:`dataknobs_common.imports` for the trust boundary that implies.
     """
 
     def __init__(self) -> None:
@@ -63,42 +68,18 @@ class FunctionRegistry:
         """Get a registered function, resolving via dynamic import if needed.
 
         Raises:
-            KeyError: If the function reference cannot be resolved.
+            DottedPathError: If the reference cannot be resolved to a
+                callable. This was a ``KeyError`` before the resolvers were
+                consolidated — a registry-shaped error for what is a config
+                fault, and the only one of the nine resolution sites that
+                raised it.
         """
         if ref in self._functions:
             return self._functions[ref]
 
-        func = self._resolve_import(ref)
+        func = resolve_callable(ref)
         self._functions[ref] = func
         return func
-
-    def _resolve_import(self, ref: str) -> Any:
-        """Dynamically import a function from a ``"module:function"`` reference.
-
-        Raises:
-            KeyError: If the module or function cannot be imported.
-        """
-        if ":" not in ref:
-            raise KeyError(
-                f"Invalid function reference '{ref}': "
-                "expected 'module.path:function_name' format"
-            )
-
-        module_path, func_name = ref.rsplit(":", 1)
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError as e:
-            raise KeyError(
-                f"Cannot import module '{module_path}' "
-                f"from reference '{ref}': {e}"
-            ) from e
-
-        if not hasattr(module, func_name):
-            raise KeyError(
-                f"Module '{module_path}' has no attribute '{func_name}'"
-            )
-
-        return getattr(module, func_name)
 
 
 class RubricExecutor:

@@ -33,6 +33,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.imports import resolve_callable
 from dataknobs_common.registry import Registry
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -382,11 +383,12 @@ class ToolCatalog(Registry[ToolEntry]):
 
         Raises:
             NotFoundError: If name not in catalog.
-            ImportError: If class cannot be imported.
-            ValueError: If resolved class is not callable.
+            DottedPathError: If ``class_path`` cannot be resolved, or resolves
+                to something that is not callable (reason ``not_callable``).
+                It is a ``ConfigurationError`` subclass, so a caller catching
+                that keeps working; catching ``ImportError`` or ``ValueError``
+                does **not**, which is what this entry used to promise.
         """
-        from dataknobs_bots.tools.resolve import resolve_callable
-
         entry = self.get(name)
         tool_class = resolve_callable(entry.class_path)
         params = dict(entry.default_params)

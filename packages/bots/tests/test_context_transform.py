@@ -3,6 +3,7 @@
 import re
 
 import pytest
+from dataknobs_common.exceptions import ConfigurationError, DottedPathReason
 
 from dataknobs_bots.testing import BotTestHarness
 
@@ -156,3 +157,41 @@ async def test_context_transform_receives_unwrapped_kb_body() -> None:
     assert "<knowledge_base>" not in kb_input
     assert "</knowledge_base>" not in kb_input
     assert "## Knowledge base" not in kb_input
+
+
+def test_a_wrong_type_context_transform_is_rejected() -> None:
+    """A value that is neither ``None``, callable, nor a dotted path raises.
+
+    This used to be a WARNING and a ``None`` return, which made the function
+    disagree with itself: a *typo'd path* was already fatal while a value of
+    the wrong type entirely was shrugged off, so ``context_transform: 42``
+    produced a bot that started cleanly and silently applied no transform.
+
+    Pinned because the flip shipped without a test while every sibling flip
+    got one — and an untested fail-loud path is one revert away from being
+    silent again.
+    """
+    from dataknobs_bots.bot.base import DynaBot
+
+    with pytest.raises(ConfigurationError, match="context_transform"):
+        DynaBot._resolve_context_transform(42)
+
+
+def test_a_context_transform_typo_names_the_path_and_the_reason() -> None:
+    """The already-fatal half: an unresolvable dotted path."""
+    from dataknobs_bots.bot.base import DynaBot
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        DynaBot._resolve_context_transform("no_such_module_anywhere:transform")
+
+    message = str(excinfo.value)
+    assert "no_such_module_anywhere:transform" in message
+    assert DottedPathReason.MODULE_NOT_FOUND.value in message
+
+
+def test_none_and_a_callable_still_pass_through() -> None:
+    """The two shapes that must keep working, beside the two that raise."""
+    from dataknobs_bots.bot.base import DynaBot
+
+    assert DynaBot._resolve_context_transform(None) is None
+    assert DynaBot._resolve_context_transform(fence_content) is fence_content

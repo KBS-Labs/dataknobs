@@ -734,6 +734,13 @@ exactly one resolution body and the two flavors cannot drift.
 > a config file, a deployment's policy bundle, a pack a platform team
 > authored. Never build one from end-user input, a request body, or a
 > per-tenant blob the tenant supplies.
+>
+> The same boundary applies to every config key taking a dotted path — hook
+> paths, custom transforms, merge filters, tool classes — and is stated once
+> for all of them in the
+> [dotted-path guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/),
+> along with why returning the class rather than an instance is only a
+> *partial* mitigation.
 
 ### Spec shape
 

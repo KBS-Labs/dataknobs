@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import DottedPathError
+
 from dataknobs_data.sources.base import RetrievalIntent
 
 from dataknobs_bots.knowledge.sources.factory import (
@@ -611,7 +613,7 @@ class TestFactoryResolution:
         kb = ScriptedKnowledgeBase([])
         cfg = self._config(dedup_key="nonexistent.module:missing_fn")
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(DottedPathError) as exc_info:
             _create_vector_kb_source(cfg, knowledge_base=kb)
 
         msg = str(exc_info.value)

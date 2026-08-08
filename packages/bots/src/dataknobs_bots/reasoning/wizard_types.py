@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.imports import resolve_class
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -963,50 +964,32 @@ def load_merge_filter(dotted_path: str) -> MergeFilter:
 
     Args:
         dotted_path: Fully qualified class name, e.g.
+            ``"mypackage.filters:ConfigBotMergeFilter"`` or
             ``"mypackage.filters.ConfigBotMergeFilter"``.
 
     Returns:
         Instantiated :class:`MergeFilter`.
 
     Raises:
-        ConfigurationError: If the path is invalid, the class cannot
-            be found, or the instance doesn't satisfy the protocol.
+        DottedPathError: If the path is malformed or the class cannot be
+            found.
+        DottedPathTypeError: If the class does not satisfy the protocol.
+            This is checked **before** construction now — the previous
+            implementation instantiated first and checked after, so a
+            mistyped path ran an unrelated class's ``__init__`` before
+            rejecting it.
+
+    Note:
+        A runtime-checkable protocol validates method-name presence only,
+        not the signature, so a class with a non-callable ``filter``
+        attribute still passes. That was true of the ``isinstance`` form
+        this replaced as well.
+
+    Warning:
+        Resolving the path **imports and executes** the target module. See
+        :mod:`dataknobs_common.imports`.
     """
-    from dataknobs_common.exceptions import ConfigurationError
-
-    module_path, _, class_name = dotted_path.rpartition(".")
-    if not module_path:
-        raise ConfigurationError(
-            f"Invalid merge_filter path: {dotted_path!r} "
-            "(expected 'module.ClassName')",
-            context={"merge_filter": dotted_path},
-        )
-    import importlib
-
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError as exc:
-        raise ConfigurationError(
-            f"Cannot import merge filter module {module_path!r}: {exc}",
-            context={"merge_filter": dotted_path},
-        ) from exc
-    cls = getattr(module, class_name, None)
-    if cls is None:
-        raise ConfigurationError(
-            f"Merge filter class {class_name!r} not found in {module_path!r}",
-            context={"merge_filter": dotted_path},
-        )
-    instance = cls()
-    # Runtime-checkable protocol validates method name presence
-    # only, not full signature.  A class with a non-callable
-    # ``filter`` attribute would pass this check.
-    if not isinstance(instance, MergeFilter):
-        raise ConfigurationError(
-            f"Merge filter {dotted_path!r} does not implement "
-            "the MergeFilter protocol (must have a 'filter' method)",
-            context={"merge_filter": dotted_path},
-        )
-    return instance
+    return resolve_class(dotted_path, MergeFilter)()
 
 
 def normalize_enum_value(

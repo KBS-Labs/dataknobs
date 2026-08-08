@@ -1,5 +1,7 @@
 """Unit tests for tool resolution from configuration."""
 
+import logging
+
 import pytest
 from dataknobs_common.exceptions import ConfigurationError
 
@@ -157,8 +159,27 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             DynaBot._resolve_tool(tool_config, {})
+
+    def test_a_resolution_failure_names_the_path_that_failed(self):
+        """A bot declaring ten tools has to say *which* one is wrong.
+
+        The bounded-message rule keeps the *underlying* exception's text out
+        of the message, because importing a module executes it and that text
+        is arbitrary. It does not extend to the path: that is the config the
+        deployment wrote, and without it the error identifies nothing.
+
+        Pinned separately from ``test_resolve_invalid_class_path`` because
+        that test matches only the prefix, so it stayed green while the
+        identifier went missing.
+        """
+        tool_config = {"class": "non.existent.Module", "params": {}}
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            DynaBot._resolve_tool(tool_config, {})
+
+        assert "non.existent.Module" in str(excinfo.value)
 
     def test_a_failing_ctor_does_not_leak_its_message(self):
         """The instantiation funnel catches ``Exception``; its text is unbounded.
@@ -198,6 +219,24 @@ class TestToolResolution:
         tool = DynaBot._resolve_tool(tool_config, {})
         assert tool is None
 
+    def test_a_skipped_optional_tool_is_named_in_the_log(self, caplog):
+        """The deliberately-silent path is the one that most needs the name.
+
+        Nothing is raised and nothing is returned, so the WARNING is the only
+        record that a configured tool is absent. Without the path it says a
+        tool was skipped without saying which.
+        """
+        tool_config = {
+            "class": "non.existent.Module",
+            "params": {},
+            "optional": True,
+        }
+
+        with caplog.at_level(logging.WARNING):
+            assert DynaBot._resolve_tool(tool_config, {}) is None
+
+        assert "non.existent.Module" in caplog.text
+
     def test_resolve_invalid_xref(self):
         """Non-existent xref target raises ConfigurationError."""
         config = {
@@ -232,7 +271,7 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
     def test_resolve_non_tool_class_with_optional_true_still_raises(self):
@@ -251,7 +290,7 @@ class TestToolResolution:
             "optional": True,
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
     def test_resolve_non_tool_class_does_not_run_ctor(self):
@@ -277,7 +316,7 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
         assert _SideEffectyNonTool.instances_created == 0, (
@@ -432,7 +471,7 @@ class TestToolResolution:
             ],
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             await DynaBot.from_config(config)
 
     @pytest.mark.asyncio

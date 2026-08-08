@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A config key naming something that cannot be imported is now fatal, where
+  four of them used to be ignored.** This is the consumer-visible half of
+  consolidating nine dotted-path resolvers onto
+  `dataknobs_common.imports`. Each of these was a WARNING and a bot that
+  started cleanly while quietly doing less than its configuration said:
+
+  - an unusable **derivation rule** (`derivations[].custom_class`, and the
+    eleven other authoring faults `parse_derivation_rules` rejected alongside
+    it — a missing `source`/`target`, an unknown `transform`, a malformed
+    regex, a parameterized transform missing its parameter);
+  - a **wizard hook** path (`on_enter`, `on_exit`, `on_error`);
+  - a **turn-lifecycle hook** entry (`on_turn_start`, `on_turn_end`) —
+    including an entry with the `function` key forgotten entirely, which
+    previously registered nothing and did not even log;
+  - a **task-injection hook** path, and a hook naming an unknown event;
+  - a `context_transform` of the wrong *type* (a typo'd path was already
+    fatal, so this function disagreed with itself).
+
+  **All faults in one block are reported together**, so an author with three
+  bad rules learns about three rather than fixing one and re-running to
+  discover the next. Nothing is registered from a block containing a fault:
+  partial loading is the silent degradation with an exception attached.
+
+  A deployment running on a stale path will now fail at bot construction where
+  it previously started. That is the intended change, and the reason it is
+  called out here rather than buried in the consolidation note below.
+
+  **Before upgrading**, find out whether you are affected without waiting for
+  the failure: every one of these logged a WARNING first, so the evidence is
+  already in your logs. Grep a representative run for the messages that are
+  becoming errors —
+
+  ```
+  grep -E "Failed to load hook function\
+  |Failed to resolve lifecycle hook callback\
+  |Lifecycle hook callback path must be\
+  |Ignoring unknown event\
+  |context_transform must be a callable\
+  |^.*(Unknown derivation|Derivation rule|Derivation transform)" app.log
+  ```
+
+  — and fix any path or key they name. A clean grep means no config key you
+  exercise is on a stale path. Note the last alternative is deliberately
+  broad: it also matches derivation warnings raised at *execution* time
+  (a transform that failed on a particular value), which are unchanged. Those
+  are worth reading anyway, but they are not what will start failing.
+
+- **Both `module:name` and `module.name` are accepted at every config key that
+  takes a dotted path.** Three keys previously accepted only `:`, four only
+  `.`, and two either — so the same value was valid or invalid depending on
+  which key it was written under. Only paths that were previously *rejected*
+  start resolving; no working configuration changes meaning.
+
+- **A wrong-shape `merge_filter` or `custom_class` no longer runs the target's
+  `__init__` before rejecting it.** Both used to instantiate and then check the
+  protocol, so a mistyped path executed an unrelated class's constructor —
+  arbitrary code, with whatever side effects it has. `resolve_class` returns
+  the class and leaves construction to the caller, which makes
+  validate-before-instantiate the only expressible order. Tool and middleware
+  specs already behaved this way, by a policy held in a twelve-line comment;
+  that comment is deleted because the resolver now enforces what it described.
+
+- **Error types at the resolution sites are unified.** `ValueError`,
+  `ImportError`, `AttributeError` and `KeyError` are all `DottedPathError` — a
+  `ConfigurationError` subclass carrying a machine-readable `reason`. A caller
+  catching `ConfigurationError` is unaffected; one catching a specific stdlib
+  type is not. The rubric `FunctionRegistry.get` case is the sharpest: a bad
+  `function_ref` raised `KeyError`, which read to a caller as a missing
+  dictionary key rather than a bad config value.
+
+  The `context` dict changes shape with the type. `load_merge_filter` used to
+  attach `context={"merge_filter": <path>}`; it now carries the family's
+  `ref` and `reason`, so code reading `exc.context["merge_filter"]` gets a
+  `KeyError`. Read `exc.ref` for the path — it is on the exception as an
+  attribute as well as in `context`.
+
+- **Error text at those sites is bounded** — the message names the reference
+  and the failure type, and the caught exception's text moves to `__cause__`
+  and the logs. Three sites interpolated it directly. Importing a module
+  executes it, so that text is arbitrary, and `ConfigurationError` is rendered
+  at the HTTP boundary.
+
+- **`dataknobs_bots.tools.resolve` is now a re-export** of
+  `dataknobs_common.imports`. Existing deep imports keep working;
+  `resolve_optional_callable` raises `DottedPathError` rather than
+  `ValueError`.
+
 - **`DynaBotConfigBuilder.merge_overrides` documents list-replace, and no
   longer carries its own merge.** The behavior is unchanged — the private
   `_deep_merge` it used was byte-equivalent to `dataknobs_config.deep_merge`,

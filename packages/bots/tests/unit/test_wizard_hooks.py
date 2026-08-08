@@ -3,6 +3,7 @@
 import pytest
 
 from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
+from dataknobs_common.exceptions import ConfigurationError
 
 
 class TestWizardHooksRegistration:
@@ -347,45 +348,71 @@ class TestWizardHooksFromConfig:
         }
 
     def test_from_config_invalid_function_format(self) -> None:
-        """Test that invalid function format is handled gracefully."""
-        # Missing colon separator
-        hooks = WizardHooks.from_config(
-            {"on_enter": [{"function": "invalid.format"}]}
-        )
-
-        # Should not register invalid hook
-        assert hooks.hook_count["enter"] == 0
+        """Was "handled gracefully" — the hook simply never fired."""
+        with pytest.raises(ConfigurationError, match="invalid.format"):
+            WizardHooks.from_config({"on_enter": [{"function": "invalid.format"}]})
 
     def test_from_config_missing_module(self) -> None:
-        """Test that missing module is handled gracefully."""
-        hooks = WizardHooks.from_config(
-            {"on_enter": [{"function": "nonexistent.module:func"}]}
-        )
-
-        # Should not register hook for missing module
-        assert hooks.hook_count["enter"] == 0
+        with pytest.raises(ConfigurationError, match="nonexistent.module"):
+            WizardHooks.from_config(
+                {"on_enter": [{"function": "nonexistent.module:func"}]}
+            )
 
     def test_from_config_string_format(self) -> None:
-        """Test that string format (without dict) is handled."""
-        # String without dict wrapper should still be processed
-        hooks = WizardHooks.from_config(
-            {"on_complete": ["nonexistent.module:func"]}
-        )
-
-        # Should not register hook for missing module
-        assert hooks.hook_count["complete"] == 0
+        """The bare-string entry shape fails the same way as the dict shape."""
+        with pytest.raises(ConfigurationError, match="nonexistent.module"):
+            WizardHooks.from_config({"on_complete": ["nonexistent.module:func"]})
 
     def test_load_callback_invalid_type(self) -> None:
-        """Test that invalid config type returns None."""
-        result = WizardHooks._load_callback(12345)  # type: ignore
-
-        assert result is None
+        with pytest.raises(ConfigurationError, match="must be a dotted path"):
+            WizardHooks._load_callback(12345)  # type: ignore[arg-type]
 
     def test_load_callback_empty_function(self) -> None:
-        """Test that empty function string returns None."""
-        result = WizardHooks._load_callback({"function": ""})
+        with pytest.raises(ConfigurationError, match="names no function"):
+            WizardHooks._load_callback({"function": ""})
 
-        assert result is None
+    def test_on_error_and_on_turn_start_are_treated_alike(self) -> None:
+        """The sharpest instance of the defect this item removes.
+
+        ``WizardHooks.from_config`` loads ``on_error`` through
+        ``_load_callback`` and delegates ``on_turn_start`` to
+        ``LifecycleHooks``. Flipping only the lifecycle half — which is what
+        the narrower reading of this work would have done — would have left
+        one function that **raised for one key and silently skipped for the
+        key three lines above it**, on the same class of typo. Two adjacent
+        config keys, two different answers, no principle distinguishing them.
+
+        Asserted as an agreement between the two rather than as two separate
+        raises, so the property that matters cannot be half-satisfied.
+        """
+        bad = "nonexistent.module:func"
+
+        outcomes = {}
+        for key in ("on_error", "on_turn_start"):
+            try:
+                WizardHooks.from_config({key: [bad]})
+            except ConfigurationError:
+                outcomes[key] = "raised"
+            else:
+                outcomes[key] = "skipped silently"
+
+        assert outcomes["on_error"] == outcomes["on_turn_start"], outcomes
+
+    def test_every_bad_hook_is_reported_together(self) -> None:
+        """One error covers both the wizard keys and the lifecycle keys."""
+        with pytest.raises(ConfigurationError) as excinfo:
+            WizardHooks.from_config(
+                {
+                    "on_enter": ["nonexistent.module:a"],
+                    "on_error": ["nonexistent.module:b"],
+                    "on_turn_start": ["nonexistent.module:c"],
+                }
+            )
+
+        message = str(excinfo.value)
+        assert "on_enter" in message
+        assert "on_error" in message
+        assert "on_turn_start" in message
 
     def test_from_config_preserves_lifecycle_instance_identity(self) -> None:
         """``WizardHooks.from_config`` must register turn-lifecycle

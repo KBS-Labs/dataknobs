@@ -2310,6 +2310,16 @@ hooks:
     - "myapp.hooks:handle_error"
 ```
 
+A hook path that cannot be resolved raises a `ConfigurationError` at bot
+construction, and every bad path in the block is reported together. These were
+previously logged as a WARNING and skipped, which produced a bot that started
+successfully and never fired the hook — including the case where the
+`function` key was omitted entirely, which did not even log.
+
+Resolving a hook path **imports and executes** the target module. Hook paths
+must come from the same trust domain as the application's own code; see the
+[dotted-path guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/).
+
 **Function Reference Syntax:**
 
 Hook functions and custom transition functions are specified as string references.

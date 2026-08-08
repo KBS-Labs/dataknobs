@@ -507,8 +507,14 @@ For domain-specific merge logic, provide a custom `MergeFilter` class:
 
 ```yaml
 settings:
-  merge_filter: mypackage.filters.ConfigBotMergeFilter
+  merge_filter: mypackage.filters:ConfigBotMergeFilter
 ```
+
+Both `module:Class` (preferred) and `module.Class` are accepted. A path that
+cannot be resolved, or that resolves to a class not implementing the protocol,
+raises a `ConfigurationError` at bot construction — the class is checked
+*before* it is constructed, so a mistyped path does not run an unrelated
+class's `__init__`.
 
 The class must implement the `MergeFilter` protocol
 (`from dataknobs_bots.reasoning.wizard_grounding import MergeFilter, MergeDecision`):
@@ -907,6 +913,11 @@ For typed results (boolean, integer, list, etc.), use the `expression` transform
 
 `target_missing` is the safe default — it never overwrites user-provided or extracted data. The `always` option exists for cases where derived values should take precedence (e.g., enforcing a naming convention).
 
+Any other value falls back to `target_missing` with a WARNING. Note what that
+means for a typo: `when: allways` keeps the rule and fires it only while the
+target is *absent* — the inverse of what was asked for, from a rule that looks
+live. Check the logs when a derivation fires at unexpected times.
+
 ### Return Type Behavior
 
 - **Boolean transforms** (`equals`, `not_equals`, `boolean`, `one_of`, `contains`, `regex_match`) return Python `True`/`False`, not strings.
@@ -939,8 +950,16 @@ settings:
     - source: subject
       target: domain_id
       transform: custom
-      custom_class: mypackage.transforms.SubjectToId
+      custom_class: mypackage.transforms:SubjectToId
 ```
+
+Both `module:Class` (preferred) and `module.Class` are accepted. An unusable
+derivation rule — an unresolvable `custom_class`, a class that does not
+implement `FieldTransform`, an unknown `transform`, an unknown `when`, a
+missing `source` or `target` — raises a `ConfigurationError` at bot
+construction, naming **every** unusable rule in the block. Rules were
+previously skipped with a WARNING, so a wizard declaring six derivations could
+run five and start cleanly.
 
 The class must implement:
 

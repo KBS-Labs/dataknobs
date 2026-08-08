@@ -1221,6 +1221,15 @@ reasoning:
       - "myapp.hooks:save_project"
 ```
 
+> **A hook path that cannot be resolved is fatal.** It raises a
+> `ConfigurationError` at bot construction, and every bad path in the block is
+> reported together. These were previously logged as a WARNING and skipped, so
+> a typo produced a bot that started cleanly and never fired the hook. Both
+> `module:name` and `module.name` are accepted.
+>
+> Resolving a path **imports and executes** the target module — see the
+> [dotted-path guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/).
+
 #### Turn-Lifecycle Hooks
 
 `on_enter` / `on_exit` fire on stage transitions. For pre-turn /

@@ -85,11 +85,13 @@ strategy without protocol-level coupling.
 """
 from __future__ import annotations
 
-import importlib
 import inspect
 import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Union
+
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.imports import resolve_callable
 
 from dataknobs_common.callbacks import (
     CallbackRegistry,
@@ -120,6 +122,10 @@ TurnHookCallback = Callable[
     [dict[str, Any]],
     Union[Coroutine[Any, Any, None], None],
 ]
+
+# One of the two registration methods, bound. Used by ``load_config`` to
+# resolve every entry before registering any of them.
+_Register = Callable[..., None]
 
 
 class LifecycleHooks(CapabilityMixin):
@@ -313,16 +319,49 @@ class LifecycleHooks(CapabilityMixin):
         :attr:`WizardHooks.lifecycle`) keep the same identity across
         the config load.
 
+        Every fault in *config* is collected and reported together, so an
+        author with three bad hook paths learns about three rather than
+        fixing one and re-running to discover the next.
+
         Returns ``self`` for chaining.
+
+        Raises:
+            ConfigurationError: If any entry cannot be resolved. These were
+                WARNINGs, and a hook that never fired.
+
+        Warning:
+            Resolving a hook path **imports and executes** the target module.
+            See :mod:`dataknobs_common.imports`.
         """
-        for entry in config.get("on_turn_start", []):
-            callback, stage = self._resolve_entry(entry)
-            if callback is not None:
-                self.on_turn_start(callback, stage=stage)
-        for entry in config.get("on_turn_end", []):
-            callback, stage = self._resolve_entry(entry)
-            if callback is not None:
-                self.on_turn_end(callback, stage=stage)
+        faults: list[str] = []
+        resolved: list[tuple[_Register, TurnHookCallback, str | None]] = []
+
+        for key, register in (
+            ("on_turn_start", self.on_turn_start),
+            ("on_turn_end", self.on_turn_end),
+        ):
+            for entry in config.get(key, []):
+                try:
+                    callback, stage = self._resolve_entry(entry)
+                except ConfigurationError as exc:
+                    faults.append(f"{key}: {exc}")
+                else:
+                    resolved.append((register, callback, stage))
+
+        if faults:
+            # Nothing is registered when any entry is bad. A partially
+            # loaded hook set is the failure mode this change exists to
+            # remove, with an exception attached — the bot would still be
+            # running fewer hooks than its config names.
+            raise ConfigurationError(
+                "Invalid lifecycle hook configuration:\n"
+                + "\n".join(f"  - {fault}" for fault in faults),
+                context={"faults": faults},
+            )
+
+        for register, callback, stage in resolved:
+            register(callback, stage=stage)
+
         return self
 
     @classmethod
@@ -354,7 +393,21 @@ class LifecycleHooks(CapabilityMixin):
     @staticmethod
     def _resolve_entry(
         entry: dict[str, Any] | str,
-    ) -> tuple[TurnHookCallback | None, str | None]:
+    ) -> tuple[TurnHookCallback, str | None]:
+        """Resolve one config entry to ``(callback, stage)``.
+
+        Every failure raises. All four used to log a WARNING and return
+        ``(None, None)``, which the caller read as "nothing to register" —
+        so a bot whose config named a lifecycle hook it could not resolve
+        started successfully and simply never fired it. One of the four did
+        not even log: an entry with no ``function`` key registered nothing
+        and said nothing at all.
+
+        Raises:
+            ConfigurationError: The entry is not a string or mapping, or
+                names no callback.
+            DottedPathError: The path is malformed or unresolvable.
+        """
         if isinstance(entry, str):
             path: str | None = entry
             stage: str | None = None
@@ -362,25 +415,15 @@ class LifecycleHooks(CapabilityMixin):
             path = entry.get("function") or entry.get("callback")
             stage = entry.get("stage")
         else:
-            logger.warning("Invalid lifecycle hook entry type: %s", type(entry))
-            return None, None
+            raise ConfigurationError(
+                "Lifecycle hook entry must be a dotted path or a mapping with "
+                f"a 'function' key; got {type(entry).__name__}"
+            )
 
         if not path:
-            return None, None
-
-        module_path, _, name = path.partition(":")
-        if not module_path or not name:
-            logger.warning(
-                "Lifecycle hook callback path must be 'module.path:name'; got %r",
-                path,
+            raise ConfigurationError(
+                "Lifecycle hook entry names no callback — expected a "
+                f"'function' or 'callback' key in {entry!r}"
             )
-            return None, None
 
-        try:
-            module = importlib.import_module(module_path)
-            return getattr(module, name), stage
-        except (ImportError, AttributeError) as exc:
-            logger.warning(
-                "Failed to resolve lifecycle hook callback %r: %s", path, exc,
-            )
-            return None, None
+        return resolve_callable(path), stage

@@ -50,6 +50,7 @@ Package-Specific Extensions:
     ```
 """
 
+from enum import StrEnum
 from typing import Any, Dict
 
 
@@ -367,10 +368,128 @@ class RateLimitError(OperationError):
         self.retry_after = retry_after
 
 
+class DottedPathReason(StrEnum):
+    """The complete :attr:`DottedPathError.reason` vocabulary.
+
+    Normalized in the constructor for the same reason
+    ``PackResolutionReason`` is: a plain string stays acceptable, but an
+    unrecognized one is a typo rather than a new vocabulary member.
+    """
+
+    #: The reference is not of the form ``module:name`` / ``module.name``.
+    MALFORMED = "malformed"
+    #: A module was not found — the target itself, an ancestor package of it,
+    #: or something it imports at its top level. **An environment condition:**
+    #: something is not installed. This is the reason a config key documented
+    #: as ``optional`` may reasonably swallow.
+    #:
+    #: A missing *transitive* dependency lands here rather than in
+    #: :attr:`IMPORT_FAILED` deliberately. A tool whose module imports an
+    #: uninstalled SDK is exactly the optional-dependency case, and telling it
+    #: apart from a mistyped path would need the deployment's intent, which
+    #: this layer does not have.
+    MODULE_NOT_FOUND = "module_not_found"
+    #: The module was found, and **executing it raised** something other than
+    #: a missing module. **A defect, not an environment condition:** the code
+    #: is present and broken. Split from :attr:`MODULE_NOT_FOUND` so that a
+    #: caller skipping absent optional dependencies does not also skip a
+    #: module that is installed and raising — the two want opposite responses,
+    #: and one is never safe to swallow silently.
+    IMPORT_FAILED = "import_failed"
+    #: The module imported; it has no such attribute.
+    ATTRIBUTE_NOT_FOUND = "attribute_not_found"
+    #: The attribute resolved and is not callable.
+    NOT_CALLABLE = "not_callable"
+
+
+class DottedPathError(ConfigurationError):
+    """Raised when a dotted path from configuration cannot be resolved.
+
+    Carries the offending ``ref`` and a machine-readable :attr:`reason`,
+    following ``PackResolutionError``'s shape.
+
+    Deliberately a **sibling** of :class:`DottedPathTypeError`, not its
+    parent. The two mean different things to a caller: a resolution failure
+    is transient and environmental (a module that is not installed, a typo
+    in a path), and a config key documented as ``optional`` may reasonably
+    swallow it; a shape mismatch means the path resolved to the wrong kind
+    of object, which is never optional. Were the shape error a subclass, the
+    obvious lenient handler::
+
+        except DottedPathError:
+            if optional:
+                return None
+
+    would swallow it too, and ``optional: true`` would silently grow to
+    cover misfiled specs. As siblings, that handler cannot match a shape
+    mismatch at all, so the distinction holds by construction rather than by
+    remembering to order the ``except`` clauses.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        ref: str,
+        reason: DottedPathReason | str,
+        **context: Any,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Bounded description — see the module docstring of
+                :mod:`dataknobs_common.imports` for why the underlying
+                exception's text does not belong here.
+            ref: The dotted path that failed, as written in configuration.
+            reason: A :class:`DottedPathReason` member (or its value).
+            **context: Extra context keys, merged into ``context``.
+        """
+        reason = DottedPathReason(reason)
+        super().__init__(message, context={"ref": ref, "reason": reason, **context})
+        self.ref = ref
+        self.reason = reason
+
+
+class DottedPathTypeError(ConfigurationError):
+    """Raised when a dotted path resolves to an object of the wrong shape.
+
+    The sibling of :class:`DottedPathError` — see that class for why the two
+    are not related by inheritance. This one is **never** optional: a path
+    that resolved successfully but named the wrong kind of object is a
+    programmer error in the configuration's layout, and the only safe
+    response is to surface it at config-load time.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        ref: str,
+        expected: type,
+        **context: Any,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Bounded description of the mismatch.
+            ref: The dotted path that resolved, as written in configuration.
+            expected: The base class or protocol the target had to satisfy.
+            **context: Extra context keys, merged into ``context``.
+        """
+        super().__init__(
+            message, context={"ref": ref, "expected": expected, **context}
+        )
+        self.ref = ref
+        self.expected = expected
+
+
 __all__ = [
     "DataknobsError",
     "ValidationError",
     "ConfigurationError",
+    "DottedPathError",
+    "DottedPathReason",
+    "DottedPathTypeError",
     "ResourceError",
     "NotFoundError",
     "ConsentRequiredError",

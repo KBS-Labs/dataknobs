@@ -39,6 +39,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
+from dataknobs_common.exceptions import ConfigurationError, DottedPathError
+from dataknobs_common.imports import resolve_callable
+
 if TYPE_CHECKING:
     from .observability import WizardTask
 
@@ -467,28 +470,49 @@ class TaskInjector:
               - function: "myapp.hooks:stage_entry_hook"
         ```
 
+        A hook reference that names an unknown event, or that cannot be
+        resolved, is a **fatal** configuration error. Every fault in the block
+        is collected and reported together, so an author with three bad hooks
+        learns about three.
+
         Args:
             config: Configuration dict with task_injection section
             custom_functions: Optional dict of pre-loaded functions
 
         Returns:
             Configured TaskInjector
+
+        Raises:
+            ConfigurationError: If any hook names an unknown event or cannot
+                be resolved. Both were WARNINGs before the dotted-path
+                resolvers were consolidated, leaving a bot that started fine
+                and silently ran none of the hooks its config named.
+
+        Warning:
+            Resolving a hook reference **imports and executes** the target
+            module. See :mod:`dataknobs_common.imports`.
         """
         injector = cls()
         custom_functions = custom_functions or {}
+        faults: list[str] = []
 
         hooks_config = config.get("hooks", {})
         for event, hook_list in hooks_config.items():
             if event not in cls.EVENTS:
-                logger.warning(
-                    "Ignoring unknown event '%s' in task injection config", event
+                faults.append(
+                    f"unknown event {event!r} (known: {', '.join(sorted(cls.EVENTS))})"
                 )
                 continue
 
             for hook_def in hook_list:
-                func_ref = hook_def.get("function") if isinstance(hook_def, dict) else hook_def
+                func_ref = (
+                    hook_def.get("function")
+                    if isinstance(hook_def, dict)
+                    else hook_def
+                )
 
                 if not func_ref:
+                    faults.append(f"event {event!r}: hook entry names no function")
                     continue
 
                 # Try custom functions first
@@ -496,46 +520,19 @@ class TaskInjector:
                     injector.register(event, custom_functions[func_ref])
                     continue
 
-                # Try to import the function
                 try:
-                    hook_func = _import_function(func_ref)
-                    injector.register(event, hook_func)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to load hook function '%s' for event '%s': %s",
-                        func_ref,
-                        event,
-                        e,
-                    )
+                    injector.register(event, resolve_callable(func_ref))
+                except DottedPathError as exc:
+                    faults.append(f"event {event!r}: {exc}")
+
+        if faults:
+            raise ConfigurationError(
+                "Invalid task_injection configuration:\n"
+                + "\n".join(f"  - {fault}" for fault in faults),
+                context={"faults": faults},
+            )
 
         return injector
-
-
-def _import_function(func_ref: str) -> Callable[..., Any]:
-    """Import a function from a module:function reference.
-
-    Args:
-        func_ref: Function reference in format "module.path:function_name"
-
-    Returns:
-        The imported function
-
-    Raises:
-        ValueError: If func_ref format is invalid
-        ImportError: If module cannot be imported
-        AttributeError: If function not found in module
-    """
-    if ":" not in func_ref:
-        raise ValueError(
-            f"Invalid function reference '{func_ref}'. "
-            "Expected format: 'module.path:function_name'"
-        )
-
-    module_path, func_name = func_ref.rsplit(":", 1)
-
-    import importlib
-    module = importlib.import_module(module_path)
-    return getattr(module, func_name)
 
 
 # =============================================================================

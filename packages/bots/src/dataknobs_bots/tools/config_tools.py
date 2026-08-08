@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yaml
+from dataknobs_common.imports import resolve_callable
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
@@ -387,8 +388,6 @@ class PreviewConfigTool(ContextAwareTool):
         Returns:
             Configured PreviewConfigTool instance.
         """
-        from .resolve import resolve_callable
-
         factory_ref = config["builder_factory"]
         factory = resolve_callable(factory_ref)
         return cls(builder_factory=factory)
@@ -508,8 +507,6 @@ class ValidateConfigTool(ContextAwareTool):
         validator = ConfigValidator()
         factory = None
         if "builder_factory" in config:
-            from .resolve import resolve_callable
-
             factory = resolve_callable(config["builder_factory"])
         return cls(validator=validator, builder_factory=factory)
 
@@ -647,13 +644,10 @@ class SaveConfigTool(ContextAwareTool):
 
         on_save = None
         factory = None
-        if "on_save" in config or "builder_factory" in config:
-            from .resolve import resolve_callable
-
-            if "on_save" in config:
-                on_save = resolve_callable(config["on_save"])
-            if "builder_factory" in config:
-                factory = resolve_callable(config["builder_factory"])
+        if "on_save" in config:
+            on_save = resolve_callable(config["on_save"])
+        if "builder_factory" in config:
+            factory = resolve_callable(config["builder_factory"])
 
         portable = config.get("portable", False)
         return cls(

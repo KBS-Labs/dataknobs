@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    DottedPathError,
+    DottedPathReason,
+    NotFoundError,
+    OperationError,
+)
 
 from dataknobs_bots.config.tool_catalog import (
     CatalogDescribable,
@@ -489,6 +495,26 @@ class TestToolInstantiation:
         catalog = ToolCatalog()
         with pytest.raises(NotFoundError):
             catalog.instantiate_tool("nonexistent")
+
+    def test_an_unresolvable_class_path_raises_dotted_path_error(self) -> None:
+        """Pins the type a caller has to catch, which the docstring names.
+
+        There was no test on this failure path, so when the underlying
+        resolver was swapped the ``Raises:`` block went stale unnoticed: it
+        promised ``ImportError``/``ValueError``, and a caller following it
+        would no longer catch anything.
+        """
+        catalog = ToolCatalog()
+        catalog.register_tool(
+            name="broken", class_path="no_such_module_anywhere:Tool"
+        )
+
+        with pytest.raises(DottedPathError) as excinfo:
+            catalog.instantiate_tool("broken")
+
+        assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+        # A ConfigurationError subclass — the documented catch still works.
+        assert isinstance(excinfo.value, ConfigurationError)
 
     def test_create_tool_registry(self) -> None:
         catalog = ToolCatalog()

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dataknobs_common.exceptions import DottedPathError
 import yaml
 
 from dataknobs_bots.tools.resolve import resolve_callable
@@ -31,15 +32,15 @@ class TestResolveCallable:
         assert result is ListTemplatesTool
 
     def test_import_error(self) -> None:
-        with pytest.raises(ImportError):
+        with pytest.raises(DottedPathError):
             resolve_callable("nonexistent.module:Foo")
 
     def test_attribute_error(self) -> None:
-        with pytest.raises(AttributeError):
+        with pytest.raises(DottedPathError):
             resolve_callable("dataknobs_bots.tools.config_tools:NoSuchClass")
 
     def test_not_callable_error(self) -> None:
-        with pytest.raises(ValueError, match="not callable"):
+        with pytest.raises(DottedPathError, match="not callable"):
             resolve_callable("dataknobs_bots.tools.config_tools:logger")
 
 

@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigurationError
+
 
 def _import_lifecycle():
     """Lazy import — until the module ships these tests collect-fail (RED)."""
@@ -198,14 +200,102 @@ async def test_from_config_loads_dotted_path_callbacks(monkeypatch) -> None:
     assert fired == ["x", "y"]
 
 
-def test_from_config_with_unparseable_path_skips_silently(caplog) -> None:
-    """Malformed dotted paths log a WARNING and skip — no crash."""
+def test_from_config_with_unparseable_path_raises() -> None:
+    """Was ``test_from_config_with_unparseable_path_skips_silently``.
+
+    Inverted and renamed rather than deleted and replaced. The old name
+    stated the property in its own title — "skips silently" — so it is the
+    clearest possible record that the behaviour was deliberate before it was
+    changed, and a differently-named new test beside a deleted old one loses
+    that.
+
+    A bot whose config named a lifecycle hook it could not import used to
+    start cleanly and never fire it. The only trace was a WARNING, in a
+    process that logs plenty of them.
+    """
     LifecycleHooks, _ = _import_lifecycle()
-    caplog.set_level("WARNING", logger="dataknobs_bots.reasoning.lifecycle")
-    hooks = LifecycleHooks.from_config(
-        {"on_turn_start": [{"function": "not_a_valid_path"}]},
-    )
+
+    with pytest.raises(ConfigurationError, match="not_a_valid_path"):
+        LifecycleHooks.from_config(
+            {"on_turn_start": [{"function": "not_a_valid_path"}]},
+        )
+
+
+def test_an_entry_with_no_function_key_raises() -> None:
+    """The exit that did not even log.
+
+    ``{"stage": "triage"}`` — the ``function`` key forgotten entirely —
+    registered nothing and said nothing at all. It was the only one of the
+    four lenient exits with no WARNING, and no test covered it.
+    """
+    LifecycleHooks, _ = _import_lifecycle()
+
+    with pytest.raises(ConfigurationError, match="names no callback"):
+        LifecycleHooks.from_config({"on_turn_start": [{"stage": "triage"}]})
+
+
+def test_an_entry_of_the_wrong_type_raises() -> None:
+    LifecycleHooks, _ = _import_lifecycle()
+
+    with pytest.raises(ConfigurationError, match="must be a dotted path"):
+        LifecycleHooks.from_config({"on_turn_start": [42]})
+
+
+def test_every_bad_entry_is_reported_together() -> None:
+    """One error names all three, so three typos take one round trip."""
+    LifecycleHooks, _ = _import_lifecycle()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        LifecycleHooks.from_config(
+            {
+                "on_turn_start": [{"function": "not_a_valid_path"}, {"stage": "x"}],
+                "on_turn_end": [42],
+            },
+        )
+
+    assert len(excinfo.value.context["faults"]) == 3
+
+
+def test_nothing_is_registered_when_any_entry_is_bad() -> None:
+    """Partial registration would be the silent skip with an exception on top.
+
+    A valid hook beside an invalid one must not be registered: the caller
+    catching the error and carrying on would otherwise get exactly the
+    half-loaded hook set this change exists to prevent.
+    """
+    LifecycleHooks, _ = _import_lifecycle()
+    hooks = LifecycleHooks()
+
+    with pytest.raises(ConfigurationError):
+        hooks.load_config(
+            {
+                "on_turn_start": [
+                    "tests.unit.reasoning.test_lifecycle_hooks:_a_valid_hook",
+                    "not_a_valid_path",
+                ],
+            },
+        )
+
     assert hooks.turn_start_count == 0
+
+
+def _a_valid_hook(event: dict[str, Any]) -> None:
+    """Resolvable target for the partial-registration test."""
+
+
+def test_a_dot_separated_path_is_accepted() -> None:
+    """``.`` was rejected here and accepted at four other resolution sites."""
+    LifecycleHooks, _ = _import_lifecycle()
+
+    hooks = LifecycleHooks.from_config(
+        {
+            "on_turn_start": [
+                "tests.unit.reasoning.test_lifecycle_hooks._a_valid_hook"
+            ],
+        },
+    )
+
+    assert hooks.turn_start_count == 1
 
 
 @pytest.mark.asyncio

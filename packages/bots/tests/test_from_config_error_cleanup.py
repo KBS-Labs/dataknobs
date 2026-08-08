@@ -119,7 +119,7 @@ class TestToolResolutionFailure:
         }
 
         with EchoProvider.track_instances() as instances:
-            with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+            with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
                 await DynaBot.from_config(config)
 
         # Provider must be closed on error path
@@ -201,7 +201,7 @@ class TestToolResolutionFailure:
             ],
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             await DynaBot.from_config(config)
 
 
