@@ -311,9 +311,9 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 
 ### Python Style
 - Follow PEP 8 coding style
-- Use black for code formatting
-- Use isort for import organization
-- Use pylint for code quality checks
+- Use ruff for both linting and formatting — it also organizes imports
+- Use mypy for type checking
+- Line length is 100 characters, set in the root `pyproject.toml`
 
 ### Documentation
 - Write clear, comprehensive docstrings
@@ -336,21 +336,21 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 
 ### Code Quality
 ```bash
-# Format code
-black packages/
+# Lint and type-check everything, auto-fixing what can be fixed
+bin/validate.sh -f
 
-# Sort imports
-isort packages/
+# A single package
+bin/validate.sh -f data
 
-# Check style
-flake8 packages/
-
-# Type checking
-mypy packages/
-
-# Security scanning
-bandit -r packages/
+# Or drive the tools directly (always pass the root config)
+uv run ruff check --config pyproject.toml packages/data/src
+uv run ruff format --config pyproject.toml packages/data/src
+uv run mypy packages/data/src
 ```
+
+Dependency CVEs are audited by `osv-scanner` in the weekly
+`dependency-update.yml` workflow rather than by a local scanner — see
+[Dependency Updates](dependency-updates.md).
 
 ### Testing
 ```bash

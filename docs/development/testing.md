@@ -723,94 +723,52 @@ pytest --pdb
 
 ## Continuous Integration
 
-### GitHub Actions Configuration
+Tests do **not** run on GitHub's runners. The integration suites need
+PostgreSQL, Elasticsearch, and LocalStack, and standing those up on every push
+is slow and expensive — so the work happens on your machine and CI verifies
+that it happened.
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
+`bin/dk pr` runs the suites locally and writes an attestation into
+`.quality-artifacts/`, which you commit alongside the code. On the pull
+request, `.github/workflows/quality-validation.yml` re-derives a content hash
+for every package and workspace scope from the checkout and compares them
+against the ones your artifacts recorded. Disagreement means the artifacts
+describe different code than the branch being merged, and the check fails
+naming the packages that need re-validation.
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install poetry
-        poetry install --with dev,test
-    
-    - name: Run linting
-      run: |
-        poetry run black --check packages/
-        poetry run isort --check-only packages/
-        poetry run flake8 packages/
-        poetry run mypy packages/
-    
-    - name: Run tests
-      run: |
-        poetry run pytest --cov=packages/ --cov-report=xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
+```bash
+bin/dk pr                 # changed packages only (the usual case)
+bin/dk pr --all           # every package, in parallel
+git add .quality-artifacts/
 ```
+
+See [Quality Checks](quality-checks.md) for the full mechanism, including what
+to do after merging main into a branch.
+
+None of the other workflows run tests:
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `quality-validation.yml` | pull request | validates the committed artifacts; builds docs |
+| `docs-mirror-check.yml` | pull request | package and site doc pairs stay in sync |
+| `docs-version-check.yml` | pull request | version tables match the package registry |
+| `ci.yml` | push to `main` | post-merge `uv build` of every package |
+| `docs.yml` | push, manual | builds and deploys the documentation site |
+| `release.yml` | release, manual | publishes to PyPI |
+| `dependency-update.yml` | schedule, manual | opens dependency-bump pull requests |
 
 ### Pre-commit Hooks
 
-```yaml
-# .pre-commit-config.yaml
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-  
-  - repo: https://github.com/psf/black
-    rev: 22.10.0
-    hooks:
-      - id: black
-  
-  - repo: https://github.com/pycqa/isort
-    rev: 5.10.1
-    hooks:
-      - id: isort
-  
-  - repo: https://github.com/pycqa/flake8
-    rev: 5.0.4
-    hooks:
-      - id: flake8
-  
-  - repo: local
-    hooks:
-      - id: pytest
-        name: Run tests
-        entry: pytest
-        language: system
-        pass_filenames: false
-        always_run: true
+`.pre-commit-config.yaml` is checked in. It runs ruff (lint and format), mypy
+over `packages/*/src`, a set of file-hygiene hooks, and a syntax check. It does
+**not** run the test suite — that is what `bin/dk pr` is for.
+
+`pre-commit` is not a workspace dependency, so install it as a standalone tool:
+
+```bash
+uv tool install pre-commit     # or: pipx install pre-commit
+pre-commit install             # once per clone
+pre-commit run --all-files     # run against everything on demand
 ```
 
 ## Best Practices
