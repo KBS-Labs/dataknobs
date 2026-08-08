@@ -639,12 +639,23 @@ Resources are external dependencies that states can use.
 
 ### Resource Types
 
-1. **database** - Database connections
+1. **database** / **async_database** - Database connections
 2. **filesystem** - File system access
 3. **http** - HTTP/REST API clients
-4. **llm** - Language model interfaces
-5. **vector_store** - Vector database connections
-6. **custom** - User-defined resource types
+4. **custom** - User-defined resource types, named by a dotted `class` path
+
+> **`llm` and `vector_store` are not buildable.** Both are still members of
+> the `ResourceType` enum, so a config naming one loads without complaint,
+> but neither has a class behind it: the `llm` resource moved to
+> `dataknobs-llm` (see `dataknobs_llm.fsm_integration`), and `vector_store`
+> was never implemented. The builder raises
+> `ValueError: Unsupported resource type` for both. Use a `custom` resource
+> pointing at the provider class instead.
+
+A `custom` resource's `class` accepts either separator — `my_pkg.resources:MyResource`
+or `my_pkg.resources.MyResource` — and must resolve to an `IResourceProvider`.
+It is checked *before* it is constructed, so a mistyped path cannot run an
+unrelated class's `__init__`.
 
 ### Resource Configuration
 

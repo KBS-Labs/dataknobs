@@ -1,13 +1,14 @@
 """Optional object construction and caching functionality."""
 
 import copy
-import importlib
-from typing import TYPE_CHECKING, Any, Dict, Type
+from typing import TYPE_CHECKING, Any, Dict
+
+from dataknobs_common.imports import resolve_dotted
 
 if TYPE_CHECKING:
     from .config import Config
 
-from .exceptions import ConfigError, ValidationError
+from .exceptions import ConfigError
 
 
 class ObjectBuilder:
@@ -280,51 +281,37 @@ class ObjectBuilder:
             "'create_async', 'from_config' method or be callable"
         )
 
-    def _load_class(self, class_path: str) -> Type[Any]:
-        """Load a class from a module path.
+    def _load_class(self, class_path: str) -> Any:
+        """Resolve a dotted path to the object it names.
+
+        ``resolve_dotted`` rather than ``resolve_class``, and ``Any`` rather
+        than ``type``, because this method has no single shape to check:
+        :meth:`_load_factory` routes a ``factory:`` path through it and
+        deliberately accepts a module-level *function* back. The name is
+        historical; the callers that do want a class check for the members
+        they need (``from_config``, ``create``) rather than the type.
 
         Args:
-            class_path: Full path to class (e.g., "mymodule.MyClass")
+            class_path: ``"module.path:Name"`` or ``"module.path.Name"``.
 
         Returns:
-            Class object
+            The resolved object.
 
         Raises:
-            ConfigError: If class cannot be loaded
+            DottedPathError: The path is malformed, names a module that does
+                not exist, names a module that raised while importing, or
+                names an attribute the module does not have. A
+                ``ConfigurationError`` subclass, so ``except ConfigError``
+                still catches every case this method used to raise.
+
+        Warning:
+            Importing the module **executes** it. The resolver suppresses the
+            underlying exception's text for that reason — it is arbitrary
+            consumer output, and a ``ConfigurationError`` is rendered at the
+            bots API layer's HTTP boundary. The path and the failure type
+            survive; the rest travels on ``__cause__``.
         """
-        try:
-            # Split module and class name
-            if "." in class_path:
-                module_path, class_name = class_path.rsplit(".", 1)
-            else:
-                raise ValidationError(f"Invalid class path: {class_path}")
-
-            # Import module
-            module = importlib.import_module(module_path)
-
-            # Get class from module
-            if not hasattr(module, class_name):
-                raise ConfigError(f"Class {class_name} not found in {module_path}")
-
-            cls: Type[Any] = getattr(module, class_name)
-            return cls
-
-        # Both branches report the same way, for the same reason. ConfigError
-        # is a ConfigurationError, which the bots API layer renders at the HTTP
-        # boundary, and neither caught exception's text is this project's to
-        # publish: importing a module executes it, so `except Exception` can
-        # carry anything module-level code raised, and an ImportError's own
-        # text carries an absolute site-packages path. The class path is from
-        # the config and the type name is a class name; __cause__ carries the
-        # rest to the logs.
-        except ImportError as e:
-            raise ConfigError(
-                f"Failed to import {class_path} ({type(e).__name__})"
-            ) from e
-        except Exception as e:
-            raise ConfigError(
-                f"Failed to load class {class_path} ({type(e).__name__})"
-            ) from e
+        return resolve_dotted(class_path)
 
     def clear_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.

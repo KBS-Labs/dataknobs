@@ -21,7 +21,13 @@ from __future__ import annotations
 from typing import Any
 
 from dataknobs_bots.middleware.base import Middleware
+from dataknobs_fsm.resources.base import (
+    BaseResourceProvider,
+    ResourceHealth,
+    ResourceMetrics,
+)
 from dataknobs_llm.tools import Tool
+from dataknobs_xization.chunking.base import Chunker
 
 # ── Instantiation counter ─────────────────────────────────────────────
 #
@@ -114,12 +120,17 @@ class BareClass(_Counted):
 #
 # `MergeFilter` and `FieldTransform` above are runtime-checkable Protocols, so
 # conforming to them costs nothing and this module stays dependency-free for
-# them. `Middleware` and `Tool` are real base classes checked with
+# them. `Middleware`, `Tool` and `Chunker` are real base classes checked with
 # `issubclass`, so their targets must inherit — which is the only reason this
-# module imports from `bots` and `llm` at all. Worth the import: leaving those
-# two rows out would exempt the two entry points with the most
-# consumer-visible config keys (`middleware:` and tool `class:`) from the
-# guard.
+# module imports from `bots`, `llm` and `xization` at all. `IResourceProvider`
+# is a runtime-checkable Protocol, but its five members are easiest to satisfy
+# by subclassing `fsm`'s own base, so that import is here for convenience
+# rather than necessity.
+#
+# Worth every one of them: leaving these rows out would exempt the entry
+# points with the most consumer-visible config keys (`middleware:`, tool
+# `class:`, `chunker:`, resource `class:`) from the guard, which is the
+# population the guard exists for.
 
 
 class ConformingMiddleware(_Counted, Middleware):
@@ -139,11 +150,43 @@ class ConformingTool(_Counted, Tool):
         return None
 
 
+class ConformingChunker(_Counted, Chunker):
+    """Subclasses the ``xization`` ``Chunker`` ABC, implementing ``chunk``."""
+
+    def chunk(self, content: str, **kwargs: Any) -> list[Any]:
+        return []
+
+
+class ConformingResourceProvider(_Counted, BaseResourceProvider):
+    """Satisfies ``fsm``'s ``IResourceProvider`` runtime-checkable Protocol."""
+
+    def __init__(self, name: str = "fixture", **kwargs: Any) -> None:
+        BaseResourceProvider.__init__(self, name)
+        _Counted.__init__(self)
+
+    def acquire(self, **kwargs: Any) -> Any:
+        return object()
+
+    def release(self, resource: Any) -> None:
+        return None
+
+    def validate(self, resource: Any) -> bool:
+        return True
+
+    def health_check(self) -> ResourceHealth:
+        return ResourceHealth.HEALTHY
+
+    def get_metrics(self) -> ResourceMetrics:
+        return self.metrics
+
+
 __all__ = [
     "BareClass",
+    "ConformingChunker",
     "ConformingFieldTransform",
     "ConformingMergeFilter",
     "ConformingMiddleware",
+    "ConformingResourceProvider",
     "ConformingTool",
     "instantiations",
     "not_callable",

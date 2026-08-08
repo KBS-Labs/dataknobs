@@ -33,8 +33,9 @@ Usage::
         assert_no_ad_hoc_dotted_import(
             *(root / "packages").glob("*/src"),
             allow={
-                # Resolves a builder callable; adoption tracked separately.
-                "config/builders.py:303",
+                # Parses a CLI argument and exits; not config-driven
+                # resolution at all.
+                "llm/prompts/syntax.py:486",
             },
         )
 

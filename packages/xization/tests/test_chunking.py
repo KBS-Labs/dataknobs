@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigurationError
+
 from dataknobs_xization.chunking import (
     ChunkTransform,
     Chunker,
@@ -254,13 +256,44 @@ class TestChunkerRegistry:
             if chunker_registry.is_registered(path):
                 chunker_registry.unregister(path)
 
+    @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
+    def test_dotted_import_accepts_either_separator(self, separator):
+        """``module:Name`` and ``module.Name`` name the same chunker.
+
+        This site accepted only ``.``, so the same class was nameable under
+        one spelling and not the other — a distinction a config author has no
+        way to predict from the key they are writing under.
+        """
+        path = f"{PlaintextChunker.__module__}{separator}PlaintextChunker"
+        try:
+            assert isinstance(create_chunker({"chunker": path}), PlaintextChunker)
+        finally:
+            if chunker_registry.is_registered(path):
+                chunker_registry.unregister(path)
+
     def test_dotted_import_invalid_path(self):
-        with pytest.raises(Exception):
+        """A typo in ``chunker`` is catchable as the config fault it is.
+
+        ``ConfigurationError`` rather than ``Exception``: this raised a bare
+        ``ImportError``, so a caller wrapping chunker construction in
+        ``except ConfigurationError`` — which catches every other dotted-path
+        fault in the workspace — did not catch this one. Asserting
+        ``Exception`` passes against any of those states and so distinguishes
+        none of them.
+        """
+        with pytest.raises(ConfigurationError):
             create_chunker({"chunker": "no_such_module.NoSuchClass"})
+
+    def test_dotted_import_missing_attribute(self):
+        """The other half of a typo: right module, wrong name."""
+        with pytest.raises(ConfigurationError):
+            create_chunker(
+                {"chunker": f"{PlaintextChunker.__module__}:NoSuchChunker"}
+            )
 
     def test_dotted_import_not_chunker_subclass(self):
         # int is not a Chunker subclass
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigurationError):
             create_chunker({"chunker": "builtins.int"})
 
     def test_dotted_import_race_safe(self):

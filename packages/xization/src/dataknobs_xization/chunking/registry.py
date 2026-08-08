@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 from typing import Any
 
+from dataknobs_common.imports import resolve_class
 from dataknobs_common.registry import PluginRegistry
 
 from dataknobs_xization.chunking.base import ChunkTransform, Chunker
@@ -66,38 +66,17 @@ transform_registry: PluginRegistry[ChunkTransform] = PluginRegistry(
 # Dotted import resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_dotted_import(dotted_path: str, base_type: type) -> type:
-    """Import a class from a dotted path and validate it.
+def _looks_like_a_dotted_path(key: str) -> bool:
+    """Whether *key* names a class to import rather than a registry entry.
 
-    Accepts either ``module.ClassName`` or ``package.module.ClassName``.
-
-    Raises:
-        ImportError: If the module cannot be imported.
-        AttributeError: If the class does not exist in the module.
-        TypeError: If the resolved object is not a subclass of *base_type*.
+    Both separators, because :func:`~dataknobs_common.imports.resolve_class`
+    accepts both and a gate that recognised only ``.`` would reject a
+    ``module:Name`` path before the resolver ever saw it — leaving it to fail
+    as an unregistered plugin key, which is not what went wrong. Registry keys
+    are plain identifiers (``markdown_tree``, ``merge_small``) and contain
+    neither.
     """
-    module_path, _, class_name = dotted_path.rpartition(".")
-    if not module_path:
-        raise ImportError(
-            f"Invalid dotted path '{dotted_path}': expected 'module.ClassName'"
-        )
-
-    module = importlib.import_module(module_path)
-    try:
-        cls = getattr(module, class_name)
-    except AttributeError:
-        raise AttributeError(
-            f"'{class_name}' not found in module '{module_path}' "
-            f"(from dotted path '{dotted_path}')"
-        ) from None
-
-    if not (isinstance(cls, type) and issubclass(cls, base_type)):
-        raise TypeError(
-            f"'{dotted_path}' resolved to {cls!r} which is not a "
-            f"{base_type.__name__} subclass"
-        )
-
-    return cls
+    return "." in key or ":" in key
 
 
 def _ensure_registered(
@@ -105,9 +84,22 @@ def _ensure_registered(
     key: str,
     base_type: type,
 ) -> None:
-    """Register a dotted-path key if not already registered."""
-    if "." in key and not registry.is_registered(key):
-        cls = _resolve_dotted_import(key, base_type)
+    """Register a dotted-path key if not already registered.
+
+    Raises:
+        DottedPathError: *key* looks like a dotted path but cannot be
+            resolved.
+        DottedPathTypeError: It resolves to something that is not a
+            *base_type* subclass.
+
+    Both are ``ConfigurationError`` subclasses. This used to raise
+    ``ImportError`` / ``AttributeError`` / ``TypeError``, so a caller
+    wrapping chunker construction in ``except ConfigurationError`` — which
+    catches every other dotted-path fault in the workspace — did not catch
+    these.
+    """
+    if _looks_like_a_dotted_path(key) and not registry.is_registered(key):
+        cls = resolve_class(key, base_type)
         registry.register(key, cls, override=True)
         logger.info("Registered custom %s '%s'", base_type.__name__, key)
 
