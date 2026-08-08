@@ -41,8 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`DottedPathError` and `DottedPathTypeError`** (`dataknobs_common.exceptions`)
   — the family's two error types, plus the `DottedPathReason` vocabulary
-  (`malformed`, `module_not_found`, `attribute_not_found`, `not_callable`)
-  carried on `DottedPathError.reason`, following `PackResolutionError`'s shape.
+  (`malformed`, `module_not_found`, `import_failed`, `attribute_not_found`,
+  `not_callable`) carried on `DottedPathError.reason`, following
+  `PackResolutionError`'s shape.
+
+  `module_not_found` and `import_failed` are separate members because they
+  want opposite responses: the first means something is **not installed**
+  (the target, an ancestor package, or one of its own top-level imports —
+  the optional-dependency condition), the second means code **was** found
+  and raised while executing. A caller skipping absent optional
+  dependencies must not also skip a module that is installed and broken.
+
+  Both can arise at either of two execution points. Reading the attribute is
+  the second one: a module-level `__getattr__` (PEP 562) runs on first
+  access, which is how a lazy export defers an optional dependency —
+  `dataknobs_common.events` does this for `SqsEventBus`. On a base install
+  without `aioboto3`, resolving `dataknobs_common.events:SqsEventBus` fails
+  at the attribute rather than at the import, and still arrives as a
+  `DottedPathError` a caller's `optional: true` can cover.
 
   Both subclass `ConfigurationError`, so an existing `except ConfigurationError`
   keeps working. They are deliberately **siblings, not parent and child**: the

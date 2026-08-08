@@ -240,39 +240,27 @@ class TestParsing:
         with pytest.raises(ConfigurationError, match="missing 'source' or 'target'"):
             parse_derivation_rules([{"source": "a", "transform": "copy"}])
 
-    def test_parse_rejects_unknown_when(self) -> None:
-        """Was ``assert rules[0].when == "target_missing"`` — the odd fault out.
+    def test_parse_unknown_when_defaults(self) -> None:
+        """An unknown ``when`` is deliberately **not** one of the twelve faults.
 
-        The other twelve dropped the rule. This one kept it and ran it under a
-        guard the author had not written: ``when: allways`` fired only when the
-        target was *absent*, the opposite of what the typo asked for. A dropped
-        rule at least derives nothing; this one derived under inverted
-        conditions, which is why it is the worst of the thirteen to leave
-        silent.
+        It keeps the rule and runs it under the default guard, with a WARNING.
+        The twelve describe rules that already do nothing, so failing loud
+        costs a deployment nothing it was relying on; a rule with a bad
+        ``when`` is running today, which makes flipping it a separate
+        question from this consolidation.
         """
-        with pytest.raises(ConfigurationError, match="unknown 'when' condition"):
-            parse_derivation_rules([
-                {"source": "a", "target": "b", "transform": "copy",
-                 "when": "bogus"},
-            ])
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b", "transform": "copy",
+             "when": "bogus"},
+        ])
+        assert len(rules) == 1
+        assert rules[0].when == "target_missing"
 
-    def test_unknown_when_fault_names_the_valid_conditions(self) -> None:
-        """The typo is nearly always a near-miss, so print the near-misses."""
+    def test_faults_are_collected_rather_than_short_circuited(self) -> None:
+        """Every bad rule is reported, each labelled with its own position."""
         with pytest.raises(ConfigurationError) as exc_info:
             parse_derivation_rules([
-                {"source": "a", "target": "b", "when": "allways"},
-            ])
-        message = str(exc_info.value)
-        assert "'allways'" in message
-        assert "always" in message
-        assert "target_empty" in message
-        assert "target_missing" in message
-
-    def test_a_bad_when_is_collected_with_the_other_faults(self) -> None:
-        """It joins the collect-then-raise block rather than short-circuiting it."""
-        with pytest.raises(ConfigurationError) as exc_info:
-            parse_derivation_rules([
-                {"source": "a", "target": "b", "when": "allways"},
+                {"source": "a", "target": "b", "transform": "bogus"},
                 {"source": "c", "target": "d", "transform": "nonexistent"},
             ])
         faults = exc_info.value.context["faults"]
@@ -369,14 +357,13 @@ class TestApplyDerivations:
         assert derived == set()
 
     def test_hand_built_rule_with_an_unknown_guard_skips(self) -> None:
-        """The execution-time guard survives config becoming fatal.
+        """The execution-time guard, reached without going through parsing.
 
-        ``parse_derivation_rules`` can no longer emit a rule with an unknown
-        ``when``, so this branch is now reachable only by constructing a
-        ``DerivationRule`` directly — a programmer error, not operator input,
-        and one that must not derive under a guard nobody chose. It was
-        untested while config could reach it; pinning it here keeps the
-        remaining path honest.
+        ``parse_derivation_rules`` normalizes an unknown ``when`` to
+        ``target_missing`` before building the rule, so this branch is
+        reachable only by constructing a ``DerivationRule`` directly — a
+        programmer error rather than operator input, and one that must not
+        derive under a guard nobody chose.
         """
         rules = [DerivationRule(source="id", target="name",
                                 transform_name="title_case",

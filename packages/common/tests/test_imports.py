@@ -26,7 +26,6 @@ from dataknobs_common.imports import (
     resolve_optional_callable,
 )
 
-SELF = "packages.common.tests.test_imports"
 HERE = __name__
 
 
@@ -322,13 +321,18 @@ def test_the_message_does_not_carry_the_underlying_exception_text() -> None:
     assert str(excinfo.value.__cause__) not in message
 
 
-def test_an_exploding_module_reports_module_not_found_not_the_explosion(
+def test_an_exploding_module_reports_import_failed_not_module_not_found(
     tmp_path, monkeypatch
 ) -> None:
     """The import runs the target, so the failure is not always an ImportError.
 
     Catching only ``ImportError`` here would let a ``RuntimeError`` raised at
     the target's module scope escape untyped, past every caller's ``except``.
+
+    And the reason must not be ``module_not_found``: the module was found. A
+    caller skipping absent optional dependencies on that reason would
+    otherwise silently skip a module that is installed and raising — the two
+    states want opposite responses, and only one is safe to swallow.
     """
     import sys
 
@@ -340,9 +344,58 @@ def test_an_exploding_module_reports_module_not_found_not_the_explosion(
     with pytest.raises(DottedPathError) as excinfo:
         resolve_dotted("dk_exploding_fixture:anything")
 
-    assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+    assert excinfo.value.reason is DottedPathReason.IMPORT_FAILED
     assert "RuntimeError" in str(excinfo.value)
     assert "hunter2" not in str(excinfo.value)
+
+
+def test_a_module_missing_a_dependency_reports_module_not_found(
+    tmp_path, monkeypatch
+) -> None:
+    """The target exists; something it imports does not.
+
+    This is the optional-dependency case — a tool whose module imports an SDK
+    the deployment did not install — so it belongs with "not installed"
+    rather than with "present and broken", even though the target module
+    itself was found. Telling it apart from a mistyped path would take the
+    deployment's intent, which this layer does not have.
+    """
+    import sys
+
+    module = tmp_path / "dk_missing_dep_fixture.py"
+    module.write_text("import dk_no_such_sdk_anywhere\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("dk_missing_dep_fixture", None)
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_missing_dep_fixture:anything")
+
+    assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+
+
+def test_a_broken_from_import_reports_import_failed(
+    tmp_path, monkeypatch
+) -> None:
+    """A plain ``ImportError`` means the module began executing and failed.
+
+    ``ModuleNotFoundError`` is an ``ImportError`` subclass, so the ordering of
+    the two ``except`` clauses is what places this case: the module was found
+    and its own ``from x import y`` did not resolve. That is a defect (or a
+    version skew), not an absent dependency.
+    """
+    import sys
+
+    (tmp_path / "dk_partial_fixture.py").write_text("VALUE = 1\n")
+    module = tmp_path / "dk_broken_from_fixture.py"
+    module.write_text("from dk_partial_fixture import MISSING_NAME\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("dk_broken_from_fixture", None)
+    sys.modules.pop("dk_partial_fixture", None)
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_broken_from_fixture:anything")
+
+    assert excinfo.value.reason is DottedPathReason.IMPORT_FAILED
 
 
 def test_the_reason_vocabulary_rejects_a_typo() -> None:
@@ -356,3 +409,101 @@ def test_the_error_carries_ref_and_reason_in_context() -> None:
     assert error.ref == "a:b"
     assert error.context["ref"] == "a:b"
     assert error.context["reason"] is DottedPathReason.MALFORMED
+
+
+def _write_lazy_export_module(tmp_path, monkeypatch, name: str, raises: str):
+    """A PEP 562 module whose ``__getattr__`` raises *raises*.
+
+    The shape ``dataknobs_common.events`` uses for ``SqsEventBus``: the
+    attribute is not in the namespace, and touching it runs an import.
+    """
+    import sys
+
+    (tmp_path / f"{name}.py").write_text(
+        f"def __getattr__(attr):\n    raise {raises}\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop(name, None)
+
+
+def test_a_lazy_export_that_raises_is_still_a_dotted_path_error(
+    tmp_path, monkeypatch
+) -> None:
+    """The attribute lookup is a *second* execution point, not just a read.
+
+    A PEP 562 module-level ``__getattr__`` runs arbitrary code, and the
+    standard use of it is a lazy export that imports an optional dependency
+    on first access — which is what ``dataknobs_common.events`` does for
+    ``SqsEventBus``.
+
+    Catching only ``AttributeError`` there let the resulting ``ImportError``
+    escape raw, so a caller's ``except DottedPathError`` did not match and
+    ``optional: true`` did not cover it. The type is the property under test:
+    every failure of this function must arrive as one exception type.
+    """
+    _write_lazy_export_module(
+        tmp_path, monkeypatch, "dk_lazy_raises_fixture",
+        "ImportError('lazy export is broken')",
+    )
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_lazy_raises_fixture:SomeExport")
+
+    # Not `attribute_not_found`: the module did not say "no such attribute",
+    # it ran code and that code failed. Reporting the miss would send the
+    # reader to look for a typo in a name that is spelled correctly.
+    assert excinfo.value.reason is DottedPathReason.IMPORT_FAILED
+    assert isinstance(excinfo.value.__cause__, ImportError)
+
+
+def test_a_lazy_export_missing_its_dependency_reports_module_not_found(
+    tmp_path, monkeypatch
+) -> None:
+    """The optional-dependency case, at the attribute site.
+
+    Classified by the same rule as the import site — a shared helper, so the
+    two execution points cannot report the same failure differently. This is
+    the reason a caller's ``optional: true`` is entitled to swallow.
+    """
+    _write_lazy_export_module(
+        tmp_path, monkeypatch, "dk_lazy_missing_dep_fixture",
+        "ModuleNotFoundError(\"No module named 'dk_no_such_sdk'\")",
+    )
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_lazy_missing_dep_fixture:SomeExport")
+
+    assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+
+
+def test_a_hostile_dir_cannot_replace_the_error(tmp_path, monkeypatch) -> None:
+    """The suggestion builder runs inside an ``except`` — it must not raise.
+
+    ``_suggestions`` walks ``dir(module)`` calling ``getattr`` on each name,
+    and ``getattr(..., None)`` swallows ``AttributeError`` only. A module
+    advertising a name whose access raises something else would take the
+    builder down *while it was building the message*, replacing the
+    ``DottedPathError`` the caller is owed with an unrelated one chained
+    behind "during handling of the above exception".
+    """
+    import sys
+
+    (tmp_path / "dk_hostile_dir_fixture.py").write_text(
+        "def __dir__():\n"
+        "    return ['landmine', 'real_name']\n"
+        "\n"
+        "def real_name():\n"
+        "    return 1\n"
+        "\n"
+        "def __getattr__(attr):\n"
+        "    if attr == 'landmine':\n"
+        "        raise ImportError('boom')\n"
+        "    raise AttributeError(attr)\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("dk_hostile_dir_fixture", None)
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_hostile_dir_fixture:no_such_attribute")
+
+    assert excinfo.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND

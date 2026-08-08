@@ -821,10 +821,10 @@ For typed results (boolean, integer, list, etc.), use the `expression` transform
 
 `target_missing` is the safe default — it never overwrites user-provided or extracted data. The `always` option exists for cases where derived values should take precedence (e.g., enforcing a naming convention).
 
-Any other value is a `ConfigurationError` at bot construction. It previously
-fell back to `target_missing` with a WARNING, which made a typo worse than a
-dropped rule: `when: allways` kept the rule and fired it only while the target
-was *absent* — the inverse of what was asked for, from a rule that looked live.
+Any other value falls back to `target_missing` with a WARNING. Note what that
+means for a typo: `when: allways` keeps the rule and fires it only while the
+target is *absent* — the inverse of what was asked for, from a rule that looks
+live. Check the logs when a derivation fires at unexpected times.
 
 ### Per-Stage Override {#derivation-per-stage-override}
 

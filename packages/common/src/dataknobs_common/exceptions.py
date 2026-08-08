@@ -378,8 +378,24 @@ class DottedPathReason(StrEnum):
 
     #: The reference is not of the form ``module:name`` / ``module.name``.
     MALFORMED = "malformed"
-    #: The module half could not be imported.
+    #: A module was not found — the target itself, an ancestor package of it,
+    #: or something it imports at its top level. **An environment condition:**
+    #: something is not installed. This is the reason a config key documented
+    #: as ``optional`` may reasonably swallow.
+    #:
+    #: A missing *transitive* dependency lands here rather than in
+    #: :attr:`IMPORT_FAILED` deliberately. A tool whose module imports an
+    #: uninstalled SDK is exactly the optional-dependency case, and telling it
+    #: apart from a mistyped path would need the deployment's intent, which
+    #: this layer does not have.
     MODULE_NOT_FOUND = "module_not_found"
+    #: The module was found, and **executing it raised** something other than
+    #: a missing module. **A defect, not an environment condition:** the code
+    #: is present and broken. Split from :attr:`MODULE_NOT_FOUND` so that a
+    #: caller skipping absent optional dependencies does not also skip a
+    #: module that is installed and raising — the two want opposite responses,
+    #: and one is never safe to swallow silently.
+    IMPORT_FAILED = "import_failed"
     #: The module imported; it has no such attribute.
     ATTRIBUTE_NOT_FOUND = "attribute_not_found"
     #: The attribute resolved and is not callable.

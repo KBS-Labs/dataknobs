@@ -383,8 +383,11 @@ class ToolCatalog(Registry[ToolEntry]):
 
         Raises:
             NotFoundError: If name not in catalog.
-            ImportError: If class cannot be imported.
-            ValueError: If resolved class is not callable.
+            DottedPathError: If ``class_path`` cannot be resolved, or resolves
+                to something that is not callable (reason ``not_callable``).
+                It is a ``ConfigurationError`` subclass, so a caller catching
+                that keeps working; catching ``ImportError`` or ``ValueError``
+                does **not**, which is what this entry used to promise.
         """
         entry = self.get(name)
         tool_class = resolve_callable(entry.class_path)

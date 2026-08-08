@@ -507,7 +507,7 @@ class ValidateConfigTool(ContextAwareTool):
         validator = ConfigValidator()
         factory = None
         if "builder_factory" in config:
-                factory = resolve_callable(config["builder_factory"])
+            factory = resolve_callable(config["builder_factory"])
         return cls(validator=validator, builder_factory=factory)
 
     @property

@@ -19,12 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     eleven other authoring faults `parse_derivation_rules` rejected alongside
     it — a missing `source`/`target`, an unknown `transform`, a malformed
     regex, a parameterized transform missing its parameter);
-  - a **derivation `when`** naming a guard that does not exist. This one was
-    not merely ignored: it kept the rule and silently substituted
-    `target_missing`, so `when: allways` derived only while the target was
-    *absent* — the inverse of what was asked for, from a rule that looked
-    live. A rule firing under conditions its author did not write is worse
-    than one that never fires;
   - a **wizard hook** path (`on_enter`, `on_exit`, `on_error`);
   - a **turn-lifecycle hook** entry (`on_turn_start`, `on_turn_end`) —
     including an entry with the `function` key forgotten entirely, which
@@ -41,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A deployment running on a stale path will now fail at bot construction where
   it previously started. That is the intended change, and the reason it is
   called out here rather than buried in the consolidation note below.
+
+  **Before upgrading**, find out whether you are affected without waiting for
+  the failure: every one of these logged a WARNING first, so the evidence is
+  already in your logs. Grep a representative run for the messages that are
+  becoming errors —
+
+  ```
+  grep -E "Failed to load hook function\
+  |Failed to resolve lifecycle hook callback\
+  |Lifecycle hook callback path must be\
+  |Ignoring unknown event\
+  |context_transform must be a callable\
+  |^.*(Unknown derivation|Derivation rule|Derivation transform)" app.log
+  ```
+
+  — and fix any path or key they name. A clean grep means no config key you
+  exercise is on a stale path. Note the last alternative is deliberately
+  broad: it also matches derivation warnings raised at *execution* time
+  (a transform that failed on a particular value), which are unchanged. Those
+  are worth reading anyway, but they are not what will start failing.
 
 - **Both `module:name` and `module.name` are accepted at every config key that
   takes a dotted path.** Three keys previously accepted only `:`, four only
@@ -64,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type is not. The rubric `FunctionRegistry.get` case is the sharpest: a bad
   `function_ref` raised `KeyError`, which read to a caller as a missing
   dictionary key rather than a bad config value.
+
+  The `context` dict changes shape with the type. `load_merge_filter` used to
+  attach `context={"merge_filter": <path>}`; it now carries the family's
+  `ref` and `reason`, so code reading `exc.context["merge_filter"]` gets a
+  `KeyError`. Read `exc.ref` for the path — it is on the exception as an
+  attribute as well as in `context`.
 
 - **Error text at those sites is bounded** — the message names the reference
   and the failure type, and the caught exception's text moves to `__cause__`

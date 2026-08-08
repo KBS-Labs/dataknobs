@@ -371,3 +371,31 @@ def test_a_wrong_shape_target_is_rejected_before_it_is_constructed(
         f"{name} constructed the wrong-shape class before rejecting it "
         f"({fixtures.instantiations} construction(s))"
     )
+
+
+def test_the_bots_re_export_is_the_same_object_not_a_copy() -> None:
+    """``bots.tools.resolve`` must *be* the common function, by identity.
+
+    Every other check in this file is behavioural, and behaviour cannot see
+    the difference that matters here: a re-inlined copy of the resolver would
+    satisfy all of them and still be a fifth implementation free to drift.
+    Identity is the only assertion that distinguishes "delegates" from
+    "happens to agree today".
+
+    The source guard catches a copy that reaches for ``import_module``, but
+    not one written against the shared helper — a wrapper that adds a default,
+    narrows the separator, or swallows a reason would pass the scan and pass
+    the behavioural table for the fixtures it is given.
+    """
+    from dataknobs_bots.tools import resolve as bots_resolve
+    from dataknobs_common import imports as common_imports
+
+    exported = list(bots_resolve.__all__)
+    assert exported, "the re-export exports nothing"
+
+    for name in exported:
+        assert getattr(bots_resolve, name) is getattr(common_imports, name), (
+            f"bots.tools.resolve.{name} is not "
+            f"dataknobs_common.imports.{name} — a wrapper or a re-inlined "
+            f"copy would pass every behavioural check in this file"
+        )

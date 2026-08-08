@@ -104,8 +104,33 @@ Two sibling types, both `ConfigurationError` subclasses:
 | `DottedPathTypeError` | it resolved, and the target is the wrong shape | **never** |
 
 `DottedPathError` carries a machine-readable `reason` — `malformed`,
-`module_not_found`, `attribute_not_found`, `not_callable` — so a caller can
-catch one type and still branch on which fault it was.
+`module_not_found`, `import_failed`, `attribute_not_found`, `not_callable` —
+so a caller can catch one type and still branch on which fault it was.
+
+`module_not_found` and `import_failed` are split because they want opposite
+responses. `module_not_found` means something is **not installed** — the
+target, an ancestor package, or one of its own top-level imports — which is
+the optional-dependency condition. `import_failed` means code **was** found
+and raised while executing: it is present and broken. A caller that skips
+absent optional dependencies must not also skip a module that is installed
+and raising:
+
+```python
+except DottedPathError as exc:
+    if optional and exc.reason is DottedPathReason.MODULE_NOT_FOUND:
+        return None          # not installed — a deployment condition
+    raise                    # anything else is a defect worth surfacing
+```
+
+Both reasons can come from either of two execution points. Importing the
+module is the obvious one; reading the attribute is the second, because a
+module-level `__getattr__` (PEP 562) runs on first access — which is how a
+lazy export defers an optional dependency. `dataknobs_common.events` does
+exactly this for `SqsEventBus`, so on a base install without `aioboto3`,
+resolving `dataknobs_common.events:SqsEventBus` fails at the *attribute*, not
+at the import. It still arrives as a `DottedPathError` with reason
+`module_not_found`, so the handler above covers it without knowing which
+point it came from.
 
 **They are siblings, not parent and child, and that asymmetry is load-bearing.**
 The obvious lenient handler is:

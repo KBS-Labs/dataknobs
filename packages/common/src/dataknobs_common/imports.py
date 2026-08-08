@@ -12,6 +12,10 @@ whose callable references are optional.
    line at module scope — before this module has looked at the attribute, let
    alone checked its shape. There is no allow-list here and no sandbox.
 
+   Reading the attribute can execute code too: a module-level ``__getattr__``
+   (PEP 562) runs on first access, which is how a lazy export defers an
+   optional dependency. Both points are treated as execution here.
+
    A dotted path must therefore come from the same trust domain as the
    application's own code: a config file, a deployment's policy bundle, a
    declaration a platform team authored. **Never build one from end-user
@@ -125,6 +129,23 @@ def _split(ref: str) -> tuple[str, str]:
     return module_path, attribute
 
 
+def _peek(obj: Any, name: str) -> Any:
+    """``getattr(obj, name)`` that cannot raise, for use inside a handler.
+
+    ``getattr(..., None)`` swallows ``AttributeError`` only. A module with a
+    PEP 562 ``__getattr__`` can raise anything for a name ``__dir__``
+    advertises — an ``ImportError`` from a lazy export whose optional
+    dependency is absent is the realistic case — and that would escape the
+    message builder rather than being reported as a missing attribute.
+    """
+    try:
+        return getattr(obj, name, None)
+    except Exception:
+        # Deliberately broad: this is a diagnostic, and a diagnostic that
+        # raises replaces the error it was describing.
+        return None
+
+
 def _suggestions(module: Any) -> str:
     """Public callables *this* module defines, for a missing-attribute message.
 
@@ -137,17 +158,22 @@ def _suggestions(module: Any) -> str:
     A pure re-export module — a package ``__init__`` — defines nothing of its
     own, so the filter would empty the list exactly where a caller most needs
     it. Those fall back to the whole namespace.
+
+    Every attribute read goes through :func:`_peek`, because this runs *inside*
+    an ``except`` handler: an exception escaping here would replace the
+    ``DottedPathError`` the caller is owed with an unrelated one, chained
+    behind "during handling of the above exception".
     """
-    own_name = getattr(module, "__name__", None)
+    own_name = _peek(module, "__name__")
     public = [
         name
         for name in dir(module)
-        if not name.startswith("_") and callable(getattr(module, name, None))
+        if not name.startswith("_") and callable(_peek(module, name))
     ]
     defined_here = [
         name
         for name in public
-        if getattr(getattr(module, name, None), "__module__", None) == own_name
+        if _peek(_peek(module, name), "__module__") == own_name
     ]
 
     available = sorted(defined_here or public)
@@ -175,25 +201,49 @@ def resolve_dotted(ref: str) -> Any:
         The resolved attribute, whatever it is.
 
     Raises:
-        DottedPathError: The path is malformed, the module cannot be
-            imported, or it has no such attribute.
+        DottedPathError: The path is malformed (``malformed``), a module was
+            not found (``module_not_found``), code ran and raised
+            (``import_failed``), or the module has no such attribute
+            (``attribute_not_found``). Branch on ``reason`` to tell an absent
+            optional dependency from a broken one.
 
     Warning:
-        Importing the module **executes** it. See the module docstring.
+        Importing the module **executes** it — and so, for a PEP 562 lazy
+        export, does reading the attribute. See the module docstring.
     """
     module_path, attribute = _split(ref)
 
+    # The two clauses here, and the two at the attribute lookup below, are the
+    # same classification made twice: `ModuleNotFoundError` means something is
+    # **not installed** (an environment condition, and the one a caller's
+    # `optional: true` may reasonably swallow), anything else means code was
+    # found and **raised** (a defect, never safe to skip silently). Expressed
+    # as except-clause dispatch rather than a shared helper because a helper
+    # would have to receive `exc`, and an exception instance flowing into a
+    # raise expression is the disclosure pattern the house error-text guard
+    # exists to reject — correctly, since it cannot know what a callee does
+    # with it. All four paths are pinned by tests.
     try:
         module = importlib.import_module(module_path)
-    except Exception as exc:
-        # `Exception`, not `ImportError`: the import runs the target module's
-        # top level, so the failure can be anything that module raises. The
-        # text stays on `__cause__` for the same reason.
+    except ModuleNotFoundError as exc:
         raise DottedPathError(
             f"Cannot import module {module_path!r} from {ref!r} "
             f"({type(exc).__name__})",
             ref=ref,
             reason=DottedPathReason.MODULE_NOT_FOUND,
+        ) from exc
+    except Exception as exc:
+        # `Exception`, not `ImportError`: the import runs the target module's
+        # top level, so the failure can be anything that module raises. The
+        # text stays on `__cause__` for the same reason. A plain `ImportError`
+        # — a `from x import y` that failed inside the target — reaches here
+        # rather than the clause above, which is right: the module began
+        # executing.
+        raise DottedPathError(
+            f"Cannot import module {module_path!r} from {ref!r} "
+            f"({type(exc).__name__})",
+            ref=ref,
+            reason=DottedPathReason.IMPORT_FAILED,
         ) from exc
 
     try:
@@ -204,6 +254,32 @@ def resolve_dotted(ref: str) -> Any:
             f"(from {ref!r}). Available: {_suggestions(module)}",
             ref=ref,
             reason=DottedPathReason.ATTRIBUTE_NOT_FOUND,
+        ) from exc
+    except ModuleNotFoundError as exc:
+        # A PEP 562 module-level `__getattr__` runs arbitrary code, so the
+        # attribute lookup is a second execution point — and the standard use
+        # of that hook is a *lazy export* that imports an optional dependency
+        # on first access. `dataknobs_common.events:SqsEventBus` is one:
+        # without `aioboto3` installed, this line raises `ModuleNotFoundError`,
+        # not `AttributeError`.
+        #
+        # Catching only `AttributeError` let that escape as a raw exception, so
+        # a caller's `except DottedPathError` did not match it and
+        # `optional: true` did not cover the one case it most obviously should.
+        raise DottedPathError(
+            f"Module {module_path!r} raised resolving attribute "
+            f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
+            ref=ref,
+            reason=DottedPathReason.MODULE_NOT_FOUND,
+        ) from exc
+    except Exception as exc:
+        # The lazy export ran and failed for some reason other than a missing
+        # module — present and broken, not absent.
+        raise DottedPathError(
+            f"Module {module_path!r} raised resolving attribute "
+            f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
+            ref=ref,
+            reason=DottedPathReason.IMPORT_FAILED,
         ) from exc
 
 

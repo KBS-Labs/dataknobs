@@ -3779,9 +3779,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # Bounded: `e` already carries only the ref and the failure
             # reason, because importing a module executes it and the full
             # text of whatever it raised is on __cause__.
-            msg = f"Failed to resolve tool class ({e.reason})"
+            #
+            # `e.ref` is the offending `class` value — the deployment's own
+            # config, not third-party text — and naming it is what makes the
+            # message actionable when a bot declares ten tools and one path
+            # is wrong. Taken from the exception rather than `class_path`
+            # because the exception contract guarantees it is set, and this
+            # clause is reachable from more than one resolution call.
+            msg = f"Failed to resolve tool class '{e.ref}' ({e.reason})"
             if optional:
-                logger.warning("Skipping optional tool: %s", msg)
+                # The full `{e}` only here: a WARNING goes to the log, which
+                # is the operator's surface, while the raised message can
+                # reach an HTTP client through a `ConfigurationError` handler.
+                logger.warning("Skipping optional tool '%s': %s", e.ref, e)
                 return None
             # Same type, not a plain `ConfigurationError`: a caller
             # branching on `reason` must not lose it to a re-wrap that

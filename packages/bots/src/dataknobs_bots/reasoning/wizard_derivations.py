@@ -481,11 +481,11 @@ def parse_derivation_rules(
     ``custom_class: MyTransfrm`` was fatal and ``transform: cutsom`` on the
     next line was not.
 
-    A thirteenth was quieter still. An unknown ``when`` kept the rule and ran
-    it under the default guard, so ``when: allways`` derived only while the
-    target was *absent* — the inverse of the request, from a rule that looked
-    live. A rule firing under conditions its author did not write is worse
-    than one that never fires, so it is a fault now too.
+    An unknown ``when`` is **not** among them: it keeps the rule and runs it
+    under the default guard, with a WARNING. That is its own question — the
+    twelve describe rules that already do nothing, so failing loud costs a
+    deployment nothing it was relying on, whereas a rule with a bad ``when``
+    is running today. Left as it was, deliberately.
 
     Args:
         config_list: List of derivation rule dicts from wizard settings.
@@ -518,11 +518,12 @@ def parse_derivation_rules(
         where = f"rule {index} ({source} → {target})"
 
         if when not in _VALID_WHEN_CONDITIONS:
-            faults.append(
-                f"{where}: unknown 'when' condition {when!r} "
-                f"(available: {sorted(_VALID_WHEN_CONDITIONS)})"
+            logger.warning(
+                "Unknown derivation 'when' condition %r — "
+                "defaulting to 'target_missing'.",
+                when,
             )
-            continue
+            when = "target_missing"
 
         # Validate built-in transform name
         if (
@@ -719,10 +720,11 @@ def apply_field_derivations(
         elif rule.when == "always":
             pass  # No guard — always derive
         else:
-            # Config can no longer reach here — parse_derivation_rules rejects
-            # an unknown 'when'. A rule constructed directly still can, and
-            # skipping is the only safe reading: every alternative derives
-            # under a guard nobody chose.
+            # Config does not reach here — parse_derivation_rules normalizes
+            # an unknown 'when' to 'target_missing' before building the rule.
+            # A rule constructed directly still can, and skipping is the only
+            # safe reading: every alternative derives under a guard nobody
+            # chose.
             logger.warning(
                 "Unknown 'when' condition %r at execution time for "
                 "rule %s → %s — skipping.",
