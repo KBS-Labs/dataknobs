@@ -57,24 +57,35 @@ docker info
 The script will:
 - Start PostgreSQL, Elasticsearch, and LocalStack containers
 - Wait for services to be healthy
+- Validate package references across the codebase
+- Lint the GitHub Actions workflow files
+- Run code validation (syntax, ruff, imports, mypy, print statements)
+- Build the documentation and check its version and mirror consistency
 - Run all tests (unit and integration)
-- Perform linting and style checks
 - Generate artifacts in `.quality-artifacts/`
 
 **Expected output:**
 ```
 ═══════════════════════════════════════════════════════════════
-                       Quality Check Summary                     
+                       Quality Check Summary
 ═══════════════════════════════════════════════════════════════
-  Linting:           ✓ PASSED
-  Style Check:       ✓ PASSED
-  Unit Tests:        ✓ PASSED
-  Integration Tests: ✓ PASSED
+  Documentation:      ✓ PASSED
+  Doc Versions:       ✓ PASSED
+  Doc Mirrors:        ✓ PASSED
+  Code Validation:    ✓ PASSED
+  Workflow Lint:      ✓ PASSED
+  Unit Tests:         ✓ PASSED
+  Integration Tests:  ✓ PASSED
 
 ✓ All critical checks passed!
   Artifacts saved to: .quality-artifacts/
   You can now create your pull request.
 ```
+
+The documentation lines appear in PR mode only, and a skipped check reads
+`⊘ SKIPPED` rather than passing. Every line above corresponds to an entry in
+`quality-summary.json`, which is the only thing CI reads — see
+[CI Validation](#4-ci-validation).
 
 ### 3. Commit the Artifacts
 
@@ -100,6 +111,26 @@ When you create a PR, GitHub Actions will:
 4. **Check coverage** - Ensures minimum coverage threshold (70%)
 
 The CI validation is **fast** (< 30 seconds) since it only validates artifacts, not re-running tests.
+
+## Required Tools
+
+| Tool | Used for | If absent |
+|---|---|---|
+| `uv` | every Python invocation in the gate | fatal |
+| Docker | the integration-test services below | fatal, unless tests are skipped or already running in a container |
+| `shellcheck` | analysing the `run:` blocks in the workflow files | fatal |
+
+`shellcheck` is a hard requirement rather than an optional extra, and that is
+deliberate. CI validates the committed artifacts instead of re-running the gate,
+so a run that quietly skipped the analysis would produce an artifact
+indistinguishable from one where the linter ran and found nothing:
+`environment.json` records no per-check tool availability, and nothing
+downstream could tell the two apart. A check that skips silently reports green
+having verified nothing, which is worse than not having the check at all,
+because it also reports success.
+
+Install it with `brew install shellcheck` (macOS) or `apt-get install shellcheck`
+(Debian/Ubuntu).
 
 ## Required Services
 

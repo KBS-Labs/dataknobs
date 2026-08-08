@@ -41,7 +41,8 @@ print_fail() {
 # print_fail must reach VALIDATION_FAILED or exit — a red ✗ on a run that then
 # reports success is indistinguishable from a passing run, and both times that
 # has happened here it went unnoticed for months. Guarded by
-# tests/test_quality_artifact_contract.py.
+# tests/test_quality_gate_accounting.py, which applies the same rule to
+# run-quality-checks.sh.
 print_warn() {
     echo -e "  ${YELLOW}!${NC} $1"
 }
@@ -184,6 +185,23 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         fi
     else
         print_info "Integration tests: Not found (may be optional)"
+    fi
+
+    # Named separately rather than left to overall_status, so a failure says
+    # which check failed instead of only that one did. Tolerant of absence
+    # because artifacts generated before the workflow lint was wired into the
+    # gate carry no such entry — that tolerance is about old artifacts only; the
+    # check itself is not optional, and a fresh artifact always records it.
+    if grep -q '"workflow_lint"' "$ARTIFACTS_DIR/quality-summary.json"; then
+        WORKFLOW_STATUS=$(grep -A2 '"workflow_lint"' "$ARTIFACTS_DIR/quality-summary.json" | grep '"status"' | cut -d'"' -f4)
+        if [ "$WORKFLOW_STATUS" = "pass" ]; then
+            print_pass "Workflow lint: PASS"
+        else
+            print_fail "Workflow lint: $WORKFLOW_STATUS"
+            VALIDATION_FAILED=1
+        fi
+    else
+        print_info "Workflow lint: not recorded (artifact predates this check)"
     fi
 fi
 

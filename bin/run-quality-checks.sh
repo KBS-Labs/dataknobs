@@ -506,16 +506,19 @@ DOCS_MIRROR_STATUS=0
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
+WORKFLOW_LINT_STATUS=0
 
 # Compute the overall PASS/FAIL/PASS_WITH_SKIPS verdict from the individual check
 # statuses. Called from two sites that MUST agree — the quality-summary.json
 # generation (the value CI validates) and the terminal banner that drives the
 # exit code — so the logic lives here once. A new check added to the gate must
-# be added to this one function; wiring it into only one site (as previously
-# happened with the doc-mirror check) silently desyncs the exit code from the
-# reported summary.
+# be added to this one function AND to the checks object in quality-summary.json,
+# which is the only thing CI reads. Wiring it into one site and not the other
+# silently desyncs the exit code from the reported summary (the doc-mirror check)
+# or leaves it invisible to CI entirely (the workflow lint). Both halves are
+# guarded by tests/test_quality_gate_accounting.py.
 compute_overall_status() {
-    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ]; then
         echo "FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         echo "PASS_WITH_SKIPS"
@@ -558,11 +561,16 @@ else
     exit 1
 fi
 
-# Lint GitHub Actions workflows
+# Lint GitHub Actions workflows. The status is captured rather than discarded:
+# this check printed ✗ and let the gate go on to report PASS, which is worse
+# than not running it, because it also reports success. Every check has to reach
+# compute_overall_status (the exit code) and the checks object in
+# quality-summary.json (the only thing CI looks at) — see both, below.
 print_status "Linting GitHub Actions workflow files..."
 if "$SCRIPT_DIR/lint-workflows.sh"; then
     print_success "Workflow files are valid"
 else
+    WORKFLOW_LINT_STATUS=$?
     print_error "Workflow lint failed"
 fi
 
@@ -1138,6 +1146,11 @@ except Exception:
       "skipped": $VALIDATION_SKIPPED,
       "tool": "validate.sh"
     },
+    "workflow_lint": {
+      "status": $([ $WORKFLOW_LINT_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $WORKFLOW_LINT_STATUS,
+      "tool": "lint-workflows.sh"
+    },
     "unit_tests": {
       "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $UNIT_TEST_STATUS,
@@ -1294,6 +1307,14 @@ elif [ $VALIDATION_STATUS -eq 0 ]; then
     echo -e "  Code Validation:    ${GREEN}✓ PASSED${NC}"
 else
     echo -e "  Code Validation:    ${RED}✗ FAILED${NC}"
+fi
+
+# Reported unconditionally because it runs unconditionally — it is not gated by
+# PR mode, changed packages, or any skip flag.
+if [ $WORKFLOW_LINT_STATUS -eq 0 ]; then
+    echo -e "  Workflow Lint:      ${GREEN}✓ PASSED${NC}"
+else
+    echo -e "  Workflow Lint:      ${RED}✗ FAILED${NC}"
 fi
 
 if [ "$PR_MODE" = "yes" ]; then
