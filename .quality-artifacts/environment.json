@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-08T03:51:56Z",
+  "timestamp": "2026-08-08T13:57:57Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.2 (Homebrew 2026-08-05 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "main",
-  "git_commit": "37a1464aeb518ecfeaf645c4cd7f0a5c3ed2d116",
+  "git_branch": "sbk/dotted-path-resolver-consolidation",
+  "git_commit": "755af68298f39357437a714e687e61929ae4a341",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
