@@ -1,10 +1,11 @@
 {
-  "timestamp": "2026-08-08T15:11:59Z",
-  "overall_status": "PASS_WITH_SKIPS",
+  "timestamp": "2026-08-08T17:10:16Z",
+  "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "all",
-  "tested_packages": [],
+  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
+  "coverage_percent": 82.2,
   "package_hashes": {
   "bots": "f98355122308995850b20a110601d9ec923420b0a209af0cb10ce9a7abdfb91b",
   "common": "7e8daa33d2522af3a95ff88e0e34f30bef692f072b42456a61cc7fd06a73b763",
@@ -19,14 +20,14 @@
   "_algorithm_version": 3
 },
   "workspace_hashes": {
-  "toolchain": "829a04918283971340f6fd465acf46f5a94006f7ebf6a8ec6846f40370ce8a60",
-  "workspace_tests": "8931b5ab809b81005aa0a1fb0c90df4fa4e2512afde0508a4bcd800d18c71fa0"
+  "toolchain": "a314cf7d5c779bed607da22f1ccf4b40058fe51f14ab27c58f24744b92665be2",
+  "workspace_tests": "db8903ca81492a36f94849e9895092493219216876f4f1bc50161cdb8603b057"
 },
   "checks": {
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -42,18 +43,18 @@
     "validation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "validate.sh"
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true
+      "skipped": false
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true
+      "skipped": false
     }
   }
 }
