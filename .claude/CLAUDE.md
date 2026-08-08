@@ -12,7 +12,7 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 4. **Mock prohibition in tests** - use EchoProvider, SyncMemoryDatabase, etc. (see below)
 5. **Ollama-first for LLM defaults** - default to local models; commercial providers via config
 6. **Security constraints are non-negotiable** - input validation, HTTP safety, path traversal prevention, sensitive data protection (see `rules/security.md`)
-7. **Dependency management** - permissive licenses only, selection criteria enforced, no duplication (see `rules/dependency-management.md`)
+7. **Dependency management** - permissive licenses only for libraries we *import*; tools we merely *execute* are a separate category with its own four conditions. Selection criteria enforced, no duplication (see `rules/dependency-management.md`)
 8. **Consumer extensibility** - bias toward extension points (registries, hooks, injectable parameters) over special-case knobs; capture deferred opportunities with rationale rather than dismissing them; we're building a production-ready toolkit consumers grab off the shelf and run to production, NOT a set of seams they must finish themselves — ship reference impls of standard production behaviors alongside their Protocols, and defer only against a named category in the deferral bar (see `rules/consumer-extensibility.md`)
 
 ### This Project's Special Role
