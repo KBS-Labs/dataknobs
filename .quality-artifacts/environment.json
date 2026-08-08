@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-08T15:20:35Z",
+  "timestamp": "2026-08-08T17:10:16Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.12.2 (Homebrew 2026-08-05 aarch64-apple-darwin)",
+  "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/workspace-guards-run-on-tests-only-prs",
-  "git_commit": "71151343339ad69cd9b3199bca060c95cc77031d",
+  "git_branch": "sbk/test-runner-multiple-packages",
+  "git_commit": "09e1dbc53e011472e241bf84722d01d02daedfc9",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

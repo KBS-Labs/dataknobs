@@ -61,14 +61,17 @@ coverage.xml
 packages/data/coverage.xml
 
 # Quality check artifacts
+#
+# No coverage XML is committed. The gate's only use for it was a line-rate it
+# treats as a warning and never a failure, and that number is now recorded in
+# quality-summary.json directly. Committing the report cost a merge conflict per
+# pull request (it appeared in 399 of the last 404 artifact commits) and over a
+# gigabyte of object history, to carry one float.
 .quality-artifacts/*
 !.quality-artifacts/quality-summary.json
 !.quality-artifacts/environment.json
 !.quality-artifacts/unit-test-results.xml
 !.quality-artifacts/integration-test-results.xml
-!.quality-artifacts/coverage.xml
-!.quality-artifacts/coverage-unit.xml
-!.quality-artifacts/coverage-integration.xml
 !.quality-artifacts/lint-report.json
 !.quality-artifacts/style-check.json
 !.quality-artifacts/signature.sha256

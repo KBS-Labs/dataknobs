@@ -1073,6 +1073,23 @@ if [ "$PR_MODE" = "yes" ]; then
         echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$ARTIFACTS_DIR/coverage.xml"
     fi
 
+    # Read the line-rate out of coverage.xml now and record it in the summary.
+    # coverage.xml itself is no longer committed: it is a multi-megabyte
+    # generated file that changed on nearly every run, and the single thing the
+    # gate ever took from it was this number — which it reports as a warning and
+    # never fails on. A float belongs in the summary; the report belongs on disk.
+    COVERAGE_PERCENT=$(python3 -c "
+import xml.etree.ElementTree as ET
+try:
+    root = ET.parse('$ARTIFACTS_DIR/coverage.xml').getroot()
+    print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
+except Exception:
+    print('null')
+" 2>/dev/null || echo "null")
+    # A blank would emit invalid JSON, which would fail the gate for a reason
+    # that has nothing to do with the code under test.
+    COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
+
     # Generate quality summary and signature immediately after coverage.xml is ready.
     # These are the files CI validates and that must be committed — they must not be
     # delayed by the slower per-package coverage reporting that follows.
@@ -1095,6 +1112,7 @@ if [ "$PR_MODE" = "yes" ]; then
   "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
   "tested_packages": $TESTED_PACKAGES_JSON,
+  "coverage_percent": $COVERAGE_PERCENT,
   "package_hashes": $PACKAGE_HASHES_JSON,
   "workspace_hashes": $WORKSPACE_HASHES_JSON,
   "checks": {
@@ -1136,10 +1154,22 @@ EOF
 
     print_status "Generating artifact signature..."
     cd "$ARTIFACTS_DIR"
-    if command -v sha256sum >/dev/null 2>&1; then
-        find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs sha256sum > signature.sha256
+    # Sign exactly the files that get committed, not everything the run left on
+    # disk. A `find` over the directory also picked up per-package coverage
+    # reports and docs status that are gitignored, so the stored signature named
+    # a dozen files a CI checkout never contains and the integrity check
+    # mismatched on every single pull request — a permanently-red diagnostic,
+    # which is how it came to be non-failing instead of correct.
+    SIGNED_FILES=$(git ls-files --cached --others --exclude-standard -- '*.json' '*.xml' | sed 's|^|./|' | sort)
+    if [ -z "$SIGNED_FILES" ]; then
+        # Empty input would leave xargs to run the hasher against stdin and write
+        # a checksum of nothing, which reads as a valid signature file.
+        print_warning "No committable artifacts found — signature not generated"
+        : > signature.sha256
+    elif command -v sha256sum >/dev/null 2>&1; then
+        echo "$SIGNED_FILES" | xargs sha256sum > signature.sha256
     else
-        find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs shasum -a 256 > signature.sha256
+        echo "$SIGNED_FILES" | xargs shasum -a 256 > signature.sha256
     fi
     cd "$PROJECT_ROOT"
     print_success "Quality summary and signature generated"

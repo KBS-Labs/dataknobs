@@ -22,11 +22,15 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 
 from tests._workspace import ROOT
 
 PRODUCER = ROOT / "bin" / "package-hashes.py"
 CONSUMER = ROOT / "bin" / "validate-quality-artifacts.sh"
+ARTIFACTS = ROOT / ".quality-artifacts"
+GITATTRIBUTES = ROOT / ".gitattributes"
+GIT_SETUP = ROOT / "bin" / "setup-git-config.sh"
 
 #: Emitted for completeness but deliberately not read from this payload. The
 #: consumer greps ``overall_status`` out of quality-summary.json directly, a few
@@ -120,3 +124,128 @@ def test_consumer_does_not_let_a_warning_shadow_the_verdict():
         f"and a failure reports only the warning: {chained}. Print it in its "
         "own 'if' ahead of the verdict instead."
     )
+
+
+def _required_files() -> list[str]:
+    """The REQUIRED_FILES array the consumer checks for existence."""
+    body = CONSUMER.read_text(encoding="utf-8")
+    match = re.search(r"^REQUIRED_FILES=\((.*?)^\)", body, re.MULTILINE | re.DOTALL)
+    assert match, f"REQUIRED_FILES array not found in {CONSUMER.name}"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def _is_committable(relative_path: str) -> bool:
+    """Whether git would keep this artifact path, i.e. .gitignore does not drop it."""
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", f".quality-artifacts/{relative_path}"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    # 0 means the path IS ignored, 1 means it is not, and anything else is an
+    # error — check-ignore reports 128 outside a work tree. Treating that as
+    # "not ignored" would pass this guard on every path without consulting a
+    # single rule, which is the failure it exists to catch.
+    if result.returncode not in (0, 1):
+        raise AssertionError(
+            f"git check-ignore failed ({result.returncode}) for {relative_path}: "
+            f"{result.stderr.decode(errors='replace').strip()}"
+        )
+    return result.returncode == 1
+
+
+def test_every_required_artifact_is_one_git_actually_keeps():
+    """A required file that .gitignore drops fails every pull request at once.
+
+    The two declarations sit in different files with nothing between them, and
+    the failure mode is maximally unhelpful: CI reports a missing artifact for
+    every branch, including ones that changed nothing, and the developer's
+    fix — re-running the checks — regenerates a file git then discards again.
+
+    This is a live risk rather than a hypothetical: coverage.xml was required
+    here and committed for months before being untracked as generated churn,
+    and the only thing that made that safe was removing it from the array in
+    the same change.
+    """
+    required = _required_files()
+    assert required, "no REQUIRED_FILES entries extracted — the array's shape changed"
+
+    dropped = sorted(name for name in required if not _is_committable(name))
+    assert not dropped, (
+        f"{CONSUMER.name} requires {dropped}, which .gitignore excludes from the "
+        "repository. CI would fail every pull request on a file no developer can "
+        "commit. Either add a '!' un-ignore rule, or drop it from REQUIRED_FILES."
+    )
+
+
+def test_no_coverage_report_is_committed():
+    """Coverage XML is generated, multi-megabyte, and cannot fail the gate.
+
+    It was committed on nearly every artifact run, conflicting on each one and
+    accumulating over a gigabyte of object history, to carry a line-rate the
+    validator reports as a warning and never fails on. That number lives in
+    quality-summary.json now. Re-adding an un-ignore rule for a coverage report
+    would quietly restore all of that.
+    """
+    ignore_rules = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    unignored = [
+        line.strip()
+        for line in ignore_rules
+        if line.strip().startswith("!.quality-artifacts/") and "coverage" in line
+    ]
+    assert not unignored, (
+        f"coverage reports are un-ignored again: {unignored}. The gate reads "
+        "coverage_percent from quality-summary.json and needs no XML committed."
+    )
+
+
+def test_the_merge_driver_gitattributes_names_is_actually_defined():
+    """`merge=<name>` is a reference; an undefined driver silently does nothing.
+
+    Git does not warn when a named merge driver has no `merge.<name>.driver`
+    config — it falls back to the default text merge and conflicts exactly as if
+    the attribute were absent. So .gitattributes on its own is indistinguishable
+    from protection that works, right up until the merge that needed it.
+
+    Asserting the setup script defines every driver .gitattributes names keeps
+    the two from drifting: renaming the driver in one file and not the other
+    fails here rather than at someone's next rebase.
+    """
+    attributes = GITATTRIBUTES.read_text(encoding="utf-8")
+    named = set(re.findall(r"\bmerge=([A-Za-z0-9_.-]+)", attributes))
+    assert named, (
+        f"{GITATTRIBUTES.name} names no merge driver — if the merge=ours line "
+        "was removed, delete this guard rather than leaving it passing vacuously"
+    )
+
+    setup = GIT_SETUP.read_text(encoding="utf-8")
+    undefined = sorted(
+        driver for driver in named if f'"merge.{driver}.driver"' not in setup
+    )
+    assert not undefined, (
+        f"{GITATTRIBUTES.name} uses merge drivers {undefined} that "
+        f"{GIT_SETUP.name} never configures. Git falls back to a text merge "
+        "without warning, so the attribute would do nothing at all."
+    )
+
+
+def test_the_signature_covers_the_committed_set_on_both_sides():
+    """Producer and verifier must enumerate the signed files the same way.
+
+    They did not: the producer signed every ``*.json``/``*.xml`` on disk, which
+    includes per-package coverage output that is gitignored, so the stored
+    signature named files a CI checkout never contains and the comparison
+    mismatched on every run. A check that always reports the same thing carries
+    no information, which is how it ended up explicitly non-failing.
+
+    Both sides enumerate through ``git ls-files`` now. If one reverts to a
+    filesystem walk they diverge again, and silently.
+    """
+    producer = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
+    consumer = CONSUMER.read_text(encoding="utf-8")
+
+    for name, body in (("run-quality-checks.sh", producer), (CONSUMER.name, consumer)):
+        assert "git ls-files" in body, (
+            f"{name} no longer enumerates signed artifacts with 'git ls-files', "
+            "so it signs or verifies a different set than its counterpart."
+        )

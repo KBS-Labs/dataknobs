@@ -80,6 +80,14 @@ _GLOBAL_QUALITY_INPUTS = [
     "mypy.ini",  # bin/validate.sh type-checks against it on one branch
     "pytest.ini",  # testpaths, addopts, and asyncio_mode for every run
     ".python-version",  # the interpreter itself
+    # The two scripts that *are* the lint and test steps. Every package's
+    # recorded result is whatever these produced, so a change to either makes
+    # all ten stale — the same blast radius as the config they read, which is
+    # already listed above. They sit here rather than under bin/ below because
+    # that tier is for inputs no package result depends on, and these are the
+    # inputs every package result depends on.
+    "bin/validate.sh",  # the validation step: ruff, mypy, import checks
+    "bin/test.sh",  # the test step: selection, markers, coverage flags
 ]
 
 # Reachable only by the workspace guards, so a change here cannot move any
@@ -95,13 +103,28 @@ _GLOBAL_QUALITY_INPUTS = [
 # Caveat, because it is asymmetric and easy to misread: change *detection* below
 # matches these by path prefix, so bin/*.sh counts; the artifact *hash* scope in
 # package-hashes.py globs "*.py" beneath a directory entry, so a shell-only
-# change here triggers the guards without dirtying the stored hash. That is
-# strictly better than the nothing it had before, and widening the glob is its
-# own decision — __pycache__ sits under tests/ and every stored hash would move.
+# change here triggers the guards without dirtying the stored hash.
+#
+# The scripts that produce and verify the artifact are shell, so they landed in
+# exactly that gap: editing the gate ran the guards but left the stored hash
+# intact, and the artifact written under the old rules still validated under the
+# new ones. They are named individually below. Naming them beats widening the
+# glob, which was the other way to close this: "*" beneath a directory entry
+# sweeps __pycache__ and would move every stored hash on a stray import.
+#
+# A file entry is matched exactly by both readers, so listing one is unambiguous
+# in a way a directory entry is not.
 _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".pylintrc",
     "bin/",
     "tests/",
+    # Shell, so the bin/ glob above does not reach them. Each decides what the
+    # gate checks or records without moving any package's own result: a suite
+    # that passed still passes, but the verdict about it was computed by
+    # different rules, so the artifact has to be regenerated under the new ones.
+    "bin/run-quality-checks.sh",  # writes the artifact CI validates
+    "bin/validate-quality-artifacts.sh",  # the checks CI actually runs
+    "bin/docs-update-versions.sh",  # the documentation_versions check it records
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only

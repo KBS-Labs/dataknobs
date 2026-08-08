@@ -26,8 +26,12 @@ fi
 
 # Default values
 TEST_TYPE="both"
-PACKAGE=""
-TEST_PATH=""  # For direct file/directory paths
+# Both accumulate, mirroring bin/validate.sh: a positional is classified as a
+# path or a package name and appended. They used to be single-valued, so a
+# second positional fell through to the unknown-option arm — which printed the
+# usage text and exited 0, reporting success for a run that never started.
+PACKAGE_NAMES=()
+TEST_PATHS=()  # For direct file/directory paths
 START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
@@ -181,18 +185,18 @@ show_usage() {
     cat << EOF
 ${CYAN}DataKnobs Test Runner${NC}
 
-Usage: $0 [OPTIONS] [PACKAGE|PATH] [-- PYTEST_ARGS]
+Usage: $0 [OPTIONS] [PACKAGE|PATH]... [-- PYTEST_ARGS]
 
 Run unit and/or integration tests for DataKnobs packages with flexible pytest options.
 
-PACKAGE|PATH can be:
+PACKAGE|PATH can be given more than once, and can be:
   - A package name (e.g., 'data', 'config')
   - A test file path (e.g., 'packages/data/tests/test_backends/test_s3.py')
   - A test directory (e.g., 'packages/data/tests/integration/')
 
 ${YELLOW}Options:${NC}
     -t, --type TYPE          Test type: unit, integration, or both (default: both)
-    -p, --package PACKAGE    Package or path to test
+    -p, --package PACKAGE    Package or path to test (repeatable)
                             Can be a package name (e.g., data, config)
                             or a file/directory path (e.g., packages/data/tests/test_s3.py)
                             If not specified, tests all packages
@@ -232,6 +236,7 @@ ${YELLOW}Randomized test order (pytest-randomly):${NC}
 ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
     $0 data                               # Test data package
+    $0 data config                        # Test several packages (one run each)
     $0 -t unit data                       # Unit tests only for data package
     $0 packages/data/tests/test_s3.py    # Run specific test file
     $0 packages/data/tests/integration/  # Run all integration tests for data
@@ -251,7 +256,17 @@ ${YELLOW}Docker/Container Notes:${NC}
     - Coverage reports are saved to project root for persistence
 
 EOF
-    exit 0
+}
+
+# Classify a positional as a path or a package name and record it.
+# Shared by -p/--package and the bare positional arm so the two cannot
+# disagree about what counts as a path.
+add_target() {
+    if [[ "$1" == *"/"* ]] || [ -f "$1" ] || [ -d "$1" ]; then
+        TEST_PATHS+=("$1")
+    else
+        PACKAGE_NAMES+=("$1")
+    fi
 }
 
 # Parse command line arguments
@@ -262,12 +277,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -p|--package)
-            # Check if it's a file path or package name
-            if [[ "$2" == *"/"* ]] || [ -f "$2" ] || [ -d "$2" ]; then
-                TEST_PATH="$2"
-            else
-                PACKAGE="$2"
-            fi
+            add_target "$2"
             shift 2
             ;;
         -s|--services)
@@ -318,6 +328,7 @@ while [[ $# -gt 0 ]]; do
         # Help
         -h|--help)
             show_usage
+            exit 0
             ;;
         # Separator for custom pytest args - everything after this goes to pytest
         --)
@@ -325,20 +336,18 @@ while [[ $# -gt 0 ]]; do
             PYTEST_ARGS="$@"
             break
             ;;
+        # An unrecognized flag. Matched before the positional arm below so it is
+        # diagnosed as a bad option rather than looked up as a package that does
+        # not exist — and so it exits non-zero, which the shared show_usage no
+        # longer decides for its callers.
+        -*)
+            echo -e "${RED}Unknown option: $1${NC}" >&2
+            echo "Use -- to pass arguments to pytest" >&2
+            show_usage >&2
+            exit 2
+            ;;
         *)
-            # Check if it's a package name or file path
-            if [ -z "$PACKAGE" ] && [ -z "$TEST_PATH" ]; then
-                # Check if it looks like a file/directory path
-                if [[ "$1" == *"/"* ]] || [ -f "$1" ] || [ -d "$1" ]; then
-                    TEST_PATH="$1"
-                else
-                    PACKAGE="$1"
-                fi
-            else
-                echo -e "${RED}Unknown option: $1${NC}"
-                echo "Use -- to pass arguments to pytest"
-                show_usage
-            fi
+            add_target "$1"
             shift
             ;;
     esac
@@ -607,26 +616,30 @@ if [ "$IN_DOCKER" = true ]; then
     echo -e "Environment: ${CYAN}Docker Container${NC}"
 fi
 
-# Determine what to test (file path vs package)
-if [ -n "$TEST_PATH" ]; then
-    # Test specific file or directory path
-    echo -e "Test path: ${BLUE}$TEST_PATH${NC}"
-    # For file paths, we'll run them directly, not through package logic
-    USE_PATH_MODE=true
-elif [ -n "$PACKAGE" ]; then
-    # Test specific package
-    if [ ! -d "$ROOT_DIR/packages/$PACKAGE" ]; then
-        echo -e "${RED}Package not found: $PACKAGE${NC}"
-        exit 1
-    fi
-    PACKAGES=("$PACKAGE")
-    echo -e "Package: ${BLUE}$PACKAGE${NC}"
-    USE_PATH_MODE=false
-else
+# Determine what to test. Paths and packages are no longer exclusive: each
+# named target runs, in the order it was classified. Only a run that names
+# neither falls back to discovering every package.
+PACKAGES=()
+
+if [ ${#TEST_PATHS[@]} -gt 0 ]; then
+    echo -e "Test paths: ${BLUE}${TEST_PATHS[*]}${NC}"
+fi
+
+if [ ${#PACKAGE_NAMES[@]} -gt 0 ]; then
+    # Every name is checked before anything runs, so an unknown package in the
+    # list fails immediately rather than after the earlier ones have run.
+    for pkg in "${PACKAGE_NAMES[@]}"; do
+        if [ ! -d "$ROOT_DIR/packages/$pkg" ]; then
+            echo -e "${RED}Package not found: $pkg${NC}" >&2
+            exit 1
+        fi
+    done
+    PACKAGES=("${PACKAGE_NAMES[@]}")
+    echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
+elif [ ${#TEST_PATHS[@]} -eq 0 ]; then
     # Discover packages based on test type
     PACKAGES=($(discover_test_packages "$TEST_TYPE"))
     echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
-    USE_PATH_MODE=false
 fi
 
 if [ -n "$PYTEST_ARGS" ]; then
@@ -655,29 +668,30 @@ cleanup_services() {
 # Set trap for cleanup on exit
 trap cleanup_services EXIT INT TERM
 
-# Run tests based on mode
-if [ "$USE_PATH_MODE" = true ]; then
-    # Run tests for the specified path
-    run_path_tests "$TEST_PATH" || OVERALL_RESULT=$?
-else
-    # Run tests for each package
-    for pkg in "${PACKAGES[@]}"; do
-        echo -e "\n${GREEN}Testing package: $pkg${NC}"
-        echo "----------------------------------------"
-        
-        case "$TEST_TYPE" in
-            unit)
-                run_unit_tests "$pkg" || OVERALL_RESULT=$?
-                ;;
-            integration)
-                run_integration_tests "$pkg" || OVERALL_RESULT=$?
-                ;;
-            both)
-                run_combined_tests "$pkg" || OVERALL_RESULT=$?
-                ;;
-        esac
-    done
-fi
+# Run every named target. Each gets its own pytest process — packages have
+# always been run one at a time by the discovery path, and naming several
+# explicitly takes the same route rather than handing pytest one invocation
+# spanning multiple package trees.
+for path in "${TEST_PATHS[@]}"; do
+    run_path_tests "$path" || OVERALL_RESULT=$?
+done
+
+for pkg in "${PACKAGES[@]}"; do
+    echo -e "\n${GREEN}Testing package: $pkg${NC}"
+    echo "----------------------------------------"
+
+    case "$TEST_TYPE" in
+        unit)
+            run_unit_tests "$pkg" || OVERALL_RESULT=$?
+            ;;
+        integration)
+            run_integration_tests "$pkg" || OVERALL_RESULT=$?
+            ;;
+        both)
+            run_combined_tests "$pkg" || OVERALL_RESULT=$?
+            ;;
+    esac
+done
 
 # Summary
 echo ""

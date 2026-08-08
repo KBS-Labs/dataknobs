@@ -336,23 +336,27 @@ For more details, see `.dataknobs/README.md` for the full package registry docum
 
 We follow [PEP 8](https://pep8.org/) with some modifications:
 
-- **Line length**: 88 characters (Black default)
-- **Imports**: Use isort for import organization
+- **Line length**: 100 characters (`tool.ruff.line-length`)
+- **Imports**: Organized by ruff's `I` rules — no separate isort
 - **Docstrings**: Google style docstrings
-- **Type hints**: Required for all public APIs
+- **Type hints**: Required for all public APIs, in modern syntax (`list[str]`,
+  `X | None`)
 
 ### Code Formatting
 
+Ruff handles both linting and formatting; there is no Black or isort in this
+repository. Always pass the root config, which is the authoritative one.
+
 ```bash
-# Format code with Black
-black packages/
+# Lint, and auto-fix what can be fixed
+bin/validate.sh -f
 
-# Sort imports with isort
-isort packages/
+# Or drive ruff directly
+uv run ruff check --config pyproject.toml packages/<pkg>/src
+uv run ruff format --config pyproject.toml packages/<pkg>/src
 
-# Check formatting
-black --check packages/
-isort --check-only packages/
+# Type checking
+uv run mypy packages/<pkg>/src
 ```
 
 ### Docstring Style
@@ -582,13 +586,17 @@ dk diagnose        # If checks fail, see what went wrong
 dk fix             # Auto-fix style issues
 dk test --last     # Re-run only failed tests
 
-# Or manually run individual checks
-uv run ruff check packages/    # Style check
-uv run ruff format packages/   # Format code
-uv run pylint packages/*/src   # Linting
-uv run mypy packages/          # Type checking
-uv run pytest                  # Run tests
+# Or manually run individual checks. Always pass the root config: it is the
+# one bin/validate.sh uses, and a per-package [tool.ruff] section can differ.
+uv run ruff check --config pyproject.toml packages/*/src     # Style check
+uv run ruff format --config pyproject.toml packages/*/src    # Format code
+uv run pylint packages/*/src --rcfile=.pylintrc              # Linting
+uv run mypy packages/*/src                                   # Type checking
+uv run pytest                                                # Run tests
 ```
+
+`pylint` is a developer aid here, not part of the gate — no quality-check step
+runs it.
 
 ### Commit Messages
 

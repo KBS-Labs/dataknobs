@@ -122,6 +122,25 @@ def compute_package_hash(package_name: str) -> str:
     return _hash_files(all_files, pkg_dir)
 
 
+def workspace_scope_files(scope: str) -> list[Path]:
+    """Every file one workspace scope actually hashes.
+
+    Split out from compute_workspace_hash so a guard can ask "is this script
+    covered?" through the same entry semantics the hash uses, rather than
+    restating them. A restatement would answer the question about a rule the
+    hasher does not follow, which is how a coverage check ends up passing for
+    a file nothing hashes.
+    """
+    files: list[Path] = []
+    for entry in WORKSPACE_QUALITY_INPUTS[scope]:
+        target = _ROOT / entry.rstrip("/")
+        if entry.endswith("/"):
+            files.extend(p for p in target.rglob("*.py") if p.is_file())
+        elif target.is_file():
+            files.append(target)
+    return files
+
+
 def compute_workspace_hash(scope: str) -> str:
     """Hash one workspace-level scope declared in WORKSPACE_QUALITY_INPUTS.
 
@@ -134,17 +153,7 @@ def compute_workspace_hash(scope: str) -> str:
     by nature (.pylintrc and mypy.ini are both absent in a fresh checkout of
     some branches), and its later appearance changes the hash on its own.
     """
-    entries = WORKSPACE_QUALITY_INPUTS[scope]
-    files: list[Path] = []
-
-    for entry in entries:
-        target = _ROOT / entry.rstrip("/")
-        if entry.endswith("/"):
-            files.extend(p for p in target.rglob("*.py") if p.is_file())
-        elif target.is_file():
-            files.append(target)
-
-    return _hash_files(files, _ROOT)
+    return _hash_files(workspace_scope_files(scope), _ROOT)
 
 
 def compute_all_hashes() -> dict[str, str]:
