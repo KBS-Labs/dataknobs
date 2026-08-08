@@ -80,6 +80,82 @@ def test_flags_base_exception_too(tmp_path):
         assert_no_broad_except_in_error_text(path, error_names=_ERRORS)
 
 
+def test_flags_import_error_by_default(tmp_path):
+    """``except ImportError`` is narrow and still unbounded.
+
+    Its text reads ``cannot import name 'X' from 'pkg'
+    (/abs/path/site-packages/pkg/__init__.py)`` — an absolute filesystem
+    path, which is exactly what a not-found error withholds on the grounds
+    that it doubles as a map of the server's filesystem.
+
+    Default rather than opt-in because the reason is a property of the
+    exception type, not of the package catching it: an opt-in that every
+    caller has to remember is a guard that narrows quietly, and this one was
+    recommended in its own docstring and passed by nobody for as long as it
+    existed.
+    """
+    path = _write(
+        tmp_path,
+        "def f():\n"
+        "    try:\n"
+        "        import_module(name)\n"
+        "    except ImportError as e:\n"
+        '        raise ConfigError(f"failed to import {name}: {e}") from e\n',
+    )
+
+    with pytest.raises(AssertionError) as excinfo:
+        assert_no_broad_except_in_error_text(path, error_names=_ERRORS)
+
+    assert "sample.py:5" in str(excinfo.value)
+
+
+def test_a_narrow_except_is_still_not_flagged(tmp_path):
+    """The default set stays a set, not "every named type".
+
+    ``AttributeError`` from ``getattr`` yields a module and an attribute
+    name — text the project can reason about. If widening the default had
+    swept in every narrow clause, the guard would flag the prescribed fix
+    along with the defect.
+
+    This replaces a test that made the same point with ``ImportError`` and a
+    docstring reading "bounded, and worth keeping" — which contradicted the
+    module's own documentation, where ``ImportError`` was the named example
+    of a narrow clause that is *not* bounded. The guard's suite and the
+    guard's docs disagreed about that type from the day both were written.
+    """
+    path = _write(
+        tmp_path,
+        "def f():\n"
+        "    try:\n"
+        "        getattr(mod, name)\n"
+        "    except AttributeError as e:\n"
+        '        raise ConfigError(f"failed: {e}") from e\n',
+    )
+
+    assert_no_broad_except_in_error_text(path, error_names=_ERRORS)
+
+
+def test_an_explicit_unbounded_types_still_overrides_the_default(tmp_path):
+    """The parameter is an override, and stays one.
+
+    Passing it replaces the default rather than extending it, so a caller
+    that names only ``Exception`` gets exactly that — the behaviour every
+    call site had before ``ImportError`` joined the default.
+    """
+    path = _write(
+        tmp_path,
+        "def f():\n"
+        "    try:\n"
+        "        import_module(name)\n"
+        "    except ImportError as e:\n"
+        '        raise ConfigError(f"failed: {e}") from e\n',
+    )
+
+    assert_no_broad_except_in_error_text(
+        path, error_names=_ERRORS, unbounded_types={"Exception"}
+    )
+
+
 def test_flags_a_qualified_broad_except(tmp_path):
     """``except builtins.Exception`` is the same clause spelled longer."""
     path = _write(
@@ -274,20 +350,6 @@ def test_allows_the_bounded_replacement(tmp_path):
         "        build()\n"
         "    except Exception as e:\n"
         '        raise ConfigurationError(f"failed ({type(e).__name__})") from e\n',
-    )
-
-    assert_no_broad_except_in_error_text(path, error_names=_ERRORS)
-
-
-def test_allows_a_narrow_except(tmp_path):
-    """``ImportError`` text is module names — bounded, and worth keeping."""
-    path = _write(
-        tmp_path,
-        "def f():\n"
-        "    try:\n"
-        "        build()\n"
-        "    except ImportError as e:\n"
-        '        raise ConfigurationError(f"failed: {e}") from e\n',
     )
 
     assert_no_broad_except_in_error_text(path, error_names=_ERRORS)

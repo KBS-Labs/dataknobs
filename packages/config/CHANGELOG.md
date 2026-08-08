@@ -281,21 +281,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **`ObjectBuilder._load_class` no longer puts an arbitrary import failure's
-  message into the `ConfigError` it raises.** Resolving a dotted class path
-  calls `importlib.import_module`, which *executes* the target module, so the
-  non-`ImportError` branch was interpolating text produced by module-level
-  code the deployment supplied — a module that connects on import raises with
-  its connection URL in the message. `ConfigError` is a
+- **`ObjectBuilder._load_class` no longer puts a failed import's message into
+  the `ConfigError` it raises.** `ConfigError` is a
   `dataknobs_common.exceptions.ConfigurationError`, which the `dataknobs-bots`
-  API layer renders at the HTTP boundary, so that string could reach a
-  response body.
+  API layer renders at the HTTP boundary, so whatever went into that string
+  could reach a response body — and neither branch's text was this package's
+  to publish. Resolving a dotted class path calls `importlib.import_module`,
+  which *executes* the target module, so the non-`ImportError` branch carried
+  text produced by module-level code the deployment supplied: a module that
+  connects on import raises with its connection URL in the message. The
+  `ImportError` branch looks narrow enough to be safe and is not — `cannot
+  import name 'X' from 'pkg' (/abs/path/site-packages/pkg/__init__.py)` is an
+  absolute filesystem path, which this package withholds from a not-found
+  error for exactly that reason.
 
-  The message now names the class path (which comes from the config, not from
+  Both messages now name the class path (which comes from the config, not from
   the exception) and the exception type; the original travels on `__cause__`.
-  The `ImportError` branch is untouched — its text is module and attribute
-  names — as are the `except TypeError` instantiation branches, whose text is
-  a constructor signature mismatch.
+  The `except TypeError` instantiation branches are unchanged, their text
+  being a constructor signature mismatch.
 
 - **A config file's resolved path and contents no longer reach the error
   message.** `Config` resolves a path to an absolute one before reporting it,
