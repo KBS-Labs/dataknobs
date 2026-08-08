@@ -672,11 +672,16 @@ name under the roots while `"pkg/module.py:120"` exempts one; give as much path
 as you mean. **An entry that matches nothing fails the guard**, because a
 suppression whose site moved is a hole that otherwise reads as a clean scan.
 
-`unbounded_types=` widens what counts as a broad catch. `ImportError` is the
-case that motivated it: its text reads
-`cannot import name 'X' from 'pkg' (/abs/path/site-packages/pkg/__init__.py)`,
-an absolute filesystem path. A package resolving dotted paths from config
-should add it rather than assume the narrow clause bounded the text.
+`unbounded_types=` names what counts as an unbounded catch, defaulting to
+`Exception`, `BaseException` and `ImportError`. The first two are unbounded
+because they are *broad*; `ImportError` is unbounded despite being narrow,
+because of what its text says — `cannot import name 'X' from 'pkg'
+(/abs/path/site-packages/pkg/__init__.py)`, an absolute filesystem path. That
+reason is a property of the exception type rather than of the package catching
+it, which is why it is a default and not an opt-in.
+
+Passing `unbounded_types=` **replaces** the default rather than extending it,
+so union the default in when adding a type.
 
 The failure lists every site, so one run reports the whole surface.
 

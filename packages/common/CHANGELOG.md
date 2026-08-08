@@ -174,6 +174,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`assert_no_broad_except_in_error_text` now treats `ImportError` as
+  unbounded by default.** A narrow `except` is not automatically a bounded
+  one: an `ImportError`'s own text reads `cannot import name 'X' from 'pkg'
+  (/abs/path/site-packages/pkg/__init__.py)`, an absolute filesystem path,
+  which is precisely what a not-found error withholds on the grounds that it
+  doubles as a map of the server's filesystem. Interpolating it into an error
+  type that a boundary renders publishes that path.
+
+  It is a default rather than an opt-in because the reason is a property of
+  the exception type, not of the package catching it. `unbounded_types=`
+  still names the set, and still **replaces** the default rather than
+  extending it — union the default in when adding a type, or pass
+  `{"Exception", "BaseException"}` for the previous behaviour.
+
 - **The owned-vs-injected close helpers now log when an owned collaborator
   exposes no way to close it.** Each helper probes exactly one method name
   and skips when it is absent, so reaching for `aclose_if_owned` on a

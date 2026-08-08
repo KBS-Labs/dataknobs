@@ -249,3 +249,74 @@ def test_the_signature_covers_the_committed_set_on_both_sides():
             f"{name} no longer enumerates signed artifacts with 'git ls-files', "
             "so it signs or verifies a different set than its counterpart."
         )
+
+
+#: Ends the last check section. Without it the final section runs to EOF and
+#: swallows the summary's own ``exit 1``, which would satisfy every assertion
+#: below by accident.
+_SUMMARY_MARKER = "# Final summary"
+
+
+def _check_sections() -> list[tuple[int, str, list[str]]]:
+    """The consumer's checks, split on ``print_check`` and stopping at the summary.
+
+    Returned as ``(line_number, title, body)`` per section, one-indexed to match
+    what an editor shows.
+    """
+    lines = CONSUMER.read_text(encoding="utf-8").splitlines()
+    end = next(
+        (i for i, ln in enumerate(lines) if ln.strip() == _SUMMARY_MARKER), len(lines)
+    )
+    starts = [
+        i for i, ln in enumerate(lines[:end]) if re.match(r"^\s*print_check\s", ln)
+    ]
+    bounds = list(zip(starts, starts[1:] + [end]))
+    return [
+        (start + 1, lines[start].strip(), lines[start:stop]) for start, stop in bounds
+    ]
+
+
+def test_every_check_that_reports_a_failure_can_fail_the_build():
+    """A section calling ``print_fail`` must reach ``VALIDATION_FAILED`` or ``exit``.
+
+    ``print_fail`` only writes a red line. The verdict is ``VALIDATION_FAILED``,
+    and nothing ties the two together, so a check could print ``✗`` and let the
+    script exit 0 — which is what the artifact-signature check did on every pull
+    request, under a comment saying not to fail on it. It was written that way
+    because the comparison was broken and always mismatched; once that was fixed
+    the reason expired, but the branch stayed, and the first genuinely corrupt
+    signature went green.
+
+    The distinction this enforces is between *failing* and *advisory*. A check
+    that cannot fail the build must say so with ``print_warn`` — coverage is the
+    one such check, and it reads as a warning rather than announcing a failure
+    it has no intention of causing.
+
+    Granularity is the section, not the branch: shell arms are not worth parsing
+    here, and every instance of this defect has been a whole check that could
+    not fail rather than one arm of a check that could. A new non-accounting arm
+    inside a section that already fails elsewhere would pass this guard.
+    """
+    sections = _check_sections()
+    assert sections, (
+        f"no 'print_check' sections found in {CONSUMER.name} — the script was "
+        "restructured, so fix this guard rather than deleting it"
+    )
+    assert any("print_fail" in "\n".join(body) for _, _, body in sections), (
+        "no section calls print_fail, so this guard is checking nothing — "
+        "verify the failure helper was not renamed"
+    )
+
+    silent = [
+        f"line {line}: {title}"
+        for line, title, body in sections
+        if any("print_fail" in ln for ln in body)
+        and not any(
+            "VALIDATION_FAILED=1" in ln or re.match(r"^\s*exit\s", ln) for ln in body
+        )
+    ]
+    assert not silent, (
+        "these checks print a failure the build never sees, so they report "
+        f"'✗' and exit 0: {silent}. Set VALIDATION_FAILED=1 in the failing "
+        "branch, or use print_warn if the check is genuinely advisory."
+    )

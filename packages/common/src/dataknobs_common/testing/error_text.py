@@ -31,13 +31,17 @@ coming back:
         )
     ```
 
-"Predictable" is not the same as "safe", and ``unbounded_types=`` is how a
-caller says so. ``ImportError`` is the case that motivated it: its text reads
-``cannot import name 'X' from 'pkg' (/abs/path/site-packages/pkg/__init__.py)``
-— an absolute filesystem path, which is exactly what ``dataknobs_config``
-withholds from a not-found error on the grounds that it doubles as a map of the
-server's filesystem. A package resolving dotted paths from config should add it
-rather than assume the narrow clause made the text bounded.
+"Predictable" is not the same as "safe", so a narrow clause is not
+automatically bounded. ``ImportError`` is the case: its text reads ``cannot
+import name 'X' from 'pkg' (/abs/path/site-packages/pkg/__init__.py)`` — an
+absolute filesystem path, which is exactly what ``dataknobs_config`` withholds
+from a not-found error on the grounds that it doubles as a map of the server's
+filesystem. It is in the default set for that reason, and because the reason is
+a property of the exception type rather than of the package catching it: an
+opt-in every caller has to remember is a guard that narrows quietly.
+
+``unbounded_types=`` names the set, and **replaces** the default rather than
+extending it — union the default in when adding a type.
 
 It is a source scan, not a runtime check: the defect is a shape in the code,
 and the runtime path that reaches any given site may need a live database to
@@ -57,9 +61,16 @@ __all__ = [
     "assert_no_broad_except_in_error_text",
 ]
 
-#: ``except`` targets treated as unbounded. Anything narrower is assumed to
+#: ``except`` targets treated as unbounded, for either of two reasons.
+#:
+#: ``Exception`` and ``BaseException`` are unbounded because they are *broad*:
+#: the text comes from whatever ran in the ``try``, which can be consumer code.
+#:
+#: ``ImportError`` is unbounded despite being narrow, because of what its text
+#: says — ``cannot import name 'X' from 'pkg' (/abs/path/site-packages/...)``
+#: carries an absolute filesystem path. Anything else narrow is assumed to
 #: produce text the project can reason about.
-_BROAD = frozenset({"Exception", "BaseException"})
+_UNBOUNDED = frozenset({"Exception", "BaseException", "ImportError"})
 
 
 def _shared_error_names() -> frozenset[str]:
@@ -99,7 +110,7 @@ class BroadExceptFinding(NamedTuple):
     def __str__(self) -> str:
         return (
             f"{self.path}:{self.lineno}: {self.error_name} message interpolates "
-            f"'{self.exc_name}' caught by a broad except"
+            f"'{self.exc_name}', caught by an except whose text is unbounded"
         )
 
 
@@ -276,7 +287,7 @@ def assert_no_broad_except_in_error_text(
     *roots: Path,
     error_names: Iterable[str],
     ignore: Iterable[str] = (),
-    unbounded_types: Iterable[str] = _BROAD,
+    unbounded_types: Iterable[str] = _UNBOUNDED,
 ) -> None:
     """Fail if a broad ``except`` feeds its exception into a named error's message.
 
@@ -294,9 +305,9 @@ def assert_no_broad_except_in_error_text(
             An entry matching nothing is an error: a suppression whose site
             moved is a hole, and a silent one reads as a clean scan.
         unbounded_types: ``except`` targets whose text is treated as
-            unbounded. Defaults to ``Exception`` and ``BaseException``. Add
-            ``"ImportError"`` in a package that resolves dotted paths from
-            config — its text carries an absolute filesystem path.
+            unbounded. Defaults to ``Exception``, ``BaseException`` and
+            ``ImportError``. **Replaces** the default rather than extending
+            it, so union it in when adding a type.
 
     Raises:
         AssertionError: Listing every flagged site, so one run reports the
@@ -333,11 +344,12 @@ def assert_no_broad_except_in_error_text(
     if findings:
         listed = "\n".join(f"  {f}" for f in findings)
         raise AssertionError(
-            f"{len(findings)} error message(s) built from a broadly-caught "
-            f"exception:\n{listed}\n\n"
-            "The text of an exception caught by `except Exception` comes from "
-            "whatever ran in the `try`, including consumer code, so it can "
-            "carry a connection URL or a credential. Name what failed plus "
+            f"{len(findings)} error message(s) built from an exception whose "
+            f"text is unbounded:\n{listed}\n\n"
+            "Under `except Exception` the text comes from whatever ran in the "
+            "`try`, including consumer code, so it can carry a connection URL "
+            "or a credential. Under `except ImportError` it carries an "
+            "absolute filesystem path. Name what failed plus "
             "`type(exc).__name__`, and let `raise ... from exc` carry the "
             "original to the logs."
         )

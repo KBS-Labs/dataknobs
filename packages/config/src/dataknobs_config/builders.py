@@ -309,15 +309,19 @@ class ObjectBuilder:
             cls: Type[Any] = getattr(module, class_name)
             return cls
 
+        # Both branches report the same way, for the same reason. ConfigError
+        # is a ConfigurationError, which the bots API layer renders at the HTTP
+        # boundary, and neither caught exception's text is this project's to
+        # publish: importing a module executes it, so `except Exception` can
+        # carry anything module-level code raised, and an ImportError's own
+        # text carries an absolute site-packages path. The class path is from
+        # the config and the type name is a class name; __cause__ carries the
+        # rest to the logs.
         except ImportError as e:
-            raise ConfigError(f"Failed to import {class_path}: {e}") from e
+            raise ConfigError(
+                f"Failed to import {class_path} ({type(e).__name__})"
+            ) from e
         except Exception as e:
-            # Bounded message, unlike the ImportError branch above: importing
-            # a module executes it, so `e` here can come from arbitrary
-            # module-level code and is not text this project controls.
-            # ConfigError is a ConfigurationError, which the bots API layer
-            # renders at the HTTP boundary. The class path is from the config
-            # and the type name is a class name; __cause__ carries the rest.
             raise ConfigError(
                 f"Failed to load class {class_path} ({type(e).__name__})"
             ) from e
