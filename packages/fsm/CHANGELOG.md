@@ -102,6 +102,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ConfigLoader.merge_configs` accumulated list-valued fields instead of
+  replacing them, so merging two configurations produced a config neither one
+  described.** Its docstring said "Later configurations override earlier
+  ones," and for scalars it did. For lists it *extended* — and an FSM's whole
+  substance is list-shaped, so the promise was false for exactly the fields
+  carrying the state machine.
+
+  Two configurations each declaring one network named `main` merged into **two
+  networks both named `main`**, with the first configuration's states and the
+  second's sitting side by side. `validate_config` on the way out accepted the
+  result, so nothing surfaced until the FSM was built and behaved as though a
+  fragment it had been told to override were still in effect.
+
+  Lists are now replaced by the later configuration, matching
+  `dataknobs_config.deep_merge`, matching `apply_template` on the same kind of
+  data in this same package, and matching what the docstring always claimed.
+  The docstring now names the affected fields (`networks`, and each network's
+  `states` and `arcs`) rather than leaving "override" to be inferred.
+
+  **If you relied on the accumulation** — layering fragments that each
+  contribute networks or states, expecting the union — concatenate the lists
+  before merging, or merge the fragments into distinct keys. The old behavior
+  is not recoverable through `merge_configs`.
+
+  The private merge helpers behind `merge_configs` and `apply_template` are
+  deleted; both now call the exported `dataknobs_config.deep_merge`, which is
+  why the two can no longer disagree.
+
 - **Docs: a push arc that exceeds the depth limit does not throw.**
   `FSM_PROCESSING_FLOW.md` said it raises `StateTransitionError`, in both the
   prose and the flowchart. It logs an error and returns `False`, so the engine

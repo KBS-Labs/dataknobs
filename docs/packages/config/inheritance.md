@@ -133,6 +133,33 @@ result = deep_merge(base, override)
 # {"items": [4, 5]}
 ```
 
+This is the merge semantic for the whole codebase. Every *dict-deep-merge* path
+in DataKnobs routes through this one function — `extends:` resolution,
+`DynaBotConfigBuilder.merge_overrides`, `apply_template`, and
+`ConfigLoader.merge_configs` — and `tests/test_deep_merge_agreement.py` fails
+if one of them stops. To accumulate instead, concatenate before merging.
+
+(`Config.merge`, `EnvironmentConfig.merge`, and
+`dataknobs_common.merge_bindings` are *not* in that set. They combine named
+collections and binding layers rather than merging two dicts structurally, and
+have their own documented precedence rules.)
+
+### Non-mutation is a top-level guarantee
+
+Neither argument is mutated. The copy at each level is *shallow*, though, so a
+key present in only one input is carried into the result **by reference**:
+
+```python
+base = {"shared": {"deep": 1}}
+result = deep_merge(base, {"other": 2})
+result["shared"] is base["shared"]   # True
+```
+
+Rebinding keys on the result is safe; mutating a nested value reached *through*
+it also mutates the input. Copy first if you need isolation — merging into a
+module-level constant is the case where forgetting bites, because the corruption
+outlives the call.
+
 ## Multi-Level Inheritance
 
 Configurations can chain inheritance:
@@ -440,7 +467,10 @@ def deep_merge(base: dict, override: dict) -> dict:
     """Deep merge two dictionaries.
 
     Override values take precedence. Nested dicts are merged recursively;
-    all other types are replaced.
+    every other type, lists included, is replaced.
+
+    Neither argument is mutated. The copy is shallow at each level, so the
+    result is not deeply isolated from its inputs.
     """
 
 def substitute_env_vars(data: Any) -> Any:

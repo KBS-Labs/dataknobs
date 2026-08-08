@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 import yaml
+from dataknobs_config import deep_merge
 
 from .schema import DynaBotConfigSchema
 from .templates import ConfigTemplate
@@ -459,7 +460,8 @@ class DynaBotConfigBuilder:
     def merge_overrides(self, overrides: dict[str, Any]) -> Self:
         """Merge override values into the current configuration.
 
-        Performs recursive dict merge for nested dictionaries.
+        Performs recursive dict merge for nested dictionaries. Lists, like
+        every non-dict value, are replaced rather than extended.
 
         Args:
             overrides: Override values to merge.
@@ -467,7 +469,7 @@ class DynaBotConfigBuilder:
         Returns:
             self for method chaining.
         """
-        self._config = _deep_merge(self._config, overrides)
+        self._config = deep_merge(self._config, overrides)
         return self
 
     # -- Output --
@@ -588,26 +590,3 @@ class DynaBotConfigBuilder:
         config = dict(self._config)
         config.update(self._custom_sections)
         return config
-
-
-def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge overrides into base dict.
-
-    Args:
-        base: Base dictionary.
-        overrides: Override values to merge in.
-
-    Returns:
-        New merged dictionary.
-    """
-    result = dict(base)
-    for key, value in overrides.items():
-        if (
-            key in result
-            and isinstance(result[key], dict)
-            and isinstance(value, dict)
-        ):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result

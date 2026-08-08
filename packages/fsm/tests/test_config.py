@@ -198,6 +198,53 @@ class TestConfigTemplates:
             assert "data_mode" in config
             assert "execution_strategy" in config
 
+    def test_returned_config_is_isolated_from_the_template(self):
+        """A caller mutating the result must not corrupt the module template.
+
+        `apply_template` deepcopies `TEMPLATES[template]` before merging, and
+        that deepcopy is load-bearing rather than vestigial: with no overrides
+        the merge never runs at all, so without it this returns the
+        module-level constant itself and the mutation below is permanent for
+        the rest of the process.
+
+        The deepcopy reads as redundant now that the merge no longer mutates
+        its base, which is exactly why it needs a test standing on it.
+        """
+        template = UseCaseTemplate.DATABASE_ETL
+
+        first = apply_template(template)
+        first["data_mode"]["default"] = "mutated-by-caller"
+        first["injected"] = "should not persist"
+
+        second = apply_template(template)
+
+        assert second["data_mode"]["default"] == DataHandlingMode.COPY
+        assert "injected" not in second
+
+    def test_isolation_survives_an_override_of_a_sibling_key(self):
+        """The deepcopy is what isolates sections the overrides never touch.
+
+        This is the case that makes removing the deepcopy wrong in general
+        rather than only for the no-override call. `deep_merge` copies
+        shallowly, so a key present in *only* the template -- here
+        ``data_mode``, while the overrides address ``execution_strategy`` --
+        is carried into the result **by reference**. Merging the template
+        directly would hand the caller the constant's own nested dict.
+
+        Overriding *into* ``data_mode`` instead would not detect this: the
+        recursive branch builds a fresh dict for a key both sides declare, so
+        that section comes out isolated whether or not the deepcopy ran.
+        """
+        template = UseCaseTemplate.DATABASE_ETL
+
+        first = apply_template(
+            template,
+            overrides={"execution_strategy": ExecutionStrategy.DEPTH_FIRST},
+        )
+        first["data_mode"]["default"] = "mutated-by-caller"
+
+        assert apply_template(template)["data_mode"]["default"] == DataHandlingMode.COPY
+
 
 class TestConfigLoader:
     """Test configuration loader."""
@@ -509,6 +556,54 @@ class TestConfigLoader:
         merged = loader.merge_configs(config1, config2)
         assert merged.name == "test2"
         assert merged.version == "2.0.0"
+        # The fields this test was blind to, and the reason the divergence
+        # survived: `name` and `version` are scalars, and every merge helper
+        # in the codebase agreed about scalars. Only the list-valued fields
+        # ever disagreed, and nothing here looked at them.
+        assert len(merged.networks) == 1
+        assert [n.name for n in merged.networks] == ["main"]
+        assert len(merged.networks[0].states) == 1
+
+    def test_merge_configs_replaces_list_valued_fields(self):
+        """Later configurations replace list-valued fields, not accumulate them.
+
+        Regression. `merge_configs` used a private merge helper that EXTENDED
+        lists, while every other merge path in DK -- including `apply_template`
+        in this same package -- replaces them. Two configurations each
+        declaring one network named "main" merged into *two* networks both
+        named "main", and `validate_config` on the way out accepted the result.
+
+        An FSM's substance is entirely list-shaped (`networks` -> `states` ->
+        `arcs`), so "Later configurations override earlier ones" was false for
+        exactly the fields carrying the state machine.
+        """
+        loader = ConfigLoader()
+
+        def one_network(name: str, version: str, state: str) -> FSMConfig:
+            return FSMConfig(
+                name=name,
+                version=version,
+                networks=[
+                    NetworkConfig(
+                        name="main",
+                        states=[StateConfig(name=state, is_start=True, arcs=[])],
+                    ),
+                ],
+                main_network="main",
+            )
+
+        merged = loader.merge_configs(
+            one_network("test1", "1.0.0", "from_first"),
+            one_network("test2", "2.0.0", "from_second"),
+        )
+
+        # The defect produced two networks, both named "main".
+        assert len(merged.networks) == 1
+        assert merged.networks[0].name == "main"
+        # Distinct state names, so this pins *which* configuration won as well
+        # as how many survived. Naming the state "start" on both sides -- as
+        # the test above does -- cannot tell a replace from a merge.
+        assert [s.name for s in merged.networks[0].states] == ["from_second"]
 
 
 class TestFSMBuilder:

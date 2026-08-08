@@ -1373,19 +1373,34 @@ order).
 ```python
 from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
 
-def deep_merge(target, source):
+def merge_in_place(target, source):
     for k, v in source.items():
         if isinstance(v, dict) and isinstance(target.get(k), dict):
-            deep_merge(target[k], v)
+            merge_in_place(target[k], v)
         else:
             target[k] = v
 
 config = WizardReasoningConfig(
     wizard_config=...,
     manager_metadata_inbox_key="_inbox",
-    inbox_merge_fn=deep_merge,
+    inbox_merge_fn=merge_in_place,
 )
 ```
+
+> **Caveat — `inbox_merge_fn` mutates; `dataknobs_config.deep_merge`
+> returns.** The signature is `Callable[[dict, dict], None]`: the merger
+> writes into `target`, and its return value is discarded.
+> `dataknobs_config.deep_merge` is the codebase's canonical dict merge, but
+> it is deliberately *non-mutating*, so passing it here leaves the inbox
+> payload silently unapplied with nothing raised. Wrap it to get its
+> semantics:
+>
+> ```python
+> from dataknobs_config import deep_merge
+>
+> def merge_in_place(target, source):
+>     target.update(deep_merge(target, source))
+> ```
 
 **Writer helper** — for consumer code (pipeline steps, custom
 logic) that publishes to the inbox for the NEXT turn:

@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from dataknobs_config import deep_merge
+
 from dataknobs_fsm.core.arc import DataIsolationMode
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
@@ -369,24 +371,21 @@ def apply_template(
         Configuration dictionary.
     """
     import copy
-    
+
+    # Deep, and load-bearing. `deep_merge` copies shallowly, so returning a
+    # merge of TEMPLATES[template] directly would hand back a config sharing
+    # nested subtrees with this module-level constant -- a caller mutating a
+    # nested section of the result would corrupt the template for the rest of
+    # the process. Keep this even though the merge below no longer mutates.
     config = copy.deepcopy(TEMPLATES[template])
-    
+
     # Apply parameters (template-specific logic can go here)
     if params:
         # This would contain template-specific parameter application
         pass
-    
+
     # Apply overrides
     if overrides:
-        def deep_merge(base: Dict, updates: Dict) -> Dict:
-            for key, value in updates.items():
-                if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                    deep_merge(base[key], value)
-                else:
-                    base[key] = value
-            return base
-        
-        deep_merge(config, overrides)
-    
+        config = deep_merge(config, overrides)
+
     return config

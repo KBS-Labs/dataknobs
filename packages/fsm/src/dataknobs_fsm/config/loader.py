@@ -21,7 +21,7 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
 )
 from dataknobs_config import Config as DataknobsConfig
-from dataknobs_config import substitute_env_vars
+from dataknobs_config import deep_merge, substitute_env_vars
 
 from dataknobs_fsm.config.schema import (
     FSMConfig,
@@ -709,40 +709,22 @@ class ConfigLoader:
 
     def merge_configs(self, *configs: FSMConfig) -> FSMConfig:
         """Merge multiple FSM configurations.
-        
-        Later configurations override earlier ones.
-        
+
+        Later configurations override earlier ones. List-valued fields --
+        including ``networks``, and each network's ``states`` and ``arcs`` --
+        are **replaced** by the later configuration rather than accumulated
+        across configurations, matching :func:`dataknobs_config.deep_merge`
+        and :func:`~dataknobs_fsm.config.schema.apply_template`.
+
         Args:
             *configs: FSMConfig instances to merge.
-            
+
         Returns:
             Merged FSMConfig instance.
         """
-        merged_dict = {}
-        
-        for config in configs:
-            config_dict = config.model_dump()
-            self._deep_merge(merged_dict, config_dict)
-        
-        return validate_config(merged_dict)
+        merged_dict: Dict[str, Any] = {}
 
-    def _deep_merge(self, base: Dict, updates: Dict) -> Dict:
-        """Deep merge two dictionaries.
-        
-        Args:
-            base: Base dictionary (modified in place).
-            updates: Updates to apply.
-            
-        Returns:
-            Merged dictionary.
-        """
-        for key, value in updates.items():
-            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                self._deep_merge(base[key], value)
-            elif key in base and isinstance(base[key], list) and isinstance(value, list):
-                # For lists, we extend rather than replace
-                base[key].extend(value)
-            else:
-                base[key] = value
-        
-        return base
+        for config in configs:
+            merged_dict = deep_merge(merged_dict, config.model_dump())
+
+        return validate_config(merged_dict)
