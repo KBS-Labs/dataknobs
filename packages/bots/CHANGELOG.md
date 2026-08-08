@@ -96,6 +96,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_optional_callable` raises `DottedPathError` rather than
   `ValueError`.
 
+- **A bad `chunking.chunker` path now escapes
+  `create_knowledge_base_from_config` as a `DottedPathError` rather than an
+  `OperationError`.** No bots code changed here — this follows from
+  `dataknobs-xization` adopting the shared resolver, and it is recorded in
+  this changelog because the type a bots API raises is a bots contract.
+
+  The knowledge-base registry unwraps a backend's exception out of the
+  registry's `OperationError` wrapper when it is a `ValueError` or a
+  `DataknobsError`, and re-raises the wrapper otherwise. `create_chunker`
+  used to fail with `ImportError`, which is neither, so the wrapper escaped;
+  it now fails with `DottedPathError`, which *is* a `DataknobsError`, so the
+  cause escapes in its place. A caller writing `except OperationError:`
+  around knowledge-base construction to catch a mistyped chunker path stops
+  catching it; `except ConfigurationError:` catches it, and matches how every
+  other dotted-path fault in a bot config already reports.
+
+  Unchanged at the HTTP boundary — both types render as `500`.
+
 - **`DynaBotConfigBuilder.merge_overrides` documents list-replace, and no
   longer carries its own merge.** The behavior is unchanged — the private
   `_deep_merge` it used was byte-equivalent to `dataknobs_config.deep_merge`,

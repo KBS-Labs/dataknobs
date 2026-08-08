@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolver at all — it fell through to a registry lookup and reported that no
   such plugin was registered, which is not what went wrong. Both separators are
   recognised now. Registry keys are plain identifiers (`markdown_tree`,
-  `merge_small`) and contain neither; a *registered* key containing `:` would
-  now be read as a dotted path.
+  `merge_small`) and contain neither, and a registered key wins in any case:
+  a path is resolved only for a key the registry does not already hold, so
+  widening the gate cannot shadow an existing entry.
 
 - **Resolving one of those keys fails as a `ConfigurationError`.** This site
   raised `ImportError`, `AttributeError` or `TypeError` depending on how the

@@ -76,6 +76,67 @@ class ConformingResource(BaseResourceProvider):
         return self.metrics
 
 
+class StrictSignatureResource(BaseResourceProvider):
+    """A provider that declares its parameters instead of absorbing them.
+
+    ``ConformingResource`` takes ``**kwargs``, which is the shape that hides
+    the builder passing a key that is not a constructor argument: the stray
+    keyword lands in the catch-all and nothing complains. Most real providers
+    are written this way — ``FileSystemResource`` and ``HTTPServiceResource``
+    both name their parameters — so a fixture that only ever absorbs cannot
+    speak for them.
+    """
+
+    def __init__(self, name: str = "fixture", param1: str | None = None) -> None:
+        super().__init__(name)
+        self.param1 = param1
+        instantiations.bump()
+
+    def acquire(self, **kwargs: Any) -> Any:
+        return object()
+
+    def release(self, resource: Any) -> None:
+        return None
+
+    def validate(self, resource: Any) -> bool:
+        return True
+
+    def health_check(self) -> ResourceHealth:
+        return ResourceHealth.HEALTHY
+
+    def get_metrics(self) -> ResourceMetrics:
+        return self.metrics
+
+
+class NoInitResource:
+    """Satisfies the protocol structurally and defines no ``__init__``.
+
+    ``IResourceProvider`` is a runtime-checkable, method-only Protocol, so
+    conforming to it needs the five methods and nothing else — a provider has
+    no obligation to define a constructor. Such a class inherits
+    ``object.__init__``, a slot wrapper, which is the shape that has no
+    ``__code__`` attribute to read parameter names out of.
+
+    Not a ``BaseResourceProvider`` subclass on purpose: inheriting a *Python*
+    ``__init__`` supplies a ``__code__`` and would not exercise this at all.
+    """
+
+    def acquire(self, **kwargs: Any) -> Any:
+        return object()
+
+    def release(self, resource: Any) -> None:
+        return None
+
+    def validate(self, resource: Any) -> bool:
+        return True
+
+    def health_check(self) -> ResourceHealth:
+        return ResourceHealth.HEALTHY
+
+    def get_metrics(self) -> ResourceMetrics:
+        return ResourceMetrics()
+
+
 class NotAResource:
     """Resolves fine, satisfies nothing, and reports being constructed.
 
@@ -89,7 +150,9 @@ class NotAResource:
 
 __all__ = [
     "ConformingResource",
+    "NoInitResource",
     "NotAResource",
+    "StrictSignatureResource",
     "instantiations",
     "reset_instantiations",
 ]

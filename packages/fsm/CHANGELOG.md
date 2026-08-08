@@ -130,12 +130,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   did not catch. `module.path:Name` is now accepted alongside
   `module.path.Name`.
 
-- **A resource provider whose `__init__` is inherited or C-level crashed the
-  build with `AttributeError`.** Deciding whether to pass `name=` read
-  `resource_class.__init__.__code__.co_varnames`, and `__code__` does not exist
-  on a slot wrapper. `inspect.signature` answers the same question for every
-  callable, and falls back to not passing `name=` when a signature cannot be
-  read at all.
+- **A `custom` resource provider was constructed with the `class` path that
+  named it.** `_create_resource` read `class` out of the resource config and
+  then passed that same config through as keyword arguments, so every custom
+  provider received a stray `class="my_pkg:MyProvider"`. It can never be a
+  declared parameter — `class` is a reserved word — so the only providers that
+  worked were those absorbing `**kwargs`; one declaring its parameters, as
+  both built-in `filesystem` and `http` do, failed with `TypeError: __init__()
+  got an unexpected keyword argument 'class'`. The key selects the provider
+  and is no longer forwarded to it.
+
+- **A resource provider that declares no `__init__` of its own crashed the
+  build.** `IResourceProvider` is a method-only Protocol, so a conforming
+  provider need not define a constructor; such a class inherits
+  `object.__init__`, a slot wrapper. Deciding whether to pass `name=` read
+  `resource_class.__init__.__code__.co_varnames`, and a slot wrapper has no
+  `__code__` — an `AttributeError` before construction was attempted.
+  `inspect.signature` answers the same question for every callable, and falls
+  back to not passing `name=` when a signature cannot be read at all. (A
+  provider *inheriting* a Python `__init__`, from `BaseResourceProvider` or
+  anywhere else, was never affected: that supplies a `__code__` to read.)
 
 - **`ConfigLoader.merge_configs` accumulated list-valued fields instead of
   replacing them, so merging two configurations produced a config neither one

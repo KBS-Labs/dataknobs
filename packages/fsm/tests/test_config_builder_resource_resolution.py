@@ -39,10 +39,10 @@ def _reset_instantiation_counter() -> Iterator[None]:
     yield
 
 
-def _custom(class_path: str) -> ResourceConfig:
+def _custom(class_path: str, **extra: object) -> ResourceConfig:
     """A ``custom`` resource config naming *class_path* as its provider."""
     return ResourceConfig(
-        name="fixture", type="custom", config={"class": class_path}
+        name="fixture", type="custom", config={"class": class_path, **extra}
     )
 
 
@@ -102,6 +102,37 @@ def test_a_wrong_shape_custom_class_is_rejected_before_it_is_constructed() -> No
     )
 
 
+def test_a_custom_provider_is_not_handed_the_path_that_named_it() -> None:
+    """``class`` selects the provider; it is not one of its arguments.
+
+    The builder read ``class`` out of the resource config and then passed that
+    same config through as keyword arguments, so every custom provider was
+    constructed with a stray ``class="pkg.mod:Name"``. It can never be a
+    declared parameter — ``class`` is a reserved word — so the only provider
+    that survived it was one absorbing ``**kwargs``, which is why the fixtures
+    written alongside the resolver adoption did not see it.
+    """
+    resource = FSMBuilder()._create_resource(
+        _custom(f"{FIXTURES}:StrictSignatureResource", param1="value1")
+    )
+
+    assert isinstance(resource, fixtures.StrictSignatureResource)
+    assert resource.param1 == "value1", "declared parameters must still arrive"
+
+
+def test_a_provider_that_defines_no_init_is_constructed() -> None:
+    """A conforming provider need not declare a constructor at all.
+
+    ``IResourceProvider`` is a method-only Protocol, so a class satisfying it
+    may inherit ``object.__init__`` — a slot wrapper. Reading parameter names
+    off ``__init__.__code__`` raised ``AttributeError`` on exactly that shape;
+    ``inspect.signature`` reports it as taking nothing, which is true.
+    """
+    resource = FSMBuilder()._create_resource(_custom(f"{FIXTURES}:NoInitResource"))
+
+    assert isinstance(resource, fixtures.NoInitResource)
+
+
 def test_a_custom_resource_without_a_class_is_still_a_value_error() -> None:
     """The pre-resolution guard is unchanged by adopting the resolver."""
     with pytest.raises(ValueError, match="requires 'class'"):
@@ -129,17 +160,27 @@ def test_a_type_the_builder_cannot_build_reports_it_as_unsupported(
 
 
 @pytest.mark.parametrize(
-    "resource_type", ["database", "async_database", "filesystem"]
+    ("resource_type", "config"),
+    [
+        ("database", {}),
+        ("async_database", {}),
+        ("filesystem", {}),
+        ("http", {"base_url": "https://service.invalid"}),
+    ],
 )
-def test_the_builtin_types_that_do_resolve_still_do(resource_type: str) -> None:
+def test_the_builtin_types_that_do_resolve_still_do(
+    resource_type: str, config: dict[str, object]
+) -> None:
     """Regression guard for the entries that are not going anywhere.
 
-    The shape check this adoption adds is only correct if every surviving
+    The shape check this adoption adds is only correct if *every* surviving
     built-in passes it — ``IResourceProvider`` is what ``register_provider``
-    declares, and these are what it is handed.
+    declares, and these are what it is handed. So ``http`` is here despite
+    requiring an argument the other three do not; carrying a config per type
+    costs one column and keeps the claim and the coverage the same size.
     """
     resource = FSMBuilder()._create_resource(
-        ResourceConfig(name="fixture", type=resource_type, config={})
+        ResourceConfig(name="fixture", type=resource_type, config=config)
     )
 
     assert isinstance(resource, IResourceProvider)

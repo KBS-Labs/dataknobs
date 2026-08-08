@@ -379,9 +379,16 @@ class FSMBuilder:
 
         # Create resource with configuration, adding name if needed.
         # `inspect.signature` rather than `__init__.__code__.co_varnames`,
-        # which does not exist on a C-level or inherited slot-wrapper
-        # `__init__` and raised `AttributeError` for such a provider.
-        kwargs = config.config.copy()
+        # which does not exist on a slot-wrapper `__init__` — a provider that
+        # declares no constructor of its own inherits `object.__init__` — and
+        # raised `AttributeError` for such a provider.
+        #
+        # `class` names the provider; it is not one of its arguments, and it
+        # cannot be: `class` is a reserved word, so no `__init__` can declare
+        # it. Passing it through meant only providers absorbing `**kwargs`
+        # could be built at all. The sibling site in `dataknobs_config` drops
+        # it the same way.
+        kwargs = {key: value for key, value in config.config.items() if key != "class"}
         try:
             accepts_name = "name" in inspect.signature(resource_class).parameters
         except (TypeError, ValueError):
@@ -883,6 +890,15 @@ class FSMBuilder:
                 # attribute as a clear ValueError (parity with the builtin
                 # "not found" message), not a bare ModuleNotFoundError /
                 # AttributeError leaking from importlib.
+                #
+                # Deliberately a different family from `_create_resource`,
+                # which raises `ConfigurationError` for the same class of
+                # typo: the raises here match the `ValueError` the "registered
+                # function not found" branches above use, and consistency
+                # within this method was judged to matter more than
+                # consistency with a method 500 lines away. Reopen the
+                # question for the whole function-resolution family, not for
+                # this branch alone.
                 try:
                     module = importlib.import_module(func_ref.module)
                 except ImportError as exc:
@@ -1039,8 +1055,11 @@ def build_fsm(
     :class:`FSMBuilder` before building so that all string references
     in state definitions and arcs resolve correctly.
 
-    All three public FSM APIs (SimpleFSM, AsyncSimpleFSM, AdvancedFSM)
-    delegate to this function for consistent build behaviour.
+    ``AsyncSimpleFSM`` calls this directly and ``SimpleFSM`` reaches it by
+    wrapping ``AsyncSimpleFSM``. ``AdvancedFSM`` does **not** — it calls
+    :meth:`FSMBuilder.build` itself, so it does not get the custom-function
+    registration this function performs and takes its functions by another
+    route.
 
     Args:
         config: Path to a YAML/JSON config file, or a config dictionary.

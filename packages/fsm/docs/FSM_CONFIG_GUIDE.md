@@ -650,7 +650,8 @@ Resources are external dependencies that states can use.
 > `dataknobs-llm` (see `dataknobs_llm.fsm_integration`), and `vector_store`
 > was never implemented. The builder raises
 > `ValueError: Unsupported resource type` for both. Use a `custom` resource
-> pointing at the provider class instead.
+> pointing at the provider class instead — the `llm` entry in the example
+> below is written in that migrated form.
 
 A `custom` resource's `class` accepts either separator — `my_pkg.resources:MyResource`
 or `my_pkg.resources.MyResource` — and must resolve to an `IResourceProvider`.
@@ -688,11 +689,11 @@ unrelated class's `__init__`.
         },
         {
             "name": "llm",
-            "type": "llm",
+            "type": "custom",
             "config": {
-                "provider": "openai",
-                "model": "gpt-4",
-                "api_key": "${OPENAI_API_KEY}",
+                "class": "dataknobs_llm.fsm_integration:LLMResource",
+                "provider": "ollama",
+                "model": "llama3.2",
                 "temperature": 0.7
             }
         },

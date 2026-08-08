@@ -35,7 +35,10 @@ Usage::
             allow={
                 # Parses a CLI argument and exits; not config-driven
                 # resolution at all.
-                "llm/prompts/syntax.py:486",
+                "llm/src/dataknobs_llm/prompts/syntax.py:486",
+                # Takes an already-split module/name pair, so it parses no
+                # path and there is nothing for the resolver to own.
+                "fsm/src/dataknobs_fsm/config/builder.py:903",
             },
         )
 

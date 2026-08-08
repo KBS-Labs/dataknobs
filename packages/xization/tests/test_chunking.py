@@ -850,6 +850,50 @@ class TestTransformRegistry:
         finally:
             transform_registry.unregister("upper_test")
 
+    @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
+    def test_a_transform_resolves_by_dotted_path_under_either_separator(
+        self, separator
+    ):
+        """``transforms`` takes a dotted path too, and by the same rules.
+
+        ``_ensure_registered`` serves both registries, so the gate deciding
+        "path or registry key" is shared — but every test of it went through
+        ``chunker``, and a shared implementation is not the same as shared
+        coverage. This is the key ``create_chunker``'s own docstring
+        advertises (``{"my_project.transforms.Custom": {...}}``) and nothing
+        exercised it.
+        """
+        path = f"{MergeSmallChunks.__module__}{separator}MergeSmallChunks"
+        try:
+            chunker = create_chunker({
+                "transforms": [{path: {"min_size": 100}}],
+            })
+            assert isinstance(chunker, CompositeChunker)
+            # The registration is the resolution: `_ensure_registered` puts the
+            # resolved class under its own path, so this is what distinguishes
+            # "the path was imported" from "a wrapper was built around
+            # something". `CompositeChunker` exposes no transform list, and a
+            # test has no business reading its private one.
+            assert transform_registry.is_registered(path)
+        finally:
+            if transform_registry.is_registered(path):
+                transform_registry.unregister(path)
+
+    def test_an_unresolvable_transform_path_is_a_configuration_error(self):
+        """The chunker half's contract, on the half that shares its resolver.
+
+        This raised a bare ``ImportError`` for the same reason and is fixed by
+        the same change, so it is worth an assertion of its own rather than an
+        assumption that the shared call site makes it true.
+        """
+        with pytest.raises(ConfigurationError):
+            create_chunker({"transforms": [{"no_such_module:NoSuchTransform": {}}]})
+
+    def test_a_wrong_shape_transform_path_is_a_configuration_error(self):
+        """``int`` resolves and is not a ``ChunkTransform``."""
+        with pytest.raises(ConfigurationError):
+            create_chunker({"transforms": [{"builtins:int": {}}]})
+
 
 # ---------------------------------------------------------------------------
 # Config-driven pipeline

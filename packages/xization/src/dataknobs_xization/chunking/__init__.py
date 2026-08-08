@@ -22,7 +22,9 @@ Quick start::
         ],
     })
 
-    # Custom implementation via dotted import path
+    # Custom implementation via dotted import path. Either separator names the
+    # same class, and `transforms` entries accept a path in place of a key too.
+    chunker = create_chunker({"chunker": "my_project.chunkers:RFCChunker"})
     chunker = create_chunker({"chunker": "my_project.chunkers.RFCChunker"})
 
 Registering a custom chunker at import time::

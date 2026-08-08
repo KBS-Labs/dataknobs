@@ -1,7 +1,7 @@
 """Optional object construction and caching functionality."""
 
 import copy
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.imports import resolve_dotted
 
@@ -27,7 +27,7 @@ class ObjectBuilder:
             config_instance: The Config instance to build objects from
         """
         self._config = config_instance
-        self._cache: Dict[str, Any] = {}
+        self._cache: dict[str, Any] = {}
 
     def build(self, ref: str, cache: bool = True, **kwargs: Any) -> Any:
         """Build an object from a configuration reference.
@@ -307,9 +307,17 @@ class ObjectBuilder:
         Warning:
             Importing the module **executes** it. The resolver suppresses the
             underlying exception's text for that reason — it is arbitrary
-            consumer output, and a ``ConfigurationError`` is rendered at the
-            bots API layer's HTTP boundary. The path and the failure type
-            survive; the rest travels on ``__cause__``.
+            consumer output. The path and the failure type survive; the text
+            travels on ``__cause__``.
+
+            The message is bounded, not empty. A missing attribute appends
+            ``Available: ...`` — the public callables the named module
+            defines — which is a "did you mean" to a library caller and an
+            inventory of a deployment's internals to an HTTP one. That is why
+            the bots API layer masks ``DottedPathError`` rather than
+            disclosing it, on a row of its own separate from the
+            ``ConfigurationError`` it inherits from. Anything routing these to
+            an untrusted caller should mask them the same way.
         """
         return resolve_dotted(class_path)
 
