@@ -13,7 +13,12 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
 from dataknobs_common.bounded_cache import BoundedLRUCache
-from dataknobs_common.exceptions import ConfigurationError, NotFoundError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    DottedPathError,
+    NotFoundError,
+)
+from dataknobs_common.imports import resolve_callable, resolve_class
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMResponse, LLMStreamResponse
@@ -639,28 +644,36 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     ) -> Callable[[str], str] | None:
         """Resolve a context_transform reference to a callable (or ``None``).
 
-        A callable passes through; a dotted import string is resolved; any
-        other value is ignored with a warning.
+        A callable passes through; a dotted import string is resolved;
+        ``None`` means the key was omitted. Anything else is a
+        ``ConfigurationError``.
+
+        That last clause used to be a WARNING and a ``None`` return, which
+        made this function disagree with itself: a *typo'd* path was fatal
+        while a value of the wrong type entirely was shrugged off, so
+        ``context_transform: 42`` produced a bot that started cleanly and
+        silently applied no transform. Both are the same authoring mistake
+        with the same consequence.
+
+        Raises:
+            ConfigurationError: If *ref* is neither ``None``, a callable, nor
+                a resolvable dotted path.
         """
         if ref is None:
             return None
         if callable(ref):
             return ref
         if isinstance(ref, str):
-            from dataknobs_bots.tools.resolve import resolve_callable
-
             try:
                 return resolve_callable(ref)
-            except (ImportError, AttributeError, ValueError) as exc:
+            except DottedPathError as exc:
                 raise ConfigurationError(
-                    f"context_transform: could not resolve '{ref}': {exc}"
+                    f"context_transform: cannot resolve {ref!r} ({exc.reason})"
                 ) from exc
-        logger.warning(
-            "context_transform must be a callable or dotted import "
-            "string, got %s — ignoring",
-            type(ref).__name__,
+        raise ConfigurationError(
+            "context_transform must be a callable or a dotted import string; "
+            f"got {type(ref).__name__}"
         )
-        return None
 
     @property
     def prompt_resolver(self) -> PromptResolver | None:
@@ -1020,8 +1033,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             )
 
         if storage_class_path:
-            from dataknobs_bots.tools.resolve import resolve_callable
-
+            # `resolve_callable`, not `resolve_class`: this resolves a
+            # storage *class* but declares no base, because whether
+            # `ConversationStorage` admits duck-typed implementations is an
+            # open question and an `issubclass` gate here could reject
+            # configurations that work today. Tracked separately.
             storage_class = resolve_callable(storage_class_path)
             conversation_storage: ConversationStorage = await storage_class.create(
                 storage_config
@@ -3621,8 +3637,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             #     }
             # }
         """
-        import importlib
-
         optional = (
             tool_config.get("optional", False)
             if isinstance(tool_config, dict)
@@ -3710,33 +3724,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 class_path = tool_config["class"]
                 params = dict(tool_config.get("params", {}))
 
-                # Import the tool class
-                module_path, class_name = class_path.rsplit(".", 1)
-                module = importlib.import_module(module_path)
-                tool_class = getattr(module, class_name)
-
-                # Class-shape check BEFORE instantiation / from_config.
-                # A wrong-shape class is a programmer error (the spec is
-                # listed under the wrong field, or the dotted path points
-                # at the wrong symbol entirely), not a transient
-                # environment failure. ``optional: true`` is therefore
-                # NOT honored here — it covers missing modules / classes
-                # / bad params, not a class that resolved successfully
-                # but is the wrong type. Running ``from_config`` or the
-                # constructor before the shape check would let a
-                # misplaced spec trigger ctor side effects (network
-                # reads, file opens, log writes); mirroring the
-                # middleware-helper policy keeps that closed.
+                # `resolve_class` returns the CLASS, so the shape check
+                # necessarily precedes `from_config` / the constructor —
+                # a misplaced spec cannot trigger ctor side effects
+                # (network reads, file opens, log writes) on its way to
+                # being rejected. That used to be a policy held in a
+                # comment here and a matching comment in the middleware
+                # helper; it is now the only order the resolver can
+                # express. `DottedPathTypeError` is not a
+                # `DottedPathError`, which is what keeps `optional: true`
+                # from reaching it.
                 from dataknobs_llm.tools import Tool
 
-                if not (
-                    isinstance(tool_class, type) and issubclass(tool_class, Tool)
-                ):
-                    raise ConfigurationError(
-                        f"Resolved class {class_path} must subclass "
-                        f"{Tool.__module__}.{Tool.__qualname__} — got "
-                        f"{tool_class!r}."
-                    )
+                tool_class = resolve_class(class_path, Tool)
 
                 # Inject dependencies declared in catalog_metadata().requires
                 if dependencies:
@@ -3770,20 +3770,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 return None
             raise ConfigurationError(msg)
 
+        except DottedPathError as e:
+            # Resolution failure — covered by ``optional``. A shape mismatch
+            # arrives as `DottedPathTypeError`, which is a sibling type and
+            # so cannot match this clause; it falls through to the
+            # `ConfigurationError` re-raise below and always propagates.
+            #
+            # Bounded: `e` already carries only the ref and the failure
+            # reason, because importing a module executes it and the full
+            # text of whatever it raised is on __cause__.
+            msg = f"Failed to resolve tool class ({e.reason})"
+            if optional:
+                logger.warning("Skipping optional tool: %s", msg)
+                return None
+            # Same type, not a plain `ConfigurationError`: a caller
+            # branching on `reason` must not lose it to a re-wrap that
+            # exists only to name the config key.
+            raise DottedPathError(msg, ref=e.ref, reason=e.reason) from e
         except ConfigurationError:
             raise
-        except ImportError as e:
-            msg = f"Failed to import tool class: {e}"
-            if optional:
-                logger.warning("Skipping optional tool: %s", msg)
-                return None
-            raise ConfigurationError(msg) from e
-        except AttributeError as e:
-            msg = f"Failed to find tool class: {e}"
-            if optional:
-                logger.warning("Skipping optional tool: %s", msg)
-                return None
-            raise ConfigurationError(msg) from e
         except Exception as e:
             detail = f"Failed to instantiate tool: {e}"
             if optional:

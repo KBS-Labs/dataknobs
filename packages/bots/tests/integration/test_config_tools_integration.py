@@ -422,7 +422,7 @@ class TestErrorHandling:
             ],
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             await DynaBot.from_config(config)
 
     @pytest.mark.asyncio
@@ -483,7 +483,7 @@ class TestErrorHandling:
             ],
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             await DynaBot.from_config(config)
 
     @pytest.mark.asyncio

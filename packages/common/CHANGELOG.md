@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.imports` — one dotted-path resolver family.**
+  `resolve_dotted` imports a module and returns one attribute of it;
+  `resolve_callable` and `resolve_class` add a shape check;
+  `resolve_optional_callable` is the `None`-tolerant lift for a config block
+  whose callable references are optional. All four are exported from the
+  package root, along with the `ClassConstraint` type alias.
+
+  Both `module.path:name` and `module.path.name` are accepted, everywhere.
+  Exactly one attribute lookup is performed — `module:Outer.Inner` is not
+  supported.
+
+  **`resolve_class` returns the class, not an instance**, so the caller
+  constructs. That makes validate-before-instantiate the only order the
+  function can express: a resolver returning an instance must construct the
+  target before it can check it, so a mistyped path runs an unrelated class's
+  `__init__` — arbitrary code, with whatever side effects it has — before
+  being rejected.
+
+  Its `base` parameter is typed `ClassConstraint[T]` rather than `type[T]`,
+  because mypy reads `type[T]` as instantiable and rejects an abstract class
+  or a protocol there — which is every useful argument, since a constraint
+  nobody can subclass constrains nothing. The alias is exported so that code
+  wrapping `resolve_class` can annotate its own parameter the same way instead
+  of reaching for `# type: ignore[type-abstract]`.
+
+  Resolving a dotted path **imports and executes** the target module. See the
+  [guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/)
+  for the trust boundary that implies, and why `resolve_class` is only a
+  *partial* mitigation.
+
+- **`DottedPathError` and `DottedPathTypeError`** (`dataknobs_common.exceptions`)
+  — the family's two error types, plus the `DottedPathReason` vocabulary
+  (`malformed`, `module_not_found`, `attribute_not_found`, `not_callable`)
+  carried on `DottedPathError.reason`, following `PackResolutionError`'s shape.
+
+  Both subclass `ConfigurationError`, so an existing `except ConfigurationError`
+  keeps working. They are deliberately **siblings, not parent and child**: the
+  obvious lenient handler — `except DottedPathError: if optional: return None`
+  — must not swallow a shape mismatch, which is never optional. As siblings it
+  cannot match one, so the contract holds by construction rather than by
+  remembering to order the `except` clauses.
+
+  Messages are bounded: they name the reference and the *type* of the
+  underlying failure, and the underlying exception's text travels on
+  `__cause__`. Importing a module executes it, so that text is arbitrary — and
+  these errors are rendered to HTTP clients by surfaces that map
+  `ConfigurationError` to a status.
+
+- **`assert_no_ad_hoc_dotted_import`** (`dataknobs_common.testing`) — a source
+  guard that fails when `importlib.import_module` (or `__import__`,
+  `pkgutil.resolve_name`, `pydoc.locate`) is called outside
+  `dataknobs_common.imports`. The companion to an agreement test, and not a
+  substitute for one: an agreement table catches drift between the sites it
+  lists and cannot notice a copy nobody adds to it; this catches the new copy
+  the day it is written and cannot notice an adopted site drifting.
+
+  `allow=` exempts a reviewed site by `"<path-suffix>:<lineno>"`. **An entry
+  matching nothing is an error** — a suppression whose site moved is a hole,
+  and a silent one reads as a clean scan.
+
 - **`assert_no_broad_except_in_error_text`** (`dataknobs_common.testing`) —
   a source guard that fails when a broad `except ... as exc` reaches a `raise`
   of a named error type whose message interpolates `exc`. The text of an

@@ -42,6 +42,130 @@ from dataknobs_bots.reasoning.wizard_derivations import (
     _execute_expression,
 )
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+from dataknobs_common.exceptions import ConfigurationError
+
+
+class _ConformingTransform:
+    """A ``FieldTransform``: has a ``transform`` method."""
+
+    def transform(self, value: Any, data: dict[str, Any]) -> Any:
+        return value
+
+
+class _NotATransform:
+    """Resolves fine, conforms to nothing. Records if it is constructed."""
+
+    constructed = 0
+
+    def __init__(self) -> None:
+        type(self).constructed += 1
+
+
+class TestCustomTransformResolution:
+    """The one fault of the twelve that had no test at all.
+
+    Eleven of ``parse_derivation_rules``' skip branches were pinned by a
+    test asserting the skip. The twelfth — a ``custom_class`` that cannot be
+    resolved — was the only one this item's consolidation touched, and the
+    only one nobody had covered. That is the same shape of coverage gap that
+    let the divergence survive elsewhere: the untested branch is the one that
+    drifts.
+    """
+
+    HERE = "tests.unit.test_wizard_field_derivations"
+
+    def _rule(self, path: str) -> dict[str, Any]:
+        return {
+            "source": "a",
+            "target": "b",
+            "transform": "custom",
+            "custom_class": path,
+        }
+
+    def test_an_unresolvable_custom_class_is_fatal(self) -> None:
+        with pytest.raises(ConfigurationError, match="no attribute"):
+            parse_derivation_rules([self._rule(f"{self.HERE}:NoSuchTransform")])
+
+    def test_a_missing_module_is_fatal(self) -> None:
+        with pytest.raises(ConfigurationError):
+            parse_derivation_rules([self._rule("no.such.module:Transform")])
+
+    def test_a_conforming_transform_resolves(self) -> None:
+        rules = parse_derivation_rules(
+            [self._rule(f"{self.HERE}:_ConformingTransform")]
+        )
+        assert isinstance(rules[0].custom_transform, _ConformingTransform)
+
+    def test_the_colon_separator_is_accepted(self) -> None:
+        """It was rejected here by a regex, and accepted four sites away.
+
+        The pre-validation regex this replaced matched only dot-separated
+        paths, so ``mypkg.transforms:SubjectToId`` — the form every other
+        resolution site preferred — was reported as an invalid path.
+        """
+        rules = parse_derivation_rules(
+            [self._rule(f"{self.HERE}:_ConformingTransform")]
+        )
+        assert rules[0].custom_transform is not None
+
+    def test_a_wrong_shape_class_is_rejected_without_being_constructed(
+        self,
+    ) -> None:
+        """The order used to be the other way round.
+
+        ``_load_custom_transform`` instantiated first and checked the
+        protocol after, so a mistyped ``custom_class`` ran an unrelated
+        class's ``__init__`` — arbitrary code, with whatever side effects it
+        has — before rejecting it.
+        """
+        _NotATransform.constructed = 0
+
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
+            parse_derivation_rules([self._rule(f"{self.HERE}:_NotATransform")])
+
+        assert _NotATransform.constructed == 0
+
+
+class TestFaultsAreReportedTogether:
+    """Three bad rules produce one error naming all three.
+
+    Fail-fast is the smaller diff and the worse tool: an author with three
+    typos should not fix one, re-run, and discover the next. The house does
+    this wherever it matters — ``verify_stage_synthesizers`` collects every
+    missing name, and the error-text guard lists every finding rather than
+    the first.
+    """
+
+    def test_one_error_names_every_unusable_rule(self) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            parse_derivation_rules(
+                [
+                    {"target": "b"},
+                    {"source": "a", "target": "b", "transform": "nonexistent"},
+                    {"source": "c", "target": "d", "transform": "map"},
+                ]
+            )
+
+        message = str(excinfo.value)
+        assert "missing 'source' or 'target'" in message
+        assert "unknown transform" in message
+        assert "requires 'transform_map'" in message
+        assert len(excinfo.value.context["faults"]) == 3
+
+    def test_a_good_rule_beside_a_bad_one_does_not_rescue_the_block(self) -> None:
+        """Partial success is the behaviour this change removes.
+
+        Loading five of six declared derivations and starting cleanly is
+        precisely the silent degradation at issue; raising after keeping the
+        five would be the same failure with an exception attached.
+        """
+        with pytest.raises(ConfigurationError):
+            parse_derivation_rules(
+                [
+                    {"source": "a", "target": "b", "transform": "copy"},
+                    {"source": "c", "target": "d", "transform": "nonexistent"},
+                ]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -102,31 +226,65 @@ class TestParsing:
         ])
         assert rules[0].when == "always"
 
-    def test_parse_skips_missing_source(self) -> None:
-        rules = parse_derivation_rules([
-            {"target": "b", "transform": "copy"},
-        ])
-        assert len(rules) == 0
+    def test_parse_rejects_missing_source(self) -> None:
+        """Was ``assert len(rules) == 0`` — a rule dropped in silence.
 
-    def test_parse_skips_missing_target(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "transform": "copy"},
-        ])
-        assert len(rules) == 0
+        Inverted, not replaced: the old name said "skips", and that was the
+        deliberate behaviour of all twelve faults here. Keeping the case in
+        place records that it changed rather than that it appeared.
+        """
+        with pytest.raises(ConfigurationError, match="missing 'source' or 'target'"):
+            parse_derivation_rules([{"target": "b", "transform": "copy"}])
 
-    def test_parse_unknown_when_defaults(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "copy",
-             "when": "bogus"},
-        ])
-        assert len(rules) == 1
-        assert rules[0].when == "target_missing"
+    def test_parse_rejects_missing_target(self) -> None:
+        with pytest.raises(ConfigurationError, match="missing 'source' or 'target'"):
+            parse_derivation_rules([{"source": "a", "transform": "copy"}])
 
-    def test_parse_unknown_transform_skips(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "nonexistent"},
-        ])
-        assert len(rules) == 0
+    def test_parse_rejects_unknown_when(self) -> None:
+        """Was ``assert rules[0].when == "target_missing"`` — the odd fault out.
+
+        The other twelve dropped the rule. This one kept it and ran it under a
+        guard the author had not written: ``when: allways`` fired only when the
+        target was *absent*, the opposite of what the typo asked for. A dropped
+        rule at least derives nothing; this one derived under inverted
+        conditions, which is why it is the worst of the thirteen to leave
+        silent.
+        """
+        with pytest.raises(ConfigurationError, match="unknown 'when' condition"):
+            parse_derivation_rules([
+                {"source": "a", "target": "b", "transform": "copy",
+                 "when": "bogus"},
+            ])
+
+    def test_unknown_when_fault_names_the_valid_conditions(self) -> None:
+        """The typo is nearly always a near-miss, so print the near-misses."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_derivation_rules([
+                {"source": "a", "target": "b", "when": "allways"},
+            ])
+        message = str(exc_info.value)
+        assert "'allways'" in message
+        assert "always" in message
+        assert "target_empty" in message
+        assert "target_missing" in message
+
+    def test_a_bad_when_is_collected_with_the_other_faults(self) -> None:
+        """It joins the collect-then-raise block rather than short-circuiting it."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_derivation_rules([
+                {"source": "a", "target": "b", "when": "allways"},
+                {"source": "c", "target": "d", "transform": "nonexistent"},
+            ])
+        faults = exc_info.value.context["faults"]
+        assert len(faults) == 2
+        assert "rule 0 (a → b)" in faults[0]
+        assert "rule 1 (c → d)" in faults[1]
+
+    def test_parse_rejects_unknown_transform(self) -> None:
+        with pytest.raises(ConfigurationError, match="unknown transform"):
+            parse_derivation_rules([
+                {"source": "a", "target": "b", "transform": "nonexistent"},
+            ])
 
     def test_parse_template_rule(self) -> None:
         rules = parse_derivation_rules([
@@ -137,11 +295,11 @@ class TestParsing:
         assert len(rules) == 1
         assert rules[0].template == "A {{ intent }} bot"
 
-    def test_parse_custom_missing_class_skips(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "custom"},
-        ])
-        assert len(rules) == 0
+    def test_parse_rejects_custom_with_no_class(self) -> None:
+        with pytest.raises(ConfigurationError, match="no 'custom_class'"):
+            parse_derivation_rules([
+                {"source": "a", "target": "b", "transform": "custom"},
+            ])
 
     def test_parse_default_transform_is_copy(self) -> None:
         rules = parse_derivation_rules([
@@ -209,6 +367,24 @@ class TestApplyDerivations:
         data: dict = {"id": "chess-champ", "name": "Existing"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
+
+    def test_hand_built_rule_with_an_unknown_guard_skips(self) -> None:
+        """The execution-time guard survives config becoming fatal.
+
+        ``parse_derivation_rules`` can no longer emit a rule with an unknown
+        ``when``, so this branch is now reachable only by constructing a
+        ``DerivationRule`` directly — a programmer error, not operator input,
+        and one that must not derive under a guard nobody chose. It was
+        untested while config could reach it; pinning it here keeps the
+        remaining path honest.
+        """
+        rules = [DerivationRule(source="id", target="name",
+                                transform_name="title_case",
+                                when="allways")]
+        data: dict = {"id": "chess-champ"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == set()
+        assert "name" not in data
 
     def test_source_missing_skips(self) -> None:
         rules = [DerivationRule(source="id", target="name",
@@ -699,31 +875,57 @@ class TestNewTransformParsing:
         assert rules[0].compiled_regex is not None
         assert rules[0].compiled_regex.pattern == r"\d+"
 
-    def test_parse_invalid_regex_skips(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "email", "target": "valid",
-             "transform": "regex_match",
-             "transform_value": "[invalid"},
-        ])
-        assert len(rules) == 0
+    @pytest.mark.parametrize(
+        ("rule", "expected"),
+        [
+            (
+                {"source": "email", "target": "valid",
+                 "transform": "regex_match", "transform_value": "[invalid"},
+                "invalid regex",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "equals"},
+                "requires 'transform_value'",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "map"},
+                "requires 'transform_map'",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "expression"},
+                "requires 'expression'",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "regex_replace",
+                 "transform_value": r"\s+"},
+                "requires 'transform_replacement'",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "contains"},
+                "requires 'transform_value'",
+            ),
+            (
+                {"source": "a", "target": "b", "transform": "one_of",
+                 "transform_values": "not-a-list"},
+                "requires 'transform_values'",
+            ),
+        ],
+        ids=["invalid-regex", "equals-no-value", "map-no-map",
+             "expression-no-expression", "regex-replace-no-replacement",
+             "contains-no-value", "one-of-not-a-list"],
+    )
+    def test_parse_rejects_a_malformed_parameterized_transform(
+        self, rule, expected
+    ) -> None:
+        """Seven faults that each used to drop their rule and log a WARNING.
 
-    def test_parse_missing_transform_value(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "equals"},
-        ])
-        assert len(rules) == 0
-
-    def test_parse_missing_transform_map(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "map"},
-        ])
-        assert len(rules) == 0
-
-    def test_parse_missing_expression(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "expression"},
-        ])
-        assert len(rules) == 0
+        Collapsed into one parametrized case on the way to raising, because
+        the seven were seven copies of ``assert len(rules) == 0`` and the
+        thing worth asserting — that the message names what is missing — is
+        the only part that differed.
+        """
+        with pytest.raises(ConfigurationError, match=expected):
+            parse_derivation_rules([rule])
 
     def test_parse_expression_rule(self) -> None:
         rules = parse_derivation_rules([
@@ -733,28 +935,6 @@ class TestNewTransformParsing:
         ])
         assert len(rules) == 1
         assert rules[0].expression == "value == 'x'"
-
-    def test_parse_regex_replace_missing_replacement(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b",
-             "transform": "regex_replace",
-             "transform_value": r"\s+"},
-        ])
-        assert len(rules) == 0
-
-    def test_parse_contains_missing_value(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "contains"},
-        ])
-        assert len(rules) == 0
-
-    def test_parse_one_of_not_list(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b",
-             "transform": "one_of",
-             "transform_values": "not-a-list"},
-        ])
-        assert len(rules) == 0
 
 
 # ---------------------------------------------------------------------------

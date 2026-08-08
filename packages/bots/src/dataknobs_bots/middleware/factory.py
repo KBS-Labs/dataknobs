@@ -50,12 +50,16 @@ one resolution body and the two flavors cannot drift.
 
 from __future__ import annotations
 
-import importlib
 import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    DottedPathError,
+    DottedPathTypeError,
+)
+from dataknobs_common.imports import resolve_class
 from dataknobs_llm.conversations import ConversationMiddleware
 
 from .base import Middleware
@@ -125,39 +129,48 @@ def resolve_middleware_from_spec(
     optional = config.get("optional", False)
     class_path = config.get("class", "<missing>")
 
+    # `resolve_class` validates the shape and returns the CLASS, so no
+    # constructor runs for a wrong-shape spec. The two failure modes arrive
+    # as two sibling exception types, which is what keeps ``optional`` from
+    # reaching the shape check: `DottedPathTypeError` is not a
+    # `DottedPathError`, so the clause below cannot match it.
     try:
-        module_path, class_name = config["class"].rsplit(".", 1)
-        module = importlib.import_module(module_path)
-        middleware_class = getattr(module, class_name)
-    except Exception as e:
+        middleware_class = resolve_class(config["class"], expected_base)
+    except DottedPathError as e:
         # Resolution failure (missing module / class / malformed spec)
         # — covered by ``optional``.
         detail = f"Failed to resolve {label} '{class_path}': {e}"
         if optional:
             logger.warning("Skipping optional %s: %s", label, detail)
             return None
-        # Bounded message: importing a module executes it, so `e` here can
-        # come from arbitrary module-level code. The class path is from the
-        # config and the type name is a class name; both are bounded. The
-        # full text travels on __cause__.
-        raise ConfigurationError(
-            f"Failed to resolve {label} '{class_path}' ({type(e).__name__})"
+        # Re-raised as the same type, not as a plain `ConfigurationError`:
+        # the label says which config key the bad path was under, which is
+        # worth adding, but not at the cost of the `reason` a caller can
+        # branch on. Same shape as `resolve_optional_callable`'s lift.
+        raise DottedPathError(
+            f"Failed to resolve {label} '{class_path}' ({e.reason})",
+            ref=e.ref,
+            reason=e.reason,
+            label=label,
         ) from e
-
-    # Class-shape check BEFORE instantiation. Never optional: a class
-    # listed under the wrong field is a programmer error, not a
-    # transient environment failure.
-    if not (
-        isinstance(middleware_class, type)
-        and issubclass(middleware_class, expected_base)
-    ):
+    except KeyError as e:
+        # The spec has no `class` key at all. Kept distinct from a malformed
+        # path: `config["class"]` is what raises, before any resolution.
+        if optional:
+            logger.warning("Skipping optional %s: spec has no 'class' key", label)
+            return None
+        raise ConfigurationError(f"{label} spec has no 'class' key") from e
+    except DottedPathTypeError as e:
+        # Never optional: a class listed under the wrong field is a
+        # programmer error in the config layout, not a transient environment
+        # failure. Re-raised only to add the which-field hint.
         raise ConfigurationError(
             f"{label} '{class_path}' must subclass "
             f"{expected_base.__module__}.{expected_base.__qualname__} "
             f"— check whether this spec belongs under 'middleware' "
             f"(bot-turn hooks) or 'conversation_middleware' "
             f"(LLM-call wraps)."
-        )
+        ) from e
 
     try:
         return middleware_class(**dict(config.get("params", {})))

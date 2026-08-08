@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.rubrics.executor import FunctionRegistry, RubricExecutor
+from dataknobs_common.exceptions import DottedPathError, DottedPathReason
 from dataknobs_bots.rubrics.models import (
     Rubric,
     RubricCriterion,
@@ -129,14 +130,29 @@ class TestFunctionRegistry:
         assert reg.get("test:func") is score_has_title
 
     def test_get_unregistered_invalid_format(self) -> None:
+        """Was ``KeyError`` — a registry-shaped error for a config fault.
+
+        This was the only one of the nine dotted-path resolution sites that
+        raised ``KeyError``, which meant a bad rubric ``function_ref`` looked
+        to a caller like a missing dictionary key rather than a bad config
+        value. It is a ``DottedPathError`` — a ``ConfigurationError`` — now,
+        the same as everywhere else.
+        """
         reg = FunctionRegistry()
-        with pytest.raises(KeyError, match="expected 'module.path:function_name'"):
+        with pytest.raises(DottedPathError) as excinfo:
             reg.get("no_colon_here")
+        assert excinfo.value.reason is DottedPathReason.MALFORMED
 
     def test_get_unregistered_bad_module(self) -> None:
         reg = FunctionRegistry()
-        with pytest.raises(KeyError, match="Cannot import module"):
+        with pytest.raises(DottedPathError) as excinfo:
             reg.get("nonexistent.module:func")
+        assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+
+    def test_get_accepts_a_dot_separated_reference(self) -> None:
+        """``.`` used to be rejected here and accepted four sites away."""
+        reg = FunctionRegistry()
+        assert reg.get("os.path.exists") is not None
 
     def test_dynamic_import_caches(self) -> None:
         reg = FunctionRegistry()

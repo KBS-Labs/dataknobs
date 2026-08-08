@@ -118,6 +118,9 @@ from dataknobs_common.exceptions import (
     ConfigurationError,
     ConsentRequiredError,
     DataknobsError,
+    DottedPathError,
+    DottedPathReason,
+    DottedPathTypeError,
     NotFoundError,
     OperationError,
     RateLimitError,
@@ -125,6 +128,13 @@ from dataknobs_common.exceptions import (
     SerializationError,
     TimeoutError,
     ValidationError,
+)
+from dataknobs_common.imports import (
+    ClassConstraint,
+    resolve_callable,
+    resolve_class,
+    resolve_dotted,
+    resolve_optional_callable,
 )
 from dataknobs_common.locks import (
     DistributedLock,
@@ -293,6 +303,26 @@ __all__ = [
     "SerializationError",
     "TimeoutError",
     "RateLimitError",
+    "DottedPathError",
+    "DottedPathReason",
+    "DottedPathTypeError",
+    # Dotted-path resolution
+    #
+    # Deliberately its own block, and deliberately NOT appended to the
+    # "Resource resolvers" group below. Those resolve a *key* to a value
+    # already in hand; these import a module and hand back what is in it.
+    # `CallableResolver` (wraps a callable) and `resolve_callable` (returns
+    # one) sitting adjacent in `__all__` is precisely the misreading that
+    # made the primitive hard to find in the first place.
+    #
+    # `ClassConstraint` is exported for the same reason it exists: a consumer
+    # wrapping `resolve_class` needs to annotate its own `base` parameter, and
+    # would otherwise rediscover the `type[T]` problem and solve it worse.
+    "ClassConstraint",
+    "resolve_callable",
+    "resolve_class",
+    "resolve_dotted",
+    "resolve_optional_callable",
     # Callbacks
     "BatchedCallbackError",
     "CallbackEntry",

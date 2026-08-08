@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import DottedPathError
+
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
 from dataknobs_llm.conversations import ConversationStorage, DataknobsConversationStorage
@@ -139,7 +141,7 @@ async def test_invalid_storage_class_module_not_found() -> None:
         .set_conversation_storage_class("nonexistent.module:FakeClass")
         .build()
     )
-    with pytest.raises((ImportError, ModuleNotFoundError)):
+    with pytest.raises(DottedPathError):
         await DynaBot.from_config(config)
 
 
@@ -154,7 +156,7 @@ async def test_invalid_storage_class_attr_not_found() -> None:
         )
         .build()
     )
-    with pytest.raises(AttributeError):
+    with pytest.raises(DottedPathError):
         await DynaBot.from_config(config)
 
 
@@ -169,7 +171,7 @@ async def test_invalid_storage_class_not_callable() -> None:
         )
         .build()
     )
-    with pytest.raises(ValueError, match="not callable"):
+    with pytest.raises(DottedPathError, match="not callable"):
         await DynaBot.from_config(config)
 
 

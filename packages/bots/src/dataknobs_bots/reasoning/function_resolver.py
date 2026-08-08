@@ -5,9 +5,10 @@ specified as strings (e.g., "module.path:function_name") to actual
 callable objects. Used by WizardConfigLoader and WizardHooks.
 """
 
-import importlib
 import logging
 from typing import Any, Callable
+
+from dataknobs_common.imports import resolve_callable
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,15 @@ def resolve_function(func_ref: str) -> Callable[..., Any]:
         The resolved callable
 
     Raises:
-        ValueError: If reference format is invalid or empty
-        ImportError: If module cannot be imported
-        AttributeError: If function not found in module
+        DottedPathError: If the reference is malformed, the module cannot be
+            imported, the function is not found, or it is not callable. These
+            were three separate stdlib exception types — ``ValueError``,
+            ``ImportError``, ``AttributeError`` — before the dotted-path
+            resolvers were consolidated.
+
+    Warning:
+        Resolving a reference **imports and executes** the target module. See
+        :mod:`dataknobs_common.imports` for the trust boundary that implies.
 
     Example:
         ```python
@@ -39,86 +46,7 @@ def resolve_function(func_ref: str) -> Callable[..., Any]:
         func = resolve_function("myapp.utils.validate_email")
         ```
     """
-    if not func_ref or not func_ref.strip():
-        raise ValueError(
-            "Empty function reference. Expected format: 'module.path:function_name' "
-            "or 'module.path.function_name'"
-        )
-
-    func_ref = func_ref.strip()
-
-    # Determine module and function name
-    if ":" in func_ref:
-        # Explicit format: module.path:function_name
-        parts = func_ref.split(":", 1)
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            raise ValueError(
-                f"Invalid function reference: '{func_ref}'. "
-                f"Expected format: 'module.path:function_name'. "
-                f"Example: 'myapp.transforms:my_function'"
-            )
-        module_path, func_name = parts
-    else:
-        # Dot format: treat last segment as function name
-        if "." not in func_ref:
-            raise ValueError(
-                f"Invalid function reference: '{func_ref}'. "
-                f"Expected format: 'module.path:function_name' "
-                f"or 'module.path.function_name'. "
-                f"Reference must contain at least one '.' or ':'. "
-                f"Example: 'myapp.transforms:my_function'"
-            )
-        parts = func_ref.rsplit(".", 1)
-        module_path, func_name = parts
-
-    # Validate module path and function name
-    if not module_path:
-        raise ValueError(
-            f"Invalid function reference: '{func_ref}'. "
-            f"Module path is empty. "
-            f"Example: 'myapp.transforms:my_function'"
-        )
-
-    if not func_name:
-        raise ValueError(
-            f"Invalid function reference: '{func_ref}'. "
-            f"Function name is empty. "
-            f"Example: 'myapp.transforms:my_function'"
-        )
-
-    # Import module
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError as e:
-        raise ImportError(
-            f"Cannot import module '{module_path}' from reference '{func_ref}': {e}. "
-            f"Ensure the module is installed and the path is correct."
-        ) from e
-
-    # Get function from module
-    if not hasattr(module, func_name):
-        # List available functions for helpful error
-        available = [
-            name for name in dir(module)
-            if callable(getattr(module, name, None)) and not name.startswith("_")
-        ]
-        available_str = ", ".join(available[:10])
-        if len(available) > 10:
-            available_str += f", ... ({len(available) - 10} more)"
-
-        raise AttributeError(
-            f"Function '{func_name}' not found in module '{module_path}'. "
-            f"Available functions: {available_str or '(none)'}"
-        )
-
-    func = getattr(module, func_name)
-    if not callable(func):
-        raise ValueError(
-            f"'{func_name}' in module '{module_path}' is not callable "
-            f"(got {type(func).__name__})"
-        )
-
-    return func
+    return resolve_callable(func_ref)
 
 
 def resolve_functions(
@@ -138,9 +66,9 @@ def resolve_functions(
         Dict mapping names to resolved callables
 
     Raises:
-        ValueError: If a string reference has invalid format
-        ImportError: If a referenced module cannot be imported
-        AttributeError: If a referenced function is not found
+        DottedPathError: If a string reference cannot be resolved to a
+            callable.
+        ValueError: If a value is neither a string nor a callable.
 
     Example:
         ```python

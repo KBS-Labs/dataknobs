@@ -101,6 +101,12 @@ from dataknobs_common.exceptions import (
     DataknobsError,
 )
 from dataknobs_common.exceptions import (
+    DottedPathError,
+)
+from dataknobs_common.exceptions import (
+    DottedPathTypeError,
+)
+from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
@@ -571,14 +577,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Twelve entries govern more than fifty
+#: :func:`resolve_error_policy`). Fourteen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: twelve and silently 500 the rest -- which is the behaviour this handler
+#: fourteen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Eleven come from ``dataknobs_common.exceptions``; the twelfth,
+#: Thirteen come from ``dataknobs_common.exceptions``; the fourteenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -641,6 +647,27 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
     # when the route is not public. The status stays 500 either way: a bad
     # config is a server-side fault however readable we make it.
     CommonConfigurationError: ErrorPolicy(500, False, False),
+    # The two dotted-path types are the *bounded* case the row above is
+    # cautious about: their messages are built by the resolver from the ref,
+    # a `reason` enum member, and module symbol names — never from the caught
+    # exception, whose text stays on `__cause__` (pinned by a test in
+    # `common`). So the argument that masks their parent does not reach them.
+    #
+    # They stay masked anyway, for a different reason. The missing-attribute
+    # message enumerates the target module's public callables, which is a
+    # "did you mean" for a library caller and an inventory of a deployment's
+    # internals for an HTTP one — the same reading that masks
+    # `NotFoundError`'s context, arriving here in the message instead. And
+    # the module named is one the *deployment's* config chose, not one the
+    # caller asked for, so there is no sense in which it is already theirs.
+    #
+    # Rows rather than inheritance because the guard requires the decision to
+    # be made rather than defaulted, and because "same as the parent, for
+    # different reasons" is worth writing down.
+    DottedPathError: ErrorPolicy(500, False, False),
+    # context carries `expected`, a live class object naming an internal
+    # base — masked for that as much as for the message.
+    DottedPathTypeError: ErrorPolicy(500, False, False),
     # --- fully masked: the message may embed infrastructure detail ---
     # e.g. a connection string, with credentials, from a failed connect.
     CommonResourceError: ErrorPolicy(503, False, False),

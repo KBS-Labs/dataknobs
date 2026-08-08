@@ -1,0 +1,358 @@
+"""Tests for :mod:`dataknobs_common.imports`.
+
+The workspace-level guard in ``tests/test_dotted_path_agreement.py`` checks
+that every *consumer* of this family behaves identically. This file checks the
+family itself: each ``reason``, both separators, the shape checks, and the two
+properties that are invisible to an assertion on the return value —
+``resolve_class`` not constructing anything, and the error text staying bounded.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Protocol, runtime_checkable
+
+import pytest
+
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    DottedPathError,
+    DottedPathReason,
+    DottedPathTypeError,
+)
+from dataknobs_common.imports import (
+    resolve_callable,
+    resolve_class,
+    resolve_dotted,
+    resolve_optional_callable,
+)
+
+SELF = "packages.common.tests.test_imports"
+HERE = __name__
+
+
+# ── Targets ───────────────────────────────────────────────────────────
+
+constructions = 0
+
+
+def a_function(*args: Any, **kwargs: Any) -> str:
+    return "resolved"
+
+
+not_callable_at_all = 42
+
+
+@runtime_checkable
+class Shaped(Protocol):
+    def shaped_method(self) -> None: ...
+
+
+class Conforming:
+    def __init__(self) -> None:
+        global constructions
+        constructions += 1
+
+    def shaped_method(self) -> None: ...
+
+
+class NotConforming:
+    def __init__(self) -> None:
+        global constructions
+        constructions += 1
+
+
+class ExplodesOnConstruction:
+    def __init__(self) -> None:
+        raise AssertionError("constructed, and it should not have been")
+
+    def shaped_method(self) -> None: ...
+
+
+@pytest.fixture(autouse=True)
+def _reset_counter():
+    global constructions
+    constructions = 0
+    yield
+
+
+# ── resolve_dotted ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("sep", [":", "."], ids=["colon", "dot"])
+def test_resolve_dotted_accepts_both_separators(sep: str) -> None:
+    assert resolve_dotted(f"{HERE}{sep}a_function") is a_function
+
+
+def test_resolve_dotted_returns_a_non_callable_without_complaint() -> None:
+    """The base of the family checks nothing — that is what it is for."""
+    assert resolve_dotted(f"{HERE}:not_callable_at_all") == 42
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["", "   ", "nodots", ":name", "module:", ".name", "module."],
+    ids=["empty", "blank", "no-separator", "no-module", "no-attr",
+         "dot-no-module", "dot-no-attr"],
+)
+def test_malformed_references_are_rejected(ref: str) -> None:
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted(ref)
+    assert excinfo.value.reason is DottedPathReason.MALFORMED
+
+
+def test_a_non_string_reference_is_malformed_not_a_crash() -> None:
+    """A YAML author writing ``function: 42`` gets a config error, not a TypeError."""
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted(42)  # type: ignore[arg-type]
+    assert excinfo.value.reason is DottedPathReason.MALFORMED
+
+
+def test_a_missing_module_reports_module_not_found() -> None:
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("no_such_module_anywhere:name")
+    assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+    assert excinfo.value.ref == "no_such_module_anywhere:name"
+
+
+def test_a_missing_attribute_reports_attribute_not_found_and_suggests() -> None:
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted(f"{HERE}:no_such_attribute")
+    assert excinfo.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND
+    # The enumeration is the one thing worth keeping from the resolver this
+    # replaced: a typo'd name is usually close to a real one.
+    assert "a_function" in str(excinfo.value)
+
+
+def test_the_suggestions_are_the_module_s_own_symbols_not_its_imports() -> None:
+    """Otherwise the list is mostly imports and truncation cuts the useful half.
+
+    This module imports ``Any``, ``Protocol``, ``pytest`` and four exception
+    types — all public and all callable. Sorted alphabetically and cut at ten,
+    an unfiltered list reaches none of the functions defined here, which are
+    the only candidates a typo could have meant.
+    """
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted(f"{HERE}:a_functoin")
+
+    message = str(excinfo.value)
+    assert "a_function" in message
+    assert "Protocol" not in message
+
+
+def test_a_re_export_module_still_suggests_something() -> None:
+    """The filter must not empty the list where it is most needed.
+
+    A package ``__init__`` defines nothing of its own — every public name in
+    it is an import — so own-module filtering would leave nothing to suggest.
+    """
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dataknobs_common:no_such_export")
+
+    assert "(none)" not in str(excinfo.value)
+
+
+def test_only_one_attribute_is_looked_up() -> None:
+    """``module:Outer.Inner`` is not supported, and says so rather than half-working.
+
+    With a single ``rpartition``, ``a.b:C.D`` splits on the colon and then
+    fails to find an attribute literally named ``C.D`` — the right answer, but
+    the reason matters: it must read as an unresolvable attribute, not as a
+    successful traversal of something else.
+    """
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted(f"{HERE}:Conforming.shaped_method")
+    assert excinfo.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND
+
+
+# ── resolve_callable ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("sep", [":", "."], ids=["colon", "dot"])
+def test_resolve_callable_accepts_both_separators(sep: str) -> None:
+    assert resolve_callable(f"{HERE}{sep}a_function") is a_function
+
+
+def test_resolve_callable_rejects_a_non_callable() -> None:
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_callable(f"{HERE}:not_callable_at_all")
+    assert excinfo.value.reason is DottedPathReason.NOT_CALLABLE
+
+
+def test_a_class_is_callable_so_resolve_callable_accepts_it() -> None:
+    """Documented, not incidental — and the reason ``resolve_class`` exists.
+
+    Two call sites resolved a *class* through the callable resolver and got
+    away with it because a class passes ``callable()``. It is a real gap in
+    what that check can promise, not a bug in this function.
+    """
+    assert resolve_callable(f"{HERE}:Conforming") is Conforming
+    assert constructions == 0
+
+
+# ── resolve_class ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("sep", [":", "."], ids=["colon", "dot"])
+def test_resolve_class_accepts_both_separators(sep: str) -> None:
+    assert resolve_class(f"{HERE}{sep}Conforming", Shaped) is Conforming
+
+
+def test_resolve_class_returns_the_class_and_constructs_nothing() -> None:
+    """The property the signature exists to guarantee."""
+    resolved = resolve_class(f"{HERE}:Conforming", Shaped)
+
+    assert resolved is Conforming
+    assert constructions == 0, "resolve_class constructed the target"
+
+
+def test_a_wrong_shape_class_is_rejected_without_being_constructed() -> None:
+    with pytest.raises(DottedPathTypeError) as excinfo:
+        resolve_class(f"{HERE}:NotConforming", Shaped)
+
+    assert excinfo.value.expected is Shaped
+    assert constructions == 0, "the wrong-shape class ran its __init__"
+
+
+def test_the_constructor_of_a_conforming_class_is_still_not_run() -> None:
+    """A conforming target whose ``__init__`` would fail still resolves.
+
+    Stronger than the counter, and immune to someone "simplifying" the
+    counter away: this class raises if constructed at all, so the test fails
+    loudly rather than by an assertion on a number.
+    """
+    assert (
+        resolve_class(f"{HERE}:ExplodesOnConstruction", Shaped)
+        is ExplodesOnConstruction
+    )
+
+
+def test_a_module_level_function_is_not_a_class() -> None:
+    with pytest.raises(DottedPathTypeError):
+        resolve_class(f"{HERE}:a_function", Shaped)
+
+
+def test_a_non_runtime_checkable_base_raises_typeerror_unwrapped() -> None:
+    """A programmer error in the *caller*, deliberately not dressed as config.
+
+    Wrapping this in ``ConfigurationError`` would point the reader at a config
+    file that is perfectly fine.
+    """
+
+    class NotRuntimeCheckable(Protocol):
+        def whatever(self) -> None: ...
+
+    with pytest.raises(TypeError):
+        resolve_class(f"{HERE}:Conforming", NotRuntimeCheckable)
+
+
+# ── resolve_optional_callable ─────────────────────────────────────────
+
+
+def test_none_resolves_to_none() -> None:
+    assert (
+        resolve_optional_callable(None, field_name="hook", owner="thing") is None
+    )
+
+
+def test_a_present_but_broken_reference_still_raises() -> None:
+    """"Omitted" and "wrong" are different states; only the first is optional."""
+    with pytest.raises(DottedPathError):
+        resolve_optional_callable(
+            f"{HERE}:no_such_attribute", field_name="hook", owner="thing"
+        )
+
+
+def test_the_error_names_the_config_site() -> None:
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_optional_callable(
+            f"{HERE}:no_such_attribute", field_name="dedup_key", owner="my_source"
+        )
+
+    message = str(excinfo.value)
+    assert "dedup_key" in message
+    assert "my_source" in message
+    # The underlying reason survives the re-wrap — a caller branching on
+    # `reason` must not be defeated by the lift that added the config site.
+    assert excinfo.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND
+
+
+# ── Error shape ───────────────────────────────────────────────────────
+
+
+def test_both_types_are_configuration_errors() -> None:
+    """So existing ``except ConfigurationError`` clauses keep working."""
+    assert issubclass(DottedPathError, ConfigurationError)
+    assert issubclass(DottedPathTypeError, ConfigurationError)
+
+
+def test_the_two_error_types_are_siblings_not_parent_and_child() -> None:
+    """The asymmetry is the contract, so it gets an assertion of its own.
+
+    A caller writing the obvious lenient handler — ``except DottedPathError:
+    if optional: return None`` — must not swallow a shape mismatch. Making
+    ``DottedPathTypeError`` a subclass would break that silently, and every
+    other test here would still pass.
+    """
+    assert not issubclass(DottedPathTypeError, DottedPathError)
+    assert not issubclass(DottedPathError, DottedPathTypeError)
+
+
+def test_a_lenient_handler_cannot_swallow_a_shape_mismatch() -> None:
+    """The same property, stated as the caller experiences it."""
+    with pytest.raises(DottedPathTypeError):
+        try:
+            resolve_class(f"{HERE}:NotConforming", Shaped)
+        except DottedPathError:  # the "optional: true" handler
+            pytest.fail("the lenient handler caught a shape mismatch")
+
+
+def test_the_message_does_not_carry_the_underlying_exception_text() -> None:
+    """Bounded messages: the detail belongs on ``__cause__``.
+
+    ``import_module`` executes the target, so the caught exception's text is
+    arbitrary consumer output — and these errors are rendered to HTTP clients
+    by surfaces that map ``ConfigurationError``.
+    """
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("no_such_module_anywhere:name")
+
+    message = str(excinfo.value)
+    assert "ModuleNotFoundError" in message, "the failure type should be named"
+    assert excinfo.value.__cause__ is not None
+    assert str(excinfo.value.__cause__) not in message
+
+
+def test_an_exploding_module_reports_module_not_found_not_the_explosion(
+    tmp_path, monkeypatch
+) -> None:
+    """The import runs the target, so the failure is not always an ImportError.
+
+    Catching only ``ImportError`` here would let a ``RuntimeError`` raised at
+    the target's module scope escape untyped, past every caller's ``except``.
+    """
+    import sys
+
+    module = tmp_path / "dk_exploding_fixture.py"
+    module.write_text("raise RuntimeError('secret: hunter2')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("dk_exploding_fixture", None)
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_dotted("dk_exploding_fixture:anything")
+
+    assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
+    assert "RuntimeError" in str(excinfo.value)
+    assert "hunter2" not in str(excinfo.value)
+
+
+def test_the_reason_vocabulary_rejects_a_typo() -> None:
+    """``reason=`` normalizes, following ``PackResolutionError``."""
+    with pytest.raises(ValueError):
+        DottedPathError("x", ref="a:b", reason="modul_not_found")
+
+
+def test_the_error_carries_ref_and_reason_in_context() -> None:
+    error = DottedPathError("x", ref="a:b", reason=DottedPathReason.MALFORMED)
+    assert error.ref == "a:b"
+    assert error.context["ref"] == "a:b"
+    assert error.context["reason"] is DottedPathReason.MALFORMED

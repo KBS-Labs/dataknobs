@@ -347,6 +347,8 @@ values while its message can be a database driver's.
 | `NotFoundError` | 404 | yes | no — the context lists a registry's keys |
 | `TimeoutError` | 504 | yes | no — the context can carry a query |
 | `ConfigurationError` | 500 | no — masked, see below | no |
+| `DottedPathError` | 500 | no — masked | no |
+| `DottedPathTypeError` | 500 | no — masked | no |
 | `ResourceError` | 503 | no — masked | no |
 | `SerializationError` | 500 | no — masked | no |
 | `OperationError` | 500 | no — masked | no |

@@ -33,6 +33,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.imports import resolve_callable
 from dataknobs_common.registry import Registry
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -385,8 +386,6 @@ class ToolCatalog(Registry[ToolEntry]):
             ImportError: If class cannot be imported.
             ValueError: If resolved class is not callable.
         """
-        from dataknobs_bots.tools.resolve import resolve_callable
-
         entry = self.get(name)
         tool_class = resolve_callable(entry.class_path)
         params = dict(entry.default_params)

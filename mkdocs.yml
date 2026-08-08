@@ -66,6 +66,7 @@ nav:
     - Common:
       - packages/common/index.md
       - packages/common/config-loading.md
+      - packages/common/dotted-paths.md
       - packages/common/expressions.md
       - packages/common/events.md
       - packages/common/aws-session.md

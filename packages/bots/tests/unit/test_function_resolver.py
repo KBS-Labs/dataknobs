@@ -12,6 +12,7 @@ from dataknobs_bots.reasoning.function_resolver import (
     resolve_function,
     resolve_functions,
 )
+from dataknobs_common.exceptions import DottedPathError, DottedPathReason
 
 
 class TestResolveFunctionColonFormat:
@@ -52,79 +53,74 @@ class TestResolveFunctionDotFormat:
 
 
 class TestResolveFunctionErrors:
-    """Tests for resolve_function error handling."""
+    """Error handling for ``resolve_function``.
 
-    def test_empty_reference_error(self) -> None:
-        """Empty reference gives helpful error."""
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function("")
+    Every case here used to assert one of three stdlib exception types —
+    ``ValueError`` for a malformed reference, ``ImportError`` for a missing
+    module, ``AttributeError`` for a missing function. All three are
+    ``DottedPathError`` now, with the distinction moved to ``reason``, so a
+    caller can catch one type and still branch on which fault it was.
 
-        error_msg = str(exc_info.value)
-        assert "Empty function reference" in error_msg
-        assert "module.path:function_name" in error_msg
+    That mattered because three types meant three ``except`` clauses at every
+    call site, and a site that listed two of them turned the third into a
+    crash. The wizard's own hook loader caught all three; the task-injection
+    loader caught bare ``Exception`` to be sure of covering them.
+    """
 
-    def test_whitespace_only_reference_error(self) -> None:
-        """Whitespace-only reference gives helpful error."""
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function("   ")
+    @pytest.mark.parametrize(
+        ("ref", "reason", "expected_text"),
+        [
+            ("", DottedPathReason.MALFORMED, "Expected a dotted path"),
+            ("   ", DottedPathReason.MALFORMED, "Expected a dotted path"),
+            ("just_a_name", DottedPathReason.MALFORMED, "just_a_name"),
+            ("module:", DottedPathReason.MALFORMED, "module:"),
+            (":function", DottedPathReason.MALFORMED, ":function"),
+            (
+                "nonexistent_module_xyz_12345:func",
+                DottedPathReason.MODULE_NOT_FOUND,
+                "nonexistent_module_xyz_12345",
+            ),
+            (
+                "os.path:nonexistent_func_xyz_12345",
+                DottedPathReason.ATTRIBUTE_NOT_FOUND,
+                "nonexistent_func_xyz_12345",
+            ),
+            ("os.path:sep", DottedPathReason.NOT_CALLABLE, "not callable"),
+        ],
+        ids=["empty", "whitespace", "no-separator", "empty-function",
+             "empty-module", "missing-module", "missing-function",
+             "not-callable"],
+    )
+    def test_every_fault_is_one_type_with_a_distinct_reason(
+        self, ref: str, reason: DottedPathReason, expected_text: str
+    ) -> None:
+        with pytest.raises(DottedPathError) as exc_info:
+            resolve_function(ref)
 
-        assert "Empty function reference" in str(exc_info.value)
+        assert exc_info.value.reason is reason
+        assert expected_text in str(exc_info.value)
 
-    def test_no_separator_error(self) -> None:
-        """Reference without separator gives helpful error."""
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function("just_a_name")
-
-        error_msg = str(exc_info.value)
-        assert "just_a_name" in error_msg  # Shows actual reference
-        assert "module.path" in error_msg  # Shows expected format
-
-    def test_invalid_colon_format_empty_function(self) -> None:
-        """Malformed colon format (empty function) gives helpful error."""
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function("module:")
-
-        error_msg = str(exc_info.value)
-        assert "module:" in error_msg
-
-    def test_invalid_colon_format_empty_module(self) -> None:
-        """Malformed colon format (empty module) gives helpful error."""
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function(":function")
-
-        error_msg = str(exc_info.value)
-        assert ":function" in error_msg
-
-    def test_module_not_found_error(self) -> None:
-        """Missing module gives helpful error with context."""
-        with pytest.raises(ImportError) as exc_info:
+    def test_the_error_still_names_the_reference(self) -> None:
+        """Carried on the exception now, not only interpolated into the text."""
+        with pytest.raises(DottedPathError) as exc_info:
             resolve_function("nonexistent_module_xyz_12345:func")
 
-        error_msg = str(exc_info.value)
-        assert "nonexistent_module_xyz_12345" in error_msg
-        assert "Cannot import module" in error_msg
+        assert exc_info.value.ref == "nonexistent_module_xyz_12345:func"
 
-    def test_function_not_found_error(self) -> None:
-        """Missing function lists available functions."""
-        with pytest.raises(AttributeError) as exc_info:
+    def test_a_missing_function_still_suggests_what_the_module_has(self) -> None:
+        """The one thing worth keeping from the implementation this replaced.
+
+        Its ``AttributeError`` enumerated the module's public callables, which
+        is the most useful part of a missing-attribute message and the reason
+        this resolver's error was better than the other eight. It moved into
+        the shared primitive rather than being lost with the function.
+        """
+        with pytest.raises(DottedPathError) as exc_info:
             resolve_function("os.path:nonexistent_func_xyz_12345")
 
         error_msg = str(exc_info.value)
-        assert "nonexistent_func_xyz_12345" in error_msg
-        assert "not found" in error_msg
-        assert "Available functions:" in error_msg
-        # Should list some real os.path functions
+        assert "Available:" in error_msg
         assert "join" in error_msg or "exists" in error_msg
-
-    def test_not_callable_error(self) -> None:
-        """Non-callable attribute gives helpful error."""
-        # os.path.sep is a string, not callable
-        with pytest.raises(ValueError) as exc_info:
-            resolve_function("os.path:sep")
-
-        error_msg = str(exc_info.value)
-        assert "not callable" in error_msg
-        assert "str" in error_msg  # Shows actual type
 
     def test_whitespace_handling(self) -> None:
         """Whitespace in reference is stripped."""
@@ -191,7 +187,7 @@ class TestResolveFunctions:
             "bad": "nonexistent.module:func",
         }
 
-        with pytest.raises(ImportError):
+        with pytest.raises(DottedPathError):
             resolve_functions(refs)
 
 
@@ -243,7 +239,7 @@ class TestWizardLoaderIntegration:
 
         loader = WizardConfigLoader()
 
-        with pytest.raises(ImportError) as exc_info:
+        with pytest.raises(DottedPathError) as exc_info:
             loader.load_from_dict(
                 config, custom_functions={"bad_func": "nonexistent.module:fake_function"}
             )

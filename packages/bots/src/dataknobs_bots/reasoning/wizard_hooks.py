@@ -39,6 +39,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Union
 
+from dataknobs_common.exceptions import ConfigurationError
+
 from .function_resolver import resolve_function
 from .lifecycle import LifecycleHooks, TurnHookCallback
 
@@ -188,46 +190,37 @@ class WizardHooks:
             ```
         """
         hooks = cls()
+        faults: list[str] = []
 
-        # Register enter hooks
-        for hook_config in config.get("on_enter", []):
-            callback = cls._load_callback(hook_config)
-            if callback:
-                stage = (
-                    hook_config.get("stage")
-                    if isinstance(hook_config, dict)
-                    else None
-                )
-                hooks.on_enter(callback, stage=stage)
+        def load(key: str, hook_config: dict[str, Any] | str) -> Any:
+            try:
+                return cls._load_callback(hook_config)
+            except ConfigurationError as exc:
+                faults.append(f"{key}: {exc}")
+                return None
 
-        # Register exit hooks
-        for hook_config in config.get("on_exit", []):
-            callback = cls._load_callback(hook_config)
-            if callback:
-                stage = (
-                    hook_config.get("stage")
-                    if isinstance(hook_config, dict)
-                    else None
-                )
-                hooks.on_exit(callback, stage=stage)
+        def stage_of(hook_config: dict[str, Any] | str) -> str | None:
+            return (
+                hook_config.get("stage")
+                if isinstance(hook_config, dict)
+                else None
+            )
 
-        # Register complete hooks
-        for hook_ref in config.get("on_complete", []):
-            callback = cls._load_callback(hook_ref)
-            if callback:
-                hooks.on_complete(callback)
-
-        # Register restart hooks
-        for hook_ref in config.get("on_restart", []):
-            callback = cls._load_callback(hook_ref)
-            if callback:
-                hooks.on_restart(callback)
-
-        # Register error hooks
-        for hook_ref in config.get("on_error", []):
-            callback = cls._load_callback(hook_ref)
-            if callback:
-                hooks.on_error(callback)
+        for key, register, staged in (
+            ("on_enter", hooks.on_enter, True),
+            ("on_exit", hooks.on_exit, True),
+            ("on_complete", hooks.on_complete, False),
+            ("on_restart", hooks.on_restart, False),
+            ("on_error", hooks.on_error, False),
+        ):
+            for hook_config in config.get(key, []):
+                callback = load(key, hook_config)
+                if callback is None:
+                    continue
+                if staged:
+                    register(callback, stage=stage_of(hook_config))
+                else:
+                    register(callback)
 
         # Delegate turn-lifecycle parsing to the generic LifecycleHooks
         # loader (same on_turn_start / on_turn_end keys + dotted-path
@@ -236,39 +229,65 @@ class WizardHooks:
         # invariant documented on ``LifecycleHooks.registry`` and on
         # this class's ``lifecycle`` property requires the instance
         # constructed in ``__init__`` to survive across ``from_config``.
-        hooks._lifecycle.load_config(config)
+        #
+        # Its faults are collected here rather than allowed to propagate so
+        # that one report covers every key. Before this, the two halves of
+        # this function disagreed: `on_turn_start` raised while `on_error`
+        # three lines above silently skipped, for the same typo.
+        try:
+            hooks._lifecycle.load_config(config)
+        except ConfigurationError as exc:
+            faults.append(str(exc))
+
+        if faults:
+            raise ConfigurationError(
+                "Invalid wizard hook configuration:\n"
+                + "\n".join(f"  - {fault}" for fault in faults),
+                context={"faults": faults},
+            )
 
         return hooks
 
     @staticmethod
-    def _load_callback(hook_config: dict[str, Any] | str) -> Callable[..., Any] | None:
+    def _load_callback(hook_config: dict[str, Any] | str) -> Callable[..., Any]:
         """Load a callback function from configuration.
 
         Args:
-            hook_config: Either a string "module.path:function" or
-                a dict with "function" key
+            hook_config: Either a string "module.path:function" (or
+                "module.path.function") or a dict with a "function" key.
 
         Returns:
-            The loaded callback function, or None if loading failed
+            The loaded callback function.
+
+        Raises:
+            ConfigurationError: The entry is not a string or mapping, or
+                names no function.
+            DottedPathError: The path cannot be resolved to a callable.
+                This was a WARNING and a ``None`` return, which callers read
+                as "no hook to register" — so a typo in an ``on_enter`` path
+                produced a wizard that ran without that hook and said so only
+                in a log line.
+
+        Warning:
+            Resolving a hook path **imports and executes** the target module.
+            See :mod:`dataknobs_common.imports`.
         """
-        # Extract function reference
         if isinstance(hook_config, str):
             func_ref = hook_config
         elif isinstance(hook_config, dict):
             func_ref = hook_config.get("function", "")
         else:
-            logger.warning("Invalid hook config type: %s", type(hook_config))
-            return None
+            raise ConfigurationError(
+                "Wizard hook entry must be a dotted path or a mapping with a "
+                f"'function' key; got {type(hook_config).__name__}"
+            )
 
         if not func_ref:
-            return None
+            raise ConfigurationError(
+                f"Wizard hook entry names no function: {hook_config!r}"
+            )
 
-        # Use shared function resolver with graceful error handling
-        try:
-            return resolve_function(func_ref)
-        except (ValueError, ImportError, AttributeError) as e:
-            logger.warning("Failed to load hook function '%s': %s", func_ref, e)
-            return None
+        return resolve_function(func_ref)
 
     def on_enter(
         self, callback: StageCallback, stage: str | None = None

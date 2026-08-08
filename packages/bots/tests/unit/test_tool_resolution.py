@@ -157,7 +157,7 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             DynaBot._resolve_tool(tool_config, {})
 
     def test_a_failing_ctor_does_not_leak_its_message(self):
@@ -232,7 +232,7 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
     def test_resolve_non_tool_class_with_optional_true_still_raises(self):
@@ -251,7 +251,7 @@ class TestToolResolution:
             "optional": True,
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
     def test_resolve_non_tool_class_does_not_run_ctor(self):
@@ -277,7 +277,7 @@ class TestToolResolution:
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="must subclass"):
+        with pytest.raises(ConfigurationError, match="must resolve to a subclass"):
             DynaBot._resolve_tool(tool_config, {})
 
         assert _SideEffectyNonTool.instances_created == 0, (
@@ -432,7 +432,7 @@ class TestToolResolution:
             ],
         }
 
-        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+        with pytest.raises(ConfigurationError, match="Failed to resolve tool class"):
             await DynaBot.from_config(config)
 
     @pytest.mark.asyncio

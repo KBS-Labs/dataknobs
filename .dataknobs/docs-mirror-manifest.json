@@ -19,6 +19,14 @@
           "site": "aws-session.md"
         },
         {
+          "package": "TESTING.md",
+          "site": "testing.md"
+        },
+        {
+          "package": "guides/dotted-paths.md",
+          "site": "dotted-paths.md"
+        },
+        {
           "package": "guides/events.md",
           "site": "events.md"
         },
@@ -53,10 +61,6 @@
         {
           "package": "guides/sync-bridge.md",
           "site": "sync-bridge.md"
-        },
-        {
-          "package": "TESTING.md",
-          "site": "testing.md"
         }
       ],
       "site_only": [
@@ -294,7 +298,6 @@
         "ARTIFACT_CORPUS.md",
         "CONFIGURATION.md",
         "CONFIG_TOOLKIT.md",
-        "CONTEXT_AWARE_WIZARDS.md",
         "MIGRATION.md",
         "PROMPT_CUSTOMIZATION.md",
         "PROMPT_REFERENCE.md",
@@ -312,6 +315,12 @@
         "quickstart.md"
       ],
       "diverge": [
+        {
+          "package": "CONTEXT_AWARE_WIZARDS.md",
+          "site": "guides/context-aware-wizards.md",
+          "reason": "Was misfiled as package_only while a hand-authored site copy existed, so the pair was invisible and unchecked -- which is how a one-sided edit to the derivation section reached review. The two share most of their body but the site page carries the full 22-transform reference the package doc links out to, and several sections are ordered differently. Recorded as a pair so both are existence-checked and the relationship is visible; reconciling the content is its own task.",
+          "shared_sections": []
+        },
         {
           "package": "MIDDLEWARE.md",
           "site": "guides/middleware.md",
