@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`DynaBotConfigBuilder.merge_overrides` documents list-replace, and no
+  longer carries its own merge.** The behavior is unchanged — the private
+  `_deep_merge` it used was byte-equivalent to `dataknobs_config.deep_merge`,
+  which it now calls — but the contract was only ever implied. Lists in an
+  override **replace** the base's rather than extending it; nested dicts
+  merge key by key. A fourth copy of the same function elsewhere in the
+  workspace had drifted to extending lists, which is what prompted the
+  consolidation; `tests/test_deep_merge_agreement.py` now fails if any entry
+  point stops agreeing.
+
+  If you imported the module-level `_deep_merge` from
+  `dataknobs_bots.config.builder` — underscore-private, but importable — use
+  `from dataknobs_config import deep_merge` instead.
+
 - **FSM functions-layer errors now get a status matching the failure.** The
   exceptions in `dataknobs_fsm.functions.base` were rooted at a plain
   `Exception` rather than at `DataknobsError`, so they never reached

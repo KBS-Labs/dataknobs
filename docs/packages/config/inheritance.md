@@ -135,25 +135,37 @@ result = deep_merge(base, override)
 
 This is the merge semantic for the whole codebase. Every *dict-deep-merge* path
 in DataKnobs routes through this one function — `extends:` resolution,
-`DynaBotConfigBuilder.merge_overrides`, `apply_template`, and
-`ConfigLoader.merge_configs` — and `tests/test_deep_merge_agreement.py` fails
-if one of them stops. To accumulate instead, concatenate before merging.
+`DynaBotConfigBuilder.merge_overrides`, `apply_template`,
+`ConfigLoader.merge_configs`, and `ConversionOptions.merge_metadata` — and
+`tests/test_deep_merge_agreement.py` fails if one of them stops. To accumulate
+instead, concatenate before merging.
 
 (`Config.merge`, `EnvironmentConfig.merge`, and
 `dataknobs_common.merge_bindings` are *not* in that set. They combine named
 collections and binding layers rather than merging two dicts structurally, and
-have their own documented precedence rules.)
+have their own documented precedence rules. Neither is
+`dataknobs_bots`' `inbox_merge_fn`, which is an *in-place* mutator — see the
+caveat in the bots user guide.)
 
 ### Non-mutation is a top-level guarantee
 
-Neither argument is mutated. The copy at each level is *shallow*, though, so a
-key present in only one input is carried into the result **by reference**:
+Neither argument is mutated. The copy at each level is *shallow*, though. A
+fresh dict is built only where **both** sides supply a dict; every other value,
+at every depth, is carried into the result **by reference**:
 
 ```python
 base = {"shared": {"deep": 1}}
 result = deep_merge(base, {"other": 2})
-result["shared"] is base["shared"]   # True
+result["shared"] is base["shared"]         # True — key in one input
+
+base = {"a": {"x": [1, 2]}}
+result = deep_merge(base, {"a": {"y": 3}})
+result["a"] is base["a"]                   # False — rebuilt, both sides had it
+result["a"]["x"] is base["a"]["x"]         # True — the list itself is shared
 ```
+
+The second case is the one worth remembering: a key appearing in *both* inputs
+does not make what is underneath it safe.
 
 Rebinding keys on the result is safe; mutating a nested value reached *through*
 it also mutates the input. Copy first if you need isolation — merging into a

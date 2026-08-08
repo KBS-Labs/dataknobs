@@ -1398,9 +1398,17 @@ config = WizardReasoningConfig(
 > ```python
 > from dataknobs_config import deep_merge
 >
-> def merge_in_place(target, source):
+> def apply_deep_merge(target, source):
 >     target.update(deep_merge(target, source))
 > ```
+>
+> One difference from the hand-rolled version above, if anything holds a
+> reference to a nested section: `deep_merge` builds a *new* dict wherever
+> both sides supply one, so `update` **rebinds** `target`'s nested values
+> rather than merging into them. A caller holding `target["section"]` from
+> before the call keeps seeing the pre-merge contents. The recursive version
+> above writes into that same dict, so the holder sees the update. Neither is
+> more correct; the wizard itself holds no such reference.
 
 **Writer helper** — for consumer code (pipeline steps, custom
 logic) that publishes to the inbox for the NEXT turn:

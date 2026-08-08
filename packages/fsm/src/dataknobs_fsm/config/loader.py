@@ -710,11 +710,20 @@ class ConfigLoader:
     def merge_configs(self, *configs: FSMConfig) -> FSMConfig:
         """Merge multiple FSM configurations.
 
-        Later configurations override earlier ones. List-valued fields --
-        including ``networks``, and each network's ``states`` and ``arcs`` --
-        are **replaced** by the later configuration rather than accumulated
-        across configurations, matching :func:`dataknobs_config.deep_merge`
-        and :func:`~dataknobs_fsm.config.schema.apply_template`.
+        A later configuration overrides the fields it **declares**; fields it
+        never mentions keep the earlier configuration's values.
+
+        List-valued fields -- ``networks``, and within a replaced network its
+        ``states`` and ``arcs`` -- are **replaced** wholesale by a later
+        configuration that declares them, never accumulated, matching
+        :func:`dataknobs_config.deep_merge` and
+        :func:`~dataknobs_fsm.config.schema.apply_template`. Because the
+        replacement happens at ``networks``, the merge never descends into a
+        network: two configurations each declaring a network named ``main``
+        do not combine their states, the later ``main`` simply stands.
+
+        Dict-valued fields (``metadata``, and the sub-configs of
+        ``data_mode``) merge key by key at every depth.
 
         Args:
             *configs: FSMConfig instances to merge.
@@ -722,9 +731,18 @@ class ConfigLoader:
         Returns:
             Merged FSMConfig instance.
         """
-        merged_dict: Dict[str, Any] = {}
+        merged_dict: dict[str, Any] = {}
 
         for config in configs:
-            merged_dict = deep_merge(merged_dict, config.model_dump())
+            # ``exclude_unset`` is what makes "override" mean *the fields this
+            # configuration declared*. A plain ``model_dump()`` emits every
+            # field including untouched defaults, so a fragment silent about
+            # ``resources`` would still dump ``resources: []`` -- and against
+            # list-replace semantics that empty list wins, overwriting an
+            # earlier configuration's resources with nothing. Dumping only set
+            # fields is also what lets a caller layer genuine fragments: a
+            # config parsed from a file has exactly that file's keys marked
+            # set, so silence in the file stays silence here.
+            merged_dict = deep_merge(merged_dict, config.model_dump(exclude_unset=True))
 
         return validate_config(merged_dict)

@@ -72,12 +72,17 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     merging.
 
     Neither argument is mutated. That guarantee is top-level: the copy at each
-    level is shallow, so a key present in only one input is shared *by
-    reference* with the result. The result is safe to rebind keys on and is
-    **not** deeply isolated from its inputs -- a caller that mutates a nested
-    value reached through the result mutates it in the input too. Callers
-    needing isolation copy first; ``copy.deepcopy`` on the way in is the usual
-    shape, and is why a caller merging into a module-level constant needs one.
+    level is shallow. A fresh dict is built only where *both* sides supply a
+    dict; every other value, at every depth, is shared **by reference** with
+    whichever input supplied it. That includes values under a key both inputs
+    declare -- merging ``{"a": {"x": [1, 2]}}`` with ``{"a": {"y": 3}}``
+    rebuilds ``a`` but hands back the very same ``x`` list.
+
+    So the result is safe to rebind keys on and is **not** deeply isolated
+    from its inputs -- a caller that mutates a nested value reached through
+    the result mutates it in the input too. Callers needing isolation copy
+    first; ``copy.deepcopy`` on the way in is the usual shape, and is why a
+    caller merging into a module-level constant needs one.
 
     Args:
         base: Base dictionary (values used when not overridden)

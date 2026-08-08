@@ -1,5 +1,6 @@
 """Tests for FSM configuration modules."""
 
+import copy
 import json
 import os
 import tempfile
@@ -173,6 +174,27 @@ class TestConfigSchema:
 class TestConfigTemplates:
     """Test configuration templates."""
 
+    @pytest.fixture
+    def restore_templates(self):
+        """Put ``TEMPLATES`` back however the test leaves it.
+
+        The two isolation tests below detect a missing deepcopy by mutating
+        their result and checking the module constant did not change. That
+        detection works by *writing through* the returned config -- so in the
+        failing case they write into ``TEMPLATES`` itself and, without this,
+        leave it poisoned for the rest of the session. The regression would
+        then take unrelated template tests down with it, and the first
+        failure to be reported would not be the one naming the cause.
+        """
+        from dataknobs_fsm.config.schema import TEMPLATES
+
+        snapshot = copy.deepcopy(TEMPLATES)
+        try:
+            yield
+        finally:
+            TEMPLATES.clear()
+            TEMPLATES.update(snapshot)
+
     def test_apply_template_database_etl(self):
         """Test applying database ETL template."""
         config = apply_template(UseCaseTemplate.DATABASE_ETL)
@@ -198,7 +220,7 @@ class TestConfigTemplates:
             assert "data_mode" in config
             assert "execution_strategy" in config
 
-    def test_returned_config_is_isolated_from_the_template(self):
+    def test_returned_config_is_isolated_from_the_template(self, restore_templates):
         """A caller mutating the result must not corrupt the module template.
 
         `apply_template` deepcopies `TEMPLATES[template]` before merging, and
@@ -221,7 +243,7 @@ class TestConfigTemplates:
         assert second["data_mode"]["default"] == DataHandlingMode.COPY
         assert "injected" not in second
 
-    def test_isolation_survives_an_override_of_a_sibling_key(self):
+    def test_isolation_survives_an_override_of_a_sibling_key(self, restore_templates):
         """The deepcopy is what isolates sections the overrides never touch.
 
         This is the case that makes removing the deepcopy wrong in general
@@ -604,6 +626,90 @@ class TestConfigLoader:
         # as how many survived. Naming the state "start" on both sides -- as
         # the test above does -- cannot tell a replace from a merge.
         assert [s.name for s in merged.networks[0].states] == ["from_second"]
+
+    def test_a_later_config_overrides_only_the_fields_it_declares(self):
+        """A field the later configuration never mentions must survive.
+
+        Regression, and the half of "later configurations override earlier
+        ones" that dumping every field silently broke. `model_dump()` emits
+        *defaults* as well as set values, so a fragment that says nothing
+        about `resources` still dumped `resources: []` -- and once lists
+        replace rather than extend, that empty list wins. The result is a
+        merge in which the later configuration overrides everything,
+        including the fields it declined to have an opinion about.
+
+        `resources` is the field where this bites hardest: its entries are
+        independently named, so accumulating them was *sane*, and it is the
+        one list field whose loss the list-replace fix would otherwise have
+        introduced rather than corrected.
+        """
+        loader = ConfigLoader()
+
+        base = FSMConfig(
+            name="pipeline",
+            version="3.1.0",
+            max_transitions=50000,
+            resources=[ResourceConfig(name="db", type="database")],
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[StateConfig(name="from_base", is_start=True, arcs=[])],
+                ),
+            ],
+            main_network="main",
+        )
+        overlay = FSMConfig(
+            name="pipeline-prod",
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[StateConfig(name="from_overlay", is_start=True, arcs=[])],
+                ),
+            ],
+            main_network="main",
+        )
+
+        merged = loader.merge_configs(base, overlay)
+
+        # Declared by the overlay -- it wins, including the list replace.
+        assert merged.name == "pipeline-prod"
+        assert [s.name for s in merged.networks[0].states] == ["from_overlay"]
+        # Never mentioned by the overlay -- the base's values stand, rather
+        # than being overwritten by the overlay's defaults.
+        assert [r.name for r in merged.resources] == ["db"]
+        assert merged.max_transitions == 50000
+        assert merged.version == "3.1.0"
+
+    def test_a_value_explicitly_set_to_its_default_still_overrides(self):
+        """Distinguishing "unset" from "set to the default value".
+
+        The fix keys on what a configuration *declared*, not on what its
+        values are, so a later configuration that deliberately restates a
+        default must still win over an earlier non-default. Without this the
+        obvious cheaper implementation -- skip values equal to the field
+        default -- would pass everything above and be wrong here.
+        """
+        loader = ConfigLoader()
+
+        def config(name: str, **kwargs: object) -> FSMConfig:
+            return FSMConfig(
+                name=name,
+                networks=[
+                    NetworkConfig(
+                        name="main",
+                        states=[StateConfig(name="s", is_start=True, arcs=[])],
+                    ),
+                ],
+                main_network="main",
+                **kwargs,  # type: ignore[arg-type]
+            )
+
+        merged = loader.merge_configs(
+            config("base", max_transitions=50000),
+            config("overlay", max_transitions=1000),
+        )
+
+        assert merged.max_transitions == 1000
 
 
 class TestFSMBuilder:
