@@ -4,7 +4,8 @@
 #   1. Mutable action refs (must use SHA pinning)
 #   2. ShellCheck issues in run: blocks
 #
-# Requires: uv (for python/pyyaml), shellcheck (optional)
+# Requires: uv (for python/pyyaml) and shellcheck. Both are required, not
+# optional — see the note above the probes below.
 
 set -e
 
@@ -24,14 +25,35 @@ fi
 
 errors=0
 
+# Report whatever has been counted so far. Called from the paths that abort
+# before the summary at the bottom, so an aborted run still says how many issues
+# it had found; silent when there are none, so an abort with a clean slate is
+# not dressed up as a finding.
+report_pending_errors() {
+    if [ $errors -gt 0 ]; then
+        echo ""
+        echo -e "${RED}Found $errors workflow issue(s) before stopping${NC}"
+    fi
+}
+
 # Check workflow directory exists
 if [ ! -d "$WORKFLOW_DIR" ]; then
     echo -e "${YELLOW}No .github/workflows/ directory found — skipping${NC}"
     exit 0
 fi
 
-workflow_files=("$WORKFLOW_DIR"/*.yml)
-if [ ! -e "${workflow_files[0]}" ]; then
+# Both extensions: GitHub Actions accepts .yaml as readily as .yml, so globbing
+# only .yml would leave such a workflow unlinted without saying so — the same
+# silent non-execution the tool probes below exist to prevent. Built by filtering
+# rather than assigned directly because a glob that matches nothing expands to
+# itself, which the old "does element zero exist" test only caught for .yml.
+workflow_files=()
+for candidate in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
+    if [ -e "$candidate" ]; then
+        workflow_files+=("$candidate")
+    fi
+done
+if [ ${#workflow_files[@]} -eq 0 ]; then
     echo -e "${YELLOW}No workflow files found — skipping${NC}"
     exit 0
 fi
@@ -53,10 +75,33 @@ if [ $errors -eq 0 ]; then
 fi
 
 # 2. ShellCheck on run: blocks
+#
+# Both tools are required, and their absence is fatal rather than a skip. A skip
+# leaves the run reporting success having analysed nothing — and since CI
+# validates the committed artifacts instead of re-running the gate, the artifact
+# from a machine without shellcheck is indistinguishable from one where the
+# linter ran and found no issues. Nothing downstream can tell them apart.
+#
+# This is also what the dependency rules require of a tool we invoke as a
+# subprocess: gate its presence explicitly and fail, never warn and continue.
+# Check 1 has already run and may have counted errors, and these branches exit
+# before reaching the summary at the bottom, so they report the running total
+# themselves — otherwise a run that found mutable refs and then hit a missing
+# tool would print its ✗ lines and stop without ever saying how many. The exit
+# stays in the branch rather than falling through to a shared one: continuing
+# past a missing tool is the defect being prevented, and the guard in
+# tests/test_quality_gate_accounting.py reads each branch for it.
 if ! command -v shellcheck >/dev/null 2>&1; then
-    echo -e "  ${YELLOW}⚠${NC} shellcheck not installed — skipping run: block analysis"
+    echo -e "  ${RED}✗${NC} shellcheck is required but not installed"
+    echo "    macOS:  brew install shellcheck"
+    echo "    Debian: apt-get install shellcheck"
+    report_pending_errors
+    exit 1
 elif ! command -v uv >/dev/null 2>&1; then
-    echo -e "  ${YELLOW}⚠${NC} uv not installed — skipping run: block analysis"
+    echo -e "  ${RED}✗${NC} uv is required but not installed"
+    echo "    Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    report_pending_errors
+    exit 1
 else
     echo "Running shellcheck on workflow run: blocks..."
     sc_errors=0
