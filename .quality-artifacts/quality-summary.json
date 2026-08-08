@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-08-08T02:24:19Z",
+  "timestamp": "2026-08-08T03:51:56Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots config data fsm llm",
-  "tested_packages": ["bots", "config", "data", "fsm", "llm"],
+  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
   "package_hashes": {
-  "bots": "8279afca9223d98829cb263691eb03fa13bc9051ee2884f8ec735a7572d38d2d",
-  "common": "6677adcd8d6e3846c1be51a07bb9a19b74b1a07e16f3acbb6eb556a05ad9796e",
+  "bots": "9db7e050bd5257b421214f8424947864a05e1370cc19a6de40ab243fa3f729de",
+  "common": "e2f5f9ef1d811fc6c45dd164b3d42a6c2c507b8e19762368365da71bef7d5c43",
   "config": "87fbb4a49b839a2a9d923246f6671633bb0d253468cbb1bab221dbad818269dc",
   "data": "c2a5b2440716bed77a32fd065a392b7834cb08a1dd9af01c62321e7f5b7bb308",
   "fsm": "25d5c2cb6b1210abcd73455f78917c303c121046d9ea115962ee47fb80b01abc",
@@ -20,7 +20,7 @@
 },
   "workspace_hashes": {
   "toolchain": "829a04918283971340f6fd465acf46f5a94006f7ebf6a8ec6846f40370ce8a60",
-  "workspace_tests": "2ee995f4e4fd78748a7bd26b9c58c467781b9c11bbc525e160e09d23faa3262b"
+  "workspace_tests": "c57e939a569fe44ccc3141138dffec2d4e7d13d3f766bf5e67ed60d5a159abea"
 },
   "checks": {
     "documentation": {
