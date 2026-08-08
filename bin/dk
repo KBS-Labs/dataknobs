@@ -510,5 +510,13 @@ if [ ! -f "$PROJECT_ROOT/pyproject.toml" ]; then
     exit 1
 fi
 
+# Repo-local git config that .gitattributes depends on. Idempotent and cheap, so
+# it runs unconditionally rather than behind a "did you set this up?" prompt no
+# one reads. Never fatal: a git config we could not write is not a reason to
+# refuse to run tests.
+if [ -x "$SCRIPT_DIR/setup-git-config.sh" ]; then
+    "$SCRIPT_DIR/setup-git-config.sh" --quiet 2>/dev/null || true
+fi
+
 # Run main command
 main "$@"
