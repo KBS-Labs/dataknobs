@@ -85,8 +85,22 @@ _GLOBAL_QUALITY_INPUTS = [
 # Reachable only by the workspace guards, so a change here cannot move any
 # package's result. .pylintrc qualifies because no gate step runs pylint —
 # it is read by `bin/dk lint`, tox, and the guard that asserts its py-version.
+#
+# bin/ qualifies for the same reason from the other direction: the guards under
+# tests/ read these scripts — the gate, change detection, the doc-mirror check —
+# so a change here moves their result and nothing else's. Without the entry a
+# change to the gate itself matched no pattern, and the run it edited skipped
+# every test while reporting success.
+#
+# Caveat, because it is asymmetric and easy to misread: change *detection* below
+# matches these by path prefix, so bin/*.sh counts; the artifact *hash* scope in
+# package-hashes.py globs "*.py" beneath a directory entry, so a shell-only
+# change here triggers the guards without dirtying the stored hash. That is
+# strictly better than the nothing it had before, and widening the glob is its
+# own decision — __pycache__ sits under tests/ and every stored hash would move.
 _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".pylintrc",
+    "bin/",
     "tests/",
 ]
 
@@ -95,9 +109,17 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # rather than by dirtying every package. See bin/package-hashes.py.
 GLOBAL_TRIGGERS = list(_GLOBAL_QUALITY_INPUTS)
 
+# The workspace-only tier, matched rather than merely declared. Three readers
+# consulted the list above and a fourth — the mapping below — did not, which is
+# how a diff touching only tests/ came out as "no quality input changed" and
+# skipped the very guards it edited.
+WORKSPACE_ONLY_TRIGGERS = list(_WORKSPACE_ONLY_QUALITY_INPUTS)
+
 #: Every workspace-level input, by scope name. Consumed by package-hashes.py to
 #: hash each scope separately and by the toolchain guards to assert that CI
-#: triggers on all of them. Directory entries end in "/" and cover *.py beneath.
+#: triggers on all of them. Directory entries end in "/"; what "beneath" covers
+#: differs by reader — hashing takes *.py, change detection takes every path
+#: under the prefix. See the caveat on _WORKSPACE_ONLY_QUALITY_INPUTS.
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
     "toolchain": _GLOBAL_QUALITY_INPUTS,
     "workspace_tests": _WORKSPACE_ONLY_QUALITY_INPUTS,
@@ -200,20 +222,42 @@ def get_transitive_dependents(packages: set[str]) -> set[str]:
     return result
 
 
-def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool]:
+def _is_workspace_only_input(filepath: str) -> bool:
+    """Whether a path is a workspace-only quality input.
+
+    Directory entries end in "/" and cover everything beneath them; file
+    entries match exactly. Spelled to the same convention
+    WORKSPACE_QUALITY_INPUTS documents, so the list stays the declaration.
+    """
+    return any(
+        filepath.startswith(entry) if entry.endswith("/") else filepath == entry
+        for entry in WORKSPACE_ONLY_TRIGGERS
+    )
+
+
+def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]:
     """Map changed files to affected packages.
 
     Returns:
-        (directly_changed_packages, docs_changed, all_packages_triggered)
+        (directly_changed_packages, docs_changed, all_packages_triggered,
+         workspace_only_changed)
     """
     changed_packages: set[str] = set()
     docs_changed = False
     all_triggered = False
+    workspace_changed = False
 
     for filepath in files:
         # Check for global triggers
         if filepath in GLOBAL_TRIGGERS:
             all_triggered = True
+            continue
+
+        # Check for workspace-only inputs. These belong to no package, so they
+        # move no package's result — but they are still a quality input, and
+        # the guards under tests/ are the ones that check the toolchain.
+        if _is_workspace_only_input(filepath):
+            workspace_changed = True
             continue
 
         # Check for docs changes
@@ -233,50 +277,80 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool]:
                 if pkg_name in DEPENDENCIES:
                     changed_packages.add(pkg_name)
 
-    return changed_packages, docs_changed, all_triggered
+    return changed_packages, docs_changed, all_triggered, workspace_changed
 
 
-def detect_changes(base_ref: str = "main") -> dict[str, Any]:
-    """Detect changed packages and docs status.
+def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
+    """Which suites a change set needs run: "packages", "workspace" or "none".
+
+    An empty package list used to be read as "run nothing". That is right for
+    a change touching no quality input and wrong for one touching only the
+    workspace guards, which belong to no package by construction and so map
+    to an empty list exactly like a no-op diff does. Naming the two cases
+    apart is what lets the gate skip the per-package suites without also
+    skipping the suite the change edited.
+    """
+    if packages:
+        return "packages"
+    if workspace_changed:
+        return "workspace"
+    return "none"
+
+
+def plan_for_files(files: list[str]) -> dict[str, Any]:
+    """Decide what a change set needs tested, without consulting git.
+
+    Split out from detect_changes so the decision is reachable from a test
+    with a literal file list. The git half is what made the previous
+    behaviour awkward to pin, and it is the decision that was wrong.
 
     Returns dict with:
         packages: sorted list of package names that need testing
         docs_changed: whether docs-related files changed
         directly_changed: packages with direct file changes
         mode: "all" if global trigger hit, "changed" otherwise
+        workspace_changed: whether a workspace-only quality input changed
+        test_scope: "packages", "workspace" or "none" (see classify_test_scope)
     """
-    changed_files = get_changed_files(base_ref)
-
-    if not changed_files:
+    if not files:
         return {
             "packages": [],
             "docs_changed": False,
             "directly_changed": [],
             "mode": "none",
+            "workspace_changed": False,
+            "test_scope": "none",
         }
 
-    directly_changed, docs_changed, all_triggered = map_files_to_packages(changed_files)
+    (
+        directly_changed,
+        docs_changed,
+        all_triggered,
+        workspace_changed,
+    ) = map_files_to_packages(files)
 
     if all_triggered:
-        return {
-            "packages": ALL_PACKAGES,
-            "docs_changed": docs_changed,
-            "directly_changed": sorted(directly_changed),
-            "mode": "all",
-        }
-
-    # Compute transitive dependents
-    all_affected = get_transitive_dependents(directly_changed)
-
-    # Filter to only packages that actually exist
-    packages = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
+        packages = list(ALL_PACKAGES)
+        mode = "all"
+    else:
+        # Compute transitive dependents, filtered to packages that exist
+        all_affected = get_transitive_dependents(directly_changed)
+        packages = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
+        mode = "changed"
 
     return {
         "packages": packages,
         "docs_changed": docs_changed,
         "directly_changed": sorted(directly_changed),
-        "mode": "changed",
+        "mode": mode,
+        "workspace_changed": workspace_changed,
+        "test_scope": classify_test_scope(packages, workspace_changed),
     }
+
+
+def detect_changes(base_ref: str = "main") -> dict[str, Any]:
+    """Detect changed packages and docs status. See plan_for_files."""
+    return plan_for_files(get_changed_files(base_ref))
 
 
 def main() -> None:

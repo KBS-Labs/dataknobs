@@ -130,6 +130,73 @@ def test_workspace_tests_are_reachable():
     )
 
 
+def test_a_change_to_these_guards_still_schedules_them():
+    """A pull request that edits only this directory must still run it.
+
+    Reachability is not only "does an entry point name the path" — the gate
+    runs it inside a block change detection can switch off. These files
+    belong to no package by construction, so a diff touching only ``tests/``
+    maps to an empty package set, and an empty package set used to mean "run
+    no tests at all". The suite that went unrun was the one the PR edited,
+    and the PR reported green.
+
+    Asserted against the decision rather than the file list, because the
+    empty package set is *correct* here — there is genuinely no package to
+    test. What was wrong was reading it as "nothing to test". ``test_scope``
+    is the distinction: no-package-changed and nothing-changed are separate
+    answers, and only the second one skips.
+    """
+    scope = _scopes.plan_for_files(["tests/test_toolchain_consistency.py"])
+
+    assert scope["packages"] == [], (
+        "a workspace guard belongs to no package — mapping one to a package "
+        f"would re-run that package's suite for an unrelated edit, got {scope['packages']}"
+    )
+    assert scope["workspace_changed"] is True
+    assert scope["test_scope"] == "workspace", (
+        "a tests/-only diff must schedule the workspace guards; "
+        f"got test_scope={scope['test_scope']!r}, which the gate reads as 'skip'"
+    )
+
+    # bin/ is the same case from the other direction — the guards read those
+    # scripts, so a change to the gate moves their result and nothing else's.
+    # Left out, the pull request that fixes the gate skips the gate.
+    assert _scopes.plan_for_files(["bin/run-quality-checks.sh"])["test_scope"] == "workspace"
+
+    # The other two answers, so the fix cannot be "always run everything".
+    assert _scopes.plan_for_files(["README.md"])["test_scope"] == "none"
+    assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
+
+
+def test_the_gate_reads_the_scope_change_detection_computes():
+    """The decision above only helps if the gate acts on it.
+
+    Text-matched, and deliberately narrow about what that proves: it pins
+    that the gate reads ``test_scope`` and that its no-package branch turns
+    off the *package* suites rather than the whole test block. It cannot
+    prove the workspace run is reachable at runtime — the guard above owns
+    the decision and ``test_workspace_tests_are_reachable`` owns the run;
+    this is the wire between them, which is the part that was missing.
+    """
+    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
+    violations = []
+
+    if "test_scope" not in gate_text:
+        violations.append(
+            "does not read test_scope from change detection, so it cannot tell "
+            "'no package changed' from 'nothing changed'"
+        )
+    if "SKIP_PACKAGE_TESTS" not in gate_text:
+        violations.append(
+            "has no package-only skip, so the only way to skip the package "
+            "suites is SKIP_TESTS, which also skips the workspace guards"
+        )
+
+    assert not violations, "bin/run-quality-checks.sh:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
+
+
 def test_no_workspace_test_is_filed_where_nothing_runs_it():
     """``tests/integration/`` is reached by no entry point, in either mode.
 
