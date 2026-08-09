@@ -157,35 +157,38 @@ lint() {
     for target in "${TARGETS[@]}"; do
         echo -e "\n${YELLOW}Checking $target...${NC}"
         
-        # Run ruff check (no auto-fix during linting)
+        # Through `uv run`, like every other linter call in bin/. A bare `ruff`
+        # or `mypy` here resolved against PATH, which this workspace does not
+        # populate — so `dev.sh lint` reported "✗ Ruff check failed" on every
+        # target, having run nothing. The `setup` command below installs into a
+        # venv/ of its own, and `uv run` uses the pinned workspace tools whether
+        # or not that venv is active, which is the version the gate judges with.
         echo -e "${BLUE}Running ruff check...${NC}"
-        if ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
+        if uv run ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff check passed${NC}"
         else
             echo -e "${RED}✗ Ruff check failed${NC}"
         fi
-        
-        # Run ruff format check
-        echo -e "${BLUE}Running ruff format check...${NC}"
-        if ruff format --check "$target" --config "$ROOT_DIR/pyproject.toml"; then
-            echo -e "${GREEN}✓ Ruff format check passed${NC}"
-        else
-            echo -e "${RED}✗ Ruff format check failed${NC}"
-        fi
-        
+
+        # No format check. Nothing in the quality gate runs `ruff format`, so
+        # this asserted a standard the repository does not hold code to — dead
+        # while the bare `ruff` above meant it never ran, and ~400 files of
+        # noise the moment that was fixed. `dk format` is the one command that
+        # formats, and it is opt-in by name.
+
         # Run mypy with workspace configuration
         echo -e "${BLUE}Running mypy...${NC}"
         # For individual files, skip following imports to avoid checking the whole codebase
         if [[ -f "$target" ]]; then
             # Single file - don't follow imports
-            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" --follow-imports=skip; then
+            if uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" --follow-imports=skip; then
                 echo -e "${GREEN}✓ Type check passed${NC}"
             else
                 echo -e "${RED}✗ Type check failed${NC}"
             fi
         else
             # Directory or package - normal behavior
-            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml"; then
+            if uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml"; then
                 echo -e "${GREEN}✓ Type check passed${NC}"
             else
                 echo -e "${RED}✗ Type check failed${NC}"

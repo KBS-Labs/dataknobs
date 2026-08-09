@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
 import tomllib
+from functools import cache
 from pathlib import Path
 from types import ModuleType
 
@@ -64,3 +66,43 @@ def python_floor() -> tuple[int, int]:
 def pyprojects() -> list[Path]:
     """The root ``pyproject.toml`` and every package's, in a stable order."""
     return [ROOT / "pyproject.toml", *sorted(ROOT.glob("packages/*/pyproject.toml"))]
+
+
+@cache
+def tracked_shell_files() -> tuple[str, ...]:
+    """Every tracked shell script, by ``git ls-files`` and then by shebang.
+
+    Extension alone would miss ``bin/dk``, which is the entry point everything
+    else is invoked through — and missing exactly that file is the shape of gap
+    the guards reading this exist to close. Tracked files only: a filesystem
+    walk picks up whatever an untracked scratch script left in ``bin/``.
+
+    Lives here because two guards now ask the same question — which scripts are
+    linted, and which of them run a linter — and a second copy of this walk is
+    how the Python-floor extraction ended up with two subtly different answers.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    found = []
+    for name in listing.split("\0"):
+        if not name:
+            continue
+        path = ROOT / name
+        if name.endswith(".sh"):
+            found.append(name)
+            continue
+        if not path.is_file():
+            continue
+        try:
+            first = path.open("rb").readline()
+        except OSError:  # pragma: no cover - unreadable tracked file
+            continue
+        if first.startswith(b"#!") and b"sh" in first.split(b"\n")[0]:
+            found.append(name)
+    assert found, "no tracked shell files found — has the enumeration broken?"
+    return tuple(sorted(found))

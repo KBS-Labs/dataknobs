@@ -236,7 +236,7 @@ with open('$ARTIFACTS_DIR/lint-report.json') as f:
     
     if [ "$SHOW_FIXES" = true ]; then
         echo -e "\n${GREEN}To see all linting issues:${NC}"
-        echo "    uv run pylint packages/*/src --rcfile=.pylintrc"
+        echo "    ./bin/dk lint"
     fi
 }
 
@@ -282,10 +282,16 @@ with open('$ARTIFACTS_DIR/style-check.json') as f:
     fi
     
     if [ "$SHOW_FIXES" = true ]; then
+        # Entry points, not tool invocations. The commands spelled out here
+        # named packages/*/src and passed no --config, so neither could
+        # reproduce a bin/ finding this same script had just listed, and both
+        # resolved the per-package [tool.ruff] sections rather than the root one
+        # the gate uses. Naming the entry point means the advice cannot drift
+        # from what the gate does, because it is what the gate does.
         echo -e "\n${GREEN}To auto-fix style issues:${NC}"
-        echo "    uv run ruff check --fix packages/*/src"
+        echo "    ./bin/fix.sh"
         echo -e "${GREEN}To see all style issues:${NC}"
-        echo "    uv run ruff check packages/*/src"
+        echo "    ./bin/validate.sh --workspace"
     fi
 }
 
@@ -445,14 +451,14 @@ if [ "$OVERALL_STATUS" != "PASS" ] && [ "$OVERALL_STATUS" != "PASS_WITH_SKIPS" ]
     # Style issues can be auto-fixed
     if [ "$STYLE_STATUS" != "pass" ]; then
         echo -e "  ${BOLD}$priority.${NC} Auto-fix style issues:"
-        echo "       uv run ruff check --fix packages/*/src"
+        echo "       ./bin/fix.sh"
         ((priority++))
     fi
     
     # Linting requires manual fixes
     if [ "$LINT_STATUS" != "pass" ] && [ "$LINT_STATUS" != "warning" ]; then
         echo -e "  ${BOLD}$priority.${NC} Fix linting issues:"
-        echo "       uv run pylint packages/*/src --rcfile=.pylintrc"
+        echo "       ./bin/dk lint"
         ((priority++))
     fi
     
