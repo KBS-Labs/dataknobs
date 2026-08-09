@@ -175,6 +175,70 @@ which is how the guard in `tests/test_toolchain_consistency.py` learns what is
 covered. It asks rather than reading the script, because a target appended
 inside a conditional reads as unconditional in the source.
 
+## Shell Scripts
+
+Everything above concerns Python. The repository's own shell scripts — 46 of
+them, including every script on the path that decides whether a pull request
+passes — are checked separately by `bin/lint-shell.sh`, which runs `shellcheck`
+and is a recorded gate check in its own right (`shell_lint` in
+`quality-summary.json`).
+
+Run it directly, or as `dk shell`:
+
+```bash
+bin/lint-shell.sh                    # check everything
+bin/lint-shell.sh --print-targets    # which scripts are checked
+bin/lint-shell.sh --print-strict     # which are held to zero findings
+bin/lint-shell.sh --print-baseline   # which are held to errors only
+bin/lint-shell.sh --print-promotable # baseline scripts that are now clean
+bin/lint-shell.sh --check-file bin/dev.sh          # one file, at its own tier
+bin/lint-shell.sh --check-file bin/dev.sh strict   # ...and would it pass promotion
+```
+
+Naming a tier answers "would this script survive promotion", showing the
+findings rather than only the verdict — `--print-promotable` for a single file.
+It is also how `tests/test_shell_lint_coverage.py` reaches the code that turns a
+tier into a severity floor: the run loop calls the same function, so the tiers
+are asserted about the real check rather than a re-implementation of it.
+
+### Two tiers, and they ratchet
+
+| Tier | Held to | Which scripts |
+|---|---|---|
+| strict | zero findings at `info` and above | the scripts that decide whether a run passes, plus every script already clean |
+| baseline | `error` severity only | everything else, while its warnings are worked down |
+
+A baseline script that reaches zero **must** be promoted into the strict tier:
+`tests/test_shell_lint_coverage.py` fails while one is eligible. So the deferred
+set only ever shrinks, and nobody has to remember to revisit it.
+
+Demoting a script instead of fixing it is not available — the same test pins the
+scripts that decide the verdict, and `lint-shell.sh` refuses to run if a strict
+entry names a file that does not exist (a stale entry would otherwise drop that
+script quietly into the baseline tier).
+
+### Two things worth knowing before you fix a finding
+
+**`mapfile` is not available.** ShellCheck's suggested remedy for `SC2207` —
+the most common warning class here — is `mapfile`, which is a bash 4 builtin.
+These scripts run on the stock macOS `/bin/bash`, which is 3.2. Use a
+`while IFS= read -r` loop instead; there are several in `bin/` to copy.
+
+**Not every finding is a defect.** `SC2086` flags an unquoted expansion, and
+several are load-bearing: `VALIDATE_ARGS` holds `"$PACKAGES --workspace"` and
+*must* word-split. Quoting it would make `validate.sh` look for a target named
+`bots --workspace`, find nothing, and validate nothing while still reporting
+success. Those sites carry a `# shellcheck disable=SC2086` with the reason
+beside them; add to that comment rather than removing the waiver.
+
+### Why the floor is `info`
+
+ShellCheck's `style` severity is stylistic preference with no defect content
+(`SC2001`, `SC2129`, `SC2006`). `info` and above is "this may be a bug" — and
+`SC2086` is reported as `info`, so a floor of `warning` would exclude the single
+class the check most exists to catch. Raising the floor to `style` is the next
+turn of the ratchet, not a separate decision.
+
 ## Package-Specific Checklists
 
 Each package should maintain its own error checklist documenting specific issues to address:

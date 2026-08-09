@@ -55,6 +55,7 @@
 #set -e
 
 if test -e .env; then
+    # shellcheck source=/dev/null  # .env is not tracked; may not exist
     . .env;
 fi
 
@@ -95,7 +96,7 @@ dryrun="";
 rsync_flags="";
 
 # parse args
-while [[ $# > 0 ]]
+while [[ $# -gt 0 ]]
 do
     key="$1";
 
@@ -114,7 +115,10 @@ do
            deploy="y";
            rsync_flags="--ignore-existing";
            shift;
-           if [[ $# > 0 ]] && ! [[ "$1" =~ "^-" ]]; then
+           # Glob, not a regex: the quoted =~ form this replaced matched the
+           # two characters ^- literally, so it never fired and every following
+           # argument was taken as the root.
+           if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                # optional server_root is present
                server_root="$1"
                shift;
@@ -125,7 +129,8 @@ do
            deploy="y";
            rsync_flags="--delete";
            shift;
-           if [[ $# > 0 ]] && ! [[ "$1" =~ "^-" ]]; then
+           # Glob, not a regex — see the note on --deploy above.
+           if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
                # optional server_root is present
                server_root="$1"
                shift;

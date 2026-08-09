@@ -135,10 +135,39 @@ def workspace_scope_files(scope: str) -> list[Path]:
     for entry in WORKSPACE_QUALITY_INPUTS[scope]:
         target = _ROOT / entry.rstrip("/")
         if entry.endswith("/"):
-            files.extend(p for p in target.rglob("*.py") if p.is_file())
+            files.extend(p for p in target.rglob("*") if _is_quality_input(p))
         elif target.is_file():
             files.append(target)
     return files
+
+
+def _is_quality_input(path: Path) -> bool:
+    """Whether a file beneath a directory entry feeds a recorded check.
+
+    A directory entry used to expand to ``*.py`` alone, which was right while
+    the only checkers reading these directories were ruff and mypy. It stopped
+    being right when the gate gained a shell lint: of the 46 shell scripts it
+    reports on, only the seven named individually across the two scopes were
+    covered. The other 39 — every remaining script in ``bin/``, ``bin/dk`` among
+    them, plus both at the repository root — sat outside every scope, so editing
+    one moved the recorded ``shell_lint`` verdict while leaving every stored hash
+    intact. CI would then accept the artifact that the edit had just invalidated.
+
+    Extension is not sufficient, for the same reason it is not sufficient in
+    lint-shell.sh: ``bin/dk`` carries none, and it is the entry point the rest
+    are invoked through. So a shebang is read when the suffix does not answer.
+    """
+    if not path.is_file():
+        return False
+    if path.suffix in {".py", ".sh"}:
+        return True
+    if path.suffix:
+        return False
+    try:
+        first = path.open("rb").readline()
+    except OSError:
+        return False
+    return first.startswith(b"#!") and b"sh" in first
 
 
 def compute_workspace_hash(scope: str) -> str:
