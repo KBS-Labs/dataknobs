@@ -128,6 +128,18 @@ After configuration, focus on these error types that indicate real issues:
 3. **Type mismatches** - Fix as you modify code
 4. **Missing annotations** - Add gradually, prioritize public APIs
 
+### How the verdict is reached
+
+`bin/validate.sh` fails a run when mypy exits non-zero, and prints whatever mypy
+said. It does not match mypy's output for the word "error": it previously piped
+mypy into `grep` and tested the pipeline, and because the script sets `pipefail`
+and mypy exits non-zero exactly when it has findings, a real type error made the
+pipeline non-zero and sent the check down its *success* branch. Every type error
+was reported as "Type checks passed". Note that `mypy.ini` disables most error
+codes, so the set of findings that can fail a run is narrower than mypy's
+default — the config decides what counts, and the exit status decides the
+verdict.
+
 ## Running Validation
 
 ```bash

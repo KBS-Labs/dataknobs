@@ -593,6 +593,11 @@ if [ "$SKIP_STYLE" != "yes" ]; then
 
     # Build package args for validate.sh
     VALIDATE_ARGS=""
+    # Set when the run must validate everything and so passes no arguments at
+    # all. Distinct from an empty VALIDATE_ARGS, which is also how "nothing to
+    # validate" is spelled — the two were the same string, and the ambiguity is
+    # the bug below.
+    VALIDATE_EVERYTHING="no"
     if [ -n "$PACKAGES" ]; then
         # --workspace on this branch too, and unconditionally. Narrowing to the
         # changed packages dropped the workspace half entirely, so a pull request
@@ -605,8 +610,10 @@ if [ "$SKIP_STYLE" != "yes" ]; then
         # targets holding the checkers that decide whether this run passes, the
         # marginal cost is seconds, and a condition here is what came out short
         # twice: once reading an empty package list as nothing to validate, and
-        # again narrowing by package name. A set that is always asked for cannot
-        # come out short.
+        # again narrowing by package name. A branch that always asks cannot come
+        # out short — though "always" is a claim about the branches that validate
+        # anything, not about every path through this script: see the
+        # change-detection fallback below, which used to validate nothing.
         VALIDATE_ARGS="$PACKAGES --workspace"
     elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
         # Same hole as the test block, one step earlier: this branch is keyed
@@ -621,10 +628,24 @@ if [ "$SKIP_STYLE" != "yes" ]; then
         # its own changes unlinted, which is the defect one line up, restated.
         # validate.sh owns the list; this asks which list.
         VALIDATE_ARGS="--workspace"
+    elif [ "$SKIP_TESTS" != "yes" ]; then
+        # Change detection failed. Nothing above matched, because PACKAGES is
+        # empty and neither skip flag was set — the case where the run does not
+        # know what changed, announces "testing all packages", and then took the
+        # empty-VALIDATE_ARGS path to validating nothing at all. Worse than the
+        # skip it resembled: compute_overall_status returns PASS rather than
+        # PASS_WITH_SKIPS, because that needs SKIP_TESTS=yes, which this path
+        # never sets. A run that could not tell what changed reported a clean
+        # validation over no code.
+        #
+        # No arguments, deliberately: that is how validate.sh spells "everything"
+        # — all package sources plus the workspace half — which is what the
+        # warning already claims is happening.
+        VALIDATE_EVERYTHING="yes"
     fi
 
     # Skip if no packages to validate in PR mode (e.g., only docs changed)
-    if [ -n "$VALIDATE_ARGS" ] || [ "$RUN_MODE" != "pr" ]; then
+    if [ -n "$VALIDATE_ARGS" ] || [ "$VALIDATE_EVERYTHING" = "yes" ] || [ "$RUN_MODE" != "pr" ]; then
         if [ "$PR_MODE" = "yes" ]; then
             # Also generate ruff JSON artifact for diagnostics
             uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || true

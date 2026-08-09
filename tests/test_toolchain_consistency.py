@@ -485,6 +485,12 @@ WORKSPACE_TARGET_CONSUMERS = (
 #: ``-o pipefail`` on files that set only ``-e``. A definition is neither.
 WORKSPACE_TARGETS_CALL = re.compile(r"\$\([^)]*workspace[_-]targets\b[^)]*\)")
 
+#: The variable a consumer captures the set into, when it captures rather than
+#: expanding inline. Feeds the "is it ever read" half of the guard below.
+CAPTURED_WORKSPACE_TARGETS = re.compile(
+    r"^\s*(\w+)=\$\([^)]*workspace[_-]targets\b[^)]*\)", re.MULTILINE
+)
+
 #: Three quoting forms, because bash accepts all three and the guard below is the
 #: only thing standing between the gate and a hardcoded target list. Matching the
 #: double-quoted form alone let ``VALIDATE_ARGS=tests`` — valid, and exactly the
@@ -614,20 +620,48 @@ def test_the_default_target_set_still_contains_what_it_must():
     duplication ``workspace_targets`` exists to remove, and here it is the point:
     an assertion computed from the declaration it guards cannot notice the
     declaration shrinking.
-    """
-    targets = set(_default_validate_targets())
 
-    missing_workspace = sorted(REQUIRED_DEFAULT_TARGETS - targets)
-    assert not missing_workspace, (
-        f"bin/validate.sh no longer validates {missing_workspace} by default. "
-        "These are not deferrable: tests/ holds the guards that check the "
-        "toolchain, and bin/ holds the checkers that decide whether a pull "
-        "request passes. Restore the target — recording it in "
-        "DEFERRED_FROM_DEFAULT_LINT is not the fix, it is the failure this "
-        "guard exists to catch."
+    Probed with a package named as well as with nothing, because those are two
+    different questions and only one of them was asked. The gate runs
+    ``validate.sh $PACKAGES --workspace`` on every pull request that touches a
+    package; it never runs it bare. Reverting the append to fire only when no
+    target was named leaves the *bare* answer byte-identical, so a check that
+    asks only that one reports full coverage while every real gate invocation
+    validates ``packages/*/src`` alone — the defect this whole file exists to
+    catch, restored with the suite green.
+    """
+    packages = sorted(path.parent.name for path in pyprojects() if path.parent != ROOT)
+    probes: list[tuple[str, ...]] = [()]
+    if packages:
+        probes.append((packages[0], "--workspace"))
+
+    for probe in probes:
+        targets = set(_validate_targets_for(*probe))
+        missing_workspace = sorted(REQUIRED_DEFAULT_TARGETS - targets)
+        shown = " ".join(probe) or "(no arguments)"
+        assert not missing_workspace, (
+            f"bin/validate.sh {shown} no longer validates {missing_workspace}. "
+            "These are not deferrable: tests/ holds the guards that check the "
+            "toolchain, and bin/ holds the checkers that decide whether a pull "
+            "request passes. Restore the target — recording it in "
+            "DEFERRED_FROM_DEFAULT_LINT is not the fix, it is the failure this "
+            "guard exists to catch."
+        )
+
+    #: The pin must also grow when the declaration does, or a directory added to
+    #: workspace_targets and later dropped from it would be missing from both —
+    #: the same omission one directory over, which is the shape above. Asserting
+    #: containment fails when the declaration grows unpinned; the pin above fails
+    #: when it shrinks. Neither is derived from the other, so both directions
+    #: hold without the circularity that would make either vacuous.
+    unpinned = sorted(set(_workspace_targets()) - REQUIRED_DEFAULT_TARGETS)
+    assert not unpinned, (
+        f"workspace_targets now declares {unpinned}, which REQUIRED_DEFAULT_TARGETS "
+        "does not name. Add it there: until it is pinned, dropping it again and "
+        "recording it in DEFERRED_FROM_DEFAULT_LINT passes every check in this file."
     )
 
-    packages = sorted(path.parent.name for path in pyprojects() if path.parent != ROOT)
+    targets = set(_default_validate_targets())
     missing_sources = [
         f"packages/{name}/src"
         for name in packages
@@ -702,6 +736,29 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
         "to no package. That is how bin/ ended up in none of them."
     )
 
+    # A call whose result nothing reads is the same dead end as a definition
+    # nobody calls, one step later. Both consumers that capture into a variable
+    # do so because errexit applies to a bare assignment but not to a
+    # substitution inside an argument list — which means dropping the expansion
+    # from the command leaves a well-formed script, a satisfied call check, and
+    # the narrowed target set the call existed to widen.
+    discarded = sorted(
+        f"{name}: ${{{variable}}}"
+        for name in WORKSPACE_TARGET_CONSUMERS
+        for variable in CAPTURED_WORKSPACE_TARGETS.findall(
+            (ROOT / name).read_text(encoding="utf-8")
+        )
+        if not re.search(
+            rf"\$\{{{re.escape(variable)}\b|\${re.escape(variable)}\b",
+            (ROOT / name).read_text(encoding="utf-8").split(f"{variable}=", 1)[1],
+        )
+    )
+    assert not discarded, (
+        f"{discarded} capture the workspace target set and never expand it, so "
+        "the set is computed and thrown away. The command that was supposed to "
+        "receive it checks package sources alone."
+    )
+
 
 #: Paths the print check must judge, and the answer it must give. The first three
 #: are shipped library code — ``dataknobs_common.testing`` and its siblings are
@@ -764,14 +821,54 @@ def test_the_print_check_recognises_test_files_by_name_not_by_substring():
         f"  - {item}" for item in wrong
     )
 
-    # Wiring, not just the predicate: both branches have to route through it. The
-    # file branch and the directory walk each used to carry their own glob.
-    for spelling in ('!= *test*', '! -path "*/test*"'):
-        assert spelling not in source, (
-            f"bin/validate.sh matches test files with {spelling!r} again. That is "
-            "the substring form this predicate replaced, and it exempts every "
-            "shipped module under a testing/ package from the print check."
-        )
+    # Both branches have to *call* it. The predicate being correct says nothing
+    # about who consults it, and the outcome guard below only catches a
+    # re-introduced exemption — deleting the call outright widens the check
+    # instead of narrowing it, so that guard stays green while every test file
+    # in the repository starts being scanned for print statements.
+    call_sites = len(re.findall(r'is_test_file\s+"', source))
+    assert call_sites == 2, (
+        f"bin/validate.sh calls is_test_file at {call_sites} site(s), expected 2 — "
+        "the named-file branch and the directory walk. They each carried their own "
+        "glob before, which is how they came to disagree; a branch that stops "
+        "consulting the shared predicate has silently grown its own answer again."
+    )
+
+def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path):
+    """The predicate being right does not mean the directory walk uses it.
+
+    Asserted as an outcome rather than a spelling. The first version of this
+    listed the two globs it had replaced and checked they were absent, which is a
+    blacklist of two strings: ``! -path '*/test*'`` in single quotes is the same
+    exemption, matches no entry, and restores it with the suite green. The same
+    commit widened another guard in this file to three quoting forms for exactly
+    that reason, and this one was written beside it without the lesson.
+
+    So this runs the real walk over a real directory and asserts the finding
+    comes back. Any spelling that re-exempts a ``testing/`` package fails here,
+    including ones nobody has thought of.
+    """
+    package = tmp_path / "shipped"
+    (package / "testing").mkdir(parents=True)
+    (package / "testing" / "helpers.py").write_text(
+        'def emit() -> None:\n    print("not a test file")\n', encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [str(ROOT / "bin" / "validate.sh"), str(package)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+
+    assert "helpers.py" in combined and "print" in combined.lower(), (
+        "bin/validate.sh's print check did not examine a shipped module under a "
+        "testing/ package. That is the exemption the is_test_file predicate "
+        "replaced — it hid eleven shipped files, including the in-memory "
+        "constructs the house rules point at instead of mocks.\n\n" + combined
+    )
 
 
 def test_the_lint_deferrals_still_describe_the_repository():
@@ -1129,3 +1226,109 @@ def test_new_package_template_declares_the_floor(floor):
     ]
 
     assert not violations, _fmt(violations, floor)
+
+
+# --------------------------------------------------------------------------
+# The verdict a checker reports, versus the one it reached
+# --------------------------------------------------------------------------
+
+
+def test_the_type_check_fails_when_mypy_does(tmp_path):
+    """A checker whose verdict ignores its own exit status reports only success.
+
+    ``bin/validate.sh`` decided this by piping mypy into ``grep`` and testing the
+    pipeline. The script sets ``pipefail``, and mypy exits non-zero exactly when
+    it has findings — so on every real type error the pipeline status was
+    non-zero, the ``if`` took the *else* branch, and the run printed "Type checks
+    passed" directly beneath the errors grep had just echoed. ``FAILED`` was
+    never set. The check could not fail, which is the shape the rest of this file
+    exists to catch, in the script that does the checking.
+
+    Run against a file with an error ``mypy.ini`` still reports (most codes are
+    disabled there, so the probe has to use one that is not).
+    """
+    probe = tmp_path / "type_error_probe.py"
+    probe.write_text("def broken() -> int:\n    return undefined_symbol_xyz\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(ROOT / "bin" / "validate.sh"), str(probe)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+
+    assert "Type errors found" in combined, (
+        "bin/validate.sh reported no type errors for a file mypy rejects. Its "
+        "mypy verdict must follow mypy's exit status, not a grep over output "
+        "that `pipefail` then inverts.\n\n" + combined
+    )
+
+
+#: The states the gate's validation-scope decision can be in when it reaches the
+#: VALIDATE_ARGS chain, and whether that state must validate something. Only the
+#: explicit "nothing changed" case may validate nothing.
+VALIDATION_SCOPE_STATES = (
+    ("packages changed", "data llm", "no", "no", True),
+    ("workspace-only change", "", "yes", "no", True),
+    ("docs only", "", "no", "yes", False),
+    ("change detection failed", "", "no", "no", True),
+)
+
+
+def test_every_state_that_should_validate_something_does():
+    """A run that cannot tell what changed must not validate nothing and pass.
+
+    When change detection fails the gate prints "testing all packages", and then
+    fell through the whole VALIDATE_ARGS chain: PACKAGES is empty and neither
+    skip flag is set, so no branch matched, VALIDATE_ARGS stayed empty, and the
+    empty string is *also* how "nothing to validate" is spelled. The run
+    validated no code — and reported PASS rather than PASS_WITH_SKIPS, because
+    that needs SKIP_TESTS=yes, which this path never sets.
+
+    Executed, not read. The decision is lifted out of the script and run under
+    each state, so this asserts what the chain decides rather than which branches
+    it appears to have.
+    """
+    gate = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
+
+    chain = re.search(
+        r"^\s*VALIDATE_ARGS=\"\"\n(.*?)^\s*# Skip if no packages to validate",
+        gate,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert chain is not None, (
+        "cannot find the VALIDATE_ARGS decision in bin/run-quality-checks.sh; "
+        "this guard reads it out of the script so it cannot drift, and it has."
+    )
+    condition = re.search(r"^\s*if \[ -n \"\$VALIDATE_ARGS\" \].*?; then$", gate, re.MULTILINE)
+    assert condition is not None, "cannot find the gate's run-validation condition"
+
+    wrong = []
+    for label, packages, skip_package_tests, skip_tests, must_validate in VALIDATION_SCOPE_STATES:
+        script = "\n".join(
+            [
+                f'PACKAGES="{packages}"',
+                f'SKIP_PACKAGE_TESTS="{skip_package_tests}"',
+                f'SKIP_TESTS="{skip_tests}"',
+                'RUN_MODE="pr"',
+                'VALIDATE_ARGS=""',
+                chain.group(1),
+                condition.group(0),
+                '    echo "VALIDATES"',
+                "else",
+                '    echo "NOTHING"',
+                "fi",
+            ]
+        )
+        verdict = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        if (verdict == "VALIDATES") != must_validate:
+            wrong.append(f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}")
+
+    assert not wrong, (
+        "bin/run-quality-checks.sh decides the wrong validation scope:\n"
+        + "\n".join(f"  - {item}" for item in wrong)
+    )

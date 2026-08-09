@@ -145,7 +145,10 @@ else
             if [[ ${#files[@]} -gt 0 ]]; then
                 VALIDATE_TARGETS+=("${files[@]}")
             else
-                echo -e "${YELLOW}Warning: Target '$target' not found${NC}"
+                # stderr, because stdout is a data channel under --print-targets:
+                # a caller splits that output into a target list, and prose on the
+                # same stream parses into targets that do not exist.
+                echo -e "${YELLOW}Warning: Target '$target' not found${NC}" >&2
             fi
         fi
     done
@@ -371,6 +374,30 @@ if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
     done
 fi
 
+# Run mypy over one target and return ITS exit status, echoing whatever it said.
+#
+# The verdict used to come from `mypy … 2>&1 | grep -E "(error|Error)"`, which
+# reports the status of the pipeline. This script sets `pipefail` (line 4), and
+# mypy exits non-zero exactly when it has findings — so a real type error made
+# the pipeline non-zero, the `if` took the *else* branch, and the run printed
+# "Type checks passed" directly beneath the errors grep had just echoed. FAILED
+# was never set, so mypy could not fail a validation run. Reading the exit status
+# is the whole fix; the output is printed rather than matched.
+#
+# One function for both call sites below, which differ only by
+# --follow-imports=skip. Two copies of this is how the two of them came to share
+# a defect.
+run_mypy() {
+    local target="$1"
+    shift
+    local output rc
+    output=$(uv run mypy "$target" --config-file "$MYPY_CONFIG" "$@" 2>&1) && rc=0 || rc=$?
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+    fi
+    return "$rc"
+}
+
 # 4. Type checking with mypy (unless quick mode)
 if [[ "$QUICK" != true ]]; then
     echo -e "\n${BLUE}4. Running mypy type checking...${NC}"
@@ -385,22 +412,20 @@ if [[ "$QUICK" != true ]]; then
         fi
         
         # For individual files, skip following imports to avoid checking the whole codebase
+        mypy_ok=true
         if [[ -f "$target" ]]; then
             # Single file - don't follow imports
-            if uv run mypy "$target" --config-file "$MYPY_CONFIG" --follow-imports=skip 2>&1 | grep -E "(error|Error)"; then
-                echo -e "${RED}    ✗ Type errors found${NC}"
-                FAILED=true
-            else
-                echo -e "${GREEN}    ✓ Type checks passed${NC}"
-            fi
+            run_mypy "$target" --follow-imports=skip || mypy_ok=false
         else
             # Directory or package - normal behavior
-            if uv run mypy "$target" --config-file "$MYPY_CONFIG" 2>&1 | grep -E "(error|Error)"; then
-                echo -e "${RED}    ✗ Type errors found${NC}"
-                FAILED=true
-            else
-                echo -e "${GREEN}    ✓ Type checks passed${NC}"
-            fi
+            run_mypy "$target" || mypy_ok=false
+        fi
+
+        if [[ "$mypy_ok" == true ]]; then
+            echo -e "${GREEN}    ✓ Type checks passed${NC}"
+        else
+            echo -e "${RED}    ✗ Type errors found${NC}"
+            FAILED=true
         fi
     done
 fi
