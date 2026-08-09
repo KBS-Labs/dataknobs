@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-09T21:49:10Z",
+  "timestamp": "2026-08-09T22:05:19Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,10 +21,10 @@
 },
   "workspace_hashes": {
   "toolchain": "9d0db3e1d4847de44345b5564f31999e720c1e88c88feb886dc1f832616edbdd",
-  "workspace_tests": "845ee16feb70e6e084b99395ac5b9b9d4c51e7ff3840aaf9492ea24c72f51ab8",
+  "workspace_tests": "2e9d5461c79d6991da7ade01791da586315c8c98bb5191de6f3389adf2d27f48",
   "docs": "2177b93df4c32747a39d6ab019615e9798ff544aa5740153fe5865a7c0dceb00"
 },
-  "total_seconds": 29,
+  "total_seconds": 25,
   "checks": {
     "documentation": {
       "status": "pass",
@@ -50,7 +50,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 8
+      "duration_seconds": 4
     },
     "shell_lint": {
       "status": "pass",
@@ -68,8 +68,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 16,
-      "workspace_guards_seconds": 16
+      "duration_seconds": 15,
+      "workspace_guards_seconds": 15
     },
     "integration_tests": {
       "status": "pass",
