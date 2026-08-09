@@ -133,6 +133,13 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "bin/validate-quality-artifacts.sh",  # the checks CI actually runs
     "bin/docs-update-versions.sh",  # the documentation_versions check it records
     "bin/lint-workflows.sh",  # the workflow_lint check it records
+    "bin/lint-shell.sh",  # the shell_lint check it records
+    # Shell scripts at the repository root, which no directory entry above
+    # reaches. Both are reported on by the shell lint, so editing one moves the
+    # recorded shell_lint verdict; setup-dk.sh is also the installer the
+    # contributing docs tell a new developer to run.
+    "run_api.sh",
+    "setup-dk.sh",
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only

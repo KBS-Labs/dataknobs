@@ -403,7 +403,7 @@ start_services() {
     done
     
     # Special post-start actions for specific services
-    if [[ " ${services_to_start[@]} " =~ " postgres " ]]; then
+    if [[ " ${services_to_start[*]} " =~ " postgres " ]]; then
         # Create test database if PostgreSQL was started
         print_status "Ensuring test database exists..."
         run_compose exec -T postgres \
@@ -842,7 +842,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             # Check if it's a valid service name
-            if [[ " ${AVAILABLE_SERVICES[@]} " =~ " $1 " ]]; then
+            if [[ " ${AVAILABLE_SERVICES[*]} " =~ " $1 " ]]; then
                 SELECTED_SERVICES+=("$1")
                 shift
             else

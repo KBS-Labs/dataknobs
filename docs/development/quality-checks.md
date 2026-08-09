@@ -118,7 +118,7 @@ The CI validation is **fast** (< 30 seconds) since it only validates artifacts, 
 |---|---|---|
 | `uv` | every Python invocation in the gate | fatal |
 | Docker | the integration-test services below | fatal, unless tests are skipped or already running in a container |
-| `shellcheck` | analysing the `run:` blocks in the workflow files | fatal |
+| `shellcheck` | the workflow `run:` blocks, and the repository's own shell scripts | fatal |
 
 `shellcheck` is a hard requirement rather than an optional extra, and that is
 deliberate. CI validates the committed artifacts instead of re-running the gate,
@@ -132,7 +132,9 @@ because it also reports success.
 Install it with `brew install shellcheck` (macOS) or `apt-get install shellcheck`
 (Debian/Ubuntu).
 
-The workflow lint is not gated by run mode or package selection, so this applies
+Two checks use it — the workflow lint (`workflow_lint`) and the shell lint over
+`bin/` and the two root scripts (`shell_lint`). Neither is gated by run mode or
+package selection, so this applies
 to every local gate run — a single-package `bin/dk check` as much as a full
 `bin/dk pr`. It does **not** apply to CI: the workflow there validates the
 committed artifacts and never invokes the gate, so no runner needs `shellcheck`

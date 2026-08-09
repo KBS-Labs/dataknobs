@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 if test -e "${PROJ_DIR}/.project_vars"; then
     . "${PROJ_DIR}/.project_vars";

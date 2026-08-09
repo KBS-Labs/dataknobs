@@ -66,7 +66,7 @@ if test -n "$(uname -a | grep -i linux)"; then
 fi
 
 # parse args
-while [[ $# > 0 ]]
+while [[ $# -gt 0 ]]
 do
     key="$1";
 

@@ -21,9 +21,13 @@ discover_packages() {
     done
     
     # Return sorted array
-    IFS=$'\n' sorted=($(sort <<<"${packages[*]}"))
-    unset IFS
-    echo "${sorted[@]}"
+    # A read loop, not the mapfile shellcheck suggests: mapfile is bash 4+
+    # and these scripts run on the stock macOS bash 3.2.
+    local sorted=() name
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && sorted+=("$name")
+    done < <(printf '%s\n' "${packages[@]:-}" | sort)
+    echo "${sorted[@]:-}"
 }
 
 # Function to list the first-party code that belongs to no package
@@ -55,7 +59,10 @@ workspace_targets() {
 # This reads from pyproject.toml to determine dependencies
 get_packages_in_order() {
     local ordered_packages=()
-    local remaining_packages=($(discover_packages))
+    local remaining_packages=() _pkg
+    while IFS= read -r _pkg; do
+        [[ -n "$_pkg" ]] && remaining_packages+=("$_pkg")
+    done < <(discover_packages | tr ' ' '\n')
     local max_iterations=10
     local iterations=0
     
@@ -72,7 +79,8 @@ get_packages_in_order() {
             if [[ -f "$pyproject" ]]; then
                 # Extract dependencies (simplified - just looking for dataknobs- packages)
                 # Exclude self-references (package referring to itself with extras like dataknobs-foo[extra])
-                local deps=$(grep -E "dataknobs-" "$pyproject" 2>/dev/null | \
+                local deps
+                deps=$(grep -E "dataknobs-" "$pyproject" 2>/dev/null | \
                             grep -v "^name = " | \
                             grep -v "dataknobs-$package\[" | \
                             grep -v "dataknobs-$package\"" | \

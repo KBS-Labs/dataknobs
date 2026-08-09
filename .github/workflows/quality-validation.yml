@@ -46,6 +46,12 @@ jobs:
               - 'pytest.ini'
               - '.python-version'
               - '.pylintrc'
+              # Shell scripts at the repository root. The '**/*.py' and 'bin/**'
+              # patterns above reach neither, and the shell lint reports on both
+              # — so a change to one moves the recorded shell_lint verdict while
+              # skipping the job that would have recomputed it.
+              - 'run_api.sh'
+              - 'setup-dk.sh'
               # This file. Without it a pull request whose only change deletes
               # the patterns above matches nothing, skips the sole PR-time
               # quality job, and reports green — leaving every declaration

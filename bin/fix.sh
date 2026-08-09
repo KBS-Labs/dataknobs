@@ -67,7 +67,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Get all packages dynamically
-ALL_PACKAGES=($(discover_packages))
+# Word splitting is intended: discover_packages emits a space-separated
+# list. Collected with a read loop rather than the mapfile shellcheck
+# suggests, because mapfile is bash 4+ and these scripts run on the
+# stock macOS bash 3.2. The loop is also glob-safe, which the bare
+# arr=($(cmd)) form is not.
+ALL_PACKAGES=()
+while IFS= read -r _pkg; do
+    [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
+done < <(discover_packages | tr ' ' '\n')
 
 # Determine what to fix
 FIX_TARGETS=()
@@ -110,6 +118,9 @@ else
         else
             # Try glob expansion
             shopt -s nullglob
+            # Unquoted on purpose: $target is a glob and this line is what
+            # expands it. nullglob above turns a non-match into zero words.
+            # shellcheck disable=SC2206
             files=($target)
             shopt -u nullglob
             if [[ ${#files[@]} -gt 0 ]]; then

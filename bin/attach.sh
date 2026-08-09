@@ -95,7 +95,7 @@ dryrun="";
 rsync_flags="";
 
 # parse args
-while [[ $# > 0 ]]
+while [[ $# -gt 0 ]]
 do
     key="$1";
 
@@ -114,7 +114,7 @@ do
            deploy="y";
            rsync_flags="--ignore-existing";
            shift;
-           if [[ $# > 0 ]] && ! [[ "$1" =~ "^-" ]]; then
+           if [[ $# -gt 0 ]] && ! [[ "$1" =~ "^-" ]]; then
                # optional server_root is present
                server_root="$1"
                shift;
@@ -125,7 +125,7 @@ do
            deploy="y";
            rsync_flags="--delete";
            shift;
-           if [[ $# > 0 ]] && ! [[ "$1" =~ "^-" ]]; then
+           if [[ $# -gt 0 ]] && ! [[ "$1" =~ "^-" ]]; then
                # optional server_root is present
                server_root="$1"
                shift;

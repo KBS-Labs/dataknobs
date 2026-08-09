@@ -113,7 +113,8 @@ build_extra_args() {
 # Consolidated function to execute pytest with proper error handling
 execute_pytest() {
     # Collapse multiple spaces in command string for clean display
-    local cmd=$(echo "$1" | tr -s ' ')
+    local cmd
+    cmd=$(echo "$1" | tr -s ' ')
     local context="${2:-tests}"  # Optional context for warning message
 
     echo -e "${CYAN}Command: $cmd${NC}"
@@ -333,7 +334,9 @@ while [[ $# -gt 0 ]]; do
         # Separator for custom pytest args - everything after this goes to pytest
         --)
             shift
-            PYTEST_ARGS="$@"
+            # $* not $@: the target is a string, and the array form keeps
+            # only the first element. Re-split at the pytest call site.
+            PYTEST_ARGS="$*"
             break
             ;;
         # An unrecognized flag. Matched before the positional arm below so it is
@@ -444,15 +447,18 @@ run_path_tests() {
     fi
     
     # Build coverage args
-    local pkg_for_cov=$(extract_package_from_path "$path")
-    local cov_args=$(build_cov_args "$pkg_for_cov")
+    local pkg_for_cov
+    pkg_for_cov=$(extract_package_from_path "$path")
+    local cov_args
+    cov_args=$(build_cov_args "$pkg_for_cov")
     # Fall back to covering the test path itself if no package identified
     if [ "$COVERAGE" = "yes" ] && [ -z "$cov_args" ]; then
         cov_args="--cov=$path"
     fi
 
     # Run tests
-    local extra_args=$(build_extra_args)
+    local extra_args
+    extra_args=$(build_extra_args)
     local cmd="pytest $path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "tests in $path"
 }
@@ -504,10 +510,12 @@ run_unit_tests() {
         exclude_args="--ignore=packages/$package/tests/integration"
     fi
 
-    local cov_args=$(build_cov_args "$package")
+    local cov_args
+    cov_args=$(build_cov_args "$package")
 
     # Run tests
-    local extra_args=$(build_extra_args)
+    local extra_args
+    extra_args=$(build_extra_args)
     local cmd="pytest $test_path $exclude_args $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "unit tests for $package"
 }
@@ -553,10 +561,12 @@ run_integration_tests() {
     # Set environment variables for tests
     set_integration_env_vars
 
-    local cov_args=$(build_cov_args "$package" "append")
+    local cov_args
+    cov_args=$(build_cov_args "$package" "append")
 
     # Run tests
-    local extra_args=$(build_extra_args)
+    local extra_args
+    extra_args=$(build_extra_args)
     local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "integration tests for $package"
 }
@@ -600,10 +610,12 @@ run_combined_tests() {
         set_integration_env_vars
     fi
 
-    local cov_args=$(build_cov_args "$package")
+    local cov_args
+    cov_args=$(build_cov_args "$package")
 
     # Run all tests together for combined coverage
-    local extra_args=$(build_extra_args)
+    local extra_args
+    extra_args=$(build_extra_args)
     local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "tests for $package"
 }
@@ -638,7 +650,14 @@ if [ ${#PACKAGE_NAMES[@]} -gt 0 ]; then
     echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
 elif [ ${#TEST_PATHS[@]} -eq 0 ]; then
     # Discover packages based on test type
-    PACKAGES=($(discover_test_packages "$TEST_TYPE"))
+    # Word splitting is intended — discover_test_packages emits a space-
+    # separated list — but a read loop states it, keeps a name containing a
+    # glob character from expanding against the filesystem, and unlike the
+    # mapfile shellcheck suggests it works on bash 3.2 (stock macOS).
+    PACKAGES=()
+    while IFS= read -r _pkg; do
+        [[ -n "$_pkg" ]] && PACKAGES+=("$_pkg")
+    done < <(discover_test_packages "$TEST_TYPE" | tr ' ' '\n')
     echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
 fi
 
@@ -656,6 +675,11 @@ OVERALL_RESULT=0
 SERVICES_STARTED=false
 
 # Function to cleanup services if we started them
+#
+# Reached only through `trap cleanup_services EXIT INT TERM` below, which the
+# linter does not read as a call site. (Do not begin a comment line with the
+# tool's name — it is parsed as a malformed directive.)
+# shellcheck disable=SC2329
 cleanup_services() {
     if [ "$SERVICES_STARTED" = true ] && [ "$IN_DOCKER" = false ]; then
         if [ -f "/tmp/.dataknobs_services_started_$$" ]; then

@@ -170,7 +170,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --)
             shift
-            PYTEST_ARGS="$@"
+            # $* not $@: this is a string, and the array form silently
+            # keeps only the first element here. It is re-split at the
+            # pytest call sites, which is why they carry SC2086 waivers.
+            PYTEST_ARGS="$*"
             break
             ;;
         *)
@@ -355,6 +358,11 @@ set_environment_vars() {
 }
 
 # Function to cleanup resources
+#
+# Reached only through `trap cleanup EXIT INT TERM` below, which shellcheck does
+# not read as a call site. Deleting it on the strength of the finding would
+# leave the service teardown unreferenced *and* the trap naming nothing.
+# shellcheck disable=SC2329
 cleanup() {
     if [ "$IN_DOCKER" = false ]; then
         # Only cleanup if manage-services.sh indicates we started them
@@ -507,6 +515,7 @@ TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
 WORKFLOW_LINT_STATUS=0
+SHELL_LINT_STATUS=0
 
 # Compute the overall PASS/FAIL/PASS_WITH_SKIPS verdict from the individual check
 # statuses. Called from two sites that MUST agree — the quality-summary.json
@@ -518,7 +527,7 @@ WORKFLOW_LINT_STATUS=0
 # or leaves it invisible to CI entirely (the workflow lint). Both halves are
 # guarded by tests/test_quality_gate_accounting.py.
 compute_overall_status() {
-    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ]; then
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ]; then
         echo "FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         echo "PASS_WITH_SKIPS"
@@ -587,6 +596,18 @@ else
     print_error "Workflow lint failed"
 fi
 
+# Lint the repository's own shell scripts. Same three-place wiring as above, for
+# the same reason: 45 shell files — including every script on this verdict path,
+# this one among them — went through no linter at all, while every *.py beside
+# them went through ruff and mypy.
+print_status "Linting shell scripts..."
+if "$SCRIPT_DIR/lint-shell.sh"; then
+    print_success "Shell scripts are clean"
+else
+    SHELL_LINT_STATUS=$?
+    print_error "Shell lint failed"
+fi
+
 # Run code validation (syntax, ruff, imports, mypy, print statements)
 if [ "$SKIP_STYLE" != "yes" ]; then
     print_status "Running code validation (syntax, ruff, imports, mypy, print statements)..."
@@ -648,8 +669,18 @@ if [ "$SKIP_STYLE" != "yes" ]; then
     if [ -n "$VALIDATE_ARGS" ] || [ "$VALIDATE_EVERYTHING" = "yes" ] || [ "$RUN_MODE" != "pr" ]; then
         if [ "$PR_MODE" = "yes" ]; then
             # Also generate ruff JSON artifact for diagnostics
+            # The word splitting is the point. These variables hold argument *lists* —
+            # VALIDATE_ARGS is "$PACKAGES --workspace", TEST_FLAGS and PYTEST_ARGS are
+            # flag strings, PACKAGE_PATTERN is several globs. Quoting one passes the whole
+            # string as a single argument: validate.sh would look for a target literally
+            # named "bots --workspace", find nothing, warn, and validate nothing while
+            # still reporting success. That is this track's defect exactly, so the waiver
+            # is here to stop a future editor "fixing" the finding into a silent failure.
+            # shellcheck disable=SC2086
             uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || true
 
+            # Deliberate word splitting — see the waiver above the ruff call.
+            # shellcheck disable=SC2086
             if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS > "$ARTIFACTS_DIR/validation.log" 2>&1; then
                 print_success "Code validation passed"
             else
@@ -659,6 +690,8 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             fi
         else
             # Dev mode: show output directly
+            # Deliberate word splitting — see the waiver above the ruff call.
+            # shellcheck disable=SC2086
             if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS; then
                 print_success "Code validation passed"
             else
@@ -761,8 +794,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             export COVERAGE_FILE="$PROJECT_ROOT/.coverage.unit.$pkg"
 
             if [ -n "$PYTEST_ARGS" ]; then
+                # Deliberate word splitting — see the waiver above the ruff call.
+                # shellcheck disable=SC2086
                 $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             else
+                # Deliberate word splitting — see the waiver above the ruff call.
+                # shellcheck disable=SC2086
                 $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             fi
 
@@ -870,6 +907,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # exits on an unrecognized argument, which the gate would count as
             # a failing suite with no failing test. $PYTEST_ARGS is passed
             # because it is already pytest's own.
+            # Deliberate word splitting — see the waiver above the ruff call.
+            # shellcheck disable=SC2086
             uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
                 -p no:cacheprovider $PYTEST_ARGS --color=yes \
                 > "$ARTIFACTS_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
@@ -894,8 +933,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 export COVERAGE_FILE="$PROJECT_ROOT/.coverage.integration.$pkg"
 
                 if [ -n "$PYTEST_ARGS" ]; then
+                    # Deliberate word splitting — see the waiver above the ruff call.
+                    # shellcheck disable=SC2086
                     $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 else
+                    # Deliberate word splitting — see the waiver above the ruff call.
+                    # shellcheck disable=SC2086
                     $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 fi
 
@@ -1025,6 +1068,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                     print_status "Testing package: $pkg"
                     
                     if [ -n "$PYTEST_ARGS" ]; then
+                        # Deliberate word splitting — see the waiver above the ruff call.
+                        # shellcheck disable=SC2086
                         $TEST_CMD "$pkg" -- $PYTEST_ARGS
                     else
                         $TEST_CMD "$pkg"
@@ -1042,6 +1087,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         else
             # This shouldn't happen in dev mode (auto-detection), but handle it
             if [ -n "$PYTEST_ARGS" ]; then
+                # Deliberate word splitting — see the waiver above the ruff call.
+                # shellcheck disable=SC2086
                 $TEST_CMD -- $PYTEST_ARGS
             else
                 $TEST_CMD
@@ -1179,18 +1226,18 @@ except Exception:
   "workspace_hashes": $WORKSPACE_HASHES_JSON,
   "checks": {
     "documentation": {
-      "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_STATUS,
       "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
       "tool": "mkdocs"
     },
     "documentation_versions": {
-      "status": $([ $DOCS_VERSIONS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_VERSIONS_STATUS,
       "tool": "docs-update-versions.sh"
     },
     "documentation_mirrors": {
-      "status": $([ $DOCS_MIRROR_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_MIRROR_STATUS,
       "tool": "docs-mirror-check.py"
     },
@@ -1200,8 +1247,13 @@ except Exception:
       "skipped": $VALIDATION_SKIPPED,
       "tool": "validate.sh"
     },
+    "shell_lint": {
+      "status": $([ "$SHELL_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $SHELL_LINT_STATUS,
+      "tool": "lint-shell.sh"
+    },
     "workflow_lint": {
-      "status": $([ $WORKFLOW_LINT_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "status": $([ "$WORKFLOW_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $WORKFLOW_LINT_STATUS,
       "tool": "lint-workflows.sh"
     },
@@ -1267,7 +1319,7 @@ EOF
         echo "====================" >> test-coverage-summary.txt
 
         echo "{" > coverage-by-package.json
-        echo '  "generated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> coverage-by-package.json
+        echo '  "generated": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'",' >> coverage-by-package.json
         echo '  "packages": {' >> coverage-by-package.json
 
         first_pkg=true
@@ -1307,10 +1359,10 @@ EOF
                         fi
                         first_pkg=false
 
-                        echo -n '    "'$pkg_name'": {' >> coverage-by-package.json
-                        echo -n '"statements": '$statements', ' >> coverage-by-package.json
-                        echo -n '"missing": '$missing', ' >> coverage-by-package.json
-                        echo -n '"coverage": "'$coverage_pct'%"}' >> coverage-by-package.json
+                        echo -n '    "'"$pkg_name"'": {' >> coverage-by-package.json
+                        echo -n '"statements": '"$statements"', ' >> coverage-by-package.json
+                        echo -n '"missing": '"$missing"', ' >> coverage-by-package.json
+                        echo -n '"coverage": "'"$coverage_pct"'%"}' >> coverage-by-package.json
                     fi
                 fi
             fi
@@ -1334,21 +1386,21 @@ echo ""
 
 if [ "$PR_MODE" = "yes" ]; then
     # Show documentation build status (only in PR mode)
-    if [ $DOCS_STATUS -eq 0 ]; then
+    if [ "$DOCS_STATUS" -eq 0 ]; then
         echo -e "  Documentation:      ${GREEN}✓ PASSED${NC}"
     else
         echo -e "  Documentation:      ${RED}✗ FAILED${NC}"
     fi
 
     # Show documentation versions status
-    if [ $DOCS_VERSIONS_STATUS -eq 0 ]; then
+    if [ "$DOCS_VERSIONS_STATUS" -eq 0 ]; then
         echo -e "  Doc Versions:       ${GREEN}✓ PASSED${NC}"
     else
         echo -e "  Doc Versions:       ${RED}✗ FAILED${NC}"
     fi
 
     # Show documentation mirror status
-    if [ $DOCS_MIRROR_STATUS -eq 0 ]; then
+    if [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
         echo -e "  Doc Mirrors:        ${GREEN}✓ PASSED${NC}"
     else
         echo -e "  Doc Mirrors:        ${RED}✗ FAILED${NC}"
@@ -1365,10 +1417,17 @@ fi
 
 # Reported unconditionally because it runs unconditionally — it is not gated by
 # PR mode, changed packages, or any skip flag.
-if [ $WORKFLOW_LINT_STATUS -eq 0 ]; then
+if [ "$WORKFLOW_LINT_STATUS" -eq 0 ]; then
     echo -e "  Workflow Lint:      ${GREEN}✓ PASSED${NC}"
 else
     echo -e "  Workflow Lint:      ${RED}✗ FAILED${NC}"
+fi
+
+# Unconditional for the same reason as the block above it.
+if [ "$SHELL_LINT_STATUS" -eq 0 ]; then
+    echo -e "  Shell Lint:         ${GREEN}✓ PASSED${NC}"
+else
+    echo -e "  Shell Lint:         ${RED}✗ FAILED${NC}"
 fi
 
 if [ "$PR_MODE" = "yes" ]; then
@@ -1438,14 +1497,14 @@ else
     
     if [ "$PR_MODE" = "yes" ]; then
         # In PR mode, show specific commands to investigate failures
-        if [ $DOCS_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-build.log" ]; then
+        if [ "$DOCS_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-build.log" ]; then
             echo -e "  ${CYAN}Documentation Build Failures:${NC}"
             echo "    View documentation errors:"
             echo "      cat $ARTIFACTS_DIR/docs-build.log"
             echo ""
         fi
 
-        if [ $DOCS_VERSIONS_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-versions.log" ]; then
+        if [ "$DOCS_VERSIONS_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-versions.log" ]; then
             echo -e "  ${CYAN}Documentation Version Mismatch:${NC}"
             echo "    View version differences:"
             echo "      cat $ARTIFACTS_DIR/docs-versions.log"
@@ -1454,7 +1513,7 @@ else
             echo ""
         fi
 
-        if [ $DOCS_MIRROR_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-mirror.log" ]; then
+        if [ "$DOCS_MIRROR_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-mirror.log" ]; then
             echo -e "  ${CYAN}Documentation Mirror Drift:${NC}"
             echo "    View mirror differences:"
             echo "      cat $ARTIFACTS_DIR/docs-mirror.log"

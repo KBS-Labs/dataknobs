@@ -86,6 +86,7 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     checkall         Check all packages
     lint [pkg]       Run linting only
     style [pkg]      Run style checks only
+    shell, sh        Run shellcheck over the repo's shell scripts
     validate-pkgs    Validate package references across codebase
     
   ${BOLD}Testing:${NC}
@@ -177,7 +178,7 @@ run_command() {
     local description="$1"
     shift
     echo -e "${BLUE}▶${NC} ${BOLD}$description${NC}"
-    echo -e "${DIM}  Running: $@${NC}"
+    echo -e "${DIM}  Running: $*${NC}"
     echo ""
     "$@"
 }
@@ -196,7 +197,7 @@ run_from_root() {
     local description="$1"
     shift
     echo -e "${BLUE}▶${NC} ${BOLD}$description${NC}"
-    echo -e "${DIM}  Running: $@${NC}"
+    echo -e "${DIM}  Running: $*${NC}"
     echo ""
     ( cd "$PROJECT_ROOT" && "$@" )
 }
@@ -219,7 +220,7 @@ main() {
             ;;
             
         # PR Preparation
-        pr|prepare|prepare-for-pr|p4p)
+        pr|prepare|prepare-for-pr|p4p|p)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
@@ -273,6 +274,14 @@ main() {
         lint|l)
             run_from_root "Running linting checks" \
                 uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
+            ;;
+        shell|sh)
+            # The shell counterpart of `style`, and a recorded gate check in its
+            # own right — so like `style` and unlike `lint`, running it green
+            # must mean the gate agrees. lint-shell.sh owns the target set and
+            # the tier split; this only invokes it.
+            run_command "Linting shell scripts" \
+                "$SCRIPT_DIR/lint-shell.sh" "$@"
             ;;
         style|s)
             # Captured before the command rather than substituted inside it.
@@ -480,47 +489,6 @@ main() {
                 "$SCRIPT_DIR/release-helper.sh" notes
             ;;
             
-        # Shortcuts
-        p)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
-            export TEST_OLLAMA=true
-            dk pr "${@}"
-            ;;
-        q)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
-            export TEST_OLLAMA=true
-            dk check "${@}"
-            ;;
-        t)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
-            export TEST_OLLAMA=true
-            dk test "${@}"
-            ;;
-        tf)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
-            export TEST_OLLAMA=true
-            dk testlast "${@}"
-            ;;
-        u) dk unit "${@}" ;;
-        i)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
-            export TEST_OLLAMA=true
-            dk int "${@}"
-            ;;
-        f) dk fix "${@}" ;;
-        d) dk diagnose "${@}" ;;
-        y) dk why "${@}" ;;
-        
         # Unknown command
         *)
             echo -e "${RED}Unknown command:${NC} $cmd"
