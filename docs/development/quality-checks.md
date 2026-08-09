@@ -205,7 +205,8 @@ python3 -c "
 import json; d = json.load(open('.quality-artifacts/quality-summary.json'))
 print(f\"total {d['total_seconds']}s\")
 for name, c in sorted(d['checks'].items(), key=lambda kv: -(kv[1]['duration_seconds'] or 0)):
-    print(f\"  {c['duration_seconds']!s:>6}s  {name}\")
+    secs = c['duration_seconds']
+    print(f\"  {'skipped' if secs is None else str(secs) + 's':>8}  {name}\")
 "
 ```
 
@@ -215,6 +216,15 @@ carries `workspace_guards_seconds`, the share of its span spent on the
 workspace guards under `tests/`; those are folded into the unit-test status
 rather than reported as their own check, so without that field their cost is
 invisible.
+
+That suite is also run with `--durations=10`, because one number for a whole
+suite says it is expensive without saying which part of it is. The ten slowest
+guards are listed at the end of
+`.quality-artifacts/unit-test-output-workspace.txt`:
+
+```bash
+grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
+```
 
 Field order within a check no longer matters. `validate-quality-artifacts.sh`
 used to read this file with line-offset greps — `grep -A2` for a status,

@@ -543,6 +543,19 @@ UNIT_TEST_SECONDS=null
 INTEGRATION_TEST_SECONDS=null
 WORKSPACE_GUARD_SECONDS=null
 
+# Whether each test stage ran, decided once and used for BOTH the duration
+# above and the "skipped" field in the summary. Deriving it in two places is
+# how integration_tests came to report a duration of 0 for a stage that never
+# ran: the heredoc knew the stage was skipped, while the timing span wrapped
+# around a zero-iteration loop did not. VALIDATION_SKIPPED above is the same
+# shape for the same reason.
+UNIT_SKIPPED="false"
+INTEGRATION_SKIPPED="false"
+if [ "$SKIP_TESTS" = "yes" ]; then
+    UNIT_SKIPPED="true"
+    INTEGRATION_SKIPPED="true"
+fi
+
 # Seconds elapsed since a `date +%s` stamp.
 elapsed_since() { echo $(( $(date +%s) - $1 )); }
 
@@ -958,10 +971,16 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # exits on an unrecognized argument, which the gate would count as
             # a failing suite with no failing test. $PYTEST_ARGS is passed
             # because it is already pytest's own.
+            # --durations=10 names the slowest guards in the output artifact.
+            # WORKSPACE_GUARD_SECONDS is one number for the whole suite, which
+            # says a suite is expensive without saying which part of it is. The
+            # first run with this flag attributed 45 of 54 seconds to one file
+            # re-invoking the shell lint per test, so the flag has already paid
+            # for the line it costs.
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086
             uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
-                -p no:cacheprovider $PYTEST_ARGS --color=yes \
+                -p no:cacheprovider --durations=10 $PYTEST_ARGS --color=yes \
                 > "$ARTIFACTS_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
 
             if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
@@ -975,8 +994,16 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         fi
         UNIT_TEST_SECONDS=$(elapsed_since "$_unit_start")
 
-        # Run integration tests (always sequential — shared external services)
-        print_status "Running integration tests..."
+        # Run integration tests (always sequential — shared external services).
+        # An empty PACKAGES_TO_TEST makes the loop below iterate zero times, so
+        # the stage did not run rather than running instantly. Recorded here so
+        # the duration and the summary's "skipped" cannot disagree about it.
+        if [ -z "$PACKAGES_TO_TEST" ]; then
+            INTEGRATION_SKIPPED="true"
+            print_status "Skipping integration tests (no package selected)"
+        else
+            print_status "Running integration tests..."
+        fi
         _integration_start=$(date +%s)
         for pkg in $PACKAGES_TO_TEST; do
             if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
@@ -1020,7 +1047,11 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 fi
             fi
         done
-        INTEGRATION_TEST_SECONDS=$(elapsed_since "$_integration_start")
+        # Only a stage that ran has a duration. A zero-iteration loop measures
+        # 0, and 0 is a measurement rather than the absence of one.
+        if [ "$INTEGRATION_SKIPPED" != "true" ]; then
+            INTEGRATION_TEST_SECONDS=$(elapsed_since "$_integration_start")
+        fi
 
         # Set overall test status
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
@@ -1330,14 +1361,14 @@ except Exception:
     "unit_tests": {
       "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $UNIT_TEST_STATUS,
-      "skipped": $([ "$SKIP_TESTS" = "yes" ] && echo "true" || echo "false"),
+      "skipped": $UNIT_SKIPPED,
       "duration_seconds": $UNIT_TEST_SECONDS,
       "workspace_guards_seconds": $WORKSPACE_GUARD_SECONDS
     },
     "integration_tests": {
       "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $INTEGRATION_TEST_STATUS,
-      "skipped": $(if [ "$SKIP_TESTS" = "yes" ] || [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then echo "true"; else echo "false"; fi),
+      "skipped": $INTEGRATION_SKIPPED,
       "duration_seconds": $INTEGRATION_TEST_SECONDS
     }
   }
