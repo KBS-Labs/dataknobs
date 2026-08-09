@@ -74,18 +74,21 @@ Run tests for dataknobs packages:
 ```
 
 ### `fix.sh`
-Auto-fix code issues using ruff:
+Auto-fix lint findings using ruff — the command `validate.sh` points you at
+when validation fails:
 
 ```bash
-# Fix all packages (linting and formatting)
+# Fix everything validation reports on
 ./bin/fix.sh
 
 # Fix specific package
 ./bin/fix.sh utils
-
-# Format only (skip linting fixes)
-./bin/fix.sh -f
 ```
+
+It does not format. No check anywhere runs `ruff format`, so a reformat here
+would be an unrequested diff over the whole repository that nothing would
+notice being reverted. `dk format` is the one command that formats, and you
+type it by name.
 
 ### `validate.sh`
 Validate code quality and catch common errors:

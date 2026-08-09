@@ -21,6 +21,7 @@ its source, so a field added later is covered without an edit to this file.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 
@@ -175,6 +176,53 @@ def test_every_required_artifact_is_one_git_actually_keeps():
         f"{CONSUMER.name} requires {dropped}, which .gitignore excludes from the "
         "repository. CI would fail every pull request on a file no developer can "
         "commit. Either add a '!' un-ignore rule, or drop it from REQUIRED_FILES."
+    )
+
+
+def test_the_committed_style_artifact_is_a_result_and_not_an_accident():
+    """``style-check.json`` is committed, signed — and read by nothing at all.
+
+    Not by ``validate-quality-artifacts.sh``, not by any other guard here. So
+    whatever it holds is what CI accepts, and there are two ways for it to hold
+    something other than a style result:
+
+    * ``ruff`` exited 2 (bad flag, unreadable config) and the redirect captured
+      an error message where JSON belongs.
+    * ``ruff`` could not read a target. An unmatched glob is passed through
+      literally and comes back as one ``E902`` io-error — **exit 1, valid
+      JSON**, identical in shape to "found one style issue". That is what the
+      gate produced when run from a subdirectory, before it started ``cd``-ing
+      to the root, and no exit-status check can tell the two apart.
+
+    Both mean the style check did not run over the code it claims to cover.
+    The gate now refuses to write either; this is the guard for one already
+    committed, which nothing else would notice.
+    """
+    artifact = ARTIFACTS / "style-check.json"
+    assert artifact.is_file(), f"{artifact.name} is missing from {ARTIFACTS.name}/"
+
+    raw = artifact.read_text(encoding="utf-8")
+    try:
+        findings = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"{artifact.name} is not JSON — ruff failed and its error was "
+            f"captured as the result:\n{raw[:400]}"
+        ) from exc
+
+    assert isinstance(findings, list), f"{artifact.name} holds {type(findings).__name__}, not a list"
+
+    unreadable = sorted(
+        {
+            entry.get("filename", "?")
+            for entry in findings
+            if isinstance(entry, dict) and entry.get("code") == "E902"
+        }
+    )
+    assert not unreadable, (
+        f"{artifact.name} reports targets ruff could not read: {unreadable}. "
+        "This is not a style finding — it is the whole check not having run. "
+        "Re-run ./bin/run-quality-checks.sh from the repository root."
     )
 
 

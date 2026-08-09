@@ -262,9 +262,10 @@ main() {
             run_command "Checking all packages (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev
             ;;
-        # Each linter call stays on one physical line: the guard in
-        # tests/test_dev_script_config_resolution.py reads the config flag from
-        # the line naming the tool, so splitting one hides its own --config.
+        # Every linter call below runs through run_from_root, names an absolute
+        # --config, and anchors its targets on $PROJECT_ROOT. All three are
+        # asserted by tests/test_linter_invocation_resolution.py, which reads a
+        # whole statement — so wrapping one across a line continuation is fine.
         #
         # Only style gets the workspace targets, and the asymmetry is deliberate.
         # ruff is the linter the quality gate runs, so a shortcut reporting green
@@ -356,10 +357,15 @@ main() {
             
         # Fixing Issues
         fix|f)
-            run_from_root "Auto-fixing style issues" \
-                uv run ruff check --fix "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+            # Delegated rather than reimplemented. This ran its own ruff over
+            # packages/*/src, so the one command named "fix" could not repair a
+            # finding in bin/ or tests/ — which validate.sh reports on, and
+            # which fix.sh has covered since its target set was widened to
+            # match. Two spellings of the fix set is one more than can be kept
+            # in step, and the narrower one was the shortcut people reach for.
+            run_command "Auto-fixing style issues" \
+                "$SCRIPT_DIR/fix.sh" "$@"
             echo ""
-            echo -e "${GREEN}✓${NC} Style issues fixed where possible"
             echo -e "${YELLOW}Tip:${NC} Run ${CYAN}dk check${NC} to verify fixes"
             ;;
         fixlint|fl)
@@ -369,6 +375,14 @@ main() {
                 uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         format|fmt)
+            # The only formatter in the repo, and deliberately the only one:
+            # no check anywhere runs `ruff format`, so its output is validated
+            # by nothing and reverting it would be noticed by nothing. That is
+            # fine for a command you type by name and asked for — it is not
+            # fine inside `fix`, where it used to live, so the containment is
+            # pinned by tests/test_remediation_paths.py.
+            echo -e "${YELLOW}Note:${NC} formatting is not enforced by any check —"
+            echo -e "      this rewrites files nothing will ask you to change."
             run_from_root "Formatting code" \
                 uv run ruff format "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;

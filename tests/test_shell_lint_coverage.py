@@ -35,7 +35,7 @@ from functools import cache
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module
+from tests._workspace import ROOT, load_bin_module, tracked_shell_files
 
 #: ``source``/``.`` whose operand is fixed at authoring time — no ``$``, no
 #: backtick — so the path shellcheck resolves under ``-x`` is the same on every
@@ -67,40 +67,6 @@ REQUIRED_STRICT = frozenset(
         "bin/lint-shell.sh",  # this file's subject, and a recorded check itself
     }
 )
-
-
-def _tracked_shell_files() -> list[str]:
-    """Every tracked shell script, by ``git ls-files`` and then by shebang.
-
-    Extension alone would miss ``bin/dk``, which is the entry point and carries
-    no suffix — and missing exactly the file everything else is invoked through
-    is the shape of gap this file exists to close.
-    """
-    listing = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    found = []
-    for name in listing.split("\0"):
-        if not name:
-            continue
-        path = ROOT / name
-        if name.endswith(".sh"):
-            found.append(name)
-            continue
-        if not path.is_file():
-            continue
-        try:
-            first = path.open("rb").readline()
-        except OSError:  # pragma: no cover - unreadable tracked file
-            continue
-        if first.startswith(b"#!") and b"sh" in first.split(b"\n")[0]:
-            found.append(name)
-    assert found, "no tracked shell files found — has the enumeration broken?"
-    return sorted(found)
 
 
 def _lint_shell(*args: str) -> subprocess.CompletedProcess[str]:
@@ -155,7 +121,7 @@ def test_every_tracked_shell_file_is_checked():
     and no entry anywhere records that it was skipped.
     """
     covered = _declared("--print-targets")
-    uncovered = sorted(set(_tracked_shell_files()) - covered)
+    uncovered = sorted(set(tracked_shell_files()) - covered)
 
     assert not uncovered, (
         "Tracked shell files that bin/lint-shell.sh does not check:\n"
@@ -172,7 +138,7 @@ def test_the_check_claims_no_file_that_does_not_exist():
     Cheap to check and the failure is otherwise invisible, since a tier listing
     a path that matches nothing simply does less work and still reports pass.
     """
-    tracked = set(_tracked_shell_files())
+    tracked = set(tracked_shell_files())
     phantom = sorted(_declared("--print-targets") - tracked)
 
     assert not phantom, (
@@ -201,7 +167,7 @@ def test_the_strict_pin_has_not_drifted_from_the_declaration():
     not require the two to be equal — the strict tier grows as the ratchet turns
     — only that every pinned name is a real one.
     """
-    tracked = set(_tracked_shell_files())
+    tracked = set(tracked_shell_files())
     phantom = sorted(REQUIRED_STRICT - tracked)
 
     assert not phantom, (

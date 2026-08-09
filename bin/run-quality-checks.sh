@@ -7,6 +7,19 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Run from the root, always. The script already assumed this — three places
+# `cd` into the artifacts directory and `cd "$PROJECT_ROOT"` back — but nothing
+# established it, and `bin/dk` dispatches the gate without changing directory.
+# So from a subdirectory the relative target globs below resolved against the
+# wrong place: ruff received `packages/*/src` unexpanded, reported it as a
+# single E902 io-error *finding* in valid JSON, and the committed
+# style-check.json read as one style issue instead of the whole check not
+# having run. Anchoring here rather than at the ruff call because the same
+# working directory decides `per-file-ignores` matching, and a `cd` in a
+# subshell at the call site would come too late for the glob.
+cd "$PROJECT_ROOT"
+
 ARTIFACTS_DIR="$PROJECT_ROOT/.quality-artifacts"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Wall-clock start, for the durations recorded in quality-summary.json. Whole
@@ -725,8 +738,35 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             # named "bots --workspace", find nothing, warn, and validate nothing while
             # still reporting success. That is this track's defect exactly, so the waiver
             # is here to stop a future editor "fixing" the finding into a silent failure.
+            _ruff_json_rc=0
             # shellcheck disable=SC2086
-            uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || true
+            uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || _ruff_json_rc=$?
+
+            # `|| true` used to cover both of the ways this goes wrong, and they
+            # are not the same way.
+            #
+            # Exit 2+ is "ruff could not run" — a bad flag, an unreadable
+            # config. The artifact then holds an error message where JSON
+            # belongs, and every reader of it reports zero findings.
+            #
+            # Exit 1 is *both* "found violations" and "could not read a target":
+            # an unmatched glob is passed through literally and comes back as a
+            # single E902 io-error in valid JSON. Identical shape to a real
+            # result, so the exit status cannot tell them apart and the content
+            # has to. The artifact is then committed, and no consumer inspects
+            # it — so a check that never ran ships as a check that found one
+            # thing. tests/test_quality_artifact_contract.py guards the
+            # committed copy; this guards writing one in the first place.
+            if [ "$_ruff_json_rc" -gt 1 ]; then
+                print_error "ruff could not produce the style artifact (exit $_ruff_json_rc)"
+                cat "$ARTIFACTS_DIR/style-check.json"
+                exit 1
+            fi
+            if grep -q '"code": *"E902"' "$ARTIFACTS_DIR/style-check.json" 2>/dev/null; then
+                print_error "ruff could not read its targets — the style check did not run"
+                grep -o '"filename": *"[^"]*"' "$ARTIFACTS_DIR/style-check.json" | head -5
+                exit 1
+            fi
 
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086

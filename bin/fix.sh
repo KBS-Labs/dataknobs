@@ -19,13 +19,12 @@ source "$ROOT_DIR/bin/package-discovery.sh"
 
 # Default values
 TARGETS=()
-FORMAT_ONLY=false
 
 # Usage function
 usage() {
     echo "Usage: $0 [OPTIONS] [TARGETS...]"
     echo ""
-    echo "Auto-fix code issues using ruff"
+    echo "Auto-fix lint findings using ruff"
     echo ""
     echo "Arguments:"
     echo "  TARGETS               Packages, directories, or files to fix"
@@ -36,7 +35,6 @@ usage() {
     echo "                        If not specified, fixes all packages"
     echo ""
     echo "Options:"
-    echo "  -f, --format-only     Only run formatting (skip linting fixes)"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -44,17 +42,15 @@ usage() {
     echo "  $0 structures                             # Fix only structures package"
     echo "  $0 packages/utils/src                     # Fix specific directory"
     echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Fix specific files"
-    echo "  $0 -f                                     # Format all packages"
+    echo ""
+    echo "Formatting is not run here and is not enforced by any check. See"
+    echo "'dk format' if you want it."
     exit 0
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -f|--format-only)
-            FORMAT_ONLY=true
-            shift
-            ;;
         -h|--help)
             usage
             ;;
@@ -143,31 +139,27 @@ echo -e "${YELLOW}Fixing code issues...${NC}"
 for target in "${FIX_TARGETS[@]}"; do
     echo -e "\n${YELLOW}Fixing $target...${NC}"
     
-    if [[ "$FORMAT_ONLY" != true ]]; then
-        # Run ruff check with auto-fix
-        echo -e "${BLUE}Running ruff auto-fix...${NC}"
-        # Use --no-unsafe-fixes to prevent breaking changes
-        if ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
-            echo -e "${GREEN}✓ Ruff auto-fix completed${NC}"
-        else
-            echo -e "${YELLOW}⚠ Some issues remain that need manual fixing${NC}"
-        fi
-    fi
-    
-    # Run ruff format
-    echo -e "${BLUE}Running ruff format...${NC}"
-    if ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
-        echo -e "${GREEN}✓ Code formatted${NC}"
+    # Through `uv run`: the workspace pins the ruff that produced the findings
+    # being fixed here. A bare `ruff` resolves against PATH, which this
+    # workspace does not populate — so this step printed "some issues remain
+    # that need manual fixing", which is what ruff-ran-and-stopped-short looks
+    # like, and exited without having read a file.
+    #
+    # --no-unsafe-fixes: no behaviour-changing rewrites without a human.
+    echo -e "${BLUE}Running ruff auto-fix...${NC}"
+    if uv run ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
+        echo -e "${GREEN}✓ Ruff auto-fix completed${NC}"
     else
-        echo -e "${RED}✗ Format failed${NC}"
-        exit 1
+        echo -e "${YELLOW}⚠ Some issues remain that need manual fixing${NC}"
     fi
 done
 
 echo -e "\n${GREEN}All fixes applied!${NC}"
 
-# Suggest next steps
+# Suggest next steps. These name entry points rather than tool invocations:
+# a command spelled out here is a target set and a config that nothing keeps
+# in step with the gate, and validate.sh is what sent you here.
 echo -e "\n${YELLOW}Next steps:${NC}"
 echo -e "  1. Review the changes: git diff"
-echo -e "  2. Run tests: ./bin/test-packages.sh"
-echo -e "  3. Run full lint check: ./bin/dev.sh lint"
+echo -e "  2. Re-run validation: ./bin/validate.sh"
+echo -e "  3. Run tests: ./bin/test.sh"
