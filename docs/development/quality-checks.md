@@ -323,8 +323,23 @@ Common causes:
 - **Modified artifacts** - Don't edit files in `.quality-artifacts/`
 
 The failure names the packages needing re-validation, or the workspace scope
-(`toolchain`, `workspace_tests`) that changed. A workspace scope dirties no
-package, so that case reports a changed scope and no package list.
+that changed. There are three, and only the first dirties any package:
+
+| Scope | Covers | Effect when it changes |
+|---|---|---|
+| `toolchain` | root `pyproject.toml`, `uv.lock`, `conftest.py`, `mypy.ini`, `pytest.ini`, `.python-version`, and the three scripts that *are* the lint and test steps | every package needs re-validation |
+| `workspace_tests` | `bin/`, `tests/`, `.pylintrc`, `run_api.sh`, `setup-dk.sh` | artifacts stale, no package dirtied |
+| `docs` | `docs/`, `packages/*/docs/`, `mkdocs.yml`, and the two `.dataknobs/` registries the version and mirror checks read | artifacts stale, no package dirtied |
+
+The last two report a changed scope and no package list — nothing they cover can
+move a suite's result, only the verdict recorded about it.
+
+A documentation-only change therefore now requires a gate run, where it
+previously did not. That is the point: the gate records three checks over the
+documentation trees, and until these files were hashed a change to one left every
+hash intact, so the stored verdict was accepted over content that had never
+produced it — and CI's docs job, which skips its build when no hash is dirty,
+declined to rebuild the site as well.
 
 ### Integration Tests Fail
 

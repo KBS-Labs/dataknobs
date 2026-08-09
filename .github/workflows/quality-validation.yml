@@ -52,6 +52,21 @@ jobs:
               # skipping the job that would have recomputed it.
               - 'run_api.sh'
               - 'setup-dk.sh'
+              # Documentation inputs. The gate records three checks over these
+              # — the site build, the version-table sync, and the dual-docs
+              # mirror — so a change to one moves a recorded verdict, exactly
+              # as a change to a linted script does. Without these patterns a
+              # documentation-only pull request skipped this job, and the docs
+              # job below skips its own build when no hash is dirty, so both
+              # accepted a verdict computed over different content.
+              #
+              # Unlike the docs filter below, index.md and installation.md are
+              # not excluded here: they are what the version-table check reads,
+              # so a change to either is precisely what needs revalidating.
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - 'packages/*/docs/**'
+              - '.dataknobs/*.json'
               # This file. Without it a pull request whose only change deletes
               # the patterns above matches nothing, skips the sole PR-time
               # quality job, and reports green — leaving every declaration
