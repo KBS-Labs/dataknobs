@@ -4,10 +4,11 @@ import logging
 
 import pytest
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_bots import DynaBot
 from dataknobs_llm.tools import Tool
-from tests.fixtures.test_tools import (
+from fixtures.tools import (
     KBDependentTestTool,
     ParameterizedTestTool,
     SimpleTestTool,
@@ -63,7 +64,7 @@ class TestToolResolution:
     def test_resolve_simple_tool_by_class(self):
         """Test resolving a simple tool by class path."""
         tool_config = {
-            "class": "tests.fixtures.test_tools.SimpleTestTool",
+            "class": dotted_path(SimpleTestTool),
             "params": {},
         }
 
@@ -78,7 +79,7 @@ class TestToolResolution:
     def test_resolve_parameterized_tool(self):
         """Test resolving a tool with parameters."""
         tool_config = {
-            "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+            "class": dotted_path(ParameterizedTestTool),
             "params": {
                 "prefix": "custom",
                 "multiplier": 3,
@@ -99,7 +100,7 @@ class TestToolResolution:
         config = {
             "tool_definitions": {
                 "my_tool": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 }
             }
@@ -117,7 +118,7 @@ class TestToolResolution:
         config = {
             "tool_definitions": {
                 "my_tool": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "xref"},
                 }
             }
@@ -136,7 +137,7 @@ class TestToolResolution:
         config = {
             "tool_definitions": {
                 "base_tool": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "base", "multiplier": 2},
                 },
                 "alias_tool": {"xref": "xref:tools[base_tool]"},
@@ -194,7 +195,7 @@ class TestToolResolution:
         and it comes from the config, not from the exception.
         """
         tool_config = {
-            "class": "tests.unit.test_tool_resolution.LeakyCtorTool",
+            "class": dotted_path(LeakyCtorTool),
             "params": {},
         }
 
@@ -242,7 +243,7 @@ class TestToolResolution:
         config = {
             "tool_definitions": {
                 "existing_tool": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                 }
             }
         }
@@ -311,7 +312,7 @@ class TestToolResolution:
 
         tool_config = {
             "class": (
-                "tests.unit.test_tool_resolution._SideEffectyNonTool"
+                dotted_path(_SideEffectyNonTool)
             ),
             "params": {},
         }
@@ -348,11 +349,11 @@ class TestToolResolution:
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "config", "multiplier": 2},
                 },
             ],
@@ -388,11 +389,11 @@ class TestToolResolution:
             },
             "tool_definitions": {
                 "simple": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 "complex": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "xref-tool"},
                 },
             },
@@ -426,7 +427,7 @@ class TestToolResolution:
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 {
@@ -435,7 +436,7 @@ class TestToolResolution:
                     "optional": True,
                 },
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {},
                 },
             ],
@@ -488,7 +489,7 @@ class TestToolResolution:
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "exec", "multiplier": 2},
                 }
             ],
@@ -515,7 +516,7 @@ class TestToolResolution:
         """
         sentinel_kb = object()  # stand-in for a real knowledge base
         tool_config = {
-            "class": "tests.fixtures.test_tools.KBDependentTestTool",
+            "class": dotted_path(KBDependentTestTool),
             "params": {},
         }
         config = {}
@@ -530,7 +531,7 @@ class TestToolResolution:
     def test_resolve_tool_without_dependency_still_works(self):
         """Tools that do NOT declare requires should be unaffected."""
         tool_config = {
-            "class": "tests.fixtures.test_tools.SimpleTestTool",
+            "class": dotted_path(SimpleTestTool),
             "params": {},
         }
         config = {}
@@ -569,7 +570,7 @@ class TestToolResolution:
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.KBDependentTestTool",
+                    "class": dotted_path(KBDependentTestTool),
                     "params": {},
                 },
             ],

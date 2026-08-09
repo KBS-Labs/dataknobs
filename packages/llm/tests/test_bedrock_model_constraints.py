@@ -30,7 +30,7 @@ from typing import Any
 from dataknobs_llm.llm.base import LLMConfig
 from dataknobs_llm.llm.providers.bedrock import BedrockProvider
 
-from test_bedrock_provider import _StubBedrockClient, _stub_provider
+from _bedrock_stubs import _StubBedrockClient, _stub_provider
 
 
 def _converse_client() -> _StubBedrockClient:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.bot.context import BotContext
@@ -473,9 +474,7 @@ class _SideEffectyNonMiddleware:
         cls.instances_created = 0
 
 
-_SIDE_EFFECTY_NON_MIDDLEWARE_CLASS = (
-    "tests.test_from_config_di._SideEffectyNonMiddleware"
-)
+_SIDE_EFFECTY_NON_MIDDLEWARE_CLASS = dotted_path(_SideEffectyNonMiddleware)
 
 
 class TestMiddlewareSpecResolution:

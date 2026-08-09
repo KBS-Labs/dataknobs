@@ -51,7 +51,7 @@ from dataknobs_llm.testing import (
     tool_call_response,
 )
 
-from test_anthropic_param_handling import make_anthropic_response
+from _anthropic_stubs import make_anthropic_response
 
 
 # ---------------------------------------------------------------------------

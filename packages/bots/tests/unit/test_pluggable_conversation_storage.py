@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_common.exceptions import DottedPathError
 
@@ -100,7 +101,7 @@ async def test_custom_storage_class_via_config() -> None:
         DynaBotConfigBuilder()
         .set_llm(provider="echo", model="echo-test")
         .set_conversation_storage_class(
-            "tests.unit.test_pluggable_conversation_storage:InMemoryTestStorage",
+            dotted_path(InMemoryTestStorage),
             custom_param="value",
         )
         .build()

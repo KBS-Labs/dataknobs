@@ -19,6 +19,7 @@ import subprocess
 import sys
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.middleware import (
@@ -190,7 +191,7 @@ class LeakyCtorMiddleware(Middleware):
         raise ValueError(f"Could not parse URL from string {_LEAKY_DSN!r}")
 
 
-_LEAKY_CLASS = "tests.test_middleware_factory.LeakyCtorMiddleware"
+_LEAKY_CLASS = dotted_path(LeakyCtorMiddleware)
 
 
 def test_a_failing_ctor_does_not_leak_its_message_into_the_config_error() -> None:

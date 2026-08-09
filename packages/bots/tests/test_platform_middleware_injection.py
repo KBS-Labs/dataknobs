@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.bot.context import BotContext
@@ -68,10 +69,8 @@ class RecordingConvMiddleware(ConversationMiddleware):
         return response
 
 
-_MW_CLASS = "tests.test_platform_middleware_injection.RecordingMiddleware"
-_CONV_MW_CLASS = (
-    "tests.test_platform_middleware_injection.RecordingConvMiddleware"
-)
+_MW_CLASS = dotted_path(RecordingMiddleware)
+_CONV_MW_CLASS = dotted_path(RecordingConvMiddleware)
 
 
 # ---------------------------------------------------------------------------

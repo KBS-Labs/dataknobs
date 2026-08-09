@@ -16,7 +16,7 @@ Reproduce-first coverage for the async-engine consolidation tail (170-FU8b /
   specific reason ("Pre-validation failed for state 'X'"), not the generic
   "Failed to enter initial state 'X'".
 
-Real constructs only: real interface instances from ``tests.custom_fns_fixture``
+Real constructs only: real interface instances from ``custom_fns_fixture``
 (``HasField`` / ``AsyncHasField``), the real builder/loader, and the real async
 engine. No mocks.
 """
@@ -31,7 +31,7 @@ from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
 
-from tests.custom_fns_fixture import AsyncHasField, HasField
+from custom_fns_fixture import AsyncHasField, HasField
 
 
 def _always_pass(data, context=None):

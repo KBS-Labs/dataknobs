@@ -64,7 +64,7 @@ from dataknobs_llm.llm.providers import anthropic as anthropic_mod
 # Reuse the sanctioned Anthropic SDK stand-ins + the initialised-provider builder
 # from the constraints test module (siblings are import-visible under pytest's
 # default ``prepend`` import mode; the same path serves the ``--regen`` entry).
-from test_anthropic_model_constraints import _ScriptedModel, _provider_with_capture
+from _anthropic_stubs import _ScriptedModel, _provider_with_capture
 
 _FIXTURE_PATH = Path(__file__).parent / "golden" / "anthropic_profile_golden.json"
 

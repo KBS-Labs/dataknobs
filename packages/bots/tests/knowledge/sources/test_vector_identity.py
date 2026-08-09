@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_common.exceptions import DottedPathError
 
@@ -573,10 +574,7 @@ class TestFactoryResolution:
     def test_factory_resolves_dotted_dedup_key(self) -> None:
         kb = ScriptedKnowledgeBase([])
         cfg = self._config(
-            dedup_key=(
-                "tests.knowledge.sources.test_vector_identity:"
-                "_dedup_by_entity_ref"
-            ),
+            dedup_key=dotted_path(_dedup_by_entity_ref),
         )
         source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
@@ -586,10 +584,7 @@ class TestFactoryResolution:
     def test_factory_resolves_dotted_source_id_fn(self) -> None:
         kb = ScriptedKnowledgeBase([])
         cfg = self._config(
-            source_id_fn=(
-                "tests.knowledge.sources.test_vector_identity:"
-                "_id_by_entity_ref"
-            ),
+            source_id_fn=dotted_path(_id_by_entity_ref),
         )
         source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
@@ -599,10 +594,7 @@ class TestFactoryResolution:
     def test_factory_resolves_dotted_metadata_fn(self) -> None:
         kb = ScriptedKnowledgeBase([])
         cfg = self._config(
-            metadata_fn=(
-                "tests.knowledge.sources.test_vector_identity:"
-                "_md_by_entity_ref"
-            ),
+            metadata_fn=dotted_path(_md_by_entity_ref),
         )
         source = _create_vector_kb_source(cfg, knowledge_base=kb)
 

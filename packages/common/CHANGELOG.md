@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dotted_path(target)` — the inverse of `resolve_dotted`.** Spells the
+  `"module.path:name"` reference for a class or module-level function, for the
+  caller holding the object and needing the string: a test building a config
+  block that names a class, a generator emitting a declaration, an error
+  message quoting the reference a consumer would have to write. Exported from
+  the package root beside the resolver family.
+
+  It refuses what `resolve_dotted` could not read back — a nested
+  `__qualname__` (`Outer.Inner`, or a closure's `f.<locals>.g`), a `__main__`
+  target, and an object carrying no module metadata. Failing there names the
+  object; failing at resolution time would name only the string.
+
+  Prefer it to writing the path out. A literal that disagrees with the object
+  does not fail the way a typo does: it names a real module reachable under a
+  second name, so the import succeeds and yields a *second* class object,
+  identical except in identity. Every `isinstance` against the locally
+  imported one then fails while every behavioural assertion keeps passing.
+
+- **`dataknobs_common.testing.declare_import_root(anchor)` — state a test
+  tree's import root.** A suite sharing scaffolding between modules imports it
+  by bare name, which resolves only because pytest's `prepend` import mode
+  inserts each collected file's directory onto `sys.path` as a side effect of
+  collecting it. Under `importlib` it does not, so the import mode is
+  load-bearing for code that never mentions it. Called from a `conftest.py`
+  with `__file__`, this declares the directory instead, and the declaration
+  holds under either mode and every invocation.
+
+  Idempotent: re-declaring the same root, by any spelling that resolves to it,
+  does not grow `sys.path`. A root that does not exist raises `ValueError` —
+  `sys.path` accepts a nonexistent entry silently, so a typo'd anchor would
+  otherwise leave every import it was meant to enable failing while the
+  declaration itself read as correct. See the
+  [testing guide](https://kbs-labs.github.io/dataknobs/packages/common/testing/#declaring-a-test-import-root).
+
 - **`dataknobs_common.imports` — one dotted-path resolver family.**
   `resolve_dotted` imports a module and returns one attribute of it;
   `resolve_callable` and `resolve_class` add a shape check;

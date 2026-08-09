@@ -69,6 +69,7 @@ from dataknobs_common.exceptions import (
 
 __all__ = [
     "ClassConstraint",
+    "dotted_path",
     "resolve_callable",
     "resolve_class",
     "resolve_dotted",
@@ -417,3 +418,55 @@ def resolve_optional_callable(
             field_name=field_name,
             owner=owner,
         ) from exc
+
+
+def dotted_path(target: Any) -> str:
+    """Spell *target*'s dotted path, the reference ``resolve_dotted`` reads back.
+
+    The inverse of :func:`resolve_dotted`, for the caller that has the object
+    and needs the string: a test building a config block that names a class, a
+    generator emitting a declaration, an error message quoting the reference a
+    consumer would have to write.
+
+    Args:
+        target: Any object carrying ``__module__`` and ``__qualname__`` — a
+            class or a module-level function.
+
+    Returns:
+        ``"module.path:name"``, the canonical form documented above.
+
+    Raises:
+        ValueError: *target* carries no ``__module__``/``__qualname__``; its
+            module is ``__main__`` or unimportable-by-name; or its qualname is
+            nested (``Outer.Inner``, or a closure's ``f.<locals>.g``).
+            ``resolve_dotted`` performs exactly one attribute lookup, so a
+            nested qualname would produce a string it cannot read back —
+            failing here names the object, while failing there would name only
+            the string.
+
+    Writing the path out by hand instead is the thing worth avoiding. A literal
+    that disagrees with the object does not fail the way a typo does: it names
+    a real module reachable under a second name, so the import succeeds and
+    yields a *second* class object, equal in every respect except identity.
+    Every ``isinstance`` against the locally imported one then fails, and every
+    test that only checks behaviour keeps passing.
+    """
+    module = getattr(target, "__module__", None)
+    qualname = getattr(target, "__qualname__", None)
+    if not module or not qualname:
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: it carries "
+            f"__module__={module!r} and __qualname__={qualname!r}"
+        )
+    if "." in qualname:
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: __qualname__ "
+            f"{qualname!r} is nested, and resolve_dotted performs exactly one "
+            "attribute lookup. Move the target to module scope."
+        )
+    if module == "__main__":
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: it is defined in "
+            "__main__, which no other process can import by that name."
+        )
+    return f"{module}:{qualname}"

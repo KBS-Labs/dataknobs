@@ -97,6 +97,9 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
     sweep_stale_test_indices,
     wait_for_elasticsearch,
 )
+from dataknobs_common.testing.import_roots import (
+    declare_import_root,
+)
 from dataknobs_common.testing.factory_parity import (
     assert_config_attribute_access_matches_dataclass,
     assert_ctor_reads_documented_keys,
@@ -146,6 +149,7 @@ __all__ = [
     "blocking_error_type",
     "create_test_json_files",
     "create_test_markdown_files",
+    "declare_import_root",
     "elasticsearch_connection_params",
     "ensure_elasticsearch_ready",
     "ensure_localstack_s3_bucket",
