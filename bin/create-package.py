@@ -313,11 +313,16 @@ class PackageCreator:
 
         self.log_change("✅ Updated README.md")
         if not install_section_found:
-            # The package list above was updated either way — this reports the
-            # half that was not, matching update_pyproject_toml, which has said
-            # so all along. Without it the flag was computed and dropped, and a
-            # README missing its "# Install specific packages" block still read
-            # as fully updated.
+            # Reports the half that was not done. Without it the flag was
+            # computed and dropped, and a README missing its "# Install specific
+            # packages" block still read as fully updated.
+            #
+            # Deliberately additive, where update_pyproject_toml replaces its
+            # success line with the informational one. The two differ because the
+            # outcomes do: there, nothing was written, so claiming an update
+            # would be false. Here the package list above was written whatever
+            # happened to the pip line, so "Updated README.md" is true and only
+            # incomplete — and saying nothing was updated would be the new lie.
             print("ℹ️  No installation section in README.md — pip line not added")
 
     def update_pyproject_toml(self, name: str, pypi_name: str) -> None:

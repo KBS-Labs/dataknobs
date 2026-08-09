@@ -88,6 +88,13 @@ _GLOBAL_QUALITY_INPUTS = [
     # inputs every package result depends on.
     "bin/validate.sh",  # the validation step: ruff, mypy, import checks
     "bin/test.sh",  # the test step: selection, markers, coverage flags
+    # Sourced by both of the above, and it answers the two questions that decide
+    # what they act on: which packages exist, and which code belongs to none of
+    # them. It sits in this tier rather than the workspace one for the same
+    # reason validate.sh does — it moves every package's recorded result, not
+    # just the artifact. Shell, so the "bin/" directory entry in the workspace
+    # tier would not have reached it either: that glob is "*.py".
+    "bin/package-discovery.sh",  # which packages exist, and what else to check
 ]
 
 # Reachable only by the workspace guards, so a change here cannot move any

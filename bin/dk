@@ -275,11 +275,19 @@ main() {
                 uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         style|s)
-            # SC2046: the word splitting is the point — workspace_targets emits
+            # Captured before the command rather than substituted inside it.
+            # errexit is decided by the status of the enclosing command, so a
+            # substitution in an argument list that fails yields an empty string
+            # and runs anyway — ruff would check packages/*/src alone and report
+            # green over a narrower set than the gate checks, which is the exact
+            # outcome this shortcut reading workspace_targets exists to prevent.
+            # A bare assignment does trip errexit.
+            style_targets=$(workspace_targets)
+            # SC2086: the word splitting is the point — workspace_targets emits
             # several target paths and each has to arrive as its own argument.
-            # shellcheck disable=SC2046
+            # shellcheck disable=SC2086
             run_from_root "Running style checks" \
-                uv run ruff check "$PROJECT_ROOT"/packages/*/src $(workspace_targets) --config "$PROJECT_ROOT/pyproject.toml" "$@"
+                uv run ruff check "$PROJECT_ROOT"/packages/*/src $style_targets --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
         validate-pkgs|validate-packages|vp)
             run_command "Validating package references" \

@@ -551,6 +551,19 @@ else
     PACKAGE_PATTERN="packages/*/src"
 fi
 
+# The code belonging to no package, from the one declaration. This was a fifth
+# answer to "which code do we check", and it feeds the ruff JSON a developer
+# reads after a failure — so without it a bin/ finding reaches validation.log and
+# appears nowhere in the diagnostics artifact, which is the shape that hides a
+# finding rather than reporting it.
+#
+# Invoked rather than sourced: package-discovery.sh sets -u and -o pipefail, and
+# this file sets only -e. Captured into a variable first because errexit applies
+# to a bare assignment but not to a substitution inside an argument list — a
+# failure there would yield an empty string and silently narrow the pattern back.
+_workspace_pattern=$("$SCRIPT_DIR/package-discovery.sh" workspace-targets)
+PACKAGE_PATTERN="$PACKAGE_PATTERN $_workspace_pattern"
+
 # Validate package references
 print_status "Validating package references across codebase..."
 if uv run python "$SCRIPT_DIR/validate-package-references.py" > "$ARTIFACTS_DIR/package-validation.log" 2>&1; then
@@ -581,7 +594,20 @@ if [ "$SKIP_STYLE" != "yes" ]; then
     # Build package args for validate.sh
     VALIDATE_ARGS=""
     if [ -n "$PACKAGES" ]; then
-        VALIDATE_ARGS="$PACKAGES"
+        # --workspace on this branch too, and unconditionally. Narrowing to the
+        # changed packages dropped the workspace half entirely, so a pull request
+        # touching any package validated packages/*/src alone — and the ruff
+        # config is a global trigger, so editing it marks all ten packages
+        # changed and takes this branch. The change that started linting bin/
+        # therefore did not lint bin/, and recorded a passing validation for it.
+        #
+        # Not conditioned on whether the workspace half changed. It is four
+        # targets holding the checkers that decide whether this run passes, the
+        # marginal cost is seconds, and a condition here is what came out short
+        # twice: once reading an empty package list as nothing to validate, and
+        # again narrowing by package name. A set that is always asked for cannot
+        # come out short.
+        VALIDATE_ARGS="$PACKAGES --workspace"
     elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
         # Same hole as the test block, one step earlier: this branch is keyed
         # by package too, so a change to the workspace guards produced no

@@ -151,9 +151,17 @@ set is declared, with its size, in `DEFERRED_FROM_DEFAULT_LINT` in
 tracked `*.py`, so a new directory of Python fails there rather than silently
 joining the set nothing checks.
 
-`--workspace` selects only the no-package half. That is what the quality gate
-passes when a pull request changed no package, and it asks by name so the gate
-does not carry a second copy of the list.
+`--workspace` adds the no-package half rather than replacing what you named, so
+`bin/validate.sh data --workspace` checks `packages/data/src` *and* that set,
+and with nothing else named it checks that set alone. The quality gate passes it
+on every run that validates anything — narrowing to the changed packages used to
+drop this half silently, which meant a pull request touching any package
+validated `packages/*/src` and nothing more.
+
+`--print-targets` prints the resolved list and exits without running a check,
+which is how the guard in `tests/test_toolchain_consistency.py` learns what is
+covered. It asks rather than reading the script, because a target appended
+inside a conditional reads as unconditional in the source.
 
 ## Package-Specific Checklists
 

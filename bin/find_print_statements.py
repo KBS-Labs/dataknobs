@@ -14,7 +14,6 @@ Print statements are ignored in the following cases (considered proper usage):
 import ast
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 
 class PrintStatementFinder(ast.NodeVisitor):
@@ -22,7 +21,7 @@ class PrintStatementFinder(ast.NodeVisitor):
 
     def __init__(self, filename: str):
         self.filename = filename
-        self.print_statements: List[Tuple[int, int, str]] = []
+        self.print_statements: list[tuple[int, int, str]] = []
         self._in_docstring = False
         self._in_main_block = False
 
@@ -111,7 +110,7 @@ class PrintStatementFinder(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def find_prints_in_file(filepath: Path) -> List[Tuple[int, int, str]]:
+def find_prints_in_file(filepath: Path) -> list[tuple[int, int, str]]:
     """Find all print statements in a Python file.
 
     Args:

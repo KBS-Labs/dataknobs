@@ -469,7 +469,29 @@ def _tracked_python() -> list[PurePosixPath]:
 #: there was one directory to name. ``workspace_targets`` in
 #: bin/package-discovery.sh is the single answer now; this is who has to be
 #: asking it.
-WORKSPACE_TARGET_CONSUMERS = ("bin/validate.sh", "bin/fix.sh", "bin/dk")
+WORKSPACE_TARGET_CONSUMERS = (
+    "bin/validate.sh",
+    "bin/fix.sh",
+    "bin/dk",
+    "bin/run-quality-checks.sh",
+)
+
+#: A *call*, not a mention. The earlier form asked whether the name appeared
+#: anywhere in the file, which ``bin/dk`` satisfies twice over without using the
+#: result: it wraps the helper in a one-line function, so deleting the call site
+#: left the now-dead definition keeping this green while ``dk style`` reverted to
+#: package sources. Both spellings are calls — the sourced function, and the CLI
+#: verb that ``bin/dk`` and the gate use because sourcing would impose ``-u`` and
+#: ``-o pipefail`` on files that set only ``-e``. A definition is neither.
+WORKSPACE_TARGETS_CALL = re.compile(r"\$\([^)]*workspace[_-]targets\b[^)]*\)")
+
+#: Three quoting forms, because bash accepts all three and the guard below is the
+#: only thing standing between the gate and a hardcoded target list. Matching the
+#: double-quoted form alone let ``VALIDATE_ARGS=tests`` — valid, and exactly the
+#: bug — pass unseen.
+VALIDATE_ARGS_ASSIGNMENT = re.compile(
+    r"""^\s*VALIDATE_ARGS=(?:"([^"]*)"|'([^']*)'|([^\s;&|#]*))""", re.MULTILINE
+)
 
 
 def _workspace_targets() -> list[str]:
@@ -489,51 +511,45 @@ def _workspace_targets() -> list[str]:
     return listing.split()
 
 
-def _default_validate_targets() -> list[str]:
-    """Every path ``bin/validate.sh`` validates when given no arguments.
+def _validate_targets_for(*args: str) -> list[str]:
+    """What ``bin/validate.sh`` resolves as its target list, for these arguments.
 
-    Three append forms are read. One names a directory outright; one
-    interpolates ``$package`` and is expanded over the packages that exist,
-    because a guard reading only literals would call the whole
-    ``packages/*/src`` tree unlinted and be wrong about the bulk of the repo;
-    one is the loop variable over ``workspace_targets``, resolved by running it.
-    An interpolation this does not recognise raises rather than being skipped —
-    quietly dropping a target it cannot parse is the exact failure this guard
-    exists to report.
+    Asked rather than parsed, for the reason ``_workspace_targets`` is: the
+    question is what the script checks, and reading the appends as text answers
+    what it says. The earlier form read them out of the default branch and
+    treated each as unconditional, so wrapping the package loop in a condition
+    that skipped it left this reporting full coverage — the append was still
+    textually present. ``--print-targets`` resolves the list through the real
+    code path and prints it before any check runs.
     """
-    validate = (ROOT / "bin" / "validate.sh").read_text(encoding="utf-8")
-    default_block = re.search(
-        r"if \[\[ \$\{#TARGETS\[@\]\} -eq 0 \]\]; then(.*?)\nelse", validate, re.DOTALL
-    )
-    assert default_block is not None, (
-        "bin/validate.sh: could not find the default-target branch — either it "
-        "was restructured or this guard stopped recognising it"
-    )
-    block = default_block.group(1)
+    listing = subprocess.run(
+        [str(ROOT / "bin" / "validate.sh"), *args, "--print-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
 
-    loop = re.search(r"for\s+(\w+)\s+in\s+\$\(workspace_targets\)", block)
-    assert loop is not None, (
-        "bin/validate.sh's default branch no longer loops over "
-        "workspace_targets, so it has stopped reading the shared declaration of "
-        "the code belonging to no package"
-    )
 
-    packages = [path.parent.name for path in pyprojects() if path.parent != ROOT]
-    targets: list[str] = []
-    for raw in re.findall(r'VALIDATE_TARGETS\+=\("([^"]+)"\)', block):
-        if raw == f"${loop.group(1)}":
-            targets.extend(_workspace_targets())
-        elif "$package" in raw:
-            targets.extend(raw.replace("$package", name) for name in packages)
-        elif "$" in raw:
-            raise AssertionError(
-                f"bin/validate.sh appends the default target {raw!r}, whose "
-                "interpolation this guard cannot expand. Teach it the new form; "
-                "skipping it would report the target's contents as unlinted."
-            )
-        else:
-            targets.append(raw)
-    return targets
+def _default_validate_targets() -> list[str]:
+    """Every path ``bin/validate.sh`` validates when given no arguments."""
+    return _validate_targets_for()
+
+
+#: What the default target set must contain, stated here rather than derived.
+#:
+#: This is the one duplication in this file that is load-bearing, and it is the
+#: answer to a specific hole. Every other assertion about coverage reads the
+#: target set and asks whether it reaches the tracked files — so dropping a
+#: directory from ``workspace_targets`` and naming it in
+#: ``DEFERRED_FROM_DEFAULT_LINT`` satisfied all of them at once: the files are no
+#: longer uncovered because they are now deferred, and the deferral is not
+#: contradicted because nothing lints them any more. Both guards green, ``bin/``
+#: unlinted again. A check derived from the thing it checks moves when that thing
+#: moves; this does not, so removing a member fails here and no entry elsewhere
+#: can quiet it.
+REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py"})
 
 
 def _linted_by(path: PurePosixPath, targets: list[str]) -> bool:
@@ -583,6 +599,46 @@ def test_every_first_party_python_file_is_linted_by_default():
     )
 
 
+def test_the_default_target_set_still_contains_what_it_must():
+    """The deferral list must not be able to buy its way out of a lost target.
+
+    The guard above compares the target set against the tracked files and takes
+    the deferrals as declared data, which makes it complete about *accidents* and
+    silent about one deliberate move: drop a directory from ``workspace_targets``,
+    add it to ``DEFERRED_FROM_DEFAULT_LINT``, and coverage is gone with both
+    checks still green. Replayed over the real repository before this was
+    written, the escape also worked for ``packages/*/src`` — all ten package
+    sources could leave the target set without a single assertion failing.
+
+    So this states the required members instead of deriving them. That is the
+    duplication ``workspace_targets`` exists to remove, and here it is the point:
+    an assertion computed from the declaration it guards cannot notice the
+    declaration shrinking.
+    """
+    targets = set(_default_validate_targets())
+
+    missing_workspace = sorted(REQUIRED_DEFAULT_TARGETS - targets)
+    assert not missing_workspace, (
+        f"bin/validate.sh no longer validates {missing_workspace} by default. "
+        "These are not deferrable: tests/ holds the guards that check the "
+        "toolchain, and bin/ holds the checkers that decide whether a pull "
+        "request passes. Restore the target — recording it in "
+        "DEFERRED_FROM_DEFAULT_LINT is not the fix, it is the failure this "
+        "guard exists to catch."
+    )
+
+    packages = sorted(path.parent.name for path in pyprojects() if path.parent != ROOT)
+    missing_sources = [
+        f"packages/{name}/src"
+        for name in packages
+        if f"packages/{name}/src" not in targets and (ROOT / "packages" / name / "src").is_dir()
+    ]
+    assert not missing_sources, (
+        f"bin/validate.sh no longer validates {missing_sources} by default, so "
+        "the shipped source of those packages is linted by nothing."
+    )
+
+
 def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     """A second copy of the target list is a second thing to forget.
 
@@ -597,7 +653,10 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     that is neither a variable nor an option is a hardcoded target set.
     """
     gate = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
-    assignments = re.findall(r'^\s*VALIDATE_ARGS="([^"]*)"', gate, re.MULTILINE)
+    assignments = [
+        next(group for group in match.groups() if group is not None)
+        for match in VALIDATE_ARGS_ASSIGNMENT.finditer(gate)
+    ]
     assert assignments, (
         "bin/run-quality-checks.sh no longer assigns VALIDATE_ARGS — if the "
         "variable was renamed, update this guard rather than deleting it"
@@ -614,16 +673,105 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
         "changes. Pass --workspace, or a variable holding the packages."
     )
 
+    # Every branch that validates anything has to ask for the workspace half.
+    # Requesting it on the no-package branch alone is what shipped: narrowing to
+    # the changed packages dropped this set, so a pull request touching a package
+    # validated packages/*/src and nothing else. The ruff config is a global
+    # trigger, so it marked all ten packages changed and took that branch — which
+    # means the change that started linting bin/ recorded a passing validation
+    # without linting bin/.
+    silent = sorted(
+        value for value in assignments if value and "--workspace" not in value
+    )
+    assert not silent, (
+        f"bin/run-quality-checks.sh assigns VALIDATE_ARGS={silent} without "
+        "--workspace, so that branch validates package sources alone and the "
+        "code belonging to no package — bin/, tests/, src/, conftest.py — goes "
+        "unchecked while the run reports a passing validation. --workspace is "
+        "additive; it does not displace the packages beside it."
+    )
+
     unread = sorted(
         name
         for name in WORKSPACE_TARGET_CONSUMERS
-        if "workspace_targets" not in (ROOT / name).read_text(encoding="utf-8")
+        if not WORKSPACE_TARGETS_CALL.search((ROOT / name).read_text(encoding="utf-8"))
     )
     assert not unread, (
-        f"{unread} build a default set of things to check without reading "
+        f"{unread} build a default set of things to check without calling "
         "workspace_targets, so each carries its own idea of which code belongs "
         "to no package. That is how bin/ ended up in none of them."
     )
+
+
+#: Paths the print check must judge, and the answer it must give. The first three
+#: are shipped library code — ``dataknobs_common.testing`` and its siblings are
+#: the constructs the house rules point at instead of mocks, and ``ab_testing``
+#: is about A/B tests, not tests — which a substring match on "test" reads as
+#: test files and skips.
+PRINT_CHECK_TEST_FILE_CASES = {
+    "packages/common/src/dataknobs_common/testing/threads.py": False,
+    "packages/bots/src/dataknobs_bots/testing.py": False,
+    "packages/llm/src/dataknobs_llm/prompts/versioning/ab_testing.py": False,
+    "tests/_workspace.py": False,
+    "conftest.py": False,
+    "tests/test_toolchain_consistency.py": True,
+    "packages/data/tests/something_test.py": True,
+}
+
+
+def test_the_print_check_recognises_test_files_by_name_not_by_substring():
+    """Skipping "anything with test in it" skipped eleven shipped modules.
+
+    The check had two spellings of one question — ``*test*`` for a named file and
+    ``*/test*`` for a directory walk — and both were wider than the question. The
+    directory form matched every path under a ``testing/`` package, so the print
+    check silently exempted ``dataknobs_common.testing`` and its siblings: shipped
+    library code, in scope on paper for as long as the check has existed and
+    examined not once.
+
+    Exercised rather than read. The predicate is lifted out of the script and run,
+    so this asserts what it decides rather than what it looks like — a guard that
+    only checked the loose glob was absent would pass against any third spelling
+    of the same mistake.
+    """
+    source = (ROOT / "bin" / "validate.sh").read_text(encoding="utf-8")
+    function = re.search(r"^is_test_file\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL)
+    assert function is not None, (
+        "bin/validate.sh no longer defines is_test_file, so the print check has "
+        "gone back to deciding what a test file is inline — which is how the two "
+        "call sites came to disagree. Restore the shared predicate."
+    )
+
+    script = "\n".join(
+        [function.group(0)]
+        + [
+            f'if is_test_file "{path}"; then echo "{path} yes"; else echo "{path} no"; fi'
+            for path in PRINT_CHECK_TEST_FILE_CASES
+        ]
+    )
+    output = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True
+    ).stdout
+    verdicts = dict(line.rsplit(" ", 1) for line in output.splitlines())
+
+    wrong = sorted(
+        f"{path}: expected {'a test file' if expected else 'checked'}, got "
+        f"{'a test file' if verdicts[path] == 'yes' else 'checked'}"
+        for path, expected in PRINT_CHECK_TEST_FILE_CASES.items()
+        if (verdicts[path] == "yes") != expected
+    )
+    assert not wrong, "bin/validate.sh's print check judges these wrongly:\n" + "\n".join(
+        f"  - {item}" for item in wrong
+    )
+
+    # Wiring, not just the predicate: both branches have to route through it. The
+    # file branch and the directory walk each used to carry their own glob.
+    for spelling in ('!= *test*', '! -path "*/test*"'):
+        assert spelling not in source, (
+            f"bin/validate.sh matches test files with {spelling!r} again. That is "
+            "the substring form this predicate replaced, and it exempts every "
+            "shipped module under a testing/ package from the print check."
+        )
 
 
 def test_the_lint_deferrals_still_describe_the_repository():
