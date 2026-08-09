@@ -128,6 +128,18 @@ After configuration, focus on these error types that indicate real issues:
 3. **Type mismatches** - Fix as you modify code
 4. **Missing annotations** - Add gradually, prioritize public APIs
 
+### How the verdict is reached
+
+`bin/validate.sh` fails a run when mypy exits non-zero, and prints whatever mypy
+said. It does not match mypy's output for the word "error": it previously piped
+mypy into `grep` and tested the pipeline, and because the script sets `pipefail`
+and mypy exits non-zero exactly when it has findings, a real type error made the
+pipeline non-zero and sent the check down its *success* branch. Every type error
+was reported as "Type checks passed". Note that `mypy.ini` disables most error
+codes, so the set of findings that can fail a run is narrower than mypy's
+default — the config decides what counts, and the exit status decides the
+verdict.
+
 ## Running Validation
 
 ```bash
@@ -137,9 +149,31 @@ uv run bin/validate.sh [package-name]
 # Run type checking
 uv run mypy packages/[package-name]/src
 
-# Run both with detailed output
-uv run bin/validate.sh [package-name] --verbose
+# Show per-rule error counts instead of the errors themselves
+uv run bin/validate.sh [package-name] --stats
 ```
+
+### What runs with no arguments
+
+Every package's `src`, plus the code that belongs to no package: `tests/`
+(the workspace guards), `bin/` (the scripts that decide whether a pull
+request passes), `src/`, and the root `conftest.py`. Anything outside that
+set is declared, with its size, in `DEFERRED_FROM_DEFAULT_LINT` in
+`tests/test_toolchain_consistency.py` — which compares the list against every
+tracked `*.py`, so a new directory of Python fails there rather than silently
+joining the set nothing checks.
+
+`--workspace` adds the no-package half rather than replacing what you named, so
+`bin/validate.sh data --workspace` checks `packages/data/src` *and* that set,
+and with nothing else named it checks that set alone. The quality gate passes it
+on every run that validates anything — narrowing to the changed packages used to
+drop this half silently, which meant a pull request touching any package
+validated `packages/*/src` and nothing more.
+
+`--print-targets` prints the resolved list and exits without running a check,
+which is how the guard in `tests/test_toolchain_consistency.py` learns what is
+covered. It asks rather than reading the script, because a target appended
+inside a conditional reads as unconditional in the source.
 
 ## Package-Specific Checklists
 

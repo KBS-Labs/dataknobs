@@ -149,7 +149,8 @@ def is_allowlisted(
     rel_path: str, line: str, allowlist: list[tuple[str, str]]
 ) -> bool:
     """A hit is suppressed iff its file matches an allowlist path AND the
-    offending line contains that entry's exact substring."""
+    offending line contains that entry's exact substring.
+    """
     for allow_path, substring in allowlist:
         if rel_path == allow_path and substring in line:
             return True

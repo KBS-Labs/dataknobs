@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-08-08T22:16:04Z",
+  "timestamp": "2026-08-09T16:14:37Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "all",
-  "tested_packages": [],
+  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
   "coverage_percent": 82.3,
   "package_hashes": {
   "bots": "f98355122308995850b20a110601d9ec923420b0a209af0cb10ce9a7abdfb91b",
@@ -20,8 +20,8 @@
   "_algorithm_version": 3
 },
   "workspace_hashes": {
-  "toolchain": "a314cf7d5c779bed607da22f1ccf4b40058fe51f14ab27c58f24744b92665be2",
-  "workspace_tests": "91f81615977a4b382007fb989ba840d0713155da4f5e357673d8a05fa2600f57"
+  "toolchain": "d122f7930ddebee19dd4d3005e713cd9f43f893d12c9529e001e8c5341853d1a",
+  "workspace_tests": "2bd1acffb91a4a161036a305ea8075008e676b7876e24ed45f10f65eb0b9b95d"
 },
   "checks": {
     "documentation": {
@@ -59,7 +59,7 @@
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true
+      "skipped": false
     }
   }
 }

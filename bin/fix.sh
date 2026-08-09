@@ -82,6 +82,14 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
             FIX_TARGETS+=("packages/$package/tests")
         fi
     done
+    # The code belonging to no package. validate.sh reports findings here now,
+    # so this is where they get fixed — without it, the one entry point named
+    # "fix" would be the one that cannot fix them. The two default sets are
+    # still not identical: this one also covers packages/*/tests, which
+    # validate.sh does not yet lint.
+    for workspace_target in $(workspace_targets); do
+        FIX_TARGETS+=("$workspace_target")
+    done
 else
     # Process specified targets
     for target in "${TARGETS[@]}"; do

@@ -23,6 +23,8 @@ QUICK=false
 FIX=false
 STATS=false
 ALL_ERRORS=false
+WORKSPACE_ONLY=false
+PRINT_TARGETS=false
 
 # Usage function
 usage() {
@@ -43,6 +45,13 @@ usage() {
     echo "  -f, --fix             Attempt to auto-fix issues"
     echo "  -s, --stats           Show detailed error statistics"
     echo "  -a, --all-errors      Show all errors (bypass suppression rules)"
+    echo "  -w, --workspace       Also validate the code belonging to no package"
+    echo "                        (tests/, bin/, src/, conftest.py). Additive: with"
+    echo "                        no other target it validates that set alone, and"
+    echo "                        alongside packages it adds it to them"
+    echo "      --print-targets   Print the resolved target list and exit, running"
+    echo "                        no checks. What the target set IS, for callers"
+    echo "                        that would otherwise have to re-derive it"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -53,6 +62,8 @@ usage() {
     echo "  $0 -f                                     # Validate and fix issues"
     echo "  $0 -s data                                # Show error statistics for data package"
     echo "  $0 -s -a data                             # Show ALL error statistics (including suppressed)"
+    echo "  $0 -w                                     # Validate only the code belonging to no package"
+    echo "  $0 data -w                                # Validate the data package and that code"
     exit 0
 }
 
@@ -75,6 +86,14 @@ while [[ $# -gt 0 ]]; do
             ALL_ERRORS=true
             shift
             ;;
+        -w|--workspace)
+            WORKSPACE_ONLY=true
+            shift
+            ;;
+        --print-targets)
+            PRINT_TARGETS=true
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -95,17 +114,13 @@ VALIDATE_PACKAGES=()
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     # No targets specified, validate all packages
-    VALIDATE_PACKAGES=("${ALL_PACKAGES[@]}")
-    for package in "${ALL_PACKAGES[@]}"; do
-        if [[ -d "packages/$package/src" ]]; then
-            VALIDATE_TARGETS+=("packages/$package/src")
-        fi
-    done
-    # The workspace guards belong to no package, so a loop over packages/*
-    # never reached them. They are the code that asserts the toolchain is
-    # coherent, and until now nothing checked theirs.
-    if [[ -d "$ROOT_DIR/tests" ]]; then
-        VALIDATE_TARGETS+=("tests")
+    if [[ "$WORKSPACE_ONLY" != true ]]; then
+        VALIDATE_PACKAGES=("${ALL_PACKAGES[@]}")
+        for package in "${ALL_PACKAGES[@]}"; do
+            if [[ -d "packages/$package/src" ]]; then
+                VALIDATE_TARGETS+=("packages/$package/src")
+            fi
+        done
     fi
 else
     # Process specified targets
@@ -130,15 +145,54 @@ else
             if [[ ${#files[@]} -gt 0 ]]; then
                 VALIDATE_TARGETS+=("${files[@]}")
             else
-                echo -e "${YELLOW}Warning: Target '$target' not found${NC}"
+                # stderr, because stdout is a data channel under --print-targets:
+                # a caller splits that output into a target list, and prose on the
+                # same stream parses into targets that do not exist.
+                echo -e "${YELLOW}Warning: Target '$target' not found${NC}" >&2
             fi
         fi
+    done
+fi
+
+# The code belonging to no package, so a loop over packages/* reached none of
+# it: the workspace guards asserting the toolchain is coherent, the root conftest
+# every test run imports, the workspace shim, and bin/ — which holds the checkers
+# deciding whether a pull request passes, among them the documentation-mirror and
+# internal-label guards. Nothing linted the linters.
+#
+# Declared once in package-discovery.sh because fix.sh and dk need the same
+# answer. tests/test_toolchain_consistency.py compares it against every tracked
+# *.py, so a new directory of first-party Python fails there rather than quietly
+# joining the set nothing checks; what stays out is declared in that file, with
+# its size.
+#
+# Outside the branch above, and that placement is the point. This half used to be
+# appended only when no target was named, so naming one dropped it — and the gate
+# narrows by package name, so every pull request touching a package validated
+# packages/*/src alone. That is every pull request that edits the ruff config,
+# because the config is a global trigger that marks all ten packages changed. The
+# change that started linting bin/ was itself one of them: bin/ went unlinted on
+# the run that was supposed to prove it clean. So --workspace adds this set to
+# whatever was named rather than replacing it, and with nothing named it is the
+# whole answer.
+if [[ ${#TARGETS[@]} -eq 0 || "$WORKSPACE_ONLY" == true ]]; then
+    for workspace_target in $(workspace_targets); do
+        VALIDATE_TARGETS+=("$workspace_target")
     done
 fi
 
 if [[ ${#VALIDATE_TARGETS[@]} -eq 0 ]]; then
     echo -e "${RED}No valid targets found to validate${NC}"
     exit 1
+fi
+
+# Resolved, before any check runs. A caller that needs to know what this script
+# validates can ask it instead of re-deriving the answer from its source — which
+# is what the coverage guard in tests/test_toolchain_consistency.py did, reading
+# the appends as text and so crediting targets that a conditional could skip.
+if [[ "$PRINT_TARGETS" == true ]]; then
+    printf '%s\n' "${VALIDATE_TARGETS[@]}"
+    exit 0
 fi
 
 # Stats mode - show error statistics and exit
@@ -320,6 +374,30 @@ if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
     done
 fi
 
+# Run mypy over one target and return ITS exit status, echoing whatever it said.
+#
+# The verdict used to come from `mypy … 2>&1 | grep -E "(error|Error)"`, which
+# reports the status of the pipeline. This script sets `pipefail` (line 4), and
+# mypy exits non-zero exactly when it has findings — so a real type error made
+# the pipeline non-zero, the `if` took the *else* branch, and the run printed
+# "Type checks passed" directly beneath the errors grep had just echoed. FAILED
+# was never set, so mypy could not fail a validation run. Reading the exit status
+# is the whole fix; the output is printed rather than matched.
+#
+# One function for both call sites below, which differ only by
+# --follow-imports=skip. Two copies of this is how the two of them came to share
+# a defect.
+run_mypy() {
+    local target="$1"
+    shift
+    local output rc
+    output=$(uv run mypy "$target" --config-file "$MYPY_CONFIG" "$@" 2>&1) && rc=0 || rc=$?
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+    fi
+    return "$rc"
+}
+
 # 4. Type checking with mypy (unless quick mode)
 if [[ "$QUICK" != true ]]; then
     echo -e "\n${BLUE}4. Running mypy type checking...${NC}"
@@ -334,22 +412,20 @@ if [[ "$QUICK" != true ]]; then
         fi
         
         # For individual files, skip following imports to avoid checking the whole codebase
+        mypy_ok=true
         if [[ -f "$target" ]]; then
             # Single file - don't follow imports
-            if uv run mypy "$target" --config-file "$MYPY_CONFIG" --follow-imports=skip 2>&1 | grep -E "(error|Error)"; then
-                echo -e "${RED}    ✗ Type errors found${NC}"
-                FAILED=true
-            else
-                echo -e "${GREEN}    ✓ Type checks passed${NC}"
-            fi
+            run_mypy "$target" --follow-imports=skip || mypy_ok=false
         else
             # Directory or package - normal behavior
-            if uv run mypy "$target" --config-file "$MYPY_CONFIG" 2>&1 | grep -E "(error|Error)"; then
-                echo -e "${RED}    ✗ Type errors found${NC}"
-                FAILED=true
-            else
-                echo -e "${GREEN}    ✓ Type checks passed${NC}"
-            fi
+            run_mypy "$target" || mypy_ok=false
+        fi
+
+        if [[ "$mypy_ok" == true ]]; then
+            echo -e "${GREEN}    ✓ Type checks passed${NC}"
+        else
+            echo -e "${RED}    ✗ Type errors found${NC}"
+            FAILED=true
         fi
     done
 fi
@@ -369,7 +445,44 @@ PRINT_EXCEPTIONS=(
     "*/api/advanced.py"            # Debugger class needs user output
     "*/prompts/syntax.py"          # CLI tool for prompt syntax conversion/detection
     "*/tooling/model_limits.py"    # CLI maintainer tool: stdout is its product (drift report / status)
+    # Every script in bin/ is a developer tool whose stdout is its product, and
+    # for three it is the *return value*: run-quality-checks.sh captures
+    # changed-packages.py and package-hashes.py into shell variables, and
+    # validate.sh reads find_print_statements.py line by line a few dozen lines
+    # below this comment. Routing those through logging would not improve the
+    # output, it would empty it and break the caller.
+    #
+    # The directory rather than those three, and that is the loose part of this
+    # entry: it exempts every future file here too, including one that turns out
+    # not to be a CLI at all. It stands because bin/ is the scripts directory by
+    # definition and all ten current files are entry points, so enumerating them
+    # would be a list to forget rather than a constraint to meet. The narrower
+    # form is available the day that stops being true.
+    "bin/*.py"
+    # Imported by pytest before any logging is configured, so a logger call here
+    # goes nowhere. print is the mechanism conftest has.
+    "conftest.py"
 )
+
+# A test file, by name — the naming convention pytest collects on.
+#
+# One predicate for both branches below, because there were two and they
+# disagreed: files were skipped on "*test*" and directory walks on "*/test*",
+# which is the same question asked two ways. Both were wider than the question,
+# and the directory form exempted every shipped module beneath a testing/
+# package — dataknobs_common.testing and its siblings are library code consumers
+# import, the constructs the house rules point at instead of mocks — from the
+# print check, silently and for as long as the check has existed. Eleven files.
+# None of them print today, so this closes a latent hole rather than a live one.
+#
+# conftest.py is deliberately not matched here. It is exempt, but through
+# PRINT_EXCEPTIONS, where the reason is written down — under the old glob its
+# entry was unreachable, describing a suppression the glob had already applied.
+is_test_file() {
+    local base
+    base="$(basename "$1")"
+    [[ "$base" == test_*.py || "$base" == *_test.py ]]
+}
 
 # Function to check if a file should be excluded
 should_exclude_file() {
@@ -388,7 +501,7 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     # Collect files to check
     if [[ -f "$target" ]]; then
         if [[ "$(basename "$target")" != "__init__.py" ]] && \
-           [[ "$target" != *test* ]] && \
+           ! is_test_file "$target" && \
            ! should_exclude_file "$target"; then
             check_files=("$target")
         else
@@ -398,10 +511,10 @@ for target in "${VALIDATE_TARGETS[@]}"; do
         # Find Python files excluding __init__.py and test files
         check_files=()
         while IFS= read -r -d '' file; do
-            if ! should_exclude_file "$file"; then
+            if ! is_test_file "$file" && ! should_exclude_file "$file"; then
                 check_files+=("$file")
             fi
-        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -print0)
+        done < <(find "$target" -name "*.py" ! -name "__init__.py" -print0)
     fi
 
     # Run the print finder on collected files

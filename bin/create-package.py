@@ -312,6 +312,18 @@ class PackageCreator:
             readme_path.write_text(new_content)
 
         self.log_change("✅ Updated README.md")
+        if not install_section_found:
+            # Reports the half that was not done. Without it the flag was
+            # computed and dropped, and a README missing its "# Install specific
+            # packages" block still read as fully updated.
+            #
+            # Deliberately additive, where update_pyproject_toml replaces its
+            # success line with the informational one. The two differ because the
+            # outcomes do: there, nothing was written, so claiming an update
+            # would be false. Here the package list above was written whatever
+            # happened to the pip line, so "Updated README.md" is true and only
+            # incomplete — and saying nothing was updated would be the new lie.
+            print("ℹ️  No installation section in README.md — pip line not added")
 
     def update_pyproject_toml(self, name: str, pypi_name: str) -> None:
         """Update root pyproject.toml with new package."""
@@ -331,7 +343,7 @@ class PackageCreator:
             if line.strip() == "dependencies = [":
                 # Find the end of dependencies
                 j = i + 1
-                while j < len(lines) and not lines[j].strip() == "]":
+                while j < len(lines) and lines[j].strip() != "]":
                     j += 1
                 # Insert before the last item or closing bracket
                 new_dep = f'    "{pypi_name}",'
@@ -442,15 +454,15 @@ class PackageCreator:
         self.update_pyproject_toml(name, pypi_name)
 
         print(f"\n✅ Package '{name}' created successfully!")
-        print(f"\n📋 Next steps (see docs/development/new-package-checklist.md):")
+        print("\n📋 Next steps (see docs/development/new-package-checklist.md):")
         print(f"   1. Implement package code in packages/{name}/src/dataknobs_{name}/")
         print(f"   2. Write tests in packages/{name}/tests/")
         print(f"   3. Add documentation to packages/{name}/docs/")
         if requires_docs_build:
-            print(f"   4. Add package to mkdocs.yml")
+            print("   4. Add package to mkdocs.yml")
             print(f"   5. Create docs/packages/{name}/ documentation")
-        print(f"   6. Run: uv sync --all-packages")
-        print(f"   7. Run: ./bin/validate-package-references.py")
+        print("   6. Run: uv sync --all-packages")
+        print("   7. Run: ./bin/validate-package-references.py")
         print(f"   8. Run tests: uv run pytest packages/{name}/tests/ -v")
 
         return True
@@ -477,7 +489,6 @@ packages = ["src/dataknobs_{name}"]
 
     def _generate_init_py(self, name: str, version: str) -> str:
         """Generate __init__.py content for new package."""
-        module_name = f"dataknobs_{name}"
         return f'''"""DataKnobs {name.capitalize()} package.
 
 {name.capitalize()} functionality for the DataKnobs ecosystem.
