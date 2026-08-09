@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ARTIFACTS_DIR="$PROJECT_ROOT/.quality-artifacts"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Wall-clock start, for the durations recorded in quality-summary.json. Whole
+# seconds via `date +%s`: bash 3.2 has no EPOCHREALTIME and macOS `date` has no
+# %N, so finer resolution would cost a subprocess per stamp and change no
+# decision anyone makes from these numbers.
+RUN_START=$(date +%s)
 
 # Default values
 PACKAGES=""
@@ -519,6 +524,28 @@ INTEGRATION_TEST_STATUS=0
 WORKFLOW_LINT_STATUS=0
 SHELL_LINT_STATUS=0
 
+# How long each check took, in whole seconds, for the durations recorded
+# alongside its status in quality-summary.json. These answer "where does a gate
+# run spend its time" from the artifact rather than from a stopwatch and a
+# guess, which is the only way to tell an expensive check from one that merely
+# feels slow.
+#
+# `null` rather than 0 for a check that did not run: 0 is a measurement, and a
+# skipped check has none. Two of the entries below carry no "skipped" field, so
+# a 0 there would be indistinguishable from a check that ran instantly.
+DOCS_SECONDS=null
+DOCS_VERSIONS_SECONDS=null
+DOCS_MIRROR_SECONDS=null
+VALIDATION_SECONDS=null
+SHELL_LINT_SECONDS=null
+WORKFLOW_LINT_SECONDS=null
+UNIT_TEST_SECONDS=null
+INTEGRATION_TEST_SECONDS=null
+WORKSPACE_GUARD_SECONDS=null
+
+# Seconds elapsed since a `date +%s` stamp.
+elapsed_since() { echo $(( $(date +%s) - $1 )); }
+
 # Compute the overall PASS/FAIL/PASS_WITH_SKIPS verdict from the individual check
 # statuses. Called from two sites that MUST agree — the quality-summary.json
 # generation (the value CI validates) and the terminal banner that drives the
@@ -591,24 +618,28 @@ fi
 # compute_overall_status (the exit code) and the checks object in
 # quality-summary.json (the only thing CI looks at) — see both, below.
 print_status "Linting GitHub Actions workflow files..."
+_check_start=$(date +%s)
 if "$SCRIPT_DIR/lint-workflows.sh"; then
     print_success "Workflow files are valid"
 else
     WORKFLOW_LINT_STATUS=$?
     print_error "Workflow lint failed"
 fi
+WORKFLOW_LINT_SECONDS=$(elapsed_since "$_check_start")
 
 # Lint the repository's own shell scripts. Same three-place wiring as above, for
 # the same reason: 46 shell files — including every script on this verdict path,
 # this one among them — went through no linter at all, while every *.py beside
 # them went through ruff and mypy.
 print_status "Linting shell scripts..."
+_check_start=$(date +%s)
 if "$SCRIPT_DIR/lint-shell.sh"; then
     print_success "Shell scripts are clean"
 else
     SHELL_LINT_STATUS=$?
     print_error "Shell lint failed"
 fi
+SHELL_LINT_SECONDS=$(elapsed_since "$_check_start")
 
 # Run code validation (syntax, ruff, imports, mypy, print statements)
 if [ "$SKIP_STYLE" != "yes" ]; then
@@ -669,6 +700,9 @@ if [ "$SKIP_STYLE" != "yes" ]; then
 
     # Skip if no packages to validate in PR mode (e.g., only docs changed)
     if [ -n "$VALIDATE_ARGS" ] || [ "$VALIDATE_EVERYTHING" = "yes" ] || [ "$RUN_MODE" != "pr" ]; then
+        # Spans both branches below and the ruff JSON generation, which is part
+        # of what a validation phase costs rather than a separate step.
+        _check_start=$(date +%s)
         if [ "$PR_MODE" = "yes" ]; then
             # Also generate ruff JSON artifact for diagnostics
             # The word splitting is the point. These variables hold argument *lists* —
@@ -701,6 +735,7 @@ if [ "$SKIP_STYLE" != "yes" ]; then
                 print_error "Code validation failed"
             fi
         fi
+        VALIDATION_SECONDS=$(elapsed_since "$_check_start")
     else
         VALIDATION_SKIPPED="true"
         print_status "Skipping code validation (no package changes)"
@@ -718,15 +753,27 @@ if [ "$PR_MODE" = "yes" ]; then
         # It writes per-check logs (docs-build.log / docs-versions.log /
         # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
         "$SCRIPT_DIR/docs-checks.sh" --artifacts "$ARTIFACTS_DIR" || true
+        # Six fields, in a fixed order: three exit codes then three durations.
+        # The durations are measured inside docs-checks.sh because this script
+        # invokes it once for all three checks, so timing it here could only
+        # ever have produced one number to spread across three entries.
+        #
+        # Still fails closed on any unreadable shape — a missing or malformed
+        # status file reports three failures, not three passes — and an
+        # unmeasured duration reports null rather than 0.
         DOCS_CHECK_CODES=$(python3 -c "
 import json
 try:
     d = json.load(open('$ARTIFACTS_DIR/docs-checks-status.json'))
-    print(d.get('docs-build', 1), d.get('docs-versions', 1), d.get('docs-mirror', 1))
+    names = ('docs-build', 'docs-versions', 'docs-mirror')
+    entries = [d.get(n) or {} for n in names]
+    print(*[e.get('exit_code', 1) for e in entries],
+          *[e.get('duration_seconds', 'null') for e in entries])
 except Exception:
-    print(1, 1, 1)
-" 2>/dev/null || echo "1 1 1")
-        read -r DOCS_STATUS DOCS_VERSIONS_STATUS DOCS_MIRROR_STATUS <<< "$DOCS_CHECK_CODES"
+    print(1, 1, 1, 'null', 'null', 'null')
+" 2>/dev/null || echo "1 1 1 null null null")
+        read -r DOCS_STATUS DOCS_VERSIONS_STATUS DOCS_MIRROR_STATUS \
+            DOCS_SECONDS DOCS_VERSIONS_SECONDS DOCS_MIRROR_SECONDS <<< "$DOCS_CHECK_CODES"
 
         if [ "$DOCS_STATUS" -eq 0 ] && [ "$DOCS_VERSIONS_STATUS" -eq 0 ] && [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
             print_success "Documentation checks passed (build, versions, mirrors)"
@@ -854,6 +901,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
         # Run unit tests
         print_status "Running unit tests..."
+        _unit_start=$(date +%s)
         if [ "$RUN_MODE" = "full" ]; then
             # Full mode: sequential execution
             for pkg in $PACKAGES_TO_TEST; do
@@ -901,6 +949,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # existing summary. Exit 5 is "no tests collected", not a failure.
         if [ -d "$WORKSPACE_TEST_DIR" ]; then
             print_status "Running workspace tests..."
+            _guards_start=$(date +%s)
             workspace_exit=0
             # No $TEST_FLAGS here: those are bin/test.sh flags (--parallel,
             # --quiet), which test.sh translates into pytest's spelling. This
@@ -922,10 +971,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             else
                 print_success "Workspace tests passed"
             fi
+            WORKSPACE_GUARD_SECONDS=$(elapsed_since "$_guards_start")
         fi
+        UNIT_TEST_SECONDS=$(elapsed_since "$_unit_start")
 
         # Run integration tests (always sequential — shared external services)
         print_status "Running integration tests..."
+        _integration_start=$(date +%s)
         for pkg in $PACKAGES_TO_TEST; do
             if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
                 print_status "Running integration tests for $pkg..."
@@ -968,6 +1020,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 fi
             fi
         done
+        INTEGRATION_TEST_SECONDS=$(elapsed_since "$_integration_start")
 
         # Set overall test status
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
@@ -1215,6 +1268,14 @@ except Exception:
     print_status "Generating quality summary..."
     OVERALL_STATUS=$(compute_overall_status)
 
+    # KEY ORDER INSIDE EACH CHECK IS LOAD-BEARING, and nothing enforces it.
+    # validate-quality-artifacts.sh reads this file with line-offset greps —
+    # `grep -A2 '"unit_tests"'` for the status, `grep -A3 "\"$check\""` for the
+    # skipped flag — so a field inserted above either one pushes it out of the
+    # window and the validator silently reads nothing. That is why the durations
+    # below are appended last in every object rather than sitting beside the
+    # exit code they belong with. Parsing that file as JSON would remove the
+    # constraint; until then, add new fields at the end. Tracked.
     cat > "$ARTIFACTS_DIR/quality-summary.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
@@ -1226,48 +1287,58 @@ except Exception:
   "coverage_percent": $COVERAGE_PERCENT,
   "package_hashes": $PACKAGE_HASHES_JSON,
   "workspace_hashes": $WORKSPACE_HASHES_JSON,
+  "total_seconds": $(elapsed_since "$RUN_START"),
   "checks": {
     "documentation": {
       "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_STATUS,
       "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
-      "tool": "mkdocs"
+      "tool": "mkdocs",
+      "duration_seconds": $DOCS_SECONDS
     },
     "documentation_versions": {
       "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_VERSIONS_STATUS,
-      "tool": "docs-update-versions.sh"
+      "tool": "docs-update-versions.sh",
+      "duration_seconds": $DOCS_VERSIONS_SECONDS
     },
     "documentation_mirrors": {
       "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_MIRROR_STATUS,
-      "tool": "docs-mirror-check.py"
+      "tool": "docs-mirror-check.py",
+      "duration_seconds": $DOCS_MIRROR_SECONDS
     },
     "validation": {
       "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $VALIDATION_STATUS,
       "skipped": $VALIDATION_SKIPPED,
-      "tool": "validate.sh"
+      "tool": "validate.sh",
+      "duration_seconds": $VALIDATION_SECONDS
     },
     "shell_lint": {
       "status": $([ "$SHELL_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $SHELL_LINT_STATUS,
-      "tool": "lint-shell.sh"
+      "tool": "lint-shell.sh",
+      "duration_seconds": $SHELL_LINT_SECONDS
     },
     "workflow_lint": {
       "status": $([ "$WORKFLOW_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $WORKFLOW_LINT_STATUS,
-      "tool": "lint-workflows.sh"
+      "tool": "lint-workflows.sh",
+      "duration_seconds": $WORKFLOW_LINT_SECONDS
     },
     "unit_tests": {
       "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $UNIT_TEST_STATUS,
-      "skipped": $([ "$SKIP_TESTS" = "yes" ] && echo "true" || echo "false")
+      "skipped": $([ "$SKIP_TESTS" = "yes" ] && echo "true" || echo "false"),
+      "duration_seconds": $UNIT_TEST_SECONDS,
+      "workspace_guards_seconds": $WORKSPACE_GUARD_SECONDS
     },
     "integration_tests": {
       "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $INTEGRATION_TEST_STATUS,
-      "skipped": $(if [ "$SKIP_TESTS" = "yes" ] || [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then echo "true"; else echo "false"; fi)
+      "skipped": $(if [ "$SKIP_TESTS" = "yes" ] || [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then echo "true"; else echo "false"; fi),
+      "duration_seconds": $INTEGRATION_TEST_SECONDS
     }
   }
 }

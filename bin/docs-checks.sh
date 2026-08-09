@@ -21,8 +21,9 @@
 #
 #   --artifacts DIR  Write each check's output to DIR/<name>.log and a
 #                    machine-readable DIR/docs-checks-status.json mapping each
-#                    check name to its exit code. Without it, output streams to
-#                    the terminal (local `dk docs-check` use).
+#                    check name to {"exit_code", "duration_seconds"}. Without
+#                    it, output streams to the terminal (local `dk docs-check`
+#                    use).
 #
 # Exit status: 0 if all checks pass, 1 if any fail (all checks always run).
 
@@ -64,6 +65,7 @@ done
 
 STATUS_NAMES=()
 STATUS_CODES=()
+STATUS_SECONDS=()
 OVERALL=0
 
 # run_doc_check <name> <label> <logfile> -- <command...>
@@ -73,7 +75,11 @@ run_doc_check() {
     [ "${1:-}" = "--" ] && shift
 
     echo -e "${CYAN}Checking ${label}...${NC}"
-    local rc=0
+    local rc=0 start
+    # Whole seconds: `date +%s` is the portable stamp. bash 3.2 has no
+    # EPOCHREALTIME and macOS `date` has no %N, so sub-second resolution would
+    # cost a subprocess per stamp to refine a number nobody reads that closely.
+    start=$(date +%s)
     if [ -n "$ARTIFACTS_DIR" ]; then
         "$@" > "$ARTIFACTS_DIR/$log" 2>&1 || rc=$?
     else
@@ -82,6 +88,7 @@ run_doc_check() {
 
     STATUS_NAMES+=("$name")
     STATUS_CODES+=("$rc")
+    STATUS_SECONDS+=("$(( $(date +%s) - start ))")
     if [ "$rc" -eq 0 ]; then
         echo -e "  ${GREEN}✓${NC} ${label} passed"
     else
@@ -103,13 +110,23 @@ run_doc_check "docs-mirror" "doc mirrors (package <-> site)" "docs-mirror.log" \
     -- python3 "$SCRIPT_DIR/docs-mirror-check.py" --check
 
 # Emit machine-readable per-check status for callers (run-quality-checks.sh).
+#
+# One object per check rather than a bare exit code, so the duration travels
+# with it. The three doc checks reach quality-summary.json as three separate
+# entries, and timing them here is what lets each carry its own span — measuring
+# at the caller could only have recorded one number for all three, since the
+# caller invokes this script once.
+#
+# This file is not committed and has exactly one reader, so the shape is free to
+# change; that reader parses it with python and fails closed on a shape it does
+# not recognise, which is why the two can be changed together.
 if [ -n "$ARTIFACTS_DIR" ]; then
     {
         echo "{"
         for i in "${!STATUS_NAMES[@]}"; do
             sep=","
             [ "$i" -eq $(( ${#STATUS_NAMES[@]} - 1 )) ] && sep=""
-            echo "  \"${STATUS_NAMES[$i]}\": ${STATUS_CODES[$i]}${sep}"
+            echo "  \"${STATUS_NAMES[$i]}\": {\"exit_code\": ${STATUS_CODES[$i]}, \"duration_seconds\": ${STATUS_SECONDS[$i]}}${sep}"
         done
         echo "}"
     } > "$ARTIFACTS_DIR/docs-checks-status.json"

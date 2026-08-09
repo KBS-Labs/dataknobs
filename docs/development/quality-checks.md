@@ -194,6 +194,33 @@ per-package and per-workspace-scope content hash, and CI recomputes those from
 the checkout: if they disagree, your artifacts do not describe the code being
 merged and the check fails, naming the packages that need re-validation.
 
+### Where the time went
+
+Every check records a `duration_seconds` beside its status, and the run records
+a `total_seconds`, so a slow gate can be diagnosed from the artifact instead of
+from a stopwatch and an impression:
+
+```bash
+python3 -c "
+import json; d = json.load(open('.quality-artifacts/quality-summary.json'))
+print(f\"total {d['total_seconds']}s\")
+for name, c in sorted(d['checks'].items(), key=lambda kv: -(kv[1]['duration_seconds'] or 0)):
+    print(f\"  {c['duration_seconds']!s:>6}s  {name}\")
+"
+```
+
+A check that did not run records `null` rather than `0` — a skipped check has no
+measurement, and `0` would claim it ran instantly. `unit_tests` additionally
+carries `workspace_guards_seconds`, the share of its span spent on the
+workspace guards under `tests/`; those are folded into the unit-test status
+rather than reported as their own check, so without that field their cost is
+invisible.
+
+The durations are appended **last** within each check object on purpose:
+`validate-quality-artifacts.sh` reads this file with line-offset greps, so a
+field inserted above `status` or `skipped` pushes it out of the window and the
+validator silently reads nothing. Add new fields at the end.
+
 **Coverage reports are not committed.** The gate's only use for `coverage.xml`
 was its line rate, which it reports as a warning and never fails on, so that
 number is recorded as `coverage_percent` in the summary instead. Committing a
