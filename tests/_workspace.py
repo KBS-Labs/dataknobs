@@ -99,7 +99,8 @@ def tracked_shell_files() -> tuple[str, ...]:
         if not path.is_file():
             continue
         try:
-            first = path.open("rb").readline()
+            with path.open("rb") as handle:
+                first = handle.readline()
         except OSError:  # pragma: no cover - unreadable tracked file
             continue
         if first.startswith(b"#!") and b"sh" in first.split(b"\n")[0]:
