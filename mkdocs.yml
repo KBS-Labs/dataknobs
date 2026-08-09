@@ -396,6 +396,19 @@ plugins:
   - awesome-pages
   - git-revision-date-localized:
       enable_creation_date: true
+      # Creation dates are looked up per page, and with git's rename detection
+      # on that is `git log --diff-filter=A --follow` over full history for each
+      # of ~266 pages: 34.5ms each rather than 16ms, about 8 seconds of a 32
+      # second build. The cost is paid on every documentation-touching pull
+      # request, since the gate builds the site as one of its checks.
+      #
+      # The trade only touches a page whose file has been renamed, which shows
+      # the date of the rename rather than of the original creation. Measured
+      # across all 266 pages at the time of the change, two differ:
+      # development/documentation-guide.md by five days, and license.md by two
+      # and a half years, since it predates the current layout. Turn this back
+      # on if that history matters more than the eight seconds.
+      enable_git_follow: false
       type: iso_datetime
       fallback_to_build_date: true
       strict: false
