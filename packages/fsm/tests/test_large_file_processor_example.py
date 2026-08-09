@@ -5,15 +5,10 @@ including REFERENCE mode handling, chunk processing, and statistics aggregation.
 """
 
 import pytest
-import sys
 import json
 import csv
 import tempfile
 from pathlib import Path
-
-# Add examples directory to path
-examples_dir = Path(__file__).parent.parent / "examples"
-sys.path.insert(0, str(examples_dir))
 
 from large_file_processor import (
     initialize_processing,

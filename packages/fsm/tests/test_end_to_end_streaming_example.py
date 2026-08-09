@@ -14,7 +14,7 @@ from typing import Dict, Any, List, AsyncIterator
 import pytest
 
 from dataknobs_fsm import AsyncSimpleFSM
-from examples.end_to_end_streaming import (
+from end_to_end_streaming import (
     generate_streaming_data,
     create_streaming_fsm_config
 )

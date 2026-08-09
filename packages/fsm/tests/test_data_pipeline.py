@@ -1,11 +1,6 @@
 """Test the fixed data pipeline example."""
 
-import sys
-import os
 import pytest
-
-# Add examples to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'examples'))
 
 from data_pipeline_example import (
     DataValidator,

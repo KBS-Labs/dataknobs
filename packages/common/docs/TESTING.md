@@ -809,7 +809,7 @@ from _stubs import FakeTransport
 
 When the shared thing is a *path* rather than an object — a config block naming
 a class by dotted path — derive it with
-[`dotted_path`](dotted-paths.md#spelling-one-dotted_path) rather than writing
+`dotted_path` (see the *Dotted paths* guide) rather than writing
 the module name out, for the same reason.
 
 ---

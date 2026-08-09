@@ -12,10 +12,22 @@ with any second package named after it.
 Declaring the root here states what was being relied on, and holds under both
 modes and every invocation: pytest loads this file before collecting anything
 beside it.
+
+The declared root is ``_support/`` rather than this directory. Both make the
+three modules importable by bare name, but a root exposes *every* immediate
+child as a top-level name, and this directory has ten subdirectories — two of
+which, ``prompts`` and ``integration``, are also names ``packages/bots/tests``
+supplies. A regular package beats a namespace portion no matter which came
+first on ``sys.path``, so a later ``from prompts import ...`` here would have
+bound to bots' package while still passing under ``pytest packages/llm/tests``:
+the same defect this file exists to close, one directory further down. A
+directory holding nothing but scaffolding has no such children to leak.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from dataknobs_common.testing import declare_import_root
 
-declare_import_root(__file__)
+declare_import_root(Path(__file__).parent / "_support")

@@ -19,7 +19,7 @@ import re
 import subprocess
 import tomllib
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +69,39 @@ def pyprojects() -> list[Path]:
 
 
 @cache
+def tracked_files() -> tuple[str, ...]:
+    """Every tracked path, root-relative, as ``git ls-files`` reports it.
+
+    Tracked rather than walked: a filesystem walk cannot tell a directory the
+    repository has from one a build left behind, and ``htmlcov/``, ``dist/``
+    and ``site/`` all look like ordinary directories. A guard whose answer
+    depends on whether coverage was last run is not a guard.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    found = tuple(name for name in listing.split("\0") if name)
+    assert found, "no tracked files found — has the enumeration broken?"
+    return found
+
+
+@cache
+def tracked_dirs() -> frozenset[str]:
+    """Every directory holding at least one tracked file, root-relative."""
+    dirs: set[str] = set()
+    for name in tracked_files():
+        parent = PurePosixPath(name).parent
+        while str(parent) != ".":
+            dirs.add(str(parent))
+            parent = parent.parent
+    return frozenset(dirs)
+
+
+@cache
 def tracked_shell_files() -> tuple[str, ...]:
     """Every tracked shell script, by ``git ls-files`` and then by shebang.
 
@@ -81,17 +114,8 @@ def tracked_shell_files() -> tuple[str, ...]:
     linted, and which of them run a linter — and a second copy of this walk is
     how the Python-floor extraction ended up with two subtly different answers.
     """
-    listing = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
     found = []
-    for name in listing.split("\0"):
-        if not name:
-            continue
+    for name in tracked_files():
         path = ROOT / name
         if name.endswith(".sh"):
             found.append(name)

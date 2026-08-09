@@ -437,12 +437,19 @@ def dotted_path(target: Any) -> str:
 
     Raises:
         ValueError: *target* carries no ``__module__``/``__qualname__``; its
-            module is ``__main__`` or unimportable-by-name; or its qualname is
-            nested (``Outer.Inner``, or a closure's ``f.<locals>.g``).
-            ``resolve_dotted`` performs exactly one attribute lookup, so a
-            nested qualname would produce a string it cannot read back —
-            failing here names the object, while failing there would name only
-            the string.
+            module is ``__main__``, which names a different object in every
+            process; its qualname is nested (``Outer.Inner``, or a closure's
+            ``f.<locals>.g``), since ``resolve_dotted`` performs exactly one
+            attribute lookup; or its qualname is a bracketed placeholder rather
+            than a name (``<lambda>``, ``<listcomp>``), which no attribute
+            lookup can resolve at all. Each of those would produce a string
+            this family cannot read back, and failing here names the object
+            while failing at resolution time would name only the string.
+
+            What it does **not** check is that the module is importable under
+            the name it reports. A class whose ``__module__`` was rewritten, or
+            one defined in a module never placed in ``sys.modules`` under that
+            name, is spelled without complaint and fails on read-back.
 
     Writing the path out by hand instead is the thing worth avoiding. A literal
     that disagrees with the object does not fail the way a typo does: it names
@@ -463,6 +470,19 @@ def dotted_path(target: Any) -> str:
             f"cannot spell a dotted path for {target!r}: __qualname__ "
             f"{qualname!r} is nested, and resolve_dotted performs exactly one "
             "attribute lookup. Move the target to module scope."
+        )
+    if "<" in qualname:
+        # Reached only by a qualname with no dot in it, since the check above
+        # already took every nested one — which in practice means a lambda
+        # defined at module scope. CPython spells the unnamed with brackets
+        # (`<lambda>`, `<listcomp>`, `<genexpr>`), and a bracketed placeholder
+        # is not a name: no attribute of that spelling exists to look up, so
+        # the dot check cannot stand in for this one.
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: __qualname__ "
+            f"{qualname!r} is not a name — it is what CPython writes for an "
+            "object that never had one. Give it a def and a name at module "
+            "scope."
         )
     if module == "__main__":
         raise ValueError(

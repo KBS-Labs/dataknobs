@@ -24,7 +24,7 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
 # Import the functions and config from the example
-from examples.advanced_debugging import (
+from advanced_debugging import (
     debug_workflow_config,
     validate_input,
     process_request,

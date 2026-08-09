@@ -556,6 +556,25 @@ def test_a_closure_is_refused() -> None:
         dotted_path(_inner)
 
 
+#: A genuine module-level lambda, held in a tuple so that assigning one to a
+#: bare name is not what is under test. Its ``__qualname__`` is ``<lambda>`` —
+#: no dot, so the nested-qualname check above does not see it.
+_LAMBDAS = (lambda: 7,)
+
+
+def test_a_module_level_lambda_is_refused() -> None:
+    """``<lambda>`` is not a name, so nothing can look it up.
+
+    It reaches here as the one unresolvable qualname with no dot in it: a
+    closure's ``f.<locals>.g`` is caught as nested, but a lambda defined at
+    module scope is a plain ``<lambda>`` and would be spelled as
+    ``module:<lambda>`` — a string ``resolve_dotted`` raises on, at the far end
+    of whatever generated it.
+    """
+    with pytest.raises(ValueError, match="not a name"):
+        dotted_path(_LAMBDAS[0])
+
+
 def test_an_object_with_no_module_metadata_is_refused() -> None:
     """An instance carries neither attribute; naming it beats a confusing path."""
     with pytest.raises(ValueError, match="__qualname__"):

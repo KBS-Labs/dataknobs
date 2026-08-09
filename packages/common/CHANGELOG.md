@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the package root beside the resolver family.
 
   It refuses what `resolve_dotted` could not read back — a nested
-  `__qualname__` (`Outer.Inner`, or a closure's `f.<locals>.g`), a `__main__`
+  `__qualname__` (`Outer.Inner`, or a closure's `f.<locals>.g`), a bracketed
+  placeholder where a name should be (`<lambda>`, `<listcomp>`), a `__main__`
   target, and an object carrying no module metadata. Failing there names the
   object; failing at resolution time would name only the string.
 

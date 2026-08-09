@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from dataknobs_fsm.api.simple import SimpleFSM
-from examples.normalize_file_example import (
+from normalize_file_example import (
     NORMALIZE_FILE_WORKFLOW_YAML,
     WORKFLOW_CONFIG,
     normalize_file_streaming,
