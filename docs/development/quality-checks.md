@@ -216,10 +216,23 @@ workspace guards under `tests/`; those are folded into the unit-test status
 rather than reported as their own check, so without that field their cost is
 invisible.
 
-The durations are appended **last** within each check object on purpose:
-`validate-quality-artifacts.sh` reads this file with line-offset greps, so a
-field inserted above `status` or `skipped` pushes it out of the window and the
-validator silently reads nothing. Add new fields at the end.
+Field order within a check no longer matters. `validate-quality-artifacts.sh`
+used to read this file with line-offset greps — `grep -A2` for a status,
+`grep -A3` for a skipped flag — which made position load-bearing in a format
+that has no order: a field added above the one a window wanted pushed it out,
+the grep returned nothing, and the validator rejected an artifact it had merely
+failed to read. It parses the file as JSON now, so the producer is free to
+record fields in whatever order reads best.
+
+To see what the validator makes of a summary without running the rest of it:
+
+```bash
+bin/validate-quality-artifacts.sh --read-summary .quality-artifacts/quality-summary.json
+```
+
+That prints one tab-delimited line per check — `CHECK<TAB>name<TAB>status<TAB>skipped<TAB>label`
+— and is the same reader the validation path uses, so what it shows is what CI
+sees.
 
 **Coverage reports are not committed.** The gate's only use for `coverage.xml`
 was its line rate, which it reports as a warning and never fails on, so that
