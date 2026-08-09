@@ -151,6 +151,36 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "setup-dk.sh",
 ]
 
+# The inputs to the three documentation checks the gate records: the site build,
+# the version-table sync, and the dual-docs mirror. Like the tier above these
+# move no package's result, so they invalidate the artifacts without dirtying a
+# suite.
+#
+# They were in no scope at all, and the consequence went past staleness. CI's
+# docs job asks package-hashes.py whether anything is dirty and skips the build
+# when nothing is, so a documentation-only pull request left every hash intact,
+# had its stored "documentation: pass" accepted over a tree that no longer
+# produced it, and skipped the job that would have rebuilt the site. Three
+# mechanisms agreed to check nothing. Reproduced with a broken intra-doc link,
+# which `mkdocs build --strict` rejects and both paths passed.
+#
+# Deliberately NOT added to _WORKSPACE_ONLY_QUALITY_INPUTS, though they are
+# workspace-only in blast radius. That list is also what change detection
+# matches, and map_files_to_packages tests it *before* DOCS_PATTERNS and stops
+# at the first hit — so filing them there would classify a docs edit as a
+# workspace-guard change and stop setting docs_changed, which is what makes the
+# gate re-run the very checks this scope exists to keep honest.
+#
+# Two file entries rather than ".dataknobs/", which also holds notes and an
+# example workflow that feed no check.
+_DOCS_QUALITY_INPUTS = [
+    "mkdocs.yml",  # the site build's own configuration
+    "docs/",  # the site tree
+    "packages/*/docs/",  # symlinked and transcluded into the tree above
+    ".dataknobs/docs-mirror-manifest.json",  # what documentation_mirrors reads
+    ".dataknobs/packages.json",  # what documentation_versions compares against
+]
+
 # Files that trigger testing all packages. Only the global tier: a workspace-only
 # input still invalidates the artifacts, but through the workspace hash scope
 # rather than by dirtying every package. See bin/package-hashes.py.
@@ -164,22 +194,38 @@ WORKSPACE_ONLY_TRIGGERS = list(_WORKSPACE_ONLY_QUALITY_INPUTS)
 
 #: Every workspace-level input, by scope name. Consumed by package-hashes.py to
 #: hash each scope separately and by the toolchain guards to assert that CI
-#: triggers on all of them. Directory entries end in "/"; what "beneath" covers
-#: differs by reader — hashing takes *.py, change detection takes every path
-#: under the prefix. See the caveat on _WORKSPACE_ONLY_QUALITY_INPUTS.
+#: triggers on all of them. Directory entries end in "/" and may name several
+#: directories through a "*"; what "beneath" covers differs by reader — hashing
+#: takes the files that feed a check, change detection takes every path under
+#: the prefix. See the caveat on _WORKSPACE_ONLY_QUALITY_INPUTS.
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
     "toolchain": _GLOBAL_QUALITY_INPUTS,
     "workspace_tests": _WORKSPACE_ONLY_QUALITY_INPUTS,
+    "docs": _DOCS_QUALITY_INPUTS,
 }
 
 #: Scopes whose change invalidates every package's result rather than only the
 #: workspace guard suite. package-hashes.py reads this to size the dirty set.
 GLOBAL_SCOPES = frozenset({"toolchain"})
 
-# Patterns that indicate docs changes
+# Paths whose change means the gate should re-run the documentation checks.
+# Matched by prefix, so a full path names exactly one file.
+#
+# Distinct from the "docs" hash scope above, and easy to conflate: that one
+# decides whether a *stored* verdict still describes the tree, this one decides
+# whether *this run* recomputes it. Neither subsumes the other — package sources
+# belong here in effect (mkdocstrings renders them) while being hashed per
+# package, and the reverse omission is worse: an input hashed but not matched
+# here goes stale, prompts a re-run, and is then re-stamped with the verdict
+# nothing recomputed. That is what the two .dataknobs entries were.
+#
+# packages/*/docs is absent because map_files_to_packages recognises it
+# separately — it has to, since these are prefixes and that shape needs a glob.
 DOCS_PATTERNS = [
     "docs/",
     "mkdocs.yml",
+    ".dataknobs/docs-mirror-manifest.json",
+    ".dataknobs/packages.json",
 ]
 
 

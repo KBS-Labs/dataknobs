@@ -194,6 +194,56 @@ per-package and per-workspace-scope content hash, and CI recomputes those from
 the checkout: if they disagree, your artifacts do not describe the code being
 merged and the check fails, naming the packages that need re-validation.
 
+### Where the time went
+
+Every check records a `duration_seconds` beside its status, and the run records
+a `total_seconds`, so a slow gate can be diagnosed from the artifact instead of
+from a stopwatch and an impression:
+
+```bash
+python3 -c "
+import json; d = json.load(open('.quality-artifacts/quality-summary.json'))
+print(f\"total {d['total_seconds']}s\")
+for name, c in sorted(d['checks'].items(), key=lambda kv: -(kv[1]['duration_seconds'] or 0)):
+    secs = c['duration_seconds']
+    print(f\"  {'skipped' if secs is None else str(secs) + 's':>8}  {name}\")
+"
+```
+
+A check that did not run records `null` rather than `0` — a skipped check has no
+measurement, and `0` would claim it ran instantly. `unit_tests` additionally
+carries `workspace_guards_seconds`, the share of its span spent on the
+workspace guards under `tests/`; those are folded into the unit-test status
+rather than reported as their own check, so without that field their cost is
+invisible.
+
+That suite is also run with `--durations=10`, because one number for a whole
+suite says it is expensive without saying which part of it is. The ten slowest
+guards are listed at the end of
+`.quality-artifacts/unit-test-output-workspace.txt`:
+
+```bash
+grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
+```
+
+Field order within a check no longer matters. `validate-quality-artifacts.sh`
+used to read this file with line-offset greps — `grep -A2` for a status,
+`grep -A3` for a skipped flag — which made position load-bearing in a format
+that has no order: a field added above the one a window wanted pushed it out,
+the grep returned nothing, and the validator rejected an artifact it had merely
+failed to read. It parses the file as JSON now, so the producer is free to
+record fields in whatever order reads best.
+
+To see what the validator makes of a summary without running the rest of it:
+
+```bash
+bin/validate-quality-artifacts.sh --read-summary .quality-artifacts/quality-summary.json
+```
+
+That prints one tab-delimited line per check — `CHECK<TAB>name<TAB>status<TAB>skipped<TAB>label`
+— and is the same reader the validation path uses, so what it shows is what CI
+sees.
+
 **Coverage reports are not committed.** The gate's only use for `coverage.xml`
 was its line rate, which it reports as a warning and never fails on, so that
 number is recorded as `coverage_percent` in the summary instead. Committing a
@@ -273,8 +323,23 @@ Common causes:
 - **Modified artifacts** - Don't edit files in `.quality-artifacts/`
 
 The failure names the packages needing re-validation, or the workspace scope
-(`toolchain`, `workspace_tests`) that changed. A workspace scope dirties no
-package, so that case reports a changed scope and no package list.
+that changed. There are three, and only the first dirties any package:
+
+| Scope | Covers | Effect when it changes |
+|---|---|---|
+| `toolchain` | root `pyproject.toml`, `uv.lock`, `conftest.py`, `mypy.ini`, `pytest.ini`, `.python-version`, and the three scripts that *are* the lint and test steps | every package needs re-validation |
+| `workspace_tests` | `bin/`, `tests/`, `.pylintrc`, `run_api.sh`, `setup-dk.sh` | artifacts stale, no package dirtied |
+| `docs` | `docs/`, `packages/*/docs/`, `mkdocs.yml`, and the two `.dataknobs/` registries the version and mirror checks read | artifacts stale, no package dirtied |
+
+The last two report a changed scope and no package list — nothing they cover can
+move a suite's result, only the verdict recorded about it.
+
+A documentation-only change therefore now requires a gate run, where it
+previously did not. That is the point: the gate records three checks over the
+documentation trees, and until these files were hashed a change to one left every
+hash intact, so the stored verdict was accepted over content that had never
+produced it — and CI's docs job, which skips its build when no hash is dirty,
+declined to rebuild the site as well.
 
 ### Integration Tests Fail
 

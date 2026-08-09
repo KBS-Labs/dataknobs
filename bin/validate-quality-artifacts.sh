@@ -19,10 +19,25 @@ NC='\033[0m' # No Color
 # Configuration
 REQUIRED_COVERAGE=${REQUIRED_COVERAGE:-70}  # Minimum coverage percentage
 
-echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}         Validating Quality Check Artifacts                       ${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-echo ""
+# --read-summary is dispatched below, before the banner, so its output is the
+# projection and nothing else. A mode whose stdout carries a decorative header
+# is one every caller has to strip, and the first caller to forget produces a
+# parse failure that looks like a data problem.
+READ_SUMMARY_MODE=""
+if [ "${1:-}" = "--read-summary" ]; then
+    if [ -z "${2:-}" ]; then
+        echo "--read-summary needs a path" >&2
+        exit 2
+    fi
+    READ_SUMMARY_MODE="$2"
+fi
+
+if [ -z "$READ_SUMMARY_MODE" ]; then
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}         Validating Quality Check Artifacts                       ${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+fi
 
 # Function to print status
 print_check() {
@@ -50,6 +65,41 @@ print_warn() {
 print_info() {
     echo -e "  ${BLUE}ℹ${NC} $1"
 }
+
+# Read quality-summary.json in one JSON parse, projected into tab-delimited
+# lines the shell can iterate:
+#
+#   OVERALL<TAB><overall_status>
+#   CHECK<TAB><name><TAB><status><TAB><skipped><TAB><label>
+#   ERROR<TAB><message>              (unreadable file; nothing else is emitted)
+#
+# This replaces seven line-offset greps — `grep -A2 '"unit_tests"'` for a status,
+# `grep -A3` for a skipped flag. Those read the file by POSITION: any field added
+# above the one they wanted pushed it out of the window and they returned
+# nothing, so the validator rejected artifacts it had simply failed to read and
+# gave "Unit tests: " with an empty status as the reason. Reordering the keys of
+# a valid, passing summary was enough to fail a pull request, and adding a field
+# in the wrong place was enough to do it repository-wide.
+#
+# Field order in the summary is now irrelevant, which is the point: JSON objects
+# are unordered by definition, and the producer should not have to know where a
+# reader's window falls.
+# The parser lives in bin/read-quality-summary.py rather than in a string here,
+# so that ruff and mypy check it and a test can drive it directly. A program
+# embedded in a shell string is checked by nothing until it runs.
+read_summary() {
+    python3 "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
+        || printf 'ERROR\tcould not run read-quality-summary.py\n'
+}
+
+# Print the projection for one summary file and exit. The main path below calls
+# the same function, so a test that drives this is asserting about the reader the
+# validator actually uses rather than a second copy of it — the reason this
+# script accumulated seven positional greps is that nothing ever executed it.
+if [ -n "$READ_SUMMARY_MODE" ]; then
+    read_summary "$READ_SUMMARY_MODE"
+    exit 0
+fi
 
 VALIDATION_FAILED=0
 
@@ -146,62 +196,70 @@ fi
 # Validate test results
 print_check "Test results"
 if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
-    # Check overall status
-    OVERALL_STATUS=$(grep -o '"overall_status": *"[^"]*"' "$ARTIFACTS_DIR/quality-summary.json" | cut -d'"' -f4)
-    
-    if [ "$OVERALL_STATUS" = "PASS" ]; then
-        print_pass "Overall status: PASS"
-    elif [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
-        print_pass "Overall status: PASS_WITH_SKIPS (some checks were skipped)"
-        # Log which checks were skipped for transparency
-        for check in validation unit_tests integration_tests documentation; do
-            skipped=$(grep -A3 "\"$check\"" "$ARTIFACTS_DIR/quality-summary.json" | grep '"skipped"' | grep -o 'true\|false')
-            if [ "$skipped" = "true" ]; then
-                print_info "  Skipped: $check"
-            fi
-        done
-    else
-        print_fail "Overall status: $OVERALL_STATUS (expected: PASS or PASS_WITH_SKIPS)"
-        VALIDATION_FAILED=1
-    fi
-    
-    # Check individual test statuses
-    UNIT_STATUS=$(grep -A2 '"unit_tests"' "$ARTIFACTS_DIR/quality-summary.json" | grep '"status"' | cut -d'"' -f4)
-    if [ "$UNIT_STATUS" = "pass" ]; then
-        print_pass "Unit tests: PASS"
-    else
-        print_fail "Unit tests: $UNIT_STATUS"
-        VALIDATION_FAILED=1
-    fi
-    
-    # Check if integration tests were run (they might be optional in some cases)
-    if grep -q '"integration_tests"' "$ARTIFACTS_DIR/quality-summary.json"; then
-        INT_STATUS=$(grep -A2 '"integration_tests"' "$ARTIFACTS_DIR/quality-summary.json" | grep '"status"' | cut -d'"' -f4)
-        if [ "$INT_STATUS" = "pass" ]; then
-            print_pass "Integration tests: PASS"
-        else
-            print_fail "Integration tests: $INT_STATUS"
-            VALIDATION_FAILED=1
-        fi
-    else
-        print_info "Integration tests: Not found (may be optional)"
-    fi
+    SUMMARY_PROJECTION=$(read_summary "$ARTIFACTS_DIR/quality-summary.json")
+    SUMMARY_ERROR=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^ERROR\t//p')
 
-    # Named separately rather than left to overall_status, so a failure says
-    # which check failed instead of only that one did. Tolerant of absence
-    # because artifacts generated before the workflow lint was wired into the
-    # gate carry no such entry — that tolerance is about old artifacts only; the
-    # check itself is not optional, and a fresh artifact always records it.
-    if grep -q '"workflow_lint"' "$ARTIFACTS_DIR/quality-summary.json"; then
-        WORKFLOW_STATUS=$(grep -A2 '"workflow_lint"' "$ARTIFACTS_DIR/quality-summary.json" | grep '"status"' | cut -d'"' -f4)
-        if [ "$WORKFLOW_STATUS" = "pass" ]; then
-            print_pass "Workflow lint: PASS"
+    if [ -n "$SUMMARY_ERROR" ]; then
+        # An unreadable summary is a failure, not a skip. It is the file the
+        # whole gate attests through, so "could not parse it" and "it says the
+        # run passed" must never reach the same verdict.
+        print_fail "Could not read quality-summary.json: $SUMMARY_ERROR"
+        VALIDATION_FAILED=1
+    else
+        OVERALL_STATUS=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^OVERALL\t//p')
+
+        if [ "$OVERALL_STATUS" = "PASS" ]; then
+            print_pass "Overall status: PASS"
+        elif [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
+            print_pass "Overall status: PASS_WITH_SKIPS (some checks were skipped)"
         else
-            print_fail "Workflow lint: $WORKFLOW_STATUS"
+            print_fail "Overall status: $OVERALL_STATUS (expected: PASS or PASS_WITH_SKIPS)"
             VALIDATION_FAILED=1
         fi
-    else
-        print_info "Workflow lint: not recorded (artifact predates this check)"
+
+        # Every check the summary records, rather than a hand-kept list of three.
+        # The old list named unit_tests, integration_tests and workflow_lint and
+        # said nothing about the other five, so a shell-lint or docs failure
+        # reached CI as a bare "Overall status: FAIL" with no indication of what
+        # broke. Naming them cannot change any verdict — all eight already feed
+        # overall_status, which is asserted by the guards in
+        # tests/test_quality_gate_accounting.py — so this is strictly a better
+        # message for a run that was failing either way.
+        #
+        # A herestring, not a pipe: a `while` loop on the right of a pipe runs in
+        # a subshell, where every VALIDATION_FAILED set below would be discarded
+        # when it exits, and the gate would report success over failing checks.
+        CHECKS_SEEN=""
+        while IFS="$(printf '\t')" read -r kind name status _skipped label; do
+            [ "$kind" = "CHECK" ] || continue
+            CHECKS_SEEN="$CHECKS_SEEN $name"
+
+            if [ "$status" = "pass" ]; then
+                print_pass "$label: PASS"
+            else
+                print_fail "$label: ${status:-no status recorded}"
+                VALIDATION_FAILED=1
+            fi
+        done <<< "$SUMMARY_PROJECTION"
+
+        # Absence is tolerated for every check except this one, because an
+        # artifact predating a check carries no entry for it and must still
+        # validate. Unit tests are the exception: a summary with no unit-test
+        # entry is not an old artifact, it is one that never ran them.
+        case " $CHECKS_SEEN " in
+            *" unit_tests "*) ;;
+            *)
+                print_fail "Unit tests: no entry in quality-summary.json"
+                VALIDATION_FAILED=1
+                ;;
+        esac
+
+        if [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
+            while IFS="$(printf '\t')" read -r kind name _status skipped _label; do
+                [ "$kind" = "CHECK" ] && [ "$skipped" = "true" ] || continue
+                print_info "  Skipped: $name"
+            done <<< "$SUMMARY_PROJECTION"
+        fi
     fi
 fi
 

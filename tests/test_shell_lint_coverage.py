@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from functools import cache
 
 import pytest
 
@@ -112,18 +113,28 @@ def _lint_shell(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _declared(mode: str) -> set[str]:
+@cache
+def _declared(mode: str) -> frozenset[str]:
     """Ask the check which files it covers, rather than parsing what it says.
 
     Same reasoning as ``validate.sh --print-targets``: the declaration is a
     filesystem walk plus a tier split, so reading it as text reports what it
     says while the question is what it returns.
+
+    Cached because nine tests here ask this across four modes, and the answer is
+    a function of tracked content — which no test in this file changes. A
+    ``frozenset`` rather than a ``set``: every caller now receives the *same*
+    object, so a mutation in one test would silently change what the others see.
+
+    A test that adds or removes a tracked shell file would need to bypass this.
+    None does, and one that did would be asserting about a tree that is not the
+    one under test.
     """
     result = _lint_shell(mode)
     assert result.returncode == 0, (
         f"bin/lint-shell.sh {mode} failed ({result.returncode}):\n{result.stderr}"
     )
-    return {line.strip() for line in result.stdout.split() if line.strip()}
+    return frozenset(line.strip() for line in result.stdout.split() if line.strip())
 
 
 def test_the_shell_lint_exists_and_is_executable():

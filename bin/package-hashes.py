@@ -122,6 +122,32 @@ def compute_package_hash(package_name: str) -> str:
     return _hash_files(all_files, pkg_dir)
 
 
+def scope_entry_files(entry: str) -> list[Path]:
+    """Every file one declared entry expands to.
+
+    The unit of expansion is the entry rather than the scope because two
+    readers need different granularities: the hash wants a whole scope, while
+    the guard that checks CI triggers on these files wants one probe per entry.
+    That guard used to restate this rule instead of calling it, and a
+    restatement answers for a rule the hasher does not follow.
+
+    A directory entry may name several directories through a "*", which is how
+    ``packages/*/docs/`` reaches all seven without listing them — a list would
+    leave the eighth package's documentation silently unhashed.
+    """
+    if not entry.endswith("/"):
+        target = _ROOT / entry
+        return [target] if target.is_file() else []
+
+    pattern = entry.rstrip("/")
+    roots = (
+        sorted(p for p in _ROOT.glob(pattern) if p.is_dir())
+        if "*" in pattern
+        else [_ROOT / pattern]
+    )
+    return [p for root in roots for p in root.rglob("*") if _is_quality_input(p)]
+
+
 def workspace_scope_files(scope: str) -> list[Path]:
     """Every file one workspace scope actually hashes.
 
@@ -131,14 +157,20 @@ def workspace_scope_files(scope: str) -> list[Path]:
     hasher does not follow, which is how a coverage check ends up passing for
     a file nothing hashes.
     """
-    files: list[Path] = []
-    for entry in WORKSPACE_QUALITY_INPUTS[scope]:
-        target = _ROOT / entry.rstrip("/")
-        if entry.endswith("/"):
-            files.extend(p for p in target.rglob("*") if _is_quality_input(p))
-        elif target.is_file():
-            files.append(target)
-    return files
+    return [p for entry in WORKSPACE_QUALITY_INPUTS[scope] for p in scope_entry_files(entry)]
+
+
+#: Suffixes carried by a file that feeds a recorded check. Code for the lint and
+#: test verdicts; markup, stylesheet and script for the three documentation ones,
+#: which read whole trees rather than named files.
+#:
+#: Slightly over-inclusive in one direction: ``bin/README.md`` feeds no check but
+#: sits under a hashed directory, so editing it invalidates the artifacts. Over-
+#: inclusion costs a gate run that was not needed; under-inclusion costs a verdict
+#: recorded over a tree that no longer produced it, which is the defect this whole
+#: mechanism exists to prevent. A per-scope suffix set would be more machinery
+#: than the single file it saves.
+_QUALITY_INPUT_SUFFIXES = frozenset({".py", ".sh", ".md", ".css", ".js"})
 
 
 def _is_quality_input(path: Path) -> bool:
@@ -153,13 +185,22 @@ def _is_quality_input(path: Path) -> bool:
     one moved the recorded ``shell_lint`` verdict while leaving every stored hash
     intact. CI would then accept the artifact that the edit had just invalidated.
 
+    It stopped being right a second time, the same way, when the documentation
+    trees were declared: they are almost entirely ``*.md``.
+
     Extension is not sufficient, for the same reason it is not sufficient in
     lint-shell.sh: ``bin/dk`` carries none, and it is the entry point the rest
     are invoked through. So a shebang is read when the suffix does not answer.
+
+    Naming what counts, rather than taking everything not obviously junk, is
+    also what keeps the answer identical on a developer's machine and on a CI
+    checkout: ``.DS_Store`` reaches the shebang test and fails it, while
+    ``USER_GUIDE.md.orig`` and ``USER_GUIDE.md~`` carry suffixes of their own and
+    are rejected outright. A file git does not track cannot move the hash.
     """
     if not path.is_file():
         return False
-    if path.suffix in {".py", ".sh"}:
+    if path.suffix in _QUALITY_INPUT_SUFFIXES:
         return True
     if path.suffix:
         return False

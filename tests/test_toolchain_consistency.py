@@ -275,6 +275,135 @@ def test_every_script_ci_executes_is_covered_by_a_hash_scope():
     )
 
 
+def _documentation_inputs() -> list[str]:
+    """Every tracked file a recorded documentation check reads.
+
+    Three of the gate's checks are about documentation — ``mkdocs build
+    --strict``, the version-table sync, and the dual-docs mirror — and between
+    them they read the two documentation trees plus three individual files. The
+    trees are taken from git rather than walked, so an untracked scratch file
+    cannot join the set on one machine and not another.
+
+    Of the three files, the manifest and the version registry are read from the
+    scripts that consume them, for the reason every declaration in this file is:
+    a restatement here would keep passing after a rename, having asserted about
+    a path nothing uses. ``mkdocs.yml`` is named directly because nothing names
+    it — it is mkdocs' own default, passed to no command.
+    """
+    tracked = _tracked("docs", "packages")
+    inputs = {
+        str(path)
+        for path in tracked
+        if path.parts[0] == "docs" or (len(path.parts) > 2 and path.parts[2] == "docs")
+    }
+
+    inputs.add("mkdocs.yml")
+    inputs.add(_rel(load_bin_module("docs-mirror-check").MANIFEST))
+
+    versions = (ROOT / "bin" / "docs-update-versions.sh").read_text()
+    registry = re.search(r'^PACKAGES_JSON="([^"]+)"', versions, re.MULTILINE)
+    assert registry, (
+        "bin/docs-update-versions.sh no longer names its registry as "
+        'PACKAGES_JSON="..." — this guard stopped tracking what that check reads'
+    )
+    inputs.add(registry.group(1))
+
+    return sorted(inputs)
+
+
+def test_every_documentation_input_is_covered_by_a_hash_scope():
+    """A documentation input outside every hash scope lets its own edit go unchecked.
+
+    This is ``test_every_script_ci_executes_is_covered_by_a_hash_scope`` one
+    domain over, and it was found the same way: an edit to ``mkdocs.yml``
+    dirtied nothing, so the artifacts recording ``documentation: pass`` stayed
+    valid over a tree they no longer described.
+
+    The consequence is larger here than staleness alone, because CI's docs job
+    gates its build on this same hash check and skips when nothing is dirty. So
+    a documentation-only pull request left every hash intact, the gate's stored
+    verdict was accepted unexamined, *and* the job that would have rebuilt the
+    site declined to run — three mechanisms agreeing to check nothing. Verified
+    against a broken intra-doc link, which ``--strict`` rejects and both paths
+    passed.
+
+    Coverage is asked through ``workspace_scope_files``, the function the hash
+    itself uses, rather than by re-deriving which paths an entry expands to.
+
+    The universe asked about is every tracked file in those trees, not every
+    ``*.md``, and that is deliberate: the hasher decides what to include by
+    suffix, and a theme override, an included snippet, or a stylesheet all
+    change what the site build does. Asserting over the whole tree is what makes
+    the suffix list keep up — adding a file of a kind nothing hashes fails here,
+    at the moment there is someone to decide, rather than silently later.
+    """
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        _rel(path)
+        for scope in WORKSPACE_QUALITY_INPUTS
+        for path in hashes.workspace_scope_files(scope)
+    }
+
+    inputs = _documentation_inputs()
+    assert len(inputs) > 100, (
+        f"only {len(inputs)} documentation inputs resolved — the git listing "
+        "broke, and this guard would pass by checking almost nothing"
+    )
+
+    uncovered = [name for name in inputs if name not in covered]
+    assert not uncovered, (
+        f"{len(uncovered)} of {len(inputs)} documentation inputs are in no hash "
+        "scope, so editing one leaves every stored hash intact, keeps the "
+        "recorded documentation verdict valid over a tree it no longer "
+        "describes, and skips CI's docs build:\n"
+        + "\n".join(f"  - {name}" for name in uncovered[:15])
+        + (f"\n  ... and {len(uncovered) - 15} more" if len(uncovered) > 15 else "")
+        + "\n\nAdd the tree or file to _DOCS_QUALITY_INPUTS in "
+        "bin/changed-packages.py."
+    )
+
+
+def test_every_docs_hash_input_also_reruns_the_docs_checks():
+    """Hashing an input the docs checks are not re-run for recomputes nothing.
+
+    The two halves have to agree in both directions. The hash decides whether a
+    stored verdict still describes the tree; ``docs_changed`` decides whether
+    the gate recomputes that verdict. An input in the first but not the second
+    produces the worst of the three possible states: the artifact goes stale, the
+    author is told to re-run the gate, the gate skips the documentation checks
+    because it sees no documentation change, and a fresh artifact is stamped
+    carrying the *old* verdict and the *new* hash. That is not a missing check —
+    it is a check that reports having run.
+
+    Found while adding the hash scope, against ``.dataknobs/packages.json``:
+    hashed as the input the version-table check compares against, but matched by
+    no docs pattern, so it invalidated the artifact and then let it be
+    regenerated without anything reading it.
+
+    The other direction is deliberately not asserted. A path may set
+    ``docs_changed`` without being hashed — package sources do, since
+    ``mkdocstrings`` renders them — and those are already covered by the package
+    hashes.
+    """
+    hashes = load_bin_module("package-hashes")
+    plan_for_files = _scopes.plan_for_files
+
+    untriggered = [
+        _rel(path)
+        for path in hashes.workspace_scope_files("docs")
+        if not plan_for_files([_rel(path)])["docs_changed"]
+    ]
+
+    assert not untriggered, (
+        "these files are hashed into the docs scope but match no docs pattern, "
+        "so changing one invalidates the artifact without making the gate "
+        "recompute the verdict it invalidated:\n"
+        + "\n".join(f"  - {name}" for name in untriggered[:15])
+        + (f"\n  ... and {len(untriggered) - 15} more" if len(untriggered) > 15 else "")
+        + "\n\nAdd each to DOCS_PATTERNS in bin/changed-packages.py."
+    )
+
+
 def test_no_workspace_test_is_filed_where_nothing_runs_it():
     """``tests/integration/`` is reached by no entry point, in either mode.
 
@@ -379,27 +508,28 @@ def _workspace_input_probes() -> list[str]:
     not the bare string ``tests``, so checking the directory name would fail
     against a filter that is in fact correct.
 
-    Which file, though, is the same question ``workspace_scope_files`` answers
-    when it decides what a directory entry hashes — so it is asked there rather
-    than restated here. It used to be restated, as ``rglob("*.py")``, and that
-    was right only while ruff and mypy were the only readers of these
-    directories. Once the gate gained a shell lint, a shell-only directory
-    entry produced *no probe at all*: the entry was declared, its files moved a
-    recorded verdict, and this guard silently asked nothing about whether CI
-    would run on a change to them. Reproduced before fixing, with a shell-only
-    directory declared and no matching CI pattern — the guard passed.
+    Which file, though, is the same question ``scope_entry_files`` answers when
+    it decides what an entry hashes — so it is asked there rather than restated
+    here. It used to be restated, as ``rglob("*.py")``, and that was right only
+    while ruff and mypy were the only readers of these directories. Once the
+    gate gained a shell lint, a shell-only directory entry produced *no probe at
+    all*: the entry was declared, its files moved a recorded verdict, and this
+    guard silently asked nothing about whether CI would run on a change to them.
+    Reproduced before fixing, with a shell-only directory declared and no
+    matching CI pattern — the guard passed.
+
+    The restatement it was replaced with had the same shape of hole waiting in
+    it: a ``*`` in a directory entry resolved to no directory here, so
+    ``packages/*/docs/`` would again have been declared and silently unprobed.
+    Calling the hasher's own expansion is what stops that recurring per entry
+    kind.
     """
-    is_quality_input = load_bin_module("package-hashes")._is_quality_input
+    scope_entry_files = load_bin_module("package-hashes").scope_entry_files
 
     probes: list[str] = []
     for entries in WORKSPACE_QUALITY_INPUTS.values():
         for entry in entries:
-            target = ROOT / entry.rstrip("/")
-            if entry.endswith("/"):
-                beneath = sorted(p for p in target.rglob("*") if is_quality_input(p))
-                probes += [_rel(p) for p in beneath[:1]]
-            elif target.exists():
-                probes.append(entry)
+            probes += [_rel(p) for p in sorted(scope_entry_files(entry))[:1]]
 
     assert probes, "no workspace quality inputs resolved — the shared declaration is empty"
     return probes
@@ -466,15 +596,26 @@ DEFERRED_FROM_DEFAULT_LINT = {
 }
 
 
-def _tracked_python() -> list[PurePosixPath]:
-    """Every ``*.py`` git keeps, as repo-relative paths."""
+def _tracked(*pathspecs: str) -> list[PurePosixPath]:
+    """Every file git keeps under the given pathspecs, as repo-relative paths.
+
+    Asking git rather than walking the tree is what keeps an editor backup, a
+    stray ``.orig``, or a macOS ``.DS_Store`` from joining the answer on one
+    machine and not another — which for a set feeding a content hash would mean
+    a developer and CI computing different digests over the same commit.
+    """
     listing = subprocess.run(
-        ["git", "ls-files", "-z", "*.py"],
+        ["git", "ls-files", "-z", "--", *pathspecs],
         cwd=ROOT,
         capture_output=True,
         check=True,
     ).stdout.decode()
     return [PurePosixPath(name) for name in listing.split("\0") if name]
+
+
+def _tracked_python() -> list[PurePosixPath]:
+    """Every ``*.py`` git keeps, as repo-relative paths."""
+    return _tracked("*.py")
 
 
 #: The scripts that build a default set of things to lint. Each used to answer

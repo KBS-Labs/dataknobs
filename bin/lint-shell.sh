@@ -112,7 +112,17 @@ shell_targets() {
             continue
         fi
         [[ -f "$ROOT_DIR/$candidate" ]] || continue
-        first=$(head -c 128 "$ROOT_DIR/$candidate" 2>/dev/null | head -n 1)
+        # A builtin read rather than `head -c 128 | head -n 1`. This loop visits
+        # every tracked file, ~2000 of which are not *.sh, and two forks apiece
+        # cost close to four seconds — paid by every mode: the check the gate
+        # records, and each guard that asks what the tiers contain.
+        #
+        # `-n 128` keeps the original bound for a file with no newline. Both the
+        # redirect (unreadable file) and `read` itself (EOF before a delimiter)
+        # can report failure, and neither is an error here, so both are absorbed
+        # explicitly — `set -e` is in force.
+        first=""
+        IFS= read -r -n 128 first < "$ROOT_DIR/$candidate" 2>/dev/null || true
         if [[ "$first" == '#!'* && "$first" == *sh* ]]; then
             found+=("$candidate")
         fi
