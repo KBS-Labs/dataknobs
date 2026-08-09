@@ -52,7 +52,7 @@ NC='\033[0m'
 
 # Scripts held to zero findings.
 #
-# The first nine decide whether a quality run passes; the rest were already
+# The first ten decide whether a quality run passes; the rest were already
 # clean and are listed so they stay that way. Names only — the enumeration below
 # decides what exists, and a name here matching no tracked file is caught by
 # test_the_strict_pin_has_not_drifted_from_the_declaration rather than silently
@@ -84,7 +84,7 @@ STRICT_SCRIPTS=(
 #
 # DELIBERATELY NOT DERIVED FROM `workspace_targets`. That helper is the single
 # declaration of which first-party code belongs to no package, and reusing it
-# here was the obvious move — it already names bin/, which is where 43 of the 45
+# here was the obvious move — it already names bin/, which is where 44 of the 46
 # shell files live. It is the wrong shape all the same, and trying it is how
 # that was found: it silently omitted setup-dk.sh, the installer four separate
 # documentation pages tell a new contributor to run, along with run_api.sh.
@@ -129,6 +129,46 @@ is_strict() {
     return 1
 }
 
+# Which tier a file is held to. The single place that decision is made, so the
+# run loop and --check-file cannot answer it differently.
+tier_for() {
+    if is_strict "$1"; then echo strict; else echo baseline; fi
+}
+
+severity_for() {
+    case "$1" in
+        strict) echo "$STRICT_SEVERITY" ;;
+        baseline) echo error ;;
+        *) echo "Unknown tier: $1" >&2; return 2 ;;
+    esac
+}
+
+# Check one file at its tier, printing any findings. Non-zero if it has some.
+#
+# THE RUN LOOP CALLS THIS, WHICH IS THE ENTIRE POINT OF ITS BEING A FUNCTION.
+# The tier split used to live inline in that loop, where no test could reach it:
+# every guard read a --print-* mode, so all of them kept passing with the strict
+# floor deleted and all 46 scripts silently dropped to `error`. A guard that
+# cannot fail against the regression it is written for is worse than none,
+# because it also reports green. Sharing the executor is what makes
+# test_the_check_holds_the_two_tiers_to_different_floors an assertion about the
+# real run rather than about a second implementation of it.
+check_one() {
+    local file="$1" tier="${2:-}"
+    local severity label output rc
+    [[ -n "$tier" ]] || tier="$(tier_for "$file")"
+    severity="$(severity_for "$tier")" || return 2
+    if [[ "$tier" == strict ]]; then label="must be clean"; else label="errors only"; fi
+
+    output=$( cd "$ROOT_DIR" && shellcheck -x -f gcc -S "$severity" "$file" 2>&1 ) && rc=0 || rc=$?
+    if [[ "$rc" -ne 0 || -n "$output" ]]; then
+        echo -e "  ${RED}✗${NC} $file ($label)"
+        printf '%s\n' "$output" | sed 's/^/      /'
+        return 1
+    fi
+    return 0
+}
+
 # Findings for one file at the given severity floor, as a count.
 count_findings() {
     local file="$1" severity="$2"
@@ -161,9 +201,15 @@ Run shellcheck over the repository's own shell scripts.
   --print-strict       List the scripts held to zero findings.
   --print-baseline     List the scripts held to errors only.
   --print-promotable   List baseline scripts that are already clean.
+  --check-file PATH [TIER]
+                       Check one file and exit non-zero on findings. TIER is
+                       strict or baseline; without it the file's own tier is
+                       used. Naming it answers "would this pass promotion",
+                       which is --print-promotable for a single file, with the
+                       findings shown rather than just the verdict.
   -h, --help           Show this message.
 
-The print modes do not require shellcheck; --print-promotable does.
+The print modes do not require shellcheck; --print-promotable and --check-file do.
 EOF
 }
 
@@ -195,6 +241,25 @@ case "$MODE" in
             [[ "$(count_findings "$file" "$STRICT_SEVERITY")" -eq 0 ]] && echo "$file"
         done < <(shell_targets)
         exit 0
+        ;;
+    --check-file)
+        require_shellcheck
+        if [[ $# -lt 2 ]]; then
+            echo "--check-file needs a path" >&2
+            usage >&2
+            exit 2
+        fi
+        if [[ ! -f "$2" ]]; then
+            echo "--check-file: no such file: $2" >&2
+            exit 2
+        fi
+        # Guarded by `if`, not left to propagate: under `set -e` a non-zero
+        # return here would exit before the status could be turned into a
+        # verdict, which is the same shape of mistake this file exists to find.
+        if check_one "$2" "${3:-}"; then
+            exit 0
+        fi
+        exit 1
         ;;
     -h|--help)
         usage
@@ -254,22 +319,14 @@ STRICT_CHECKED=0
 BASELINE_CHECKED=0
 
 while IFS= read -r file; do
-    if is_strict "$file"; then
+    tier="$(tier_for "$file")"
+    if [[ "$tier" == strict ]]; then
         STRICT_CHECKED=$((STRICT_CHECKED + 1))
-        severity="$STRICT_SEVERITY"
-        label="must be clean"
     else
         BASELINE_CHECKED=$((BASELINE_CHECKED + 1))
-        severity=error
-        label="errors only"
     fi
 
-    output=$( cd "$ROOT_DIR" && shellcheck -x -f gcc -S "$severity" "$file" 2>&1 ) && rc=0 || rc=$?
-    if [[ "$rc" -ne 0 || -n "$output" ]]; then
-        echo -e "  ${RED}✗${NC} $file ($label)"
-        printf '%s\n' "$output" | sed 's/^/      /'
-        FAILED=true
-    fi
+    check_one "$file" "$tier" || FAILED=true
 done < <(shell_targets)
 
 echo ""

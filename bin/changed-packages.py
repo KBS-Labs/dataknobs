@@ -92,8 +92,8 @@ _GLOBAL_QUALITY_INPUTS = [
     # what they act on: which packages exist, and which code belongs to none of
     # them. It sits in this tier rather than the workspace one for the same
     # reason validate.sh does — it moves every package's recorded result, not
-    # just the artifact. Shell, so the "bin/" directory entry in the workspace
-    # tier would not have reached it either: that glob is "*.py".
+    # just the artifact, and the "bin/" entry in the workspace tier would put it
+    # in the wrong tier rather than in none.
     "bin/package-discovery.sh",  # which packages exist, and what else to check
 ]
 
@@ -107,17 +107,25 @@ _GLOBAL_QUALITY_INPUTS = [
 # change to the gate itself matched no pattern, and the run it edited skipped
 # every test while reporting success.
 #
-# Caveat, because it is asymmetric and easy to misread: change *detection* below
-# matches these by path prefix, so bin/*.sh counts; the artifact *hash* scope in
-# package-hashes.py globs "*.py" beneath a directory entry, so a shell-only
-# change here triggers the guards without dirtying the stored hash.
+# The two readers used to disagree about what "beneath" covers: change
+# *detection* below matches by path prefix, so bin/*.sh counted, while the
+# artifact *hash* scope in package-hashes.py globbed "*.py", so a shell-only
+# change triggered the guards without dirtying the stored hash. The scripts that
+# produce and verify the artifact are shell and landed in exactly that gap —
+# editing the gate ran the guards but left the hash intact, and the artifact
+# written under the old rules still validated under the new ones.
 #
-# The scripts that produce and verify the artifact are shell, so they landed in
-# exactly that gap: editing the gate ran the guards but left the stored hash
-# intact, and the artifact written under the old rules still validated under the
-# new ones. They are named individually below. Naming them beats widening the
-# glob, which was the other way to close this: "*" beneath a directory entry
-# sweeps __pycache__ and would move every stored hash on a stray import.
+# That gap is closed: workspace_scope_files now expands a directory entry
+# through _is_quality_input, which reaches shell as well as Python. The bare "*"
+# this comment used to argue against would have swept __pycache__ and moved
+# every stored hash on a stray import; a predicate does not.
+#
+# So the named shell entries below are no longer what makes those files hashed.
+# They are still load-bearing, for a different reason worth stating because it
+# is not visible from here: they are the only non-.py probes in
+# _workspace_input_probes, which is what proves CI's path filter starts the
+# quality job for a change to them. Delete them as redundant and the filter can
+# lose "bin/**" with nothing reporting it.
 #
 # A file entry is matched exactly by both readers, so listing one is unambiguous
 # in a way a directory entry is not.
@@ -125,10 +133,11 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".pylintrc",
     "bin/",
     "tests/",
-    # Shell, so the bin/ glob above does not reach them. Each decides what the
-    # gate checks or records without moving any package's own result: a suite
-    # that passed still passes, but the verdict about it was computed by
-    # different rules, so the artifact has to be regenerated under the new ones.
+    # Named individually, per the note above: these are the probes that prove
+    # CI's path filter covers non-Python files. Each decides what the gate checks
+    # or records without moving any package's own result — a suite that passed
+    # still passes, but the verdict about it was computed by different rules, so
+    # the artifact has to be regenerated under the new ones.
     "bin/run-quality-checks.sh",  # writes the artifact CI validates
     "bin/validate-quality-artifacts.sh",  # the checks CI actually runs
     "bin/docs-update-versions.sh",  # the documentation_versions check it records

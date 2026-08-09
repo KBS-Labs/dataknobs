@@ -68,6 +68,7 @@ setup() {
     fi
     
     # Activate and install
+    # shellcheck source=/dev/null  # venv/ is not tracked; created just above
     source venv/bin/activate
     
     # Install all packages in dev mode

@@ -146,11 +146,12 @@ def _is_quality_input(path: Path) -> bool:
 
     A directory entry used to expand to ``*.py`` alone, which was right while
     the only checkers reading these directories were ruff and mypy. It stopped
-    being right when the gate gained a shell lint: 38 of the 46 shell scripts it
-    reports on — every one in ``bin/`` bar the four listed by name, ``bin/dk``
-    among them — sat outside every scope, so editing one moved the recorded
-    ``shell_lint`` verdict while leaving every stored hash intact. CI would then
-    accept the artifact that the edit had just invalidated.
+    being right when the gate gained a shell lint: of the 46 shell scripts it
+    reports on, only the seven named individually across the two scopes were
+    covered. The other 39 — every remaining script in ``bin/``, ``bin/dk`` among
+    them, plus both at the repository root — sat outside every scope, so editing
+    one moved the recorded ``shell_lint`` verdict while leaving every stored hash
+    intact. CI would then accept the artifact that the edit had just invalidated.
 
     Extension is not sufficient, for the same reason it is not sufficient in
     lint-shell.sh: ``bin/dk`` carries none, and it is the entry point the rest

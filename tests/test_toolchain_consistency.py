@@ -378,13 +378,26 @@ def _workspace_input_probes() -> list[str]:
     its own name: a filter reading ``tests/**`` covers ``tests/test_x.py`` and
     not the bare string ``tests``, so checking the directory name would fail
     against a filter that is in fact correct.
+
+    Which file, though, is the same question ``workspace_scope_files`` answers
+    when it decides what a directory entry hashes — so it is asked there rather
+    than restated here. It used to be restated, as ``rglob("*.py")``, and that
+    was right only while ruff and mypy were the only readers of these
+    directories. Once the gate gained a shell lint, a shell-only directory
+    entry produced *no probe at all*: the entry was declared, its files moved a
+    recorded verdict, and this guard silently asked nothing about whether CI
+    would run on a change to them. Reproduced before fixing, with a shell-only
+    directory declared and no matching CI pattern — the guard passed.
     """
+    is_quality_input = load_bin_module("package-hashes")._is_quality_input
+
     probes: list[str] = []
     for entries in WORKSPACE_QUALITY_INPUTS.values():
         for entry in entries:
             target = ROOT / entry.rstrip("/")
             if entry.endswith("/"):
-                probes += [_rel(p) for p in sorted(target.rglob("*.py"))[:1]]
+                beneath = sorted(p for p in target.rglob("*") if is_quality_input(p))
+                probes += [_rel(p) for p in beneath[:1]]
             elif target.exists():
                 probes.append(entry)
 

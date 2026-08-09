@@ -334,8 +334,9 @@ while [[ $# -gt 0 ]]; do
         # Separator for custom pytest args - everything after this goes to pytest
         --)
             shift
-            # $* not $@: the target is a string, and the array form keeps
-            # only the first element. Re-split at the pytest call site.
+            # $* not $@: the target is a string, and in a scalar assignment both
+            # join identically — the array form is misleading here, not wrong.
+            # Re-split at the pytest call site.
             PYTEST_ARGS="$*"
             break
             ;;

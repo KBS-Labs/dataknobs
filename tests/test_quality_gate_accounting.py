@@ -32,6 +32,7 @@ from tests._workspace import ROOT, rel
 GATE = ROOT / "bin" / "run-quality-checks.sh"
 VALIDATOR = ROOT / "bin" / "validate-quality-artifacts.sh"
 WORKFLOW_LINT = ROOT / "bin" / "lint-workflows.sh"
+SHELL_LINT = ROOT / "bin" / "lint-shell.sh"
 
 
 @dataclass(frozen=True)
@@ -416,10 +417,23 @@ def test_every_status_that_gates_the_verdict_reaches_the_artifact():
 #: Which is the actual reason to leave the scope alone: the cost of widening is
 #: not the three that would pass anyway but the six that would not, and telling
 #: install-on-demand from a genuine requirement needs something better than a
-#: keyword search for "install". Worth revisiting if a third gate script arrives
-#: with its own tool requirement, since that is the case this narrow scope would
-#: quietly fail to cover.
-TOOL_PROBE_SCRIPTS = (GATE, WORKFLOW_LINT)
+#: keyword search for "install".
+#:
+#: The third gate script that paragraph anticipated is ``bin/lint-shell.sh``,
+#: and it arrived outside the scope exactly as predicted: shellcheck is a hard
+#: requirement there, and turning its probe into a warn-and-continue left every
+#: guard in this file green while ``shell_lint`` reported pass over nothing
+#: analysed. Hence its entry below.
+#:
+#: Membership is still hand-maintained, and that is the open part. Deriving it —
+#: "every script the gate invokes that probes for a tool" — resolves to
+#: lint-shell, lint-workflows, manage-services and test.sh, and the last two
+#: install on demand rather than requiring, so a derived list would fail on two
+#: scripts doing nothing wrong. Separating the two forms is the design pass this
+#: comment has described from the start, and it is what a guard over this list
+#: needs first. Until then the failure mode is a script added to the gate and
+#: not to this list, which nothing reports. Tracked.
+TOOL_PROBE_SCRIPTS = (GATE, WORKFLOW_LINT, SHELL_LINT)
 
 
 def _required_tool_probes(path: Path) -> list[tuple[int, str, list[str]]]:

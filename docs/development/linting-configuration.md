@@ -191,7 +191,15 @@ bin/lint-shell.sh --print-targets    # which scripts are checked
 bin/lint-shell.sh --print-strict     # which are held to zero findings
 bin/lint-shell.sh --print-baseline   # which are held to errors only
 bin/lint-shell.sh --print-promotable # baseline scripts that are now clean
+bin/lint-shell.sh --check-file bin/dev.sh          # one file, at its own tier
+bin/lint-shell.sh --check-file bin/dev.sh strict   # ...and would it pass promotion
 ```
+
+Naming a tier answers "would this script survive promotion", showing the
+findings rather than only the verdict — `--print-promotable` for a single file.
+It is also how `tests/test_shell_lint_coverage.py` reaches the code that turns a
+tier into a severity floor: the run loop calls the same function, so the tiers
+are asserted about the real check rather than a re-implementation of it.
 
 ### Two tiers, and they ratchet
 

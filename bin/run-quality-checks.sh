@@ -170,9 +170,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --)
             shift
-            # $* not $@: this is a string, and the array form silently
-            # keeps only the first element here. It is re-split at the
-            # pytest call sites, which is why they carry SC2086 waivers.
+            # $* not $@: the target is a string. Both join the same way in a
+            # scalar assignment — "$@" does not truncate, which an earlier note
+            # here claimed — so this is about saying what is meant rather than
+            # about behaviour. It is re-split at the pytest call sites, which is
+            # why they carry SC2086 waivers.
             PYTEST_ARGS="$*"
             break
             ;;
@@ -597,7 +599,7 @@ else
 fi
 
 # Lint the repository's own shell scripts. Same three-place wiring as above, for
-# the same reason: 45 shell files — including every script on this verdict path,
+# the same reason: 46 shell files — including every script on this verdict path,
 # this one among them — went through no linter at all, while every *.py beside
 # them went through ruff and mypy.
 print_status "Linting shell scripts..."
