@@ -24,6 +24,7 @@ import ast
 import json
 import re
 import subprocess
+from pathlib import Path
 
 from tests._workspace import ROOT
 
@@ -136,7 +137,17 @@ def _required_files() -> list[str]:
 
 
 def _is_committable(relative_path: str) -> bool:
-    """Whether git would keep this artifact path, i.e. .gitignore does not drop it."""
+    """Whether git would keep this artifact path, i.e. .gitignore does not drop it.
+
+    Deliberately *without* ``--no-index``, unlike ``_excluded_by_gitignore``
+    below, because the two ask different questions and git answers each one
+    correctly for its own. Here the question is whether a path this repository
+    requires can be committed at all, and a path already tracked can be — git
+    does not apply ignore rules to tracked files — which is what the plain form
+    reports. Below the question is what the *rules* say, for which a tracked
+    path returning "not ignored" is the wrong answer and the trap that made the
+    obvious implementation unable to fail.
+    """
     result = subprocess.run(
         ["git", "check-ignore", "-q", f".quality-artifacts/{relative_path}"],
         cwd=ROOT,
@@ -176,6 +187,129 @@ def test_every_required_artifact_is_one_git_actually_keeps():
         f"{CONSUMER.name} requires {dropped}, which .gitignore excludes from the "
         "repository. CI would fail every pull request on a file no developer can "
         "commit. Either add a '!' un-ignore rule, or drop it from REQUIRED_FILES."
+    )
+
+
+def _tracked_artifacts(root: Path) -> list[str]:
+    """Every path git tracks under ``.quality-artifacts/``, repo-relative."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-z", "--", ".quality-artifacts"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [name for name in listing.split("\0") if name]
+
+
+def _excluded_by_gitignore(root: Path, paths: list[str], *, no_index: bool = True) -> list[str]:
+    """Which of ``paths`` the ignore *rules* exclude, whether tracked or not.
+
+    ``--no-index`` is load-bearing and is a parameter only so a test can pin
+    that. Without it, ``git check-ignore`` declines to report a path that is
+    already in the index — it answers "not ignored" for exactly the files this
+    is looking for, and the check reports every violation as compliant.
+    """
+    if not paths:
+        return []
+    command = ["git", "check-ignore", "-z", "--stdin"]
+    if no_index:
+        command.insert(3, "--no-index")
+    result = subprocess.run(
+        command,
+        cwd=root,
+        input="\0".join(paths),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # 0: at least one path is ignored. 1: none are. Anything else is a real
+    # failure, and reading it as "none are" would make this pass without
+    # consulting a rule.
+    if result.returncode not in (0, 1):
+        raise AssertionError(
+            f"git check-ignore failed ({result.returncode}): {result.stderr.strip()}"
+        )
+    return [name for name in result.stdout.split("\0") if name]
+
+
+def test_no_committed_artifact_is_one_gitignore_excludes():
+    """A file both tracked and ignored is in the repository by accident.
+
+    ``.gitignore`` declares the committed artifact set as an allowlist —
+    ``.quality-artifacts/*`` and a handful of ``!`` un-ignores — which makes
+    "what is committed" a decision written down in one place. A file that is
+    tracked *and* matched by the ignore rule contradicts that declaration
+    without contradicting anything git enforces: ignore rules do not apply to
+    tracked files, so it keeps being committed, keeps conflicting on every run,
+    and the allowlist keeps reading as though it were the whole story.
+
+    Which is how ``coverage.xml`` accumulated over a gigabyte of object history
+    while the rule excluding it sat right there. Reproduced with ``git add -f``:
+    all twenty artifact guards passed over it.
+
+    Only this direction is asserted. The other — every allowlisted name is
+    tracked — is legitimately false: ``lint-report.json`` is un-ignored and
+    never produced, and un-ignoring a file the gate does not always write is a
+    reasonable thing to do.
+    """
+    tracked = _tracked_artifacts(ROOT)
+    assert tracked, (
+        "no tracked files under .quality-artifacts/ — the listing broke, and "
+        "this guard would pass by checking nothing"
+    )
+
+    excluded = _excluded_by_gitignore(ROOT, tracked)
+    assert not excluded, (
+        "these files are committed and .gitignore excludes them, so the "
+        "allowlist no longer describes what is in the repository:\n"
+        + "\n".join(f"  - {name}" for name in excluded)
+        + "\n\nEither add a '!' un-ignore rule for each, if it belongs in the "
+        "repository, or 'git rm --cached' it, if it does not. Leaving it is the "
+        "state that costs the most: it stays committed regardless of the rule."
+    )
+
+
+def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path):
+    """Pins ``--no-index``, which the obvious implementation omits.
+
+    This is worth a test rather than a comment because the omission produces a
+    guard that **cannot fail**: ``git check-ignore`` skips a path that is in the
+    index, so on precisely the tracked-and-ignored file the guard above exists
+    to find, the plain form answers "not ignored" and the violation reads as
+    compliant. There is a helper in this very file that omits it — correctly,
+    for its own question — so reusing that one is the natural first move.
+
+    Asserted in a throwaway repository rather than by staging a file in this
+    one. Reaching into the developer's index to prove a point about git leaves
+    a mess behind if the assertion fails, and the property being pinned belongs
+    to git rather than to this repository's current contents.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(
+        ".quality-artifacts/*\n!.quality-artifacts/kept.json\n", encoding="utf-8"
+    )
+    artifacts = tmp_path / ".quality-artifacts"
+    artifacts.mkdir()
+    (artifacts / "kept.json").write_text("{}", encoding="utf-8")
+    (artifacts / "dropped.xml").write_text("<x/>", encoding="utf-8")
+
+    subprocess.run(
+        ["git", "add", "-f", ".gitignore", ".quality-artifacts"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    probe = [".quality-artifacts/kept.json", ".quality-artifacts/dropped.xml"]
+
+    assert _excluded_by_gitignore(tmp_path, probe) == [".quality-artifacts/dropped.xml"], (
+        "with --no-index, check-ignore must report the tracked-and-ignored file "
+        "and only that one"
+    )
+    assert _excluded_by_gitignore(tmp_path, probe, no_index=False) == [], (
+        "without --no-index, check-ignore reports nothing for tracked paths — "
+        "if this ever stops being true the parameter can go, but until then it "
+        "is the whole reason the guard above can fail at all"
     )
 
 

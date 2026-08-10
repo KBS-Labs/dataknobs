@@ -564,7 +564,7 @@ def test_placeholder():
 '''
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a new DataKnobs package",
         formatter_class=argparse.RawDescriptionHelpFormatter,

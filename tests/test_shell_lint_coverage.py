@@ -265,6 +265,15 @@ def test_every_linted_shell_script_is_covered_by_a_hash_scope():
     Coverage is asked through ``workspace_scope_files``, the function the hash
     itself uses, rather than by re-deriving which paths an entry expands to. A
     second implementation of that rule could answer for a rule nothing follows.
+
+    What this compares is two *different* rules, deliberately, which is why it
+    is worth having rather than being a tautology. The lint decides what is a
+    shell script and reads a shebang under any suffix; the hasher decides what
+    feeds a recorded check and reads one only when there is no suffix at all.
+    Both are right for their own question, and a file can satisfy one and not
+    the other — ``bin/_probe.bash`` did, and is how this guard was proved able
+    to fail. Neither answer is the bug when that happens, so the message below
+    names the choice rather than making it.
     """
     hashes = load_bin_module("package-hashes")
     covered = {
@@ -282,8 +291,17 @@ def test_every_linted_shell_script_is_covered_by_a_hash_scope():
         "so editing one leaves every stored hash intact and its own change "
         "unvalidated:\n"
         + "\n".join(f"  - {path}" for path in uncovered)
-        + "\nAdd them to a scope in bin/changed-packages.py, or widen the "
-        "directory-entry rule in bin/package-hashes.py so it reaches them."
+        + "\nThree ways to resolve this, and which is right depends on the "
+        "file:\n"
+        "  - name it in a scope in bin/changed-packages.py, if it belongs to "
+        "no hashed directory;\n"
+        "  - rename it to end in .sh, if it is an ordinary shell script "
+        "wearing another suffix;\n"
+        "  - add its suffix to _QUALITY_INPUT_SUFFIXES in "
+        "bin/package-hashes.py, if that suffix names a kind of file that feeds "
+        "a recorded check.\n"
+        "The hasher being narrower than the lint is deliberate — it answers a "
+        "different question — so widening it is a decision, not the default fix."
     )
 
 

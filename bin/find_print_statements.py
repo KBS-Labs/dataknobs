@@ -141,7 +141,7 @@ def find_prints_in_file(filepath: Path) -> list[tuple[int, int, str]]:
         return []
 
 
-def main():
+def main() -> None:
     """Main entry point for the script."""
     if len(sys.argv) < 2:
         print("Usage: find_print_statements.py <file_or_directory> [file_or_directory...]", file=sys.stderr)

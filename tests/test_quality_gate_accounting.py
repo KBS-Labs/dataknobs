@@ -27,12 +27,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests._workspace import ROOT, rel
+from tests._workspace import ROOT, rel, tracked_shell_files
 
 GATE = ROOT / "bin" / "run-quality-checks.sh"
 VALIDATOR = ROOT / "bin" / "validate-quality-artifacts.sh"
-WORKFLOW_LINT = ROOT / "bin" / "lint-workflows.sh"
-SHELL_LINT = ROOT / "bin" / "lint-shell.sh"
 
 
 @dataclass(frozen=True)
@@ -406,36 +404,6 @@ def test_every_status_that_gates_the_verdict_reaches_the_artifact():
 
 # --- a check whose tool is missing must fail, not skip ---
 
-#: Scoped to the gate's own scripts rather than all of ``bin/``, because a
-#: negative ``command -v`` probe does not mean the same thing everywhere. Of the
-#: nine outside this scope, six are install-on-demand (``not found → uv pip
-#: install → carry on``) and the other three already exit — audit-floor.sh for
-#: uv and osv-scanner, publish-test.sh for uv. So none of the nine is a defect
-#: today, and widening the scope would find nothing; the positive form used for
-#: sha256sum/shasum is alternative selection, also fine.
-#:
-#: Which is the actual reason to leave the scope alone: the cost of widening is
-#: not the three that would pass anyway but the six that would not, and telling
-#: install-on-demand from a genuine requirement needs something better than a
-#: keyword search for "install".
-#:
-#: The third gate script that paragraph anticipated is ``bin/lint-shell.sh``,
-#: and it arrived outside the scope exactly as predicted: shellcheck is a hard
-#: requirement there, and turning its probe into a warn-and-continue left every
-#: guard in this file green while ``shell_lint`` reported pass over nothing
-#: analysed. Hence its entry below.
-#:
-#: Membership is still hand-maintained, and that is the open part. Deriving it —
-#: "every script the gate invokes that probes for a tool" — resolves to
-#: lint-shell, lint-workflows, manage-services and test.sh, and the last two
-#: install on demand rather than requiring, so a derived list would fail on two
-#: scripts doing nothing wrong. Separating the two forms is the design pass this
-#: comment has described from the start, and it is what a guard over this list
-#: needs first. Until then the failure mode is a script added to the gate and
-#: not to this list, which nothing reports. Tracked.
-TOOL_PROBE_SCRIPTS = (GATE, WORKFLOW_LINT, SHELL_LINT)
-
-
 def _required_tool_probes(path: Path) -> list[tuple[int, str, list[str]]]:
     """``if ! command -v X`` probes, as ``(line, tool, branch body)``."""
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -456,7 +424,41 @@ def _required_tool_probes(path: Path) -> list[tuple[int, str, list[str]]]:
     return probes
 
 
-def test_a_gate_check_never_skips_because_its_tool_is_missing():
+def _acts_on_the_missing_tool(tool: str, body: list[str]) -> bool:
+    """Whether a not-found branch does something about it rather than continuing.
+
+    Two dispositions are correct and the difference is real, which is why this
+    is not simply "must exit": a hard requirement exits, and install-on-demand
+    installs and carries on. Both leave the script running with the tool present
+    or not running at all. The third possibility — printing a warning and going
+    on — is the defect.
+
+    Told apart without a vocabulary of installer commands, which would be a new
+    hand-maintained set standing in for the question actually being asked. The
+    question is whether the branch *acts*, so output lines are set aside and
+    what remains has to either exit or name the tool it just failed to find.
+    Every install here reads ``uv pip install <tool>``; every requirement reads
+    ``exit N`` under an echoed message that mentions ``brew install`` — which is
+    why a keyword search for "install" gets both backwards, and why exit is
+    tested first regardless of what the branch printed.
+
+    Fails closed. An install this cannot recognise is reported rather than
+    assumed, and the remedy is to make the branch say what it does; a branch
+    that silently continues is reported either way.
+    """
+    actions = [
+        stripped
+        for line in body
+        if (stripped := line.strip())
+        and not stripped.startswith("#")
+        and not re.match(r"^(echo|printf)\b", stripped)
+    ]
+    if any(re.match(r"^exit\b", action) for action in actions):
+        return True
+    return any(tool in action for action in actions)
+
+
+def test_no_shell_script_continues_when_a_tool_it_probed_for_is_missing():
     """Skipping on a missing tool reports green while testing nothing.
 
     Which is worse than having no check, because it also reports success — and
@@ -469,25 +471,45 @@ def test_a_gate_check_never_skips_because_its_tool_is_missing():
     Failing loudly is also what the dependency rules require of any tool we
     invoke as a subprocess, which is what shellcheck is. Two independent
     arguments, one behaviour.
+
+    The population is **every tracked shell file**, derived rather than listed.
+    It was three scripts named by hand, guarded by a comment that deferred the
+    widening because "telling install-on-demand from a genuine requirement needs
+    something better than a keyword search for 'install'" — which is true, and
+    was solved by not searching for a keyword. Classifying all twelve negative
+    probes in the repository comes out six exit, six install, and **none**
+    ambiguous, so the rule the comment was waiting for is just the two
+    dispositions written down.
+
+    Two things the hand-maintained list also hid, both visible only once the set
+    was derived: one of its three members contains no probe at all, so its
+    contribution was empty while the non-empty check passed on the other two;
+    and the two scripts the comment named as the obstacle use the *positive*
+    form (``if command -v docker-compose``), which is alternative selection and
+    was never in this population to begin with. Its stated failure mode — a
+    script added to the gate and not to the list — now cannot happen rather than
+    being tracked.
     """
     probes = [
-        (path, line, tool, body)
-        for path in TOOL_PROBE_SCRIPTS
-        for line, tool, body in _required_tool_probes(path)
+        (name, line, tool, body)
+        for name in tracked_shell_files()
+        for line, tool, body in _required_tool_probes(ROOT / name)
     ]
     assert probes, (
-        "no 'if ! command -v' probes found in the gate scripts — if the "
+        "no 'if ! command -v' probes found in any tracked shell file — if the "
         "requirement checks were restructured, re-point this guard rather than "
         "leaving it passing vacuously"
     )
 
-    skipping = [
-        f"{rel(path)}:{line} — {tool}"
-        for path, line, tool, body in probes
-        if not any(re.match(r"^\s*exit\b", ln) for ln in body)
+    continuing = [
+        f"{name}:{line} — {tool}"
+        for name, line, tool, body in probes
+        if not _acts_on_the_missing_tool(tool, body)
     ]
-    assert not skipping, (
-        f"these checks continue when a required tool is absent: {skipping}. The "
-        "run then reports success having verified nothing. Print an error naming "
-        "the tool and exit non-zero instead."
+    assert not continuing, (
+        f"these branches continue when a probed-for tool is absent: {continuing}. "
+        "The run then reports success having verified nothing. Either print an "
+        "error naming the tool and exit non-zero, or install it — and if the "
+        "branch does install it, name the tool in the command that does so, "
+        "which is how this tells the two apart."
     )

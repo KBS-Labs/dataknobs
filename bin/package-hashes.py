@@ -162,7 +162,15 @@ def workspace_scope_files(scope: str) -> list[Path]:
 
 #: Suffixes carried by a file that feeds a recorded check. Code for the lint and
 #: test verdicts; markup, stylesheet and script for the three documentation ones,
-#: which read whole trees rather than named files.
+#: which read whole trees rather than named files; workflow YAML for workflow_lint,
+#: whose entire input is one directory of them.
+#:
+#: This set is what a *directory* entry expands through, so it and the entries in
+#: WORKSPACE_QUALITY_INPUTS are one decision written in two files. Declaring a
+#: directory whose files this rejects yields a scope covering nothing, which reads
+#: from the declaration exactly like a scope covering everything — the reason each
+#: family of inputs has a guard asserting its own coverage rather than trusting
+#: that the entry is there.
 #:
 #: Slightly over-inclusive in one direction: ``bin/README.md`` feeds no check but
 #: sits under a hashed directory, so editing it invalidates the artifacts. Over-
@@ -170,7 +178,15 @@ def workspace_scope_files(scope: str) -> list[Path]:
 #: recorded over a tree that no longer produced it, which is the defect this whole
 #: mechanism exists to prevent. A per-scope suffix set would be more machinery
 #: than the single file it saves.
-_QUALITY_INPUT_SUFFIXES = frozenset({".py", ".sh", ".md", ".css", ".js"})
+#:
+#: Over-inclusion has a limit, though, and ``.txt`` is past it: one file under a
+#: hashed directory feeds a check (bin/internal-label-allowlist.txt, which the
+#: lint step honours) and the other feeds nothing, so admitting the suffix would
+#: take a documentation file to reach a data one. It is named in the scope
+#: instead. Naming what counts is also what keeps a developer's hash equal to
+#: CI's, and that argument runs the same way here: a suffix admitted for one file
+#: admits every stray of that kind an editor leaves behind.
+_QUALITY_INPUT_SUFFIXES = frozenset({".py", ".sh", ".md", ".css", ".js", ".yml", ".yaml"})
 
 
 def _is_quality_input(path: Path) -> bool:
@@ -191,6 +207,19 @@ def _is_quality_input(path: Path) -> bool:
     Extension is not sufficient, for the same reason it is not sufficient in
     lint-shell.sh: ``bin/dk`` carries none, and it is the entry point the rest
     are invoked through. So a shebang is read when the suffix does not answer.
+
+    But only then, and that is where this stops agreeing with ``shell_targets``
+    in lint-shell.sh — a similarity worth naming precisely, because the sentence
+    above reads as if the two rules were the same. They are not. That one asks
+    *is this a shell script* and reads a shebang under **any** suffix, so a file
+    named ``.bash`` is a lint target; this asks *does this feed a recorded
+    check* and reads one **only when there is no suffix**, so the same file is
+    not a hash input. The asymmetry is deliberate: a suffix here is a positive
+    statement that a kind of file feeds a check, and an unlisted suffix is an
+    unhandled case rather than an excluded one. Neither rule is the bug when
+    they disagree, and the shell lint's coverage guard —
+    ``test_every_linted_shell_script_is_covered_by_a_hash_scope`` — is what
+    reports the disagreement to someone who can decide which to change.
 
     Naming what counts, rather than taking everything not obviously junk, is
     also what keeps the answer identical on a developer's machine and on a CI
@@ -337,8 +366,14 @@ def validate_artifacts() -> dict[str, Any]:
 
 
 def cmd_compute() -> None:
-    """Print per-package content hashes as JSON (with algorithm version)."""
-    result = compute_all_hashes()
+    """Print per-package content hashes as JSON (with algorithm version).
+
+    The payload is widened rather than the version stringified: validate_artifacts
+    pops this key and compares it to the int constant, so emitting "3" would make
+    every stored artifact read as a different algorithm and silently skip hash
+    validation entirely.
+    """
+    result: dict[str, Any] = dict(compute_all_hashes())
     result["_algorithm_version"] = _HASH_ALGORITHM_VERSION
     json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")

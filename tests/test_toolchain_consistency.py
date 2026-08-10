@@ -227,51 +227,44 @@ def _ci_executed_bin_scripts() -> set[str]:
     return found
 
 
-def test_every_script_ci_executes_is_covered_by_a_hash_scope():
-    """A gate script outside every hash scope lets its own edit go unvalidated.
+def test_every_script_ci_executes_exists():
+    """A workflow step naming a script that is not there fails only when it runs.
 
-    The artifact records a verdict, and these scripts are what computed it. Edit
-    one and the packages are untouched — every suite that passed still passes —
-    but the recorded verdict was produced under different rules, and the stored
-    hashes have no way to say so. The pull request that changes the gate is
-    exactly the one the gate cannot check, and it reports green.
+    Which is later than it sounds, and on someone else's branch: the quality job
+    is conditional on a path filter, the release job runs at release time, and
+    ``actionlint`` checks a ``run:`` block's shell without ever asking whether
+    the file it names is in the repository. So a rename that misses one caller
+    sits green until the job it broke happens to be the one that starts.
 
-    That is not hypothetical: ``bin/`` covers only ``*.py`` in the hash scope, so
-    every shell script here sat outside it, including the two that write and
-    verify the artifact.
+    This test used to ask a second question too — whether a hash scope covered
+    each of these scripts — and that half **could not fail**. The regex is
+    anchored to ``bin/``, ``bin/`` is a directory entry, and the entry admits
+    both suffixes the regex can match, so every name it finds was covered by
+    construction and the only reachable failure was a name that does not exist.
+    A guard whose sole live failure is one its message does not describe is not
+    a weaker guard; it is a second instance of the defect it was written for,
+    since it reports a scope problem for what is a typo. Proved before removing
+    it, by injecting a real script into a ``run:`` block: passed.
 
-    Coverage is asked through ``workspace_scope_files`` — the function the hash
-    itself uses — rather than by re-deriving which paths an entry expands to. A
-    second implementation of that rule could answer for a rule nothing follows.
-
-    Scoped to what CI *executes*, so adding a developer convenience to ``bin/``
-    costs nothing, while adding a script to a workflow forces the decision at
-    review time.
+    Coverage is not lost with it. ``bin/`` is a scope entry, and what makes that
+    entry keep reaching these files is
+    ``test_every_linted_shell_script_is_covered_by_a_hash_scope``, which asks
+    about a strictly larger set and *can* fail — it did, against a ``.bash``
+    file the lint reports on and the suffix predicate rejects.
     """
-    # Both tiers are scopes — _GLOBAL_QUALITY_INPUTS *is* WORKSPACE_QUALITY_INPUTS
-    # ["toolchain"] — so one pass over the scopes covers global and workspace-only
-    # alike, and a script promoted between tiers stays covered without an edit here.
-    hashes = load_bin_module("package-hashes")
-    covered = {
-        _rel(path)
-        for scope in WORKSPACE_QUALITY_INPUTS
-        for path in hashes.workspace_scope_files(scope)
-    }
-
     executed = _ci_executed_bin_scripts()
     assert executed, (
         "no bin/ script was found in any workflow run: block — the extraction "
         "broke, and this guard would pass by checking nothing"
     )
 
-    uncovered = sorted(name for name in executed if name not in covered)
-    assert not uncovered, (
-        "CI executes these scripts, but no hash scope covers them, so editing "
-        "one leaves every stored hash intact and its own change unvalidated:\n"
-        + "\n".join(f"  - {name}" for name in uncovered)
-        + "\n\nAdd each to _GLOBAL_QUALITY_INPUTS (if it moves every package's "
-        "result) or _WORKSPACE_ONLY_QUALITY_INPUTS (if it only decides what the "
-        "gate checks or records) in bin/changed-packages.py."
+    missing = sorted(name for name in executed if not (ROOT / name).is_file())
+    assert not missing, (
+        "CI runs these scripts, and they are not in the repository:\n"
+        + "\n".join(f"  - {name}" for name in missing)
+        + "\n\nThe step fails at the moment that job runs, which for a "
+        "conditional or release-time job is not the pull request that broke it. "
+        "Fix the name in the workflow, or restore the script."
     )
 
 
@@ -314,7 +307,7 @@ def _documentation_inputs() -> list[str]:
 def test_every_documentation_input_is_covered_by_a_hash_scope():
     """A documentation input outside every hash scope lets its own edit go unchecked.
 
-    This is ``test_every_script_ci_executes_is_covered_by_a_hash_scope`` one
+    This is ``test_every_linted_shell_script_is_covered_by_a_hash_scope`` one
     domain over, and it was found the same way: an edit to ``mkdocs.yml``
     dirtied nothing, so the artifacts recording ``documentation: pass`` stayed
     valid over a tree they no longer described.
@@ -360,6 +353,175 @@ def test_every_documentation_input_is_covered_by_a_hash_scope():
         + (f"\n  ... and {len(uncovered) - 15} more" if len(uncovered) > 15 else "")
         + "\n\nAdd the tree or file to _DOCS_QUALITY_INPUTS in "
         "bin/changed-packages.py."
+    )
+
+
+def _workflow_lint_inputs() -> list[str]:
+    """Every tracked file the recorded ``workflow_lint`` check reads.
+
+    Both the directory and the extensions are read from ``bin/lint-workflows.sh``
+    rather than written here, for the reason every declaration in this file is:
+    a restatement keeps passing after the script changes, having asserted about
+    a set nothing lints. The script globs ``.yml`` *and* ``.yaml`` — GitHub
+    accepts either, and it says so where it does it.
+    """
+    script = (ROOT / "bin" / "lint-workflows.sh").read_text(encoding="utf-8")
+
+    directory = re.search(r'^WORKFLOW_DIR="\$PROJECT_ROOT/([^"]+)"', script, re.MULTILINE)
+    assert directory, (
+        "bin/lint-workflows.sh no longer names its directory as "
+        'WORKFLOW_DIR="$PROJECT_ROOT/..." — this guard stopped tracking what '
+        "the workflow lint reads"
+    )
+
+    suffixes = set(re.findall(r'"\$WORKFLOW_DIR"/\*(\.[a-z]+)', script))
+    assert suffixes, (
+        "bin/lint-workflows.sh no longer globs its workflow files by extension "
+        "— re-point this guard rather than leaving it asking about none"
+    )
+
+    prefix = directory.group(1).rstrip("/") + "/"
+    return sorted(
+        str(path)
+        for path in _tracked(directory.group(1))
+        if str(path).startswith(prefix) and path.suffix in suffixes
+    )
+
+
+def test_every_workflow_lint_input_is_covered_by_a_hash_scope():
+    """A workflow outside every hash scope lets its own edit go unvalidated.
+
+    ``workflow_lint`` is a recorded check and these files are its entire input,
+    so this is ``test_every_documentation_input_is_covered_by_a_hash_scope`` a
+    third domain over, found the same way and by the same question: what does a
+    recorded check read, and does anything notice when it changes? Editing a
+    workflow moved the recorded verdict while leaving every stored hash intact,
+    and CI — which validates the artifact rather than re-running the gate —
+    accepted the ``workflow_lint: pass`` the edit had just invalidated.
+
+    Sharper here than elsewhere, because these files are also what CI *is*: the
+    path filter deciding which jobs start is one of them, so the pull request
+    that narrows the filter is one no filter would have started a check for.
+
+    Asked through ``workspace_scope_files``, the function the hash itself uses,
+    rather than by re-deriving what an entry expands to. Note what that costs a
+    reader to check: a directory entry expands through a suffix predicate, so
+    declaring ``.github/workflows/`` while ``.yml`` is not a quality-input
+    suffix would expand to nothing at all — a declared scope covering none of
+    its files, which reads exactly like coverage. This guard is what tells the
+    two apart.
+    """
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        _rel(path)
+        for scope in WORKSPACE_QUALITY_INPUTS
+        for path in hashes.workspace_scope_files(scope)
+    }
+
+    inputs = _workflow_lint_inputs()
+    assert inputs, (
+        "no workflow files resolved — the extraction broke, and this guard "
+        "would pass by checking nothing"
+    )
+
+    uncovered = [name for name in inputs if name not in covered]
+    assert not uncovered, (
+        f"{len(uncovered)} of {len(inputs)} workflow-lint inputs are in no hash "
+        "scope, so editing one leaves every stored hash intact and keeps the "
+        "recorded workflow_lint verdict valid over files it no longer "
+        "describes:\n"
+        + "\n".join(f"  - {name}" for name in uncovered)
+        + "\n\nAdd the directory to _WORKSPACE_ONLY_QUALITY_INPUTS in "
+        "bin/changed-packages.py, and check that _QUALITY_INPUT_SUFFIXES in "
+        "bin/package-hashes.py admits the extensions it holds — a directory "
+        "entry whose files the predicate rejects expands to nothing."
+    )
+
+
+#: A ``ROOT / "literal"`` chain in a workspace guard, i.e. a file it reads by
+#: name. Interpolated names are out of reach and out of scope: the population
+#: this asks about is the hand-written literals, which is where the omissions
+#: have been.
+_ROOT_RELATIVE_RE = re.compile(r'ROOT / "([^"]+)"((?: / "[^"]+")*)')
+
+
+def _files_the_workspace_guards_read() -> list[str]:
+    """Every root-relative file the guards under ``tests/`` name.
+
+    Derived from their own source rather than listed, which is the whole point:
+    a list would be a fourth hand-maintained registration set beside the three
+    this slice is about, and it would go stale the first time a guard started
+    reading something new — silently, since a guard reading an unhashed file is
+    not a guard that fails.
+
+    Directories are skipped rather than probed. What a guard does with a
+    directory varies — walk it, glob it, check it exists — so "covered" has no
+    single meaning for one, while for a named file it has exactly one.
+
+    Walked recursively even though this tree is flat today, because the
+    alternative fails the way everything else here does: a guard filed one
+    directory down would be outside the population and nothing would say so.
+
+    One read, one expression. A chain split across statements — ``area = ROOT /
+    "bin"`` and then ``area / "thing.txt"`` — is invisible here, and invisible
+    in the direction that passes: the non-vacuity floor in the test below is
+    met by every other read, so the one that went missing is reported by
+    nothing. Write a root-relative read as a single chained expression and it
+    stays in the population.
+    """
+    named: set[str] = set()
+    sources = (p for p in ROOT.glob("tests/**/*.py") if "__pycache__" not in p.parts)
+    for source in sorted(sources):
+        for head, tail in _ROOT_RELATIVE_RE.findall(source.read_text(encoding="utf-8")):
+            parts = [head, *re.findall(r'"([^"]+)"', tail)]
+            candidate = ROOT.joinpath(*parts)
+            if candidate.is_file():
+                named.add(_rel(candidate))
+    return sorted(named)
+
+
+def test_every_file_the_workspace_guards_read_is_covered_by_a_hash_scope():
+    """A guard's own input outside every hash scope lets its verdict go stale.
+
+    The guards under ``tests/`` are themselves hashed — ``tests/`` is a scope
+    entry — but what they *read* is not, and the two are different sets. So a
+    file like ``.gitignore``, which decides the answer of three guards here and
+    is named by none of the scopes, could be edited to flip one of them from
+    pass to fail while every stored hash stayed intact and the recorded
+    ``unit_tests`` verdict stayed valid over it.
+
+    That is the same sentence as the documentation and workflow guards above,
+    turned on the guards themselves — which is the case most likely to be
+    missed, because the scope entry covering the *code* looks like coverage of
+    the check.
+
+    The population is derived from the guards' own source, so a guard that
+    starts reading a fourth root file is covered by this the day it is written
+    rather than the day someone remembers.
+    """
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        _rel(path)
+        for scope in WORKSPACE_QUALITY_INPUTS
+        for path in hashes.workspace_scope_files(scope)
+    }
+
+    named = _files_the_workspace_guards_read()
+    assert len(named) > 10, (
+        f"only {len(named)} named files resolved from the workspace guards — "
+        "the extraction broke, and this guard would pass by checking almost "
+        "nothing"
+    )
+
+    uncovered = [name for name in named if name not in covered]
+    assert not uncovered, (
+        f"{len(uncovered)} of {len(named)} files the workspace guards read are "
+        "in no hash scope, so editing one changes what a guard reports while "
+        "leaving every stored hash intact:\n"
+        + "\n".join(f"  - {name}" for name in uncovered)
+        + "\n\nAdd each to _WORKSPACE_ONLY_QUALITY_INPUTS in "
+        "bin/changed-packages.py — a guard's input moves that guard's result "
+        "and no package's, which is what that tier is for."
     )
 
 

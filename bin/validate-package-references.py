@@ -10,17 +10,25 @@ This script checks:
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+
+#: The registry as loaded. Deliberately open rather than a TypedDict:
+#: .dataknobs/packages.json owns the shape, and a second declaration of it here
+#: would be one more thing to keep in step with the file it describes.
+Registry = dict[str, Any]
 
 
-def load_registry():
+def load_registry() -> Registry:
     """Load the package registry."""
     registry_path = Path(__file__).parent.parent / ".dataknobs" / "packages.json"
     with open(registry_path) as f:
-        return json.load(f)
+        result: Registry = json.load(f)
+        return result
 
 
-def _root_workspace_members(repo_root):
+def _root_workspace_members(repo_root: Path) -> str | None:
     """Return the raw `members = [...]` list from the root `[tool.uv.workspace]`."""
     pyproject_path = repo_root / "pyproject.toml"
     if not pyproject_path.exists():
@@ -38,7 +46,7 @@ def _root_workspace_members(repo_root):
     return None
 
 
-def _package_is_workspace_member(pkg_name, members_line):
+def _package_is_workspace_member(pkg_name: str, members_line: str | None) -> bool:
     """Return True if `packages/<pkg_name>` is covered by the workspace `members` glob."""
     if members_line is None:
         return False
@@ -56,7 +64,7 @@ WORKSPACE_INSTALL_PATTERNS = (
 )
 
 
-def check_workflow_docs(registry, repo_root):
+def check_workflow_docs(registry: Registry, repo_root: Path) -> list[str]:
     """Check if docs workflows install all required packages.
 
     Two install patterns are accepted:
@@ -69,7 +77,7 @@ def check_workflow_docs(registry, repo_root):
        directly (e.g. `uv pip install -e packages/llm`). Each required
        package must appear explicitly.
     """
-    errors = []
+    errors: list[str] = []
 
     doc_packages = [p for p in registry["packages"] if p.get("requires_docs_build", False)]
 
@@ -109,9 +117,9 @@ def check_workflow_docs(registry, repo_root):
     return errors
 
 
-def check_release_workflow(registry, repo_root):
+def check_release_workflow(registry: Registry, repo_root: Path) -> list[str]:
     """Check if release workflow has all packages in choices."""
-    errors = []
+    errors: list[str] = []
 
     releasable_packages = [
         p for p in registry["packages"]
@@ -135,9 +143,9 @@ def check_release_workflow(registry, repo_root):
     return errors
 
 
-def check_readme(registry, repo_root):
+def check_readme(registry: Registry, repo_root: Path) -> list[str]:
     """Check if README mentions all non-deprecated packages."""
-    errors = []
+    errors: list[str] = []
 
     listed_packages = [
         p for p in registry["packages"]
@@ -160,9 +168,9 @@ def check_readme(registry, repo_root):
     return errors
 
 
-def check_pyproject_toml(registry, repo_root):
+def check_pyproject_toml(registry: Registry, repo_root: Path) -> list[str]:
     """Check if pyproject.toml includes all packages."""
-    errors = []
+    errors: list[str] = []
 
     pyproject_path = repo_root / "pyproject.toml"
     if not pyproject_path.exists():
@@ -180,16 +188,16 @@ def check_pyproject_toml(registry, repo_root):
     return errors
 
 
-def main():
+def main() -> None:
     repo_root = Path(__file__).parent.parent
     registry = load_registry()
 
     print("🔍 Validating package references across codebase...\n")
 
-    all_errors = []
+    all_errors: list[str] = []
 
     # Run checks
-    checks = [
+    checks: list[tuple[str, Callable[[Registry, Path], list[str]]]] = [
         ("GitHub Workflows (docs)", check_workflow_docs),
         ("Release Workflow", check_release_workflow),
         ("README.md", check_readme),
