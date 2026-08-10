@@ -267,6 +267,7 @@ ROWS = {
     "validation": ("Code Validation:", 20, False),
     "workflow_lint": ("Workflow Lint:", 20, False),
     "shell_lint": ("Shell Lint:", 20, False),
+    "contract": ("Quality Contract:", 20, False),
 }
 
 #: The test rows, which are grouped for display rather than shown one per check.

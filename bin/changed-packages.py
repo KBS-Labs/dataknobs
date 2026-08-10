@@ -167,6 +167,7 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".gitignore",  # what three artifact-contract guards are a verdict about
     ".gitattributes",  # ditto, for the merge-driver guard
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
+    ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
 ]
 
 # The inputs to the three documentation checks the gate records: the site build,

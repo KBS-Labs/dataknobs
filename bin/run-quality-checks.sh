@@ -365,6 +365,53 @@ record_check() {
         --records "$RECORDS_FILE" --name "$name" --exit-code "$code" "$@"
 }
 
+# Content hashes, taken before the first check reads anything.
+#
+# These were computed at the far end, after every check had finished, which
+# meant the recorded digest described the tree at the *end* of the run rather
+# than the tree the checks read. A file checked at minute 1 holding content A
+# and edited to B at minute 2 was hashed as B, so the validator later compared
+# disk (B) against recorded (B), found them equal, and accepted an artifact
+# attesting content that no check had seen.
+#
+# Taken here, that same edit surfaces as the ordinary "Package content has
+# changed since quality checks were run" the validator already prints. No new
+# mechanism, no new failure mode, and it fails closed — which the end-of-run
+# version structurally cannot.
+#
+# The far end now re-computes and compares instead; see the re-check below.
+#
+# The `|| echo "{}"` fallback below is the checker role's, and only the
+# checker's. An empty document is a hash computation that *failed*, and it
+# compares clean against anything — so in the gate it would put a signed
+# artifact on the far side of a comparison that never happened, which is this
+# repository's own defect class rather than a tolerable degradation. The
+# diagnostics tier attests nothing, so there it is exactly a tolerable
+# degradation: the run is still worth finishing.
+#
+# Failing here rather than at the re-check is the difference between a minute
+# and the whole run: there is nothing the intervening checks could produce that
+# would make an artifact writable without these.
+print_status "Computing per-package content hashes..."
+PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
+# Workspace-level inputs (toolchain config, workspace guards) are hashed
+# separately: they carry their own blast radius and never enter the
+# package dependency graph. Without them a change to mypy.ini or a guard
+# left every stored hash intact and CI validated a stale artifact.
+WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+    for _half in "packages:$PACKAGE_HASHES_JSON" "workspace:$WORKSPACE_HASHES_JSON"; do
+        if [ "${_half#*:}" = "{}" ]; then
+            print_error "Could not compute ${_half%%:*} content hashes."
+            print_error "An artifact signed over an empty digest set attests nothing,"
+            print_error "so no checks were run. Fix the hash computation and re-run."
+            exit 1
+        fi
+    done
+    unset _half
+fi
+
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
@@ -675,6 +722,7 @@ UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
 WORKFLOW_LINT_STATUS=0
 SHELL_LINT_STATUS=0
+CONTRACT_STATUS=0
 
 # How long each check took, in whole seconds, for the durations recorded
 # alongside its status in quality-summary.json. These answer "where does a gate
@@ -691,6 +739,7 @@ DOCS_MIRROR_SECONDS=null
 VALIDATION_SECONDS=null
 SHELL_LINT_SECONDS=null
 WORKFLOW_LINT_SECONDS=null
+CONTRACT_SECONDS=null
 UNIT_TEST_SECONDS=null
 INTEGRATION_TEST_SECONDS=null
 WORKSPACE_GUARD_SECONDS=null
@@ -721,7 +770,7 @@ elapsed_since() { echo $(( $(date +%s) - $1 )); }
 # or leaves it invisible to CI entirely (the workflow lint). Both halves are
 # guarded by tests/test_quality_gate_accounting.py.
 compute_overall_status() {
-    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ]; then
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ] || [ "$CONTRACT_STATUS" -ne 0 ]; then
         echo "FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         echo "PASS_WITH_SKIPS"
@@ -807,6 +856,40 @@ SHELL_LINT_SECONDS=$(elapsed_since "$_check_start")
 # Unconditional for the same reason as the block above it, so no "skipped".
 record_check shell_lint "$SHELL_LINT_STATUS" \
     --tool lint-shell.sh --duration "$SHELL_LINT_SECONDS"
+
+# Compare the tree against the coverage-and-strictness contract. Same three-place
+# wiring as the two above, and unconditional for the same reason.
+#
+# This is what makes a ceiling a ceiling. .dataknobs/quality-contract.json says
+# which files each tool covers and how far from clean each part of the tree may
+# be, and a number nobody compares is one that stops being true without anyone
+# finding out — the declaration it replaces carried its counts in comment prose,
+# where an entry matching nothing failed while "241 findings" stayed green at
+# 400. Enforced in one direction is how a backlog grows during the phase that is
+# supposed to be clearing it.
+#
+# It re-runs ruff and mypy rather than reading the verdicts validate.sh already
+# produced, because they are different questions. validate.sh asks "is the code
+# this run touched clean", over the packages in scope; this asks "has any cell
+# of the whole tree moved past what it declared", which needs every cell
+# measured whether the run touched it or not. Reusing one answer for the other
+# would make the ratchet depend on which packages happened to change.
+#
+# For ruff the difference is scope alone — both read the root config. For mypy
+# it is scope *and* config, since validate.sh runs under mypy.ini and the
+# contract measures under the root one; that second half disappears when mypy.ini
+# is retired, and the two invocations then differ only in what they cover.
+print_status "Checking the quality contract..."
+_check_start=$(date +%s)
+if uv run python "$SCRIPT_DIR/quality-contract.py" check; then
+    print_success "Every cell is within its ceiling"
+else
+    CONTRACT_STATUS=$?
+    print_error "The quality contract is not satisfied"
+fi
+CONTRACT_SECONDS=$(elapsed_since "$_check_start")
+record_check contract "$CONTRACT_STATUS" \
+    --tool quality-contract.py --duration "$CONTRACT_SECONDS"
 
 # Validation as a check that did not run. Two arms below reach it — asked to
 # skip style, and a PR whose diff gave validate.sh nothing to look at — and both
@@ -1572,13 +1655,44 @@ COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
 # Generate quality summary and signature immediately after coverage.xml is ready.
 # These are the files CI validates and that must be committed — they must not be
 # delayed by the slower per-package coverage reporting that follows.
-print_status "Computing per-package content hashes..."
-PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
-# Workspace-level inputs (toolchain config, workspace guards) are hashed
-# separately: they carry their own blast radius and never enter the
-# package dependency graph. Without them a change to mypy.ini or a guard
-# left every stored hash intact and CI validated a stale artifact.
-WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+# The hashes were taken before the first check. Re-take them now: equal means
+# every check read the content this artifact is about to attest, and unequal
+# means the tree moved while the run was reading it, so no digest describes
+# what was actually checked.
+#
+# Refusing is the only honest answer. Recording the start digest would attest a
+# tree half the checks never saw; recording the end digest would attest one the
+# other half never saw; and writing a summary with overall_status=FAIL would
+# say the *checks* failed, which is a different and untrue claim. So the run
+# stops here without an artifact, and .run-in-progress stays behind to say so.
+#
+# One case is open and stays open: an A→B→A edit inside a single run leaves both
+# digests equal while some check may have read B. Only a timestamp catches that,
+# and mtime is settable, rewritten by checkouts and rebases, and touched by
+# editors on saves that change nothing — the rarest case at the highest
+# flakiness cost, which is how a check ends up suppressed.
+print_status "Re-checking content hashes..."
+MOVED_SCOPES=$(uv run python "$SCRIPT_DIR/package-hashes.py" changed-since \
+    --packages "$PACKAGE_HASHES_JSON" \
+    --workspace "$WORKSPACE_HASHES_JSON") && HASH_RECHECK=0 || HASH_RECHECK=$?
+
+# Three outcomes, kept apart on purpose. "The tree moved" sends the developer
+# to re-run; "the comparison could not be made" sends them to the gate itself,
+# and telling them to re-run would be advice about the wrong program.
+if [ "$HASH_RECHECK" -eq 1 ]; then
+    print_error "The tree changed while the checks were running:"
+    # Unquoted on purpose: one name per line from the comparison, re-split here
+    # into one argument per name so printf's format cycles over them.
+    # shellcheck disable=SC2086
+    printf '  - %s\n' $MOVED_SCOPES >&2
+    print_error "No digest describes what was checked, so no artifact was written."
+    print_error "Re-run once the tree is settled."
+    exit 1
+elif [ "$HASH_RECHECK" -ne 0 ]; then
+    print_error "Could not re-check the content hashes (exit $HASH_RECHECK)."
+    print_error "The artifact would attest a tree nothing verified, so none was written."
+    exit 1
+fi
 
 print_status "Generating quality summary..."
 OVERALL_STATUS=$(compute_overall_status)
