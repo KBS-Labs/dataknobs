@@ -149,7 +149,7 @@ jobs:
 
             **Please run the following command locally before pushing:**
             \`\`\`bash
-            ./bin/run-quality-checks.sh
+            ./bin/dk pr
             \`\`\`
 
             This will:
@@ -158,6 +158,10 @@ jobs:
             3. Perform style checks with ruff
             4. Generate coverage reports
             5. Create artifacts in \`.quality-artifacts/\` that must be committed
+
+            \`./bin/run-quality-checks.sh\` runs the same checks but writes no
+            artifacts — use it to iterate, and \`./bin/dk pr\` to produce the
+            evidence this job verifies.
 
             For more information, see [Quality Checks Guide](../blob/main/docs/development/quality-checks.md)`
             })

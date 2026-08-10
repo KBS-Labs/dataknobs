@@ -22,18 +22,23 @@ validator actually uses rather than a second copy of it.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests._workspace import ROOT, rel
+from tests._workspace import ROOT, tracked_shell_files
 
 VALIDATOR = ROOT / "bin" / "validate-quality-artifacts.sh"
 
+#: The projection's field delimiter. See bin/read-quality-summary.py for why it
+#: is not a tab: `read` collapses runs of IFS whitespace and drops empty fields.
+SEP = "\x1f"
 
-def _read_summary(path: Path) -> dict[str, object]:
-    """Run the validator's reader and parse its tab-delimited projection."""
+
+def _read_summary_raw(path: Path) -> str:
+    """Run the validator's reader and return its projection verbatim."""
     result = subprocess.run(
         ["bash", str(VALIDATOR), "--read-summary", str(path)],
         capture_output=True,
@@ -41,24 +46,32 @@ def _read_summary(path: Path) -> dict[str, object]:
         check=False,
     )
     assert result.returncode == 0, f"reader exited {result.returncode}: {result.stderr}"
+    return result.stdout
+
+
+def _read_summary(path: Path) -> dict[str, object]:
+    """Run the validator's reader and parse its delimited projection."""
+    raw = _read_summary_raw(path)
 
     overall, checks, error = "", {}, None
-    for line in result.stdout.splitlines():
+    for line in raw.splitlines():
         if not line:
             continue
-        kind, _, rest = line.partition("\t")
+        kind, _, rest = line.partition(SEP)
         if kind == "OVERALL":
             overall = rest
         elif kind == "ERROR":
             error = rest
         elif kind == "CHECK":
-            name, status, skipped, label = rest.split("\t")
+            name, status, skipped, exit_code, tool, label = rest.split(SEP)
             checks[name] = {
                 "status": status,
                 "skipped": skipped == "true",
+                "exit_code": exit_code,
+                "tool": tool,
                 "label": label,
             }
-    return {"overall": overall, "checks": checks, "error": error, "raw": result.stdout}
+    return {"overall": overall, "checks": checks, "error": error, "raw": raw}
 
 
 def _write(path: Path, doc: object) -> Path:
@@ -231,28 +244,223 @@ def test_the_reader_prints_the_projection_and_nothing_else(tmp_path):
         text=True,
         check=False,
     )
-    kinds = {line.split("\t", 1)[0] for line in result.stdout.splitlines() if line}
+    kinds = {line.split(SEP, 1)[0] for line in result.stdout.splitlines() if line}
     assert kinds <= {"OVERALL", "CHECK", "ERROR"}, (
         f"unexpected output on the read-summary path: {result.stdout!r}"
     )
 
 
-def test_the_summary_is_not_read_by_line_offset_again(tmp_path):
+#: Commands that read a file as text, or as a second parse of JSON that already
+#: has a parser. ``jq`` is here for two reasons: it is a build-time dependency
+#: this repository does not pin, so every use needs a branch for its absence,
+#: and every such branch is a second reader that drifts from the first. That is
+#: not hypothetical — the ``jq`` path in the diagnostics tool asked for two
+#: checks the producer has never emitted, while the no-``jq`` path left every
+#: status variable unset, so it reported four failures for a passing run.
+_TEXT_READERS = ("grep ", "sed ", "awk ", "cut ", "head ", "tail ", "jq ")
+
+#: Reads that do not parse the file: existence, mtime and modification time.
+_NOT_A_READ = ("-nt ", "-ot ", "! -f ", "-f ", "date -r")
+
+
+def test_nothing_reads_the_summary_except_the_parser():
     """Recurrence guard for the defect class, not for one instance of it.
 
     ``grep -A<n>`` against the summary is the shape that made field order
-    load-bearing. It reads whatever sits n lines below a match, which is a
+    load-bearing: it reads whatever sits n lines below a match, which is a
     position rather than a name, so it silently returns the wrong thing the
-    moment the producer adds a field. Nothing but a parser should read this file.
+    moment the producer adds a field.
+
+    Scoped to every tracked shell file rather than to the validator. The narrow
+    version of this test passed for as long as the diagnostics tool held a
+    second reader of the same file, because the second reader was in the file it
+    did not look at. A guard scoped to where you already looked reports green
+    over the place you didn't.
     """
-    source = VALIDATOR.read_text(encoding="utf-8")
-    offenders = [
-        line.strip()
-        for line in source.splitlines()
-        if "quality-summary.json" in line and ("grep -A" in line or "grep -B" in line)
-    ]
+    offenders = []
+    for name in tracked_shell_files():
+        path = ROOT / name
+        if path.name == "read-quality-summary.py":
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "quality-summary.json" not in line or line.lstrip().startswith("#"):
+                continue
+            if any(token in line for token in _NOT_A_READ):
+                continue
+            if any(token in line for token in _TEXT_READERS):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+
     assert not offenders, (
-        f"{rel(VALIDATOR)} reads quality-summary.json by line offset again:\n  "
+        "quality-summary.json is read by something other than its parser:\n  "
         + "\n  ".join(offenders)
-        + "\nUse read_summary(), which parses it as JSON."
+        + "\nUse bin/read-quality-summary.py, which parses it as JSON once."
+    )
+
+
+def test_every_consumer_of_the_projection_names_every_field(tmp_path):
+    """A shell ``read`` with too few variables is silently wrong, not an error.
+
+    ``read -r kind name status skipped label`` against a six-field record does
+    not fail: bash assigns the leftover fields to the final variable, so ``label``
+    silently becomes ``"<label><TAB><tool>"``. Adding a field to the projection
+    therefore corrupts the last-named field of every consumer that was not
+    updated with it, in a way no consumer can detect at run time.
+
+    So the count is asserted here instead, against what the projection actually
+    emits rather than against a number written down twice.
+    """
+    projection = _read_summary_raw(_write(tmp_path / "s.json", _PRODUCER_ORDER))
+    widest = max(
+        len(line.split(SEP)) for line in projection.splitlines() if line.startswith("CHECK")
+    )
+
+    # `kind` first is the convention that makes a consumer findable: every loop
+    # over the projection has to name that field to branch on the record type.
+    #
+    # Naming `label` is what makes one a CHECK consumer. It is the last field, so
+    # it is the one that silently absorbs whatever a short read leaves over —
+    # which makes it both the symptom and a precise way to ask the question. A
+    # loop that filters to OVERALL or META and names two or three fields is not
+    # reading a CHECK record and is left alone.
+    consumers = []
+    for name in tracked_shell_files():
+        for number, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1):
+            match = re.search(r"read -r kind\b([^;|#]*)", line)
+            if not match:
+                continue
+            fields = ("kind" + match.group(1)).split()
+            if any(field.lstrip("_") == "label" for field in fields):
+                consumers.append((f"{name}:{number}", len(fields), line.strip()))
+
+    assert consumers, "no consumer of the projection found — has the loop shape changed?"
+    wrong = [
+        f"{where}: names {named} of {widest} fields\n    {text}"
+        for where, named, text in consumers
+        if named != widest
+    ]
+    assert not wrong, (
+        "these read the projection with the wrong number of variables:\n  "
+        + "\n  ".join(wrong)
+        + f"\nA CHECK record has {widest} fields; name all of them, using `_` "
+        "for the ones the loop ignores."
+    )
+
+
+# --------------------------------------------------------------------------
+# The main path — everything above drives --read-summary, which returns before
+# the main path begins.
+# --------------------------------------------------------------------------
+
+#: What the validator requires to be present before it will read anything. Their
+#: contents do not matter to the assertions below; their existence does, because
+#: the script exits at the missing-files check.
+_REQUIRED_ARTIFACTS = (
+    "environment.json",
+    "signature.sha256",
+    "unit-test-results.xml",
+)
+
+
+def _artifacts_dir(tmp_path: Path, summary: object | str) -> Path:
+    """Build a directory shaped like ``.quality-artifacts/`` around one summary."""
+    directory = tmp_path / "artifacts"
+    directory.mkdir()
+    for name in _REQUIRED_ARTIFACTS:
+        (directory / name).write_text("", encoding="utf-8")
+
+    target = directory / "quality-summary.json"
+    if isinstance(summary, str):
+        target.write_text(summary, encoding="utf-8")
+    else:
+        _write(target, summary)
+    return directory
+
+
+def _validate(directory: Path) -> str:
+    """Run the validator's main path over ``directory`` and return its report.
+
+    The exit code is deliberately not asserted on. This script also revalidates
+    package content hashes against the working tree, which is a real check with
+    a real verdict that has nothing to do with the summary — so the status lines
+    are the subject here, not the overall result.
+    """
+    result = subprocess.run(
+        ["bash", str(VALIDATOR), "--from", str(directory)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout + result.stderr
+
+
+def test_the_overall_status_reaches_the_main_path(tmp_path):
+    r"""A passing summary must be reported as passing.
+
+    The projection moved from tab-delimited to ``\037`` records. Three
+    ``while IFS`` loops moved with it and two ``sed`` extractions did not, so
+    ``OVERALL_STATUS`` resolved to the empty string on every run and the
+    validator reported ``Overall status: `` — failing CI on every pull request,
+    whatever the artifacts said.
+
+    Nothing caught it because every test above drives ``--read-summary``, which
+    exits before this code. The reader was right; its callers were not.
+    """
+    report = _validate(_artifacts_dir(tmp_path, _PRODUCER_ORDER))
+
+    assert "Overall status: PASS" in report, (
+        "the validator did not read PASS from a passing summary:\n" + report
+    )
+
+
+def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path):
+    """A summary that cannot be parsed must not read as one that says nothing.
+
+    These are the two verdicts the script's own comment says must never meet:
+    "could not parse it" and "it says the run passed". With the ERROR extraction
+    matching a separator the projection no longer uses, the parse error was
+    dropped and the run fell through to an empty overall status — so a corrupt
+    artifact and a passing one produced the same message.
+    """
+    report = _validate(_artifacts_dir(tmp_path, "[not, an, object]"))
+
+    assert "Could not read quality-summary.json" in report, (
+        "an unparseable summary was not reported as unreadable:\n" + report
+    )
+
+
+def test_the_projection_is_split_never_pattern_matched():
+    """Recurrence guard for the class the two stale ``sed`` calls belong to.
+
+    ``test_nothing_reads_the_summary_except_the_parser`` covers readers of the
+    *file*. These two read the *projection*, on lines that never mention
+    ``quality-summary.json``, so that guard could not see them — and the
+    separator changed underneath them silently.
+
+    The projection is delimited text with a declared separator. The one correct
+    way to read it is to let ``IFS`` split it; spelling the separator into a
+    regex is a second copy of that decision, and the two do not change together.
+    The carriers are discovered from the assignment rather than named here, so a
+    third one is covered the day it is written.
+    """
+    offenders = []
+    for name in tracked_shell_files():
+        text = (ROOT / name).read_text(encoding="utf-8")
+        carriers = set(re.findall(r"(\w+)=\$\(\s*read_summary\b", text)) | set(
+            re.findall(r"(\w+)=\$\([^)]*--read-summary", text)
+        )
+        if not carriers:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if not any(f"${carrier}" in line or f'${{{carrier}}}' in line for carrier in carriers):
+                continue
+            if any(token in line for token in _TEXT_READERS):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+
+    assert not offenders, (
+        "the projection is being pattern-matched rather than split:\n  "
+        + "\n  ".join(offenders)
+        + "\nRead it with `while IFS=\"$(printf '\\037')\" read -r ...`, which "
+        "takes the separator from one place."
     )

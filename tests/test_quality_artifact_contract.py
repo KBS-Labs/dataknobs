@@ -248,10 +248,7 @@ def test_no_committed_artifact_is_one_gitignore_excludes():
     while the rule excluding it sat right there. Reproduced with ``git add -f``:
     all twenty artifact guards passed over it.
 
-    Only this direction is asserted. The other — every allowlisted name is
-    tracked — is legitimately false: ``lint-report.json`` is un-ignored and
-    never produced, and un-ignoring a file the gate does not always write is a
-    reasonable thing to do.
+    The other direction is asserted separately, below.
     """
     tracked = _tracked_artifacts(ROOT)
     assert tracked, (
@@ -267,6 +264,111 @@ def test_no_committed_artifact_is_one_gitignore_excludes():
         + "\n\nEither add a '!' un-ignore rule for each, if it belongs in the "
         "repository, or 'git rm --cached' it, if it does not. Leaving it is the "
         "state that costs the most: it stays committed regardless of the rule."
+    )
+
+
+def _un_ignored_artifact_names() -> list[str]:
+    """Every ``.quality-artifacts/`` path ``.gitignore`` un-ignores, in order."""
+    prefix = "!.quality-artifacts/"
+    return [
+        line.strip().removeprefix("!")
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(prefix)
+    ]
+
+
+def test_every_un_ignored_artifact_is_one_something_writes():
+    """An allowance with no producer is a slot, and the slot is signed.
+
+    The reverse of the guard above, and it used to be legitimately false, which
+    is how it went unasserted: ``lint-report.json`` was un-ignored for a writer
+    that never existed. A reader in ``bin/diagnose-quality-failures.sh``, an
+    allowance here, and nothing in between — so the lint half of that tool
+    returned at its first line on every run it ever made, reporting nothing and
+    looking exactly like a run with no lint findings.
+
+    The cost is not the dead read. It is that the signature enumerates this
+    directory by glob — ``git ls-files --cached --others --exclude-standard --
+    '*.json' '*.xml'`` — so an un-ignored name is not merely permitted to be
+    committed, it joins *what CI attests* the moment anything writes it. An
+    allowance nobody is maintaining is a place a future write lands in the
+    signed set without a decision.
+
+    Tracked is the test for "something writes it", because the gate writes all
+    six on every run and commits them. A file the gate wrote only sometimes
+    would fail here — correctly: it would be a name that changes the attested
+    set depending on the run, which is the condition the signature exists to
+    detect and the last thing to encode in an ignore rule.
+    """
+    allowed = _un_ignored_artifact_names()
+    assert allowed, (
+        "no '!' un-ignore rules found under .quality-artifacts/ — the parse "
+        "broke, and this guard would pass by checking nothing"
+    )
+
+    tracked = set(_tracked_artifacts(ROOT))
+    orphans = [name for name in allowed if name not in tracked]
+
+    assert not orphans, (
+        ".gitignore un-ignores these, and git tracks none of them:\n"
+        + "\n".join(f"  - {name}" for name in orphans)
+        + "\n\nEither something should be writing and committing it — in which "
+        "case the producer is missing — or the allowance is dead and should be "
+        "removed. Leaving it is the state that costs the most: the signature "
+        "enumerates this directory by glob, so the name is a slot a future "
+        "write joins the attested set through, without anyone deciding to."
+    )
+
+
+def _summary_check_names() -> set[str]:
+    """The ``checks`` keys ``run-quality-checks.sh`` writes into the summary."""
+    source = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
+    heredoc = source.split('quality-summary.json" <<EOF', 1)[1].split("\nEOF", 1)[0]
+    checks = heredoc.split('"checks": {', 1)[1]
+    return set(re.findall(r'^"([a-z_]+)":\s*\{', checks, re.MULTILINE))
+
+
+def test_no_reader_names_a_check_the_summary_does_not_record():
+    """A reader asking for a key nobody writes gets a value, and it is wrong.
+
+    ``jq -r '.checks.lint.status'`` on a summary with no ``lint`` check prints
+    ``null`` and exits 0 — so the read succeeds, the value is not ``"pass"``,
+    and the caller renders a warning. ``bin/diagnose-quality-failures.sh`` did
+    that for ``lint`` and ``style``, neither of which the producer has ever
+    emitted, and showed two amber rows on every run it ever made. A row that is
+    always amber carries no information, and it costs more than a missing row:
+    it is indistinguishable from one that is amber for a reason.
+
+    The same shape as the ``lint-report.json`` allowance and the
+    permanently-mismatching signature before it — a reader, no writer, and a
+    result too plausible to look wrong.
+
+    Comment lines are skipped. This scans source text, so without that it also
+    matches the note left behind at a site where the defect was *removed*,
+    making the guard fire on the sentence explaining why it no longer can. A
+    guard that punishes describing the bug it guards against gets the
+    description deleted, which is the opposite of what it is for.
+    """
+    emitted = _summary_check_names()
+    assert emitted, "no check names extracted from the summary heredoc"
+
+    readers = {"diagnose-quality-failures.sh", "validate-quality-artifacts.sh"}
+    unknown: list[str] = []
+    for name in sorted(readers):
+        code = "\n".join(
+            line
+            for line in (ROOT / "bin" / name).read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for key in sorted(set(re.findall(r"\.checks\.([a-z_]+)", code))):
+            if key not in emitted:
+                unknown.append(f"{name}: .checks.{key}")
+
+    assert not unknown, (
+        "these read a check the summary does not record, so they read null and "
+        "render it as a verdict:\n"
+        + "\n".join(f"  - {u}" for u in unknown)
+        + f"\n\n  Recorded checks: {sorted(emitted)}"
     )
 
 

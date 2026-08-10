@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-10T03:54:09Z",
+  "timestamp": "2026-08-10T16:59:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/suppression-hygiene",
-  "git_commit": "45eb95cf7a96a35fe8d778308a0583ac038a9216",
+  "git_branch": "sbk/harness-integrity-phase-1",
+  "git_commit": "707413eb8b2911b49bc873c63935f9a42848d06c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

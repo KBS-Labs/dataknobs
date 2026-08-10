@@ -32,6 +32,26 @@ if [ "${1:-}" = "--read-summary" ]; then
     READ_SUMMARY_MODE="$2"
 fi
 
+# Which artifact set to validate. CI passes nothing and gets the committed one;
+# --from names another, which is what lets a test drive the main path below over
+# a synthetic run — the same affordance diagnose-quality-failures.sh carries, for
+# the same reason.
+#
+# Nothing could drive that path before this existed. Every guard in
+# tests/test_quality_artifact_validation.py went through --read-summary, and
+# --read-summary returns above the main path, so the two extractions that read
+# the projection outside read_summary() were executed by no test at all. They
+# were still matching on a tab after the projection moved to \037, which made
+# the overall status read empty and failed every artifact set CI has ever been
+# handed. A mode that exits before the code is not coverage of the code.
+if [ "${1:-}" = "--from" ]; then
+    if [ -z "${2:-}" ]; then
+        echo "--from needs a directory" >&2
+        exit 2
+    fi
+    ARTIFACTS_DIR="$2"
+fi
+
 if [ -z "$READ_SUMMARY_MODE" ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}         Validating Quality Check Artifacts                       ${NC}"
@@ -66,12 +86,11 @@ print_info() {
     echo -e "  ${BLUE}ℹ${NC} $1"
 }
 
-# Read quality-summary.json in one JSON parse, projected into tab-delimited
-# lines the shell can iterate:
-#
-#   OVERALL<TAB><overall_status>
-#   CHECK<TAB><name><TAB><status><TAB><skipped><TAB><label>
-#   ERROR<TAB><message>              (unreadable file; nothing else is emitted)
+# Read quality-summary.json in one JSON parse, projected into delimited lines
+# the shell can iterate. The record shapes and the choice of ASCII Unit
+# Separator over a tab are documented in bin/read-quality-summary.py; the short
+# version is that a tab is IFS whitespace, so `read` collapses runs of it and
+# drops empty fields.
 #
 # This replaces seven line-offset greps — `grep -A2 '"unit_tests"'` for a status,
 # `grep -A3` for a skipped flag. Those read the file by POSITION: any field added
@@ -89,7 +108,30 @@ print_info() {
 # embedded in a shell string is checked by nothing until it runs.
 read_summary() {
     python3 "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
-        || printf 'ERROR\tcould not run read-quality-summary.py\n'
+        || printf 'ERROR\037could not run read-quality-summary.py\n'
+}
+
+# Pull a single-valued record — OVERALL, ERROR — out of a projection.
+#
+# The same IFS-driven split the CHECK loops below use, rather than a second
+# answer to "what separates two fields" written as a regex. Both extractions
+# here were `sed -n 's/^OVERALL\t//p'` and stayed that way when the projection
+# moved from a tab to \037: they then matched nothing, the overall status read
+# empty on every run, and this script failed every artifact set CI was handed.
+# A parse error and a passing run reached the same message, which is the one
+# collapse the comment at the call site says must never happen.
+#
+# Never returns non-zero: under `set -e` a "no such record" exit status would
+# abort the run, and an absent record is a value to test for, not a failure.
+projection_value() {
+    local want="$1" kind rest
+    while IFS="$(printf '\037')" read -r kind rest; do
+        if [ "$kind" = "$want" ]; then
+            printf '%s\n' "$rest"
+            return 0
+        fi
+    done
+    return 0
 }
 
 # Print the projection for one summary file and exit. The main path below calls
@@ -107,7 +149,7 @@ VALIDATION_FAILED=0
 print_check "Artifacts directory exists"
 if [ ! -d "$ARTIFACTS_DIR" ]; then
     print_fail "Directory .quality-artifacts/ not found"
-    print_fail "Run: ./bin/run-quality-checks.sh before creating PR"
+    print_fail "Run: ./bin/dk pr before creating PR"
     exit 1
 fi
 print_pass "Found .quality-artifacts/"
@@ -135,7 +177,7 @@ done
 
 if [ $VALIDATION_FAILED -eq 1 ]; then
     echo ""
-    print_fail "Missing required artifacts. Run: ./bin/run-quality-checks.sh"
+    print_fail "Missing required artifacts. Run: ./bin/dk pr"
     exit 1
 fi
 
@@ -184,7 +226,7 @@ if [ -n "$HASH_RESULT" ]; then
         if [ -n "$SCOPES" ]; then
             print_info "Changed workspace scopes: $SCOPES"
         fi
-        print_fail "Please run: ./bin/run-quality-checks.sh"
+        print_fail "Please run: ./bin/dk pr"
         VALIDATION_FAILED=1
     fi
 else
@@ -197,7 +239,7 @@ fi
 print_check "Test results"
 if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
     SUMMARY_PROJECTION=$(read_summary "$ARTIFACTS_DIR/quality-summary.json")
-    SUMMARY_ERROR=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^ERROR\t//p')
+    SUMMARY_ERROR=$(projection_value ERROR <<< "$SUMMARY_PROJECTION")
 
     if [ -n "$SUMMARY_ERROR" ]; then
         # An unreadable summary is a failure, not a skip. It is the file the
@@ -206,7 +248,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         print_fail "Could not read quality-summary.json: $SUMMARY_ERROR"
         VALIDATION_FAILED=1
     else
-        OVERALL_STATUS=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^OVERALL\t//p')
+        OVERALL_STATUS=$(projection_value OVERALL <<< "$SUMMARY_PROJECTION")
 
         if [ "$OVERALL_STATUS" = "PASS" ]; then
             print_pass "Overall status: PASS"
@@ -230,7 +272,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         # a subshell, where every VALIDATION_FAILED set below would be discarded
         # when it exits, and the gate would report success over failing checks.
         CHECKS_SEEN=""
-        while IFS="$(printf '\t')" read -r kind name status _skipped label; do
+        while IFS="$(printf '\037')" read -r kind name status _skipped _exit_code _tool label; do
             [ "$kind" = "CHECK" ] || continue
             CHECKS_SEEN="$CHECKS_SEEN $name"
 
@@ -255,7 +297,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         esac
 
         if [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
-            while IFS="$(printf '\t')" read -r kind name _status skipped _label; do
+            while IFS="$(printf '\037')" read -r kind name _status skipped _exit_code _tool _label; do
                 [ "$kind" = "CHECK" ] && [ "$skipped" = "true" ] || continue
                 print_info "  Skipped: $name"
             done <<< "$SUMMARY_PROJECTION"
@@ -348,13 +390,13 @@ if [ $VALIDATION_FAILED -eq 0 ]; then
     exit 0
 else
     echo -e "${RED}✗ Validation failed!${NC}"
-    echo -e "${RED}  Please run: ./bin/run-quality-checks.sh${NC}"
+    echo -e "${RED}  Please run: ./bin/dk pr${NC}"
     echo -e "${RED}  Ensure all tests pass before creating a PR.${NC}"
     echo ""
     
     # Output for GitHub Actions
     if [ -n "$GITHUB_ACTIONS" ]; then
-        echo "::error::Quality artifacts validation failed. Run ./bin/run-quality-checks.sh locally."
+        echo "::error::Quality artifacts validation failed. Run ./bin/dk pr locally."
     fi
     
     exit 1

@@ -32,6 +32,14 @@ TEST_TYPE="both"
 # usage text and exited 0, reporting success for a run that never started.
 PACKAGE_NAMES=()
 TEST_PATHS=()  # For direct file/directory paths
+# The guards under tests/ belong to no package, so no package name reaches them
+# and the path arm would treat them as a package's suite — coverage target and
+# all. Named as a target of its own so the quality gate can ask for them through
+# this script instead of calling pytest itself, which was the last place the
+# gate ran a check the developer's command could not.
+RUN_WORKSPACE="no"
+# Resolve what would run, print it, run nothing.
+PRINT_TARGETS="no"
 START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
@@ -192,6 +200,7 @@ Run unit and/or integration tests for DataKnobs packages with flexible pytest op
 
 PACKAGE|PATH can be given more than once, and can be:
   - A package name (e.g., 'data', 'config')
+  - 'workspace' — the guards under tests/, which belong to no package
   - A test file path (e.g., 'packages/data/tests/test_backends/test_s3.py')
   - A test directory (e.g., 'packages/data/tests/integration/')
 
@@ -208,6 +217,7 @@ ${YELLOW}Options:${NC}
     --no-cov                Disable coverage reporting
     --cov-report TYPE       Coverage report type: term, term-missing, html, xml, or combinations
                            (default: term-missing, use comma to combine: term-missing,html,xml)
+    --print-targets         Print what this invocation would run and exit, running nothing
     -h, --help              Show this help message
 
 ${YELLOW}Advanced Usage:${NC}
@@ -237,6 +247,7 @@ ${YELLOW}Randomized test order (pytest-randomly):${NC}
 ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
     $0 data                               # Test data package
+    $0 workspace                          # Run the workspace guards under tests/
     $0 data config                        # Test several packages (one run each)
     $0 -t unit data                       # Unit tests only for data package
     $0 packages/data/tests/test_s3.py    # Run specific test file
@@ -263,7 +274,9 @@ EOF
 # Shared by -p/--package and the bare positional arm so the two cannot
 # disagree about what counts as a path.
 add_target() {
-    if [[ "$1" == *"/"* ]] || [ -f "$1" ] || [ -d "$1" ]; then
+    if [ "$1" = "workspace" ]; then
+        RUN_WORKSPACE="yes"
+    elif [[ "$1" == *"/"* ]] || [ -f "$1" ] || [ -d "$1" ]; then
         TEST_PATHS+=("$1")
     else
         PACKAGE_NAMES+=("$1")
@@ -316,6 +329,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-parallel)
             PARALLEL="no"
+            shift
+            ;;
+        --print-targets)
+            PRINT_TARGETS="yes"
             shift
             ;;
         --quiet|-q)
@@ -572,6 +589,33 @@ run_integration_tests() {
     execute_pytest "$cmd" "integration tests for $package"
 }
 
+# Function to run the workspace guards — the suite under tests/, which belongs
+# to no package.
+#
+# No coverage: the guards read configuration and shell scripts, so a --cov
+# target would measure package source none of them import. No services either;
+# the one directory here that would need them is tests/integration, excluded
+# below and asserted empty by tests/test_toolchain_consistency.py.
+#
+# -p no:cacheprovider because these run in a gate that must not leave state
+# behind, and --durations=10 because one number for the whole suite says it is
+# expensive without saying which part is: the first run with the flag attributed
+# 45 of 54 seconds to a single file re-invoking the shell lint per test.
+run_workspace_tests() {
+    echo -e "${YELLOW}Running workspace guards${NC}"
+
+    local test_path="$ROOT_DIR/tests"
+    if [ ! -d "$test_path" ]; then
+        echo -e "${BLUE}No workspace guards found${NC}"
+        return 0
+    fi
+
+    local extra_args
+    extra_args=$(build_extra_args)
+    local cmd="pytest $test_path --ignore=$test_path/integration -p no:cacheprovider --durations=10 $extra_args $PYTEST_ARGS --color=yes"
+    execute_pytest "$cmd" "workspace guards"
+}
+
 # Function to run combined tests with coverage
 run_combined_tests() {
     local package=$1
@@ -622,21 +666,14 @@ run_combined_tests() {
 }
 
 # Main execution
-echo -e "${GREEN}DataKnobs Test Runner${NC}"
-echo "======================================"
-echo -e "Test type: ${BLUE}$TEST_TYPE${NC}"
-if [ "$IN_DOCKER" = true ]; then
-    echo -e "Environment: ${CYAN}Docker Container${NC}"
-fi
 
 # Determine what to test. Paths and packages are no longer exclusive: each
 # named target runs, in the order it was classified. Only a run that names
 # neither falls back to discovering every package.
+#
+# Decided before anything is announced, so --print-targets can answer without
+# a banner on the same stream a caller is parsing.
 PACKAGES=()
-
-if [ ${#TEST_PATHS[@]} -gt 0 ]; then
-    echo -e "Test paths: ${BLUE}${TEST_PATHS[*]}${NC}"
-fi
 
 if [ ${#PACKAGE_NAMES[@]} -gt 0 ]; then
     # Every name is checked before anything runs, so an unknown package in the
@@ -648,8 +685,7 @@ if [ ${#PACKAGE_NAMES[@]} -gt 0 ]; then
         fi
     done
     PACKAGES=("${PACKAGE_NAMES[@]}")
-    echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
-elif [ ${#TEST_PATHS[@]} -eq 0 ]; then
+elif [ ${#TEST_PATHS[@]} -eq 0 ] && [ "$RUN_WORKSPACE" = "no" ]; then
     # Discover packages based on test type
     # Word splitting is intended — discover_test_packages emits a space-
     # separated list — but a read loop states it, keeps a name containing a
@@ -659,6 +695,51 @@ elif [ ${#TEST_PATHS[@]} -eq 0 ]; then
     while IFS= read -r _pkg; do
         [[ -n "$_pkg" ]] && PACKAGES+=("$_pkg")
     done < <(discover_test_packages "$TEST_TYPE" | tr ' ' '\n')
+
+    # "Everything" has to mean everything. Discovery loops packages/*, so the
+    # guards under tests/ — which belong to no package — were outside it, and a
+    # bare `bin/test.sh`, the command that reads as "run the whole suite", was
+    # the one entry point that ran every test except the ones checking the
+    # toolchain running them.
+    #
+    # Not for an integration-only run: these need no service and are not
+    # integration tests, so folding them in would report on a suite that run
+    # did not ask for.
+    if [ "$TEST_TYPE" != "integration" ]; then
+        RUN_WORKSPACE="yes"
+    fi
+fi
+
+# Resolved, before any check runs — the shape bin/validate.sh uses, for the same
+# reason: a caller that needs to know what this script runs can ask it rather
+# than re-derive the answer from its source.
+if [ "$PRINT_TARGETS" = "yes" ]; then
+    if [ "$RUN_WORKSPACE" = "yes" ]; then
+        echo "workspace"
+    fi
+    if [ ${#TEST_PATHS[@]} -gt 0 ]; then
+        printf '%s\n' "${TEST_PATHS[@]}"
+    fi
+    if [ ${#PACKAGES[@]} -gt 0 ]; then
+        printf '%s\n' "${PACKAGES[@]}"
+    fi
+    exit 0
+fi
+
+echo -e "${GREEN}DataKnobs Test Runner${NC}"
+echo "======================================"
+echo -e "Test type: ${BLUE}$TEST_TYPE${NC}"
+if [ "$IN_DOCKER" = true ]; then
+    echo -e "Environment: ${CYAN}Docker Container${NC}"
+fi
+
+if [ "$RUN_WORKSPACE" = "yes" ]; then
+    echo -e "Workspace guards: ${BLUE}tests/${NC}"
+fi
+if [ ${#TEST_PATHS[@]} -gt 0 ]; then
+    echo -e "Test paths: ${BLUE}${TEST_PATHS[*]}${NC}"
+fi
+if [ ${#PACKAGES[@]} -gt 0 ]; then
     echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
 fi
 
@@ -697,6 +778,10 @@ trap cleanup_services EXIT INT TERM
 # always been run one at a time by the discovery path, and naming several
 # explicitly takes the same route rather than handing pytest one invocation
 # spanning multiple package trees.
+if [ "$RUN_WORKSPACE" = "yes" ]; then
+    run_workspace_tests || OVERALL_RESULT=$?
+fi
+
 for path in "${TEST_PATHS[@]}"; do
     run_path_tests "$path" || OVERALL_RESULT=$?
 done

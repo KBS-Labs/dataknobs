@@ -11,10 +11,14 @@ This document explains how integration tests are incorporated into the DataKnobs
 Before creating a pull request, developers **must** run:
 
 ```bash
-./bin/run-quality-checks.sh
+./bin/dk pr
 ```
 
-This script:
+This is the gate: it runs the checks *and* writes the artifacts CI verifies.
+`./bin/run-quality-checks.sh` runs the same checks and writes no artifacts — use
+it while iterating.
+
+This command:
 - ✅ Starts Docker services (PostgreSQL, Elasticsearch, LocalStack)
 - ✅ Runs linting and style checks
 - ✅ Executes unit tests (no external dependencies)
@@ -134,7 +138,7 @@ quality-summary.json           # Overall status including integration tests
 
 ### Method 1: Full Quality Checks (Recommended)
 ```bash
-./bin/run-quality-checks.sh
+./bin/dk pr
 ```
 
 ### Method 2: Integration Tests Only
@@ -159,7 +163,7 @@ docker-compose down
 ### Common Issues
 
 1. **"Artifacts missing or outdated"**
-   - Run `./bin/run-quality-checks.sh` locally
+   - Run `./bin/dk pr` locally
    - Commit the `.quality-artifacts/` directory
 
 2. **Integration tests fail locally**
@@ -192,7 +196,7 @@ KEEP_SERVICES=true ./scripts/run-integration-tests.sh
 
 1. **Always run quality checks before pushing**
    ```bash
-   ./bin/run-quality-checks.sh
+   ./bin/dk pr
    git add .quality-artifacts/
    git commit -m "Update quality artifacts"
    ```
@@ -246,7 +250,7 @@ Required services are defined in `docker-compose.override.yml`:
 
 Integration tests are a **mandatory** part of the quality checks and are validated at multiple levels:
 
-1. **Locally**: Via `run-quality-checks.sh` before creating PR
+1. **Locally**: Via `bin/dk pr` before creating PR
 2. **Artifacts**: Results must be committed and fresh
 3. **CI/CD**: Tests run again in GitHub Actions
 4. **PR Gate**: Cannot merge without passing integration tests
