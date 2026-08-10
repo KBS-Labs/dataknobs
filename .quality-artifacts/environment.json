@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-10T17:42:43Z",
+  "timestamp": "2026-08-10T18:38:31Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/harness-integrity-phase-0a",
-  "git_commit": "c69b8523ded4211172ae273718314f4b98888c6d",
+  "git_commit": "284c4b429a57bb6cf4cc10d6c1088cea3bdc3504",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
