@@ -321,11 +321,16 @@ def test_every_un_ignored_artifact_is_one_something_writes():
 
 
 def _summary_check_names() -> set[str]:
-    """The ``checks`` keys ``run-quality-checks.sh`` writes into the summary."""
+    """The ``checks`` keys ``run-quality-checks.sh`` writes into the summary.
+
+    Gathered from the ``record_check`` calls, because that is where each name is
+    stated now: the summary is assembled from records the checks write as they
+    run, so there is no longer one block that names all eight. The name is the
+    call's first argument, so the definition line — ``record_check() {`` — does
+    not match, having no space after the name.
+    """
     source = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
-    heredoc = source.split('quality-summary.json" <<EOF', 1)[1].split("\nEOF", 1)[0]
-    checks = heredoc.split('"checks": {', 1)[1]
-    return set(re.findall(r'^"([a-z_]+)":\s*\{', checks, re.MULTILINE))
+    return set(re.findall(r"^\s*record_check\s+([a-z_]+)\b", source, re.MULTILINE))
 
 
 def test_no_reader_names_a_check_the_summary_does_not_record():
@@ -350,7 +355,7 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
     description deleted, which is the opposite of what it is for.
     """
     emitted = _summary_check_names()
-    assert emitted, "no check names extracted from the summary heredoc"
+    assert emitted, "no check names extracted from the gate's record_check calls"
 
     readers = {"diagnose-quality-failures.sh", "validate-quality-artifacts.sh"}
     unknown: list[str] = []

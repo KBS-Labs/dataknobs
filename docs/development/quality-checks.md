@@ -248,6 +248,25 @@ guards are listed at the end of
 grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
 ```
 
+### How the summary is produced
+
+Each check appends one record to `check-records.jsonl` in the run's output
+directory, at the point that ran it — or at the arm that deliberately skipped
+it. `bin/quality-summary.py build` merges those records with the run's metadata
+and writes the document.
+
+The split is the fix for a defect that shipped twice. The summary used to be a
+shell heredoc over status variables initialised near the top of the script, and
+**a status variable has a default, and the default is a verdict**: `0` renders
+as `"pass"`, so a check no code path assigned reported as one that ran and
+passed. There is no default to fall through to now — a check that writes no
+record simply is not in the document, and an absent entry cannot be read as a
+passing one.
+
+`check-records.jsonl` stays on disk beside the summary. It is git-ignored in
+both tiers, and it is worth reading when a run aborted before its summary was
+written: it holds every verdict the run had reached.
+
 Field order within a check no longer matters. `validate-quality-artifacts.sh`
 used to read this file with line-offset greps — `grep -A2` for a status,
 `grep -A3` for a skipped flag — which made position load-bearing in a format
@@ -464,18 +483,43 @@ export PYTEST_MARKERS="not slow"
 
 ### Customizing Checks
 
-To add custom checks, modify `bin/run-quality-checks.sh`:
+A check has to make three hops, and `tests/test_quality_gate_accounting.py`
+enforces each. It must capture its own exit status; that status must reach
+`compute_overall_status`, which decides the local exit code; and it must be
+recorded, because CI validates the committed artifacts rather than re-running
+the gate, so a check missing from `quality-summary.json` is invisible to CI by
+construction. The workflow lint once made none of the three: it printed
+`✗ Workflow lint failed` and the gate went on to report `PASS`.
+
+In `bin/run-quality-checks.sh`:
 
 ```bash
-# Add your custom check
+SECURITY_SCAN_STATUS=0        # beside the other statuses
+
 print_status "Running custom security scan..."
+_check_start=$(date +%s)
 if run_security_scan; then
     print_success "Security scan passed"
 else
+    SECURITY_SCAN_STATUS=$?   # hop 1: capture it
     print_error "Security scan failed"
-    OVERALL_STATUS="FAIL"
 fi
+record_check security_scan "$SECURITY_SCAN_STATUS" \
+    --tool run-security-scan.sh --duration "$(elapsed_since "$_check_start")"
 ```
+
+Then add `SECURITY_SCAN_STATUS` to the test in `compute_overall_status` — hop 2.
+Assigning `OVERALL_STATUS` directly does nothing: that variable is computed from
+the statuses, and recomputed again before the exit code is chosen.
+
+`record_check` is hop 3. `bin/diagnose-quality-failures.sh` needs no edit — it
+enumerates whatever the document holds, and offers `bin/<tool>` as the remedy
+when `--tool` names an executable there. The terminal banner still enumerates
+its own rows, so a new check needs one adding there too.
+
+A check that can be skipped passes `--skipped true|false` from the arm that
+knows, and `--duration null` when it did not run. One that cannot be skipped —
+nothing gates it — omits the field rather than always reporting `false`.
 
 ## Benefits of This Approach
 
