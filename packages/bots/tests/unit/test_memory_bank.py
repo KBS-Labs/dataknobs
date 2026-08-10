@@ -315,9 +315,19 @@ class TestMemoryBankDuplicates:
             duplicate_strategy="reject",
             match_fields=["name"],
         )
-        bank.add({"name": "flour", "amount": "1 cup"})
+        rid1 = bank.add({"name": "flour", "amount": "1 cup"})
         rid2 = bank.add({"name": "flour", "amount": "2 cups"})
         assert bank.count() == 1  # Same name → duplicate
+
+        # What `reject` actually does with the rejected call, which was captured
+        # here and never asserted: it returns the id of the record already
+        # holding the match and leaves that record's data alone. The second half
+        # is the whole difference from `merge`, whose sibling test above asserts
+        # the opposite value for the same field.
+        assert rid2 == rid1
+        kept = bank.get(rid1)
+        assert kept is not None
+        assert kept.data["amount"] == "1 cup"
 
     def test_different_match_fields_not_duplicate(self) -> None:
         bank = _make_bank(
@@ -396,10 +406,10 @@ class TestMemoryBankSerialization:
         bank.add({"name": "flour"}, source_stage="collect")
         bank.add({"name": "sugar"}, source_stage="collect")
 
+        # `all()` reconstructs its records on every call, so these are already
+        # detached from whatever `to_dict()` reads — no separate snapshot of the
+        # timestamps is needed to compare across the roundtrip.
         original_records = bank.all()
-        original_timestamps = [
-            (r.created_at, r.updated_at) for r in original_records
-        ]
 
         d = bank.to_dict()
         restored = MemoryBank.from_dict(d)

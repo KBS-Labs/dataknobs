@@ -596,11 +596,16 @@ class MemoryBank:
                 Used for checkpoint-based undo.
 
         Returns:
-            The generated record ID.
+            The new record's ID — or, when a duplicate is detected under
+            ``"reject"`` or ``"merge"``, the ID of the existing record that
+            matched. Neither strategy raises: ``"reject"`` returns that ID and
+            leaves the matched record's data alone, ``"merge"`` updates it
+            first, and both hand back the ID that now represents the data. A
+            caller distinguishing "stored" from "already present" must compare
+            the returned ID rather than catch an exception.
 
         Raises:
-            ValueError: If required fields are missing, the bank is full,
-                or duplicate_strategy is ``"reject"`` and a duplicate exists.
+            ValueError: If required fields are missing or the bank is full.
         """
         self._core.validate(data)
         self._core.check_capacity(self.count())
