@@ -26,19 +26,21 @@ catastrophic under concurrency.
 ## Enforcement
 
 - **Static guard:** ruff's `ASYNC` family (`flake8-async`) is enabled in the
-  root `select`, which is authoritative — `bin/validate.sh` lints every target
-  with `--config <repo-root>/pyproject.toml`. Packages that define their own
-  `[tool.ruff]` (common, data, bots, fsm, xization) mirror the `select` and any
-  `per-file-ignores` for IDE / hierarchical invocations; `config` and `llm`
-  have no per-package ruff config and inherit the root. It flags blocking
-  `open()` (`ASYNC230`), `Path`/`os` calls (`ASYNC240`), `time.sleep`
+  root `select`, which is the **only** ruff config in the repo: no package
+  declares `[tool.ruff]`, so `bin/validate.sh --config <repo-root>/pyproject.toml`,
+  a bare `ruff check`, and an editor all resolve the same rules. It flags
+  blocking `open()` (`ASYNC230`), `Path`/`os` calls (`ASYNC240`), `time.sleep`
   (`ASYNC251`), blocking HTTP clients (`ASYNC210`/`ASYNC212`), and subprocess
   calls (`ASYNC220`/`ASYNC221`/`ASYNC222`) inside `async def`, plus the
   `ASYNC1xx` style checks such as `ASYNC110` (async busy-wait).
 
-  > **Mirror both layers.** The root `select` and any `per-file-ignores` must
-  > be mirrored into each package that defines its own `[tool.ruff]`, or the
-  > guard has a hole on hierarchical / IDE invocations.
+  > **One config, and it stays that way.** Five packages used to carry their
+  > own `[tool.ruff]` for IDE invocations, and keeping the two in step was a
+  > standing obligation nothing enforced — they diverged in *both* directions,
+  > enforcing rules the gate had declined while missing whole families it ran.
+  > A new `ASYNC` suppression goes in the root `per-file-ignores` and nowhere
+  > else; `tests/test_ruff_config_single_source.py` fails if a second copy
+  > appears.
 
   > **ASYNC240 blind spot:** ruff reliably flags a `Path`/`os` method only
   > when it can see the receiver is a `Path` — typically a directly-

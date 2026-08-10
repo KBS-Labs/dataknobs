@@ -336,9 +336,11 @@ with open('$SOURCE_DIR/style-check.json') as f:
         # Entry points, not tool invocations. The commands spelled out here
         # named packages/*/src and passed no --config, so neither could
         # reproduce a bin/ finding this same script had just listed, and both
-        # resolved the per-package [tool.ruff] sections rather than the root one
-        # the gate uses. Naming the entry point means the advice cannot drift
-        # from what the gate does, because it is what the gate does.
+        # resolved the per-package [tool.ruff] sections that existed at the
+        # time rather than the root one the gate uses. Those sections are gone
+        # now, but the target-set half of that bug is not addressed by deleting
+        # them. Naming the entry point means the advice cannot drift from what
+        # the gate does, because it is what the gate does.
         echo -e "\n${GREEN}To auto-fix style issues:${NC}"
         echo "    ./bin/fix.sh"
         echo -e "${GREEN}To see all style issues:${NC}"
