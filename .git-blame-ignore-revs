@@ -14,9 +14,16 @@
 # below is not purely mechanical and is listed anyway: alongside the 1,128-file
 # rewrite it moved two `# noqa` directives onto the lines they waive, dropped a
 # `# type: ignore` that was concealing a real return-type mismatch, and
-# corrected two line-numbered suppression entries. Blame on those few lines
-# skips to whoever last wrote them, which is the more useful answer in each
-# case — they changed *because of* the reformat, not on their own merits.
+# corrected line-numbered suppression entries whose sites had shifted. Blame on
+# those few lines skips to whoever last wrote them, which is the more useful
+# answer in each case — they changed *because of* the reformat, not on their
+# own merits.
+#
+# It did not catch all of them. A fourth suppression, in a package suite this
+# commit did not run, was repaired in a follow-up rather than folded back in
+# here — the reformat is what moved it, so blame on that line wants the same
+# treatment, but rewriting the commit would have erased the more useful record
+# that a formatting change breaks suppressions in four different ways.
 
 # style: apply the formatter that has been declared since the repository began
 20585a7883cebf88eddbafa73ef024d1ac9fca0a
