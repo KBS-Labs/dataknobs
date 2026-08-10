@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-10T03:26:23Z",
+  "timestamp": "2026-08-10T03:54:09Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,10 +21,10 @@
 },
   "workspace_hashes": {
   "toolchain": "e1c65f2cafe5af2a863bc6be0e123c32198bddac4a960d84204f691970e99bc2",
-  "workspace_tests": "0a4fe46e27d24cb9f73a849e04abe3022b537135fcddb906f81321960db6abbd",
+  "workspace_tests": "bfe7982d6259b06b74c7b35248113db0a4683bb73a1f955e8d779b44ed4869ec",
   "docs": "3ac97992193fbf54662251cf842949e8dae1970eb40cb9f66736998facb3ef31"
 },
-  "total_seconds": 75,
+  "total_seconds": 76,
   "checks": {
     "documentation": {
       "status": "pass",
@@ -68,8 +68,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 44,
-      "workspace_guards_seconds": 24
+      "duration_seconds": 45,
+      "workspace_guards_seconds": 25
     },
     "integration_tests": {
       "status": "pass",
