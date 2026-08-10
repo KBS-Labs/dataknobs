@@ -15,7 +15,7 @@ documentation checks on every run that did not perform them. The duration
 fields escaped only by the accident of defaulting to ``null``: the absence of a
 measurement rather than a passing one.
 
-Two commands, and the split is the fix:
+Three commands, and the split is the fix:
 
 ``record``
     Append one check's outcome, called from the site that ran it (or from the
@@ -27,6 +27,12 @@ Two commands, and the split is the fix:
     Merge the records with the run's metadata and emit the document. Every
     top-level field must be supplied — a forgotten one fails the run rather than
     vanishing from the artifact.
+
+``render``
+    Print the console status lines from the finished document, so the terminal
+    banner and the artifact cannot disagree about what happened. They did: a
+    run that skipped code validation because no package changed printed
+    ``Code Validation: ✓ PASSED`` beside a summary recording ``skipped: true``.
 
 Records are JSON Lines, one object per check, written to a file under the run's
 output directory. It is a file rather than an in-shell accumulation so that the
@@ -46,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
@@ -223,6 +230,170 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# render
+# --------------------------------------------------------------------------
+
+#: Display rules for the checks the gate ships, as
+#: ``name -> (label, width, pr_only)``.
+#:
+#: Labels and column widths only — every verdict comes from the document. The
+#: two widths reproduce the layout the shell had: the documentation and lint
+#: rows align one column further right than the test rows. Preserved rather than
+#: normalised, so that swapping the producer could be verified by diffing a real
+#: run's console output against the previous one and seeing nothing.
+#:
+#: A check absent from this table is still displayed, under a label derived from
+#: its name. That is the point of deriving it: a check added to the gate appears
+#: in the banner without this table being edited, and cannot be silently dropped
+#: from the human-facing half the way it once could from the artifact.
+ROWS = {
+    "documentation": ("Documentation:", 20, True),
+    "documentation_versions": ("Doc Versions:", 20, True),
+    "documentation_mirrors": ("Doc Mirrors:", 20, True),
+    "validation": ("Code Validation:", 20, False),
+    "workflow_lint": ("Workflow Lint:", 20, False),
+    "shell_lint": ("Shell Lint:", 20, False),
+}
+
+#: The test rows, which are grouped for display rather than shown one per check.
+TEST_CHECKS = ("unit_tests", "integration_tests")
+
+#: Width of the label column for every test row.
+TEST_WIDTH = 19
+
+
+class Palette:
+    """Terminal colours, on the same condition the shell script uses.
+
+    Matched deliberately: this runs as a child of that script with its stdout
+    inherited, so the same test gives the same answer and a piped run stays
+    free of escape sequences on both halves of the banner.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        term = os.environ.get("TERM", "")
+        enabled = stream.isatty() and term not in ("", "dumb")
+        self.red = "\033[0;31m" if enabled else ""
+        self.green = "\033[0;32m" if enabled else ""
+        self.cyan = "\033[0;36m" if enabled else ""
+        self.off = "\033[0m" if enabled else ""
+
+    def verdict(self, entry: dict[str, Any]) -> str:
+        if entry.get("skipped") is True:
+            return f"{self.cyan}⊘ SKIPPED{self.off}"
+        if entry.get("status") == "pass":
+            return f"{self.green}✓ PASSED{self.off}"
+        return f"{self.red}✗ FAILED{self.off}"
+
+
+def _row(label: str, width: int, verdict: str) -> str:
+    return f"  {label:<{width}}{verdict}"
+
+
+def render(
+    document: dict[str, Any],
+    *,
+    mode: str,
+    package_tests_skipped: bool,
+    palette: Palette,
+) -> list[str]:
+    """The banner's per-check lines, in display order.
+
+    ``mode`` and ``package_tests_skipped`` are presentation, not verdicts: the
+    first decides whether the documentation rows and the split unit/integration
+    rows are shown, the second whether the unit row is labelled as the workspace
+    guards it is reduced to when no package changed. Neither can change what any
+    row says — that comes from the document, which is the property that keeps
+    this half and the artifact in step.
+    """
+    checks = document.get("checks")
+    if not isinstance(checks, dict):
+        return []
+
+    lines = []
+    for name, (label, width, pr_only) in ROWS.items():
+        entry = checks.get(name)
+        if entry is None or (pr_only and mode != "pr"):
+            continue
+        lines.append(_row(label, width, palette.verdict(entry)))
+
+    # Every check the gate recorded that has no row above and is not one of the
+    # test entries grouped below. Shown rather than dropped: the banner is the
+    # half a developer reads, and a check invisible there is one they will not
+    # know ran.
+    for name, entry in checks.items():
+        if name in ROWS or name in TEST_CHECKS:
+            continue
+        label = f"{name.replace('_', ' ').capitalize()}:"
+        lines.append(_row(label, 20, palette.verdict(entry)))
+
+    unit = checks.get("unit_tests")
+    integration = checks.get("integration_tests")
+    if unit is None or integration is None:
+        return lines
+
+    if mode != "pr":
+        # One line: dev mode hands test.sh no --type, so both suites go through
+        # one invocation and come back as one exit code. Reporting them
+        # separately would be inventing a distinction the run did not make.
+        combined = dict(unit)
+        if integration.get("status") != "pass":
+            combined["status"] = "fail"
+        if not (unit.get("skipped") and integration.get("skipped")):
+            combined["skipped"] = False
+        lines.append(_row("Tests:", TEST_WIDTH, palette.verdict(combined)))
+    elif unit.get("skipped") and integration.get("skipped"):
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
+        )
+    elif package_tests_skipped:
+        # No package suite ran, so "Unit Tests: PASSED" would be green for work
+        # not done. The workspace guards did run, and their status is what the
+        # unit entry carries here.
+        lines.append(_row("Workspace Guards:", TEST_WIDTH, palette.verdict(unit)))
+        lines.append(
+            _row(
+                "Package Tests:",
+                TEST_WIDTH,
+                f"{palette.cyan}⊘ SKIPPED (no package changed){palette.off}",
+            )
+        )
+    else:
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
+        )
+    return lines
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    """Print the banner's per-check lines from a finished summary."""
+    try:
+        with open(args.summary, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError) as exc:
+        # Reported where the rows would have been, rather than raised: the
+        # banner is a report on a run that has already finished, and aborting it
+        # here would replace a readable failure with a stack trace.
+        print(f"  (could not read {args.summary}: {exc})", file=sys.stderr)
+        return 0
+
+    if not isinstance(document, dict):
+        print(f"  (summary in {args.summary} is not a JSON object)", file=sys.stderr)
+        return 0
+
+    for line in render(
+        document,
+        mode=args.mode,
+        package_tests_skipped=args.package_tests_skipped,
+        palette=Palette(sys.stdout),
+    ):
+        print(line)
+    return 0
+
+
+# --------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -266,6 +437,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="a top-level field whose value is parsed as JSON",
     )
     builder.set_defaults(run=cmd_build)
+
+    renderer = commands.add_parser("render", help="print the console status lines")
+    renderer.add_argument("--summary", required=True)
+    renderer.add_argument("--mode", required=True, choices=("pr", "dev"))
+    renderer.add_argument("--package-tests-skipped", action="store_true")
+    renderer.set_defaults(run=cmd_render)
 
     return parser
 

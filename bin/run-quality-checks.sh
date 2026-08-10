@@ -1750,92 +1750,26 @@ echo -e "${BLUE}                        Quality Check Summary                   
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-if [ "$PR_MODE" = "yes" ]; then
-    # Show documentation build status (only in PR mode)
-    if [ "$DOCS_STATUS" -eq 0 ]; then
-        echo -e "  Documentation:      ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Documentation:      ${RED}✗ FAILED${NC}"
-    fi
-
-    # Show documentation versions status
-    if [ "$DOCS_VERSIONS_STATUS" -eq 0 ]; then
-        echo -e "  Doc Versions:       ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Doc Versions:       ${RED}✗ FAILED${NC}"
-    fi
-
-    # Show documentation mirror status
-    if [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
-        echo -e "  Doc Mirrors:        ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Doc Mirrors:        ${RED}✗ FAILED${NC}"
-    fi
+# The check lines, rendered from the document rather than from the variables
+# that produced it. They used to be a second derivation of the same statuses,
+# and the two disagreed: on any pull request that changed no documentation the
+# banner printed three ✓ PASSED rows beside a summary recording skipped: true
+# for all three — the artifact half of that defect was fixed one phase earlier,
+# and this half was not, because it reads its own variables.
+#
+# Both arguments are presentation and neither can change what a row says. --mode
+# decides whether the documentation rows appear and whether the two test suites
+# are shown apart; --package-tests-skipped labels the unit row as the workspace
+# guards it is reduced to when no package changed. Every verdict comes from the
+# file.
+_render_args=""
+if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+    _render_args="--package-tests-skipped"
 fi
-
-if [ "$SKIP_STYLE" = "yes" ]; then
-    echo -e "  Code Validation:    ${CYAN}⊘ SKIPPED${NC}"
-elif [ $VALIDATION_STATUS -eq 0 ]; then
-    echo -e "  Code Validation:    ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Code Validation:    ${RED}✗ FAILED${NC}"
-fi
-
-# Reported unconditionally because it runs unconditionally — it is not gated by
-# PR mode, changed packages, or any skip flag.
-if [ "$WORKFLOW_LINT_STATUS" -eq 0 ]; then
-    echo -e "  Workflow Lint:      ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Workflow Lint:      ${RED}✗ FAILED${NC}"
-fi
-
-# Unconditional for the same reason as the block above it.
-if [ "$SHELL_LINT_STATUS" -eq 0 ]; then
-    echo -e "  Shell Lint:         ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Shell Lint:         ${RED}✗ FAILED${NC}"
-fi
-
-if [ "$PR_MODE" = "yes" ]; then
-    # PR mode: Show unit and integration tests separately
-    if [ "$SKIP_TESTS" = "yes" ]; then
-        echo -e "  Unit Tests:        ${CYAN}⊘ SKIPPED${NC}"
-        echo -e "  Integration Tests: ${CYAN}⊘ SKIPPED${NC}"
-    elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
-        # Named apart rather than reported as two passing suites: no package
-        # suite ran, and "Unit Tests: PASSED" for a run that collected none is
-        # the same green-for-work-not-done this branch exists to end. The
-        # workspace guards did run, and their status is folded into the unit one.
-        if [ $UNIT_TEST_STATUS -eq 0 ]; then
-            echo -e "  Workspace Guards:  ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Workspace Guards:  ${RED}✗ FAILED${NC}"
-        fi
-        echo -e "  Package Tests:     ${CYAN}⊘ SKIPPED (no package changed)${NC}"
-    else
-        if [ $UNIT_TEST_STATUS -eq 0 ]; then
-            echo -e "  Unit Tests:        ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Unit Tests:        ${RED}✗ FAILED${NC}"
-        fi
-        
-        if [ $INTEGRATION_TEST_STATUS -eq 0 ]; then
-            echo -e "  Integration Tests: ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Integration Tests: ${RED}✗ FAILED${NC}"
-        fi
-    fi
-else
-    # Dev mode: Show combined test status
-    if [ "$SKIP_TESTS" = "yes" ]; then
-        echo -e "  Tests:             ${CYAN}⊘ SKIPPED${NC}"
-    elif [ $TEST_STATUS -eq 0 ]; then
-        echo -e "  Tests:             ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Tests:             ${RED}✗ FAILED${NC}"
-    fi
-fi
-
+# shellcheck disable=SC2086  # _render_args is an argument list, empty or one flag
+python3 "$SCRIPT_DIR/quality-summary.py" render \
+    --summary "$OUTPUT_DIR/quality-summary.json" \
+    --mode "$([ "$PR_MODE" = "yes" ] && echo pr || echo dev)" $_render_args
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 

@@ -253,7 +253,8 @@ grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
 Each check appends one record to `check-records.jsonl` in the run's output
 directory, at the point that ran it — or at the arm that deliberately skipped
 it. `bin/quality-summary.py build` merges those records with the run's metadata
-and writes the document.
+and writes the document; `bin/quality-summary.py render` prints the terminal
+banner's check rows from the finished document, so the two cannot disagree.
 
 The split is the fix for a defect that shipped twice. The summary used to be a
 shell heredoc over status variables initialised near the top of the script, and
@@ -262,6 +263,12 @@ as `"pass"`, so a check no code path assigned reported as one that ran and
 passed. There is no default to fall through to now — a check that writes no
 record simply is not in the document, and an absent entry cannot be read as a
 passing one.
+
+The banner had the same defect one layer further out, and kept it a phase
+longer: on any pull request that changed no documentation it printed three
+`✓ PASSED` rows beside a summary recording `skipped: true` for all three. It
+renders from the document now, and takes only presentation arguments — which
+rows to group, not what any row says.
 
 `check-records.jsonl` stays on disk beside the summary. It is git-ignored in
 both tiers, and it is worth reading when a run aborted before its summary was
@@ -512,10 +519,10 @@ Then add `SECURITY_SCAN_STATUS` to the test in `compute_overall_status` — hop 
 Assigning `OVERALL_STATUS` directly does nothing: that variable is computed from
 the statuses, and recomputed again before the exit code is chosen.
 
-`record_check` is hop 3. `bin/diagnose-quality-failures.sh` needs no edit — it
-enumerates whatever the document holds, and offers `bin/<tool>` as the remedy
-when `--tool` names an executable there. The terminal banner still enumerates
-its own rows, so a new check needs one adding there too.
+Nothing else needs editing. `record_check` is hop 3, and both readers enumerate
+whatever the document holds — the terminal banner derives a label from the
+check's name, and `bin/diagnose-quality-failures.sh` offers `bin/<tool>` as the
+remedy when `--tool` names an executable there.
 
 A check that can be skipped passes `--skipped true|false` from the arm that
 knows, and `--duration null` when it did not run. One that cannot be skipped —

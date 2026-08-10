@@ -10,21 +10,36 @@ of a measurement rather than a passing one.
 The producer is now a writer over records each check appends as it runs, so the
 defect closes by construction rather than by a guard that reads the producer's
 source for shapes it must not have. The tests here check the construction: that
-an unrecorded check is absent rather than passing, and that the fields land
-where the document says they land.
+an unrecorded check is absent rather than passing, that the fields land where
+the document says they land, and that the banner says what the document says.
+
+That last one is not hypothetical. Before the banner was rendered from the
+document it derived its own rows, and on any pull request that changed no
+documentation it printed::
+
+    Documentation:      ✓ PASSED
+    Doc Versions:       ✓ PASSED
+    Doc Mirrors:        ✓ PASSED
+
+beside a summary recording ``skipped: true`` for all three — the same false
+green, in the half a developer actually reads, on the commonest shape of pull
+request there is.
 """
 
 from __future__ import annotations
 
+import io
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from tests._workspace import load_bin_module
+from tests._workspace import ROOT, load_bin_module
 
 writer = load_bin_module("quality-summary")
 
+GATE = ROOT / "bin" / "run-quality-checks.sh"
 
 #: The ``checks`` object of a real gate run, as the shell heredoc produced it.
 #: Copied from the committed artifact at the commit before the writer replaced
@@ -284,3 +299,179 @@ def test_the_writer_reproduces_a_heredoc_summary_exactly(tmp_path):
     rebuilt = _build(tmp_path, records)
 
     assert rebuilt["checks"] == HEREDOC_CHECKS
+
+
+# --------------------------------------------------------------------------
+# the renderer
+# --------------------------------------------------------------------------
+
+
+def _rendered(checks: dict, *, mode: str = "pr", package_tests_skipped: bool = False):
+    return writer.render(
+        {"checks": checks},
+        mode=mode,
+        package_tests_skipped=package_tests_skipped,
+        palette=writer.Palette(io.StringIO()),
+    )
+
+
+def _entry(status: str = "pass", **extra: object) -> dict:
+    return {"status": status, "exit_code": 0 if status == "pass" else 1, **extra}
+
+
+def test_a_skipped_check_is_rendered_as_skipped_not_passed():
+    """The defect this renderer exists to close, in its original form.
+
+    A skipped check carries ``status: "pass"`` — it has always been recorded that
+    way, and the field that says it did not run is ``skipped``. The banner used
+    to read a status variable instead, so a documentation check that never ran
+    printed ✓ PASSED. Reading ``status`` alone here would restore that exactly.
+    """
+    rows = _rendered({"documentation": _entry(skipped=True)})
+
+    assert rows == ["  Documentation:      ⊘ SKIPPED"]
+
+
+def test_the_row_layout_is_unchanged():
+    """Two column widths, reproducing the shell's layout rather than tidying it.
+
+    The documentation and lint rows align one column further right than the test
+    rows. Preserved deliberately: it made swapping the producer verifiable by
+    diffing a real run's console output against the previous one, which is worth
+    more than the tidier alternative. Normalising them is a visible change to
+    make on purpose, not a side effect of this one.
+    """
+    rows = _rendered(
+        {
+            "documentation": _entry(skipped=False),
+            "shell_lint": _entry(),
+            "unit_tests": _entry(skipped=False),
+            "integration_tests": _entry(skipped=False),
+        }
+    )
+
+    assert rows == [
+        "  Documentation:      ✓ PASSED",
+        "  Shell Lint:         ✓ PASSED",
+        "  Unit Tests:        ✓ PASSED",
+        "  Integration Tests: ✓ PASSED",
+    ]
+
+
+def test_the_documentation_rows_are_shown_only_where_they_could_have_run():
+    """A dev run does not offer them, so it does not report on them."""
+    checks = {"documentation": _entry(skipped=True), "shell_lint": _entry()}
+
+    assert len(_rendered(checks, mode="pr")) == 2
+    assert _rendered(checks, mode="dev") == ["  Shell Lint:         ✓ PASSED"]
+
+
+def test_a_check_the_display_table_does_not_name_is_still_shown():
+    """A check added to the gate reaches the banner without editing the renderer.
+
+    Deriving the label rather than requiring one is what makes that true, and it
+    closes the human-facing half of the defect the artifact half already has a
+    guard for: a check invisible in the banner is one a developer will not know
+    ran, whatever the summary says.
+    """
+    rows = _rendered({"licence_audit": _entry("fail")})
+
+    assert rows == ["  Licence audit:      ✗ FAILED"]
+
+
+def test_dev_mode_reports_the_one_verdict_the_run_produced():
+    """Dev mode runs both suites through one invocation and one exit code.
+
+    Reporting them apart would invent a distinction the run did not make, so the
+    two entries — which carry the same value for that reason — become one row.
+    """
+    passing = {"unit_tests": _entry(skipped=False), "integration_tests": _entry(skipped=False)}
+    failing = {
+        "unit_tests": _entry("pass", skipped=False),
+        "integration_tests": _entry("fail", skipped=False),
+    }
+
+    assert _rendered(passing, mode="dev") == ["  Tests:             ✓ PASSED"]
+    assert _rendered(failing, mode="dev") == ["  Tests:             ✗ FAILED"]
+
+
+def test_dev_mode_reports_a_skipped_run_as_skipped():
+    checks = {"unit_tests": _entry(skipped=True), "integration_tests": _entry(skipped=True)}
+
+    assert _rendered(checks, mode="dev") == ["  Tests:             ⊘ SKIPPED"]
+
+
+def test_a_run_with_no_package_changed_names_the_guards_it_did_run():
+    """"Unit Tests: PASSED" for a run that collected none is green for work not done.
+
+    The workspace guards did run and the unit entry carries their status, so the
+    row is labelled as what it is and the package suites are named apart.
+    """
+    rows = _rendered(
+        {"unit_tests": _entry(skipped=False), "integration_tests": _entry(skipped=True)},
+        package_tests_skipped=True,
+    )
+
+    assert rows == [
+        "  Workspace Guards:  ✓ PASSED",
+        "  Package Tests:     ⊘ SKIPPED (no package changed)",
+    ]
+
+
+def test_colour_is_applied_only_to_a_terminal():
+    """Matched to the shell's own test, so a piped run has no escapes in either half."""
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    plain = writer.Palette(io.StringIO()).verdict(_entry())
+    assert plain == "✓ PASSED"
+
+
+# --------------------------------------------------------------------------
+# the gate keeps one derivation
+# --------------------------------------------------------------------------
+
+
+def test_the_banner_derives_no_verdict_of_its_own():
+    """One producer, so the console and the artifact cannot come to disagree.
+
+    They did, and the shape of it was a shell ``if`` over a status variable in
+    the banner region. This asserts none is left: every row comes from the
+    rendered document. The region is delimited by the banner's own rules rather
+    than by line numbers, so it cannot silently shrink to nothing — a guard that
+    checks an empty region is the failure mode this repository keeps finding.
+    """
+    lines = GATE.read_text(encoding="utf-8").splitlines()
+    rules = [i for i, line in enumerate(lines) if "Quality Check Summary" in line]
+    assert len(rules) == 1, "the banner header moved — re-point this guard"
+
+    # The rule immediately under the header opens the region; the next one
+    # closes it. Taking the first would leave the region empty, which is how a
+    # structural guard comes to check nothing and report green.
+    header = rules[0]
+    borders = [
+        i for i, line in enumerate(lines[header + 1 :], header + 1)
+        if line.startswith('echo -e "${BLUE}═')
+    ]
+    assert len(borders) >= 2, "the banner's closing rule moved — re-point this guard"
+    start, stop = borders[0], borders[1]
+    region = lines[start:stop]
+    assert region, "the banner region came out empty"
+    assert any("quality-summary.py" in line for line in region), (
+        "the banner no longer renders from the summary — if the rows moved "
+        "elsewhere, re-point this guard rather than deleting it"
+    )
+
+    derived = [
+        f"{i + 1}: {line.strip()}"
+        for i, line in enumerate(region, start)
+        if re.search(r"\[\s*\"?\$[A-Z][A-Z0-9_]*_(STATUS|SKIPPED)\b", line)
+    ]
+    assert not derived, (
+        "these lines decide a banner row from a status variable rather than from "
+        f"quality-summary.json: {derived}. The two derivations disagreed once "
+        "already — three documentation checks printed as passing on every pull "
+        "request that changed no documentation."
+    )
