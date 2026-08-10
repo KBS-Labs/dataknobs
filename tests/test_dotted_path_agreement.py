@@ -25,9 +25,9 @@ subject is agreement *between* packages — a copy of it inside any one is a
 copy that can be deleted by a refactor of that package alone.
 
 **Two of these assertions are deliberately written against a computed value
-rather than a literal.** ``test_entry_points_agree_on_the_failure_type``
-collects the exception type every entry point actually raises and asserts the
-set has one element. A test naming ``DottedPathError`` outright would pass the
+rather than a literal.** ``test_single_reference_resolvers_agree_on_the_failure_type``
+collects the exception type every single-reference entry point actually raises
+and asserts the set has one element. A test naming ``DottedPathError`` outright would pass the
 day the last site was converted and say nothing before then; this one fails
 today, names the disagreement, and keeps failing for as long as any site
 disagrees — including a site added later that nobody thought to convert.

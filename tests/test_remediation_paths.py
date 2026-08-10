@@ -20,9 +20,11 @@ Four properties, each an instance of the same sentence:
    that produced the verdict being remediated.
 2. **Advice names an entry point, not a hand-written invocation.** A printed
    ``uv run ruff check packages/*/src`` is a fourth answer to *which code do we
-   check* that no one will remember to update, and it dropped the ``--config``
-   the gate passes — so following it resolves the per-package ``[tool.ruff]``
-   sections and reports findings the gate does not have.
+   check* that no one will remember to update. It also dropped the ``--config``
+   the gate passes, which used to resolve the per-package ``[tool.ruff]``
+   sections and report findings the gate did not have; those sections are gone,
+   so that half is closed, but the target set it names is still a fourth answer
+   and still the reason this property holds.
 3. **A printed path exists.** Advice pointing at a deleted script is a dead end
    discovered by the reader.
 4. **The formatter is contained.** ``ruff format`` is not enforced anywhere:

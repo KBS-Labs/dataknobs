@@ -1252,7 +1252,7 @@ def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_pa
 # entry matching nothing is stale, and one matching something already linted is
 # the cheapest way to silence a coverage check. Both directions survive, over
 # every tool rather than just ruff, as
-# ``test_no_cell_names_a_part_of_the_tree_that_is_gone`` and
+# ``test_verify_names_a_cell_that_matches_no_tracked_file`` and
 # ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
 # tests/test_quality_contract.py.
 
