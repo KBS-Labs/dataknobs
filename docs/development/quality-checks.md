@@ -555,8 +555,21 @@ uv run bin/validate.sh data
 
 Formatting is checked, not suggested: `bin/validate.sh` fails on a file the
 formatter would rewrite. `./bin/fix.sh` is what repairs it, and `bin/dk format`
-runs the formatter alone. All three read the root `pyproject.toml` and cover
-the same files, so a green `dk format` means a green format check.
+runs the formatter alone. All three read the root `pyproject.toml`, and all
+three resolve their file list from one declaration — `format_targets` in
+`bin/package-discovery.sh` — so a green `dk format` means a green format check.
+
+That list is **not** the one the linter uses, and the difference is deliberate.
+`bin/validate.sh` lints `packages/*/src` and the workspace directories, because
+every other per-package directory sits in the quality contract's `deferred`
+tier for ruff. The contract holds `format` to a ceiling of 0 on *all* of its
+cells, so the formatter additionally reaches each package's `tests`,
+`examples`, `scripts`, `benchmarks` and `docs`. Scoping to a package
+(`bin/validate.sh data`) narrows both lists to that package.
+
+`bin/validate.sh --print-format-targets` and `./bin/fix.sh --print-format-targets`
+print the resolved list without running anything, which is also how
+`tests/test_toolchain_consistency.py` checks the two against the contract.
 
 ### Type Checking and Python Compatibility
 

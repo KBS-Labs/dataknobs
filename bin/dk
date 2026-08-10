@@ -24,6 +24,13 @@ workspace_targets() {
     "$SCRIPT_DIR/package-discovery.sh" workspace-targets
 }
 
+# The formatter's population, which is wider than the linter's — see the
+# declaration in package-discovery.sh. Wrapped the same way and for the same
+# reason: invoked, not sourced.
+format_targets() {
+    "$SCRIPT_DIR/package-discovery.sh" format-targets
+}
+
 # Colors for output
 if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM}" != "dumb" ]; then
     RED='\033[0;31m'
@@ -383,21 +390,27 @@ main() {
             # an unvalidated rewrite — it is the named opt-in for the same
             # standard, and its target set has to be the checked one.
             #
-            # It used to run over packages/*/src alone. Against an enforced
-            # check that is a trap rather than a narrower convenience: `dk
-            # format` would report success and validate.sh would still fail on
-            # tests/ or bin/, which is the shape this repository already fixed
-            # once by making `dk fix` delegate rather than keep its own set.
+            # It used to run over packages/*/src alone, then over that plus the
+            # workspace set. Both were narrower than the check: the contract
+            # enforces formatting on every package's tests, examples, scripts,
+            # benchmarks and docs too, so `dk format` reported success while
+            # validate.sh still failed on 874 files it had not touched — the
+            # shape this repository already fixed once by making `dk fix`
+            # delegate rather than keep its own set, arrived at a second time
+            # by keeping a second answer to which code we format.
+            #
+            # format_targets is now the whole population, declared once in
+            # package-discovery.sh and read by the check and its write side too.
             # Captured before the command for the reason `style` documents —
             # errexit reads the enclosing command's status, so a substitution
             # that fails inside an argument list yields an empty string and
             # formats the narrower set anyway.
-            format_targets=$(workspace_targets)
-            # SC2086: the word splitting is the point — workspace_targets emits
+            fmt_targets=$(format_targets)
+            # SC2086: the word splitting is the point — format_targets emits
             # several target paths and each has to arrive as its own argument.
             # shellcheck disable=SC2086
             run_from_root "Formatting code" \
-                uv run ruff format "$PROJECT_ROOT"/packages/*/src $format_targets --config "$PROJECT_ROOT/pyproject.toml" "$@"
+                uv run ruff format $fmt_targets --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
             
         # Diagnostics
