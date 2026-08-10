@@ -461,6 +461,13 @@ def _files_the_workspace_guards_read() -> list[str]:
     Walked recursively even though this tree is flat today, because the
     alternative fails the way everything else here does: a guard filed one
     directory down would be outside the population and nothing would say so.
+
+    One read, one expression. A chain split across statements — ``area = ROOT /
+    "bin"`` and then ``area / "thing.txt"`` — is invisible here, and invisible
+    in the direction that passes: the non-vacuity floor in the test below is
+    met by every other read, so the one that went missing is reported by
+    nothing. Write a root-relative read as a single chained expression and it
+    stays in the population.
     """
     named: set[str] = set()
     sources = (p for p in ROOT.glob("tests/**/*.py") if "__pycache__" not in p.parts)
