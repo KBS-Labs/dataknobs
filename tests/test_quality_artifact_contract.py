@@ -333,6 +333,49 @@ def _summary_check_names() -> set[str]:
     return set(re.findall(r"^\s*record_check\s+([a-z_]+)\b", source, re.MULTILINE))
 
 
+#: How each reader spells a reference to one check. Data, because the two do not
+#: spell it the same way and each does it two ways.
+#:
+#: ``("regex", ...)`` captures the name in group 1. ``("case", ...)`` names the
+#: subject line of a ``case`` over a check name and takes its arms, which
+#: alternate (``unit_tests|integration_tests|validation)``). Keyed on the subject
+#: rather than matched as bare arms: every shell ``case`` has arms, and a
+#: pattern that took all of them would read ``yes)`` as a check name.
+#:
+#: Every idiom must match something. An entry matching nothing is the state this
+#: table was found in — it held one pattern, ``\\.checks\\.<name>``, which both
+#: readers had stopped using when they moved to the ``\\x1f`` projection, so the
+#: comparison ran against an empty set on both files while both went on naming
+#: checks by literal. A dead pattern is worse than a missing one, because the
+#: guard still reports green.
+CHECK_REFERENCES = {
+    "diagnose-quality-failures.sh": (
+        ("regex", r"\bcheck_field\s+([a-z_]+)\b"),
+        ("case", 'case "$name" in'),
+    ),
+    "validate-quality-artifacts.sh": (
+        ("regex", r'\*"\s+([a-z_]+)\s+"\*\)'),
+        ("case", 'case " $CHECKS_SEEN " in'),
+    ),
+}
+
+
+def _case_arm_names(code: str, subject: str) -> set[str]:
+    """Names listed in the arms of a ``case`` over a check name."""
+    found: set[str] = set()
+    lines = code.splitlines()
+    for index, line in enumerate(lines):
+        if subject not in line:
+            continue
+        for arm in lines[index + 1 :]:
+            if arm.strip().startswith("esac"):
+                break
+            match = re.match(r"\s*\*?\"?\s*([a-z_|]+)\s*\"?\*?\)", arm)
+            if match:
+                found.update(match.group(1).split("|"))
+    return found
+
+
 def test_no_reader_names_a_check_the_summary_does_not_record():
     """A reader asking for a key nobody writes gets a value, and it is wrong.
 
@@ -353,21 +396,36 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
     making the guard fire on the sentence explaining why it no longer can. A
     guard that punishes describing the bug it guards against gets the
     description deleted, which is the opposite of what it is for.
+
+    The idioms are enumerated in ``CHECK_REFERENCES``, and each is asserted to
+    match something. Non-vacuity per *idiom* rather than per file: when one of
+    two dies the other keeps the file's set non-empty, so a check-per-file
+    assertion passes while half the reader goes unexamined — which is how the
+    single ``.checks.<name>`` pattern came to match neither reader without
+    anyone noticing.
     """
     emitted = _summary_check_names()
     assert emitted, "no check names extracted from the gate's record_check calls"
 
-    readers = {"diagnose-quality-failures.sh", "validate-quality-artifacts.sh"}
     unknown: list[str] = []
-    for name in sorted(readers):
+    for name, idioms in sorted(CHECK_REFERENCES.items()):
         code = "\n".join(
             line
             for line in (ROOT / "bin" / name).read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith("#")
         )
-        for key in sorted(set(re.findall(r"\.checks\.([a-z_]+)", code))):
-            if key not in emitted:
-                unknown.append(f"{name}: .checks.{key}")
+        for kind, spec in idioms:
+            referenced = (
+                set(re.findall(spec, code))
+                if kind == "regex"
+                else _case_arm_names(code, spec)
+            )
+            assert referenced, (
+                f"{name}: the {kind} idiom {spec!r} matches nothing, so this "
+                "guard reads that half of the file as clean without looking at "
+                "it. Re-point the entry at how the reader names checks now."
+            )
+            unknown += [f"{name}: {key}" for key in sorted(referenced - emitted)]
 
     assert not unknown, (
         "these read a check the summary does not record, so they read null and "
