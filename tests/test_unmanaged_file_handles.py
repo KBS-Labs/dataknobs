@@ -31,7 +31,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests._workspace import ROOT, rel, tracked_files, workspace_targets
+from tests._workspace import ROOT, rel, tracked_python_files, workspace_targets
 
 #: Enough scanned files that an empty finding list means "clean" rather than
 #: "matched nothing". Set well under the real count (32 when this was written)
@@ -43,13 +43,11 @@ MINIMUM_FILES_SCANNED = 20
 def _workspace_python() -> list[Path]:
     """Every tracked ``*.py`` under a declared workspace target."""
     roots = workspace_targets()
-    found = []
-    for name in tracked_files():
-        if not name.endswith(".py"):
-            continue
-        if name in roots or any(name.startswith(f"{root}/") for root in roots):
-            found.append(ROOT / name)
-    return found
+    return [
+        ROOT / name
+        for name in tracked_python_files()
+        if name in roots or any(name.startswith(f"{root}/") for root in roots)
+    ]
 
 
 def _unmanaged_opens(source: str, path: Path) -> list[tuple[int, str]]:
