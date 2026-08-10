@@ -618,6 +618,17 @@ def test_every_status_the_summary_reports_is_recorded_on_both_run_modes():
     Note the duration fields got this right by accident of their default: they
     initialise to ``null``, which is the absence of a measurement rather than a
     passing one. ``0`` is a verdict; ``null`` is not.
+
+    **Delete this guard rather than porting it** when the summary stops being
+    written by a shell heredoc. It is a compensating control, not a property
+    worth keeping: it parses the producer's source to check an invariant the
+    producer cannot express, and it exists only because a status variable has a
+    default and that default is a verdict. A writer that emits one record per
+    check as the check runs has no defaults to fall through to — a check that did
+    not run has no record, and an absent record cannot be mistaken for a passing
+    one. At that point every regex above is describing a shape that is gone, and
+    keeping them would leave the next author maintaining a reader for a producer
+    that no longer exists.
     """
     lines = GATE.read_text(encoding="utf-8").splitlines()
     entries = _summary_entries(lines)
