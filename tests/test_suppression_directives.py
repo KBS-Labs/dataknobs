@@ -64,7 +64,7 @@ import pytest
 
 from tests._workspace import ROOT, tracked_python_files
 
-#: How this repo resolves ruff; see ``test_ruff_config_mirror`` for why a bare
+#: How this repo resolves ruff; see ``test_ruff_config_single_source`` for why a bare
 #: ``ruff`` would degrade the checks that use it into a silent skip.
 RUFF = ("uv", "run", "ruff")
 
