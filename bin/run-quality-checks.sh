@@ -1462,14 +1462,21 @@ WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-wo
 print_status "Generating quality summary..."
 OVERALL_STATUS=$(compute_overall_status)
 
-# KEY ORDER INSIDE EACH CHECK IS LOAD-BEARING, and nothing enforces it.
-# validate-quality-artifacts.sh reads this file with line-offset greps —
-# `grep -A2 '"unit_tests"'` for the status, `grep -A3 "\"$check\""` for the
-# skipped flag — so a field inserted above either one pushes it out of the
-# window and the validator silently reads nothing. That is why the durations
-# below are appended last in every object rather than sitting beside the
-# exit code they belong with. Parsing that file as JSON would remove the
-# constraint; until then, add new fields at the end. Tracked.
+# Key order is not load-bearing. Every reader of this file goes through
+# bin/read-quality-summary.py, which parses it as JSON, so a new field goes
+# beside the one it belongs with rather than at the end.
+#
+# It used to be load-bearing, and the note saying so outlived the constraint by
+# long enough to shape the object below: durations sit last, away from the exit
+# codes they belong with, because line-offset greps read a fixed number of lines
+# past a match and a field inserted above one pushed it out of the window.
+# Leaving the instruction in place after the greps were gone was the more
+# expensive half — it asks every later author to preserve an order for a reader
+# that no longer exists, and the cost lands on whoever tries to work out why.
+#
+# A check added here is displayed by CI and by bin/diagnose-quality-failures.sh
+# without either being edited: both enumerate. It does need wiring into
+# compute_overall_status, which is what decides whether it can fail the gate.
 cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",

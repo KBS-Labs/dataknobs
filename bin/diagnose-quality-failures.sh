@@ -15,19 +15,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ARTIFACTS_DIR="$PROJECT_ROOT/.quality-artifacts"
 
-# Asked for by name rather than spelled here, so this tool cannot disagree with
-# run-quality-checks.sh about where that script's own output goes. The literal
-# is the fallback for the case where asking fails.
-REPORTS_DIR=$("$SCRIPT_DIR/run-quality-checks.sh" --print-output-dir 2>/dev/null) \
-    || REPORTS_DIR="$PROJECT_ROOT/.quality-reports"
+# Which run to diagnose. Resolved after the arguments are parsed, because
+# --from names the answer outright and the default has to go ask for it.
+resolve_source_dir() {
+    if [ -n "$FROM_DIR" ]; then
+        printf '%s\n' "$FROM_DIR"
+        return 0
+    fi
 
-# Newer summary wins. Bash's -nt is also true when the left exists and the right
-# does not, which is the "only a checker has run" case; both-absent leaves the
-# artifacts directory selected and is reported below.
-SOURCE_DIR="$ARTIFACTS_DIR"
-if [ "$REPORTS_DIR/quality-summary.json" -nt "$ARTIFACTS_DIR/quality-summary.json" ]; then
-    SOURCE_DIR="$REPORTS_DIR"
-fi
+    # Asked for by name rather than spelled here, so this tool cannot disagree
+    # with run-quality-checks.sh about where that script's own output goes. The
+    # literal is the fallback for the case where asking fails.
+    local reports_dir
+    reports_dir=$("$SCRIPT_DIR/run-quality-checks.sh" --print-output-dir 2>/dev/null) \
+        || reports_dir="$PROJECT_ROOT/.quality-reports"
+
+    # Newer summary wins. Bash's -nt is also true when the left exists and the
+    # right does not, which is the "only a checker has run" case; both-absent
+    # leaves the artifacts directory selected and is reported below.
+    if [ "$reports_dir/quality-summary.json" -nt "$ARTIFACTS_DIR/quality-summary.json" ]; then
+        printf '%s\n' "$reports_dir"
+    else
+        printf '%s\n' "$ARTIFACTS_DIR"
+    fi
+}
 
 # Colors for output
 if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM}" != "dumb" ]; then
@@ -70,6 +81,7 @@ ${YELLOW}Options:${NC}
     -l, --lint          Focus on linting issues
     -c, --coverage      Show coverage details
     -f, --fix           Show auto-fix commands where available
+        --from DIR      Diagnose the run whose output is in DIR
     -h, --help          Show this help message
 
 ${YELLOW}Examples:${NC}
@@ -90,6 +102,7 @@ SHOW_STYLE=true
 SHOW_COVERAGE=false
 SHOW_FIXES=false
 FOCUS_MODE=""
+FROM_DIR=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -124,6 +137,14 @@ while [[ $# -gt 0 ]]; do
             SHOW_FIXES=true
             shift
             ;;
+        --from)
+            if [ -z "${2:-}" ]; then
+                echo "--from needs a directory"
+                exit 2
+            fi
+            FROM_DIR="$2"
+            shift 2
+            ;;
         -h|--help)
             show_usage
             ;;
@@ -133,6 +154,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+SOURCE_DIR="$(resolve_source_dir)"
 
 # Neither tier holds a run. Naming the checker first: it is the cheaper of the
 # two and produces everything this tool reads.
@@ -333,43 +356,80 @@ with open('$SOURCE_DIR/coverage-by-package.json') as f:
 echo -e "${BOLD}${CYAN}DataKnobs Quality Diagnostics${NC}"
 echo -e "${DIM}Analyzing artifacts from $(date -r "$SOURCE_DIR/quality-summary.json" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'recent run')${NC}"
 
-# Read the summary
-if command -v jq &> /dev/null; then
-    OVERALL_STATUS=$(jq -r '.overall_status' "$SOURCE_DIR/quality-summary.json")
-    TIMESTAMP=$(jq -r '.timestamp' "$SOURCE_DIR/quality-summary.json")
-    ENVIRONMENT=$(jq -r '.environment' "$SOURCE_DIR/quality-summary.json")
-    PACKAGES=$(jq -r '.packages' "$SOURCE_DIR/quality-summary.json")
-    
-    # Get individual check statuses.
-    #
-    # `validation`, not `lint`: the producer has never emitted a check by that
-    # name, nor a `style` one. Reading both returned the JSON null that jq
-    # prints for a missing path, which is not "pass", so this reported a warning
-    # for each on every run it ever made — including runs where everything
-    # passed. Two permanently-amber rows are indistinguishable from two rows
-    # that are amber for a reason, which is why nobody read them.
-    #
-    # Style has no verdict of its own to read: ruff runs inside validate.sh and
-    # is part of the `validation` result. What it does have is style-check.json,
-    # so the status is derived from that file — an empty findings array is a
-    # pass — rather than from a summary key that does not exist.
-    LINT_STATUS=$(jq -r '.checks.validation.status' "$SOURCE_DIR/quality-summary.json")
-    LINT_CODE=$(jq -r '.checks.validation.exit_code' "$SOURCE_DIR/quality-summary.json")
-    if [ ! -f "$SOURCE_DIR/style-check.json" ] \
-        || [ "$(jq 'length' "$SOURCE_DIR/style-check.json" 2>/dev/null || echo 0)" = "0" ]; then
-        STYLE_STATUS="pass"
-    else
-        STYLE_STATUS="fail"
-    fi
-    UNIT_STATUS=$(jq -r '.checks.unit_tests.status' "$SOURCE_DIR/quality-summary.json")
-    UNIT_CODE=$(jq -r '.checks.unit_tests.exit_code' "$SOURCE_DIR/quality-summary.json")
-    INT_STATUS=$(jq -r '.checks.integration_tests.status' "$SOURCE_DIR/quality-summary.json")
-    INT_CODE=$(jq -r '.checks.integration_tests.exit_code' "$SOURCE_DIR/quality-summary.json")
+# Read the summary once, through the parser CI reads it with.
+#
+# This used to branch on `command -v jq`. The jq path asked for `.checks.lint`
+# and `.checks.style`, neither of which the producer has ever emitted: jq prints
+# null for a missing path, null is not "pass", so it showed two amber rows on
+# every run it ever made, including runs where everything passed. The other path
+# set no status variables at all, so a machine without jq diagnosed every run as
+# failing in four places. Both are the same defect — a second reader of a file
+# that already has one — and jq being unpinned here is what made the second
+# reader necessary. Python is not optional in a repository whose toolchain is
+# Python, so there is one reader now and no branch.
+SUMMARY_PROJECTION=$(python3 "$SCRIPT_DIR/read-quality-summary.py" \
+    "$SOURCE_DIR/quality-summary.json" 2>/dev/null \
+    || printf 'ERROR\037could not run read-quality-summary.py\n')
+
+# One field of one record, by name. Callers below name the field they want, so
+# no reader here holds a column number.
+summary_meta() {
+    local want="$1" kind key value
+    while IFS="$(printf '\037')" read -r kind key value; do
+        [ "$kind" = "META" ] && [ "$key" = "$want" ] || continue
+        printf '%s\n' "$value"
+        return 0
+    done <<< "$SUMMARY_PROJECTION"
+}
+
+check_field() {
+    local want="$1" field="$2"
+    local kind name status skipped exit_code tool label
+    while IFS="$(printf '\037')" read -r kind name status skipped exit_code tool label; do
+        [ "$kind" = "CHECK" ] && [ "$name" = "$want" ] || continue
+        case "$field" in
+            status)    printf '%s\n' "$status" ;;
+            skipped)   printf '%s\n' "$skipped" ;;
+            exit_code) printf '%s\n' "$exit_code" ;;
+            tool)      printf '%s\n' "$tool" ;;
+            label)     printf '%s\n' "$label" ;;
+        esac
+        return 0
+    done <<< "$SUMMARY_PROJECTION"
+}
+
+OVERALL_STATUS=$(printf '%s\n' "$SUMMARY_PROJECTION" \
+    | while IFS="$(printf '\037')" read -r kind value; do
+        [ "$kind" = "OVERALL" ] && printf '%s\n' "$value" && break
+    done)
+TIMESTAMP=$(summary_meta timestamp)
+ENVIRONMENT=$(summary_meta environment)
+PACKAGES=$(summary_meta packages)
+
+# The four the sections below analyse. Every other recorded check is displayed
+# and reported by enumeration; these are named only because there is specific
+# analysis to run for them.
+#
+# `validation`, not `lint`: the producer has never emitted a check by either
+# that name or `style`. Style has no verdict of its own to read — ruff runs
+# inside validate.sh and its result is part of `validation` — so it is derived
+# from style-check.json, where an empty findings array is a pass.
+LINT_STATUS=$(check_field validation status)
+LINT_CODE=$(check_field validation exit_code)
+UNIT_STATUS=$(check_field unit_tests status)
+INT_STATUS=$(check_field integration_tests status)
+STYLE_COUNT=$(python3 -c "
+import json,sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(len(json.load(fh)))
+except Exception:
+    print(0)
+" "$SOURCE_DIR/style-check.json" 2>/dev/null || echo 0)
+if [ "$STYLE_COUNT" = "0" ]; then
+    STYLE_STATUS="pass"
 else
-    # Fallback parsing without jq
-    OVERALL_STATUS=$(grep '"overall_status"' "$SOURCE_DIR/quality-summary.json" | cut -d'"' -f4)
-    TIMESTAMP=$(grep '"timestamp"' "$SOURCE_DIR/quality-summary.json" | cut -d'"' -f4)
-    echo -e "${YELLOW}Note: Install 'jq' for better JSON parsing${NC}"
+    STYLE_STATUS="fail"
 fi
 
 # Show summary header
@@ -385,12 +445,32 @@ else
     echo -e "  Overall:      ${RED}✗ FAILED${NC}"
 fi
 
-# Show individual check results
+# Every check the summary records, rather than the four this script used to name.
+#
+# The gate records eight. Naming them meant that a run red on shell lint,
+# workflow lint or any of the three documentation checks showed four passing
+# rows and nothing else — an all-clear, from the tool whose entire job is to say
+# what broke. All eight are blocking (compute_overall_status fails on any of
+# them), so there is no such thing here as a check not worth displaying, and a
+# check added to the gate tomorrow appears without this file being edited.
 echo -e "\n${BOLD}Check Results:${NC}"
-[ "$LINT_STATUS" = "pass" ] && echo -e "  Linting:      ${GREEN}✓${NC}" || echo -e "  Linting:      ${YELLOW}⚠ (exit: $LINT_CODE)${NC}"
-[ "$STYLE_STATUS" = "pass" ] && echo -e "  Style:        ${GREEN}✓${NC}" || echo -e "  Style:        ${YELLOW}⚠${NC}"
-[ "$UNIT_STATUS" = "pass" ] && echo -e "  Unit Tests:   ${GREEN}✓${NC}" || echo -e "  Unit Tests:   ${RED}✗ (exit: $UNIT_CODE)${NC}"
-[ "$INT_STATUS" = "pass" ] && echo -e "  Integration:  ${GREEN}✓${NC}" || echo -e "  Integration:  ${RED}✗ (exit: $INT_CODE)${NC}"
+while IFS="$(printf '\037')" read -r kind name status skipped exit_code tool label; do
+    [ "$kind" = "CHECK" ] || continue
+    : "$name" "$tool"
+    if [ "$skipped" = "true" ]; then
+        printf '  %-24s' "${label}:"
+        echo -e "${DIM}– skipped${NC}"
+    elif [ "$status" = "pass" ]; then
+        printf '  %-24s' "${label}:"
+        echo -e "${GREEN}✓${NC}"
+    else
+        printf '  %-24s' "${label}:"
+        echo -e "${RED}✗ (exit: ${exit_code:-?})${NC}"
+    fi
+done <<< "$SUMMARY_PROJECTION"
+[ "$STYLE_STATUS" = "pass" ] \
+    && echo -e "  ${DIM}Style findings:         none${NC}" \
+    || echo -e "  ${DIM}Style findings:         ${STYLE_COUNT} (in style-check.json)${NC}"
 
 # If everything passed, exit early
 if ([ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]) && [ "$SHOW_COVERAGE" = false ]; then
@@ -478,21 +558,53 @@ if [ "$OVERALL_STATUS" != "PASS" ] && [ "$OVERALL_STATUS" != "PASS_WITH_SKIPS" ]
     fi
     
     # Linting requires manual fixes
-    if [ "$LINT_STATUS" != "pass" ] && [ "$LINT_STATUS" != "warning" ]; then
+    if [ -n "$LINT_STATUS" ] && [ "$LINT_STATUS" != "pass" ]; then
         echo -e "  ${BOLD}$priority.${NC} Fix linting issues:"
         echo "       ./bin/dk lint"
         ((priority++))
     fi
-    
+
+    # Everything else that failed, named by the check that failed and the tool
+    # that produced it.
+    #
+    # The three lines above are the whole of what this section used to print, so
+    # a run red on shell lint, workflow lint or a documentation check reached
+    # here and printed a heading with nothing under it — and then told the
+    # developer to re-run the gate, which would fail the same way for the same
+    # unnamed reason. The `-n` guard on the linting branch is the other half of
+    # that: an absent `validation` entry read as empty, which is not "pass", so
+    # this recommended fixing lint findings for a run that had not linted.
+    while IFS="$(printf '\037')" read -r kind name status skipped exit_code tool label; do
+        [ "$kind" = "CHECK" ] || continue
+        if [ "$status" = "pass" ] || [ "$skipped" = "true" ]; then
+            continue
+        fi
+        case "$name" in
+            unit_tests|integration_tests|validation) continue ;;
+        esac
+        : "$exit_code"
+        echo -e "  ${BOLD}$priority.${NC} ${label} failed:"
+        if [ -n "$tool" ] && [ -x "$PROJECT_ROOT/bin/$tool" ]; then
+            echo "       ./bin/$tool"
+        else
+            echo "       see the ${label} output in $SOURCE_DIR"
+        fi
+        ((priority++))
+    done <<< "$SUMMARY_PROJECTION"
+
     echo -e "\n${CYAN}After fixing, re-run quality checks:${NC}"
     echo "    ./bin/dk pr"
 else
-    echo -e "${GREEN}✓ All critical checks passed!${NC}"
-    
-    if [ "$LINT_STATUS" = "warning" ] || [ "$STYLE_STATUS" = "warning" ]; then
+    echo -e "${GREEN}✓ All recorded checks passed.${NC}"
+
+    # Style findings do not fail the gate on their own — ruff's verdict reaches
+    # it through `validation` — so they are worth mentioning on a green run and
+    # are not worth blocking one. The branch this replaces tested both statuses
+    # against "warning", a value the producer has never written, so it could not
+    # run: two dead lines whose subject was a real thing worth saying.
+    if [ "$STYLE_STATUS" != "pass" ]; then
         echo -e "\n${YELLOW}Minor issues to consider:${NC}"
-        [ "$LINT_STATUS" = "warning" ] && echo "  - Some linting warnings (non-blocking)"
-        [ "$STYLE_STATUS" = "warning" ] && echo "  - Some style issues (non-blocking)"
+        echo "  - ${STYLE_COUNT} style findings (non-blocking; ./bin/fix.sh)"
     fi
 fi
 

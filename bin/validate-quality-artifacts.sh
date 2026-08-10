@@ -66,12 +66,11 @@ print_info() {
     echo -e "  ${BLUE}ℹ${NC} $1"
 }
 
-# Read quality-summary.json in one JSON parse, projected into tab-delimited
-# lines the shell can iterate:
-#
-#   OVERALL<TAB><overall_status>
-#   CHECK<TAB><name><TAB><status><TAB><skipped><TAB><label>
-#   ERROR<TAB><message>              (unreadable file; nothing else is emitted)
+# Read quality-summary.json in one JSON parse, projected into delimited lines
+# the shell can iterate. The record shapes and the choice of ASCII Unit
+# Separator over a tab are documented in bin/read-quality-summary.py; the short
+# version is that a tab is IFS whitespace, so `read` collapses runs of it and
+# drops empty fields.
 #
 # This replaces seven line-offset greps — `grep -A2 '"unit_tests"'` for a status,
 # `grep -A3` for a skipped flag. Those read the file by POSITION: any field added
@@ -89,7 +88,7 @@ print_info() {
 # embedded in a shell string is checked by nothing until it runs.
 read_summary() {
     python3 "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
-        || printf 'ERROR\tcould not run read-quality-summary.py\n'
+        || printf 'ERROR\037could not run read-quality-summary.py\n'
 }
 
 # Print the projection for one summary file and exit. The main path below calls
@@ -230,7 +229,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         # a subshell, where every VALIDATION_FAILED set below would be discarded
         # when it exits, and the gate would report success over failing checks.
         CHECKS_SEEN=""
-        while IFS="$(printf '\t')" read -r kind name status _skipped label; do
+        while IFS="$(printf '\037')" read -r kind name status _skipped _exit_code _tool label; do
             [ "$kind" = "CHECK" ] || continue
             CHECKS_SEEN="$CHECKS_SEEN $name"
 
@@ -255,7 +254,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         esac
 
         if [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
-            while IFS="$(printf '\t')" read -r kind name _status skipped _label; do
+            while IFS="$(printf '\037')" read -r kind name _status skipped _exit_code _tool _label; do
                 [ "$kind" = "CHECK" ] && [ "$skipped" = "true" ] || continue
                 print_info "  Skipped: $name"
             done <<< "$SUMMARY_PROJECTION"

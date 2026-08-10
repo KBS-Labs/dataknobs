@@ -342,6 +342,12 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
     The same shape as the ``lint-report.json`` allowance and the
     permanently-mismatching signature before it — a reader, no writer, and a
     result too plausible to look wrong.
+
+    Comment lines are skipped. This scans source text, so without that it also
+    matches the note left behind at a site where the defect was *removed*,
+    making the guard fire on the sentence explaining why it no longer can. A
+    guard that punishes describing the bug it guards against gets the
+    description deleted, which is the opposite of what it is for.
     """
     emitted = _summary_check_names()
     assert emitted, "no check names extracted from the summary heredoc"
@@ -349,8 +355,12 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
     readers = {"diagnose-quality-failures.sh", "validate-quality-artifacts.sh"}
     unknown: list[str] = []
     for name in sorted(readers):
-        text = (ROOT / "bin" / name).read_text(encoding="utf-8")
-        for key in sorted(set(re.findall(r"\.checks\.([a-z_]+)", text))):
+        code = "\n".join(
+            line
+            for line in (ROOT / "bin" / name).read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for key in sorted(set(re.findall(r"\.checks\.([a-z_]+)", code))):
             if key not in emitted:
                 unknown.append(f"{name}: .checks.{key}")
 
