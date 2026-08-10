@@ -127,6 +127,26 @@ def tracked_dirs() -> frozenset[str]:
 
 
 @cache
+def tracked_python_files() -> tuple[str, ...]:
+    """Every tracked ``*.py``, root-relative and sorted.
+
+    The whole tree, not a scope: callers narrow it themselves, and the two that
+    do want opposite widths. The handle guard reads only the directories the
+    workspace owns, because package code has legitimate instances of what it
+    rejects; the suppression guard reads everything precisely *because* some of
+    it is unlinted, which is where a directive nothing enforces survives.
+
+    Shared for the reason ``tracked_shell_files`` is: the answer to "which files
+    are Python" now decides what two guards scan, and a second copy of the walk
+    is how the Python-floor extraction ended up with two subtly different
+    answers.
+    """
+    found = tuple(sorted(name for name in tracked_files() if name.endswith(".py")))
+    assert found, "no tracked Python files found — has the enumeration broken?"
+    return found
+
+
+@cache
 def tracked_shell_files() -> tuple[str, ...]:
     """Every tracked shell script, by ``git ls-files`` and then by shebang.
 
