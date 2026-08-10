@@ -365,6 +365,29 @@ record_check() {
         --records "$RECORDS_FILE" --name "$name" --exit-code "$code" "$@"
 }
 
+# Content hashes, taken before the first check reads anything.
+#
+# These were computed at the far end, after every check had finished, which
+# meant the recorded digest described the tree at the *end* of the run rather
+# than the tree the checks read. A file checked at minute 1 holding content A
+# and edited to B at minute 2 was hashed as B, so the validator later compared
+# disk (B) against recorded (B), found them equal, and accepted an artifact
+# attesting content that no check had seen.
+#
+# Taken here, that same edit surfaces as the ordinary "Package content has
+# changed since quality checks were run" the validator already prints. No new
+# mechanism, no new failure mode, and it fails closed — which the end-of-run
+# version structurally cannot.
+#
+# The far end now re-computes and compares instead; see the re-check below.
+print_status "Computing per-package content hashes..."
+PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
+# Workspace-level inputs (toolchain config, workspace guards) are hashed
+# separately: they carry their own blast radius and never enter the
+# package dependency graph. Without them a change to mypy.ini or a guard
+# left every stored hash intact and CI validated a stale artifact.
+WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
@@ -1572,13 +1595,44 @@ COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
 # Generate quality summary and signature immediately after coverage.xml is ready.
 # These are the files CI validates and that must be committed — they must not be
 # delayed by the slower per-package coverage reporting that follows.
-print_status "Computing per-package content hashes..."
-PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
-# Workspace-level inputs (toolchain config, workspace guards) are hashed
-# separately: they carry their own blast radius and never enter the
-# package dependency graph. Without them a change to mypy.ini or a guard
-# left every stored hash intact and CI validated a stale artifact.
-WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+# The hashes were taken before the first check. Re-take them now: equal means
+# every check read the content this artifact is about to attest, and unequal
+# means the tree moved while the run was reading it, so no digest describes
+# what was actually checked.
+#
+# Refusing is the only honest answer. Recording the start digest would attest a
+# tree half the checks never saw; recording the end digest would attest one the
+# other half never saw; and writing a summary with overall_status=FAIL would
+# say the *checks* failed, which is a different and untrue claim. So the run
+# stops here without an artifact, and .run-in-progress stays behind to say so.
+#
+# One case is open and stays open: an A→B→A edit inside a single run leaves both
+# digests equal while some check may have read B. Only a timestamp catches that,
+# and mtime is settable, rewritten by checkouts and rebases, and touched by
+# editors on saves that change nothing — the rarest case at the highest
+# flakiness cost, which is how a check ends up suppressed.
+print_status "Re-checking content hashes..."
+MOVED_SCOPES=$(uv run python "$SCRIPT_DIR/package-hashes.py" changed-since \
+    --packages "$PACKAGE_HASHES_JSON" \
+    --workspace "$WORKSPACE_HASHES_JSON") && HASH_RECHECK=0 || HASH_RECHECK=$?
+
+# Three outcomes, kept apart on purpose. "The tree moved" sends the developer
+# to re-run; "the comparison could not be made" sends them to the gate itself,
+# and telling them to re-run would be advice about the wrong program.
+if [ "$HASH_RECHECK" -eq 1 ]; then
+    print_error "The tree changed while the checks were running:"
+    # Unquoted on purpose: one name per line from the comparison, re-split here
+    # into one argument per name so printf's format cycles over them.
+    # shellcheck disable=SC2086
+    printf '  - %s\n' $MOVED_SCOPES >&2
+    print_error "No digest describes what was checked, so no artifact was written."
+    print_error "Re-run once the tree is settled."
+    exit 1
+elif [ "$HASH_RECHECK" -ne 0 ]; then
+    print_error "Could not re-check the content hashes (exit $HASH_RECHECK)."
+    print_error "The artifact would attest a tree nothing verified, so none was written."
+    exit 1
+fi
 
 print_status "Generating quality summary..."
 OVERALL_STATUS=$(compute_overall_status)

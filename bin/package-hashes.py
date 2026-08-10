@@ -391,6 +391,98 @@ def cmd_compute_workspace() -> None:
     sys.stdout.write("\n")
 
 
+def changed_since(
+    packages: dict[str, Any] | None, workspace: dict[str, Any] | None
+) -> tuple[list[str], list[str]]:
+    """Which recorded digests no longer describe the tree, and which were absent.
+
+    Both arguments are documents this script printed earlier in the same run.
+    Recomputing and comparing is how the gate tells "the tree I checked" from
+    "the tree that happens to be here now": equal means every check read the
+    content the artifact is about to attest; unequal means it did not, for the
+    named scopes.
+
+    An equality of two digests rather than an ordering of two clocks. Comparing
+    file mtimes against the ``.run-in-progress`` timestamp would be cheaper and
+    is available for free, but mtime is settable, checkouts and rebases rewrite
+    it, and editors rewrite it on saves that change nothing — more *sensitive*
+    and less *reliable*, and a check that fails spuriously ends up suppressed.
+
+    Returns ``(moved, unchecked)``. The second list is what keeps an empty
+    document from reading as a clean comparison: the gate falls back to ``{}``
+    when a hash computation fails, and a half with no recorded digests has
+    nothing to compare rather than nothing wrong. Silently returning "no
+    movement" for it would be this repository's own defect class — an absence
+    rendered as a pass.
+
+    Names are qualified because the two namespaces overlap in kind but not in
+    meaning, and a bare name would leave the reader guessing which moved.
+    """
+    moved: list[str] = []
+    unchecked: list[str] = []
+
+    # Dropped rather than compared: the algorithm version is a property of this
+    # script, not of the tree, so it cannot move during a run and naming it in a
+    # diff would only mislead.
+    recorded = (
+        {k: v for k, v in packages.items() if k != "_algorithm_version"}
+        if packages
+        else {}
+    )
+    if recorded:
+        current = compute_all_hashes()
+        moved += sorted(
+            f"packages/{name}"
+            for name in set(recorded) | set(current)
+            if recorded.get(name) != current.get(name)
+        )
+    else:
+        unchecked.append("packages")
+
+    if workspace:
+        current_workspace = compute_all_workspace_hashes()
+        moved += sorted(
+            f"workspace/{scope}"
+            for scope in set(workspace) | set(current_workspace)
+            if workspace.get(scope) != current_workspace.get(scope)
+        )
+    else:
+        unchecked.append("workspace")
+
+    return moved, unchecked
+
+
+def cmd_changed_since(packages_json: str | None, workspace_json: str | None) -> None:
+    """Print every recorded scope the tree moved out from under; exit 1 if any.
+
+    Three outcomes, three exit codes, because the caller has to respond to them
+    differently: 0 the digests still hold, 1 the tree moved and the run must be
+    repeated, 2 the comparison could not be made at all. Collapsing the last two
+    would send a developer to re-run the gate over a bug in the gate.
+
+    A half with no recorded digests is reported rather than skipped in silence.
+    """
+    try:
+        packages = json.loads(packages_json) if packages_json else None
+        workspace = json.loads(workspace_json) if workspace_json else None
+    except json.JSONDecodeError as exc:
+        logger.error("Recorded hashes are not readable JSON: %s", exc)
+        sys.exit(2)
+
+    if packages is None and workspace is None:
+        logger.error("Nothing to compare — pass --packages, --workspace, or both")
+        sys.exit(2)
+
+    moved, unchecked = changed_since(packages, workspace)
+    for half in unchecked:
+        logger.warning(
+            "No %s hashes were recorded, so nothing about them was re-checked", half
+        )
+    for name in moved:
+        print(name)
+    sys.exit(1 if moved else 0)
+
+
 def cmd_validate(*, use_json: bool = False) -> None:
     """Validate that artifacts match current source content."""
     result = validate_artifacts()
@@ -441,6 +533,17 @@ def main() -> None:
         "compute-workspace", help="Print per-scope workspace content hashes as JSON"
     )
 
+    changed_parser = subparsers.add_parser(
+        "changed-since",
+        help="Report which recorded hashes no longer match the tree",
+    )
+    changed_parser.add_argument(
+        "--packages", help="the package-hash document recorded earlier this run"
+    )
+    changed_parser.add_argument(
+        "--workspace", help="the workspace-hash document recorded earlier this run"
+    )
+
     validate_parser = subparsers.add_parser(
         "validate", help="Validate artifacts against current source content"
     )
@@ -455,6 +558,8 @@ def main() -> None:
         cmd_compute()
     elif args.command == "compute-workspace":
         cmd_compute_workspace()
+    elif args.command == "changed-since":
+        cmd_changed_since(args.packages, args.workspace)
     elif args.command == "validate":
         cmd_validate(use_json=args.use_json)
 

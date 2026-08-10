@@ -216,6 +216,30 @@ per-package and per-workspace-scope content hash, and CI recomputes those from
 the checkout: if they disagree, your artifacts do not describe the code being
 merged and the check fails, naming the packages that need re-validation.
 
+Those hashes are taken **before the first check runs**, and re-taken at the end.
+The two are different questions and only one of them is the one you want asked:
+hashing at the end records whatever is on disk when the run finishes, so a file
+checked at minute 1 and edited at minute 2 is attested as its *new* content —
+CI then compares disk against the record, finds them equal, and accepts an
+artifact describing code no check ever read. Hashing at the start makes that
+edit surface as the ordinary "content has changed since quality checks were
+run", which is the message you want and a failure rather than a pass.
+
+The re-check at the end compares the two. If they disagree the tree moved while
+the run was reading it, no digest describes what was actually checked, and the
+run stops without writing an artifact:
+
+```
+✗ The tree changed while the checks were running:
+  - packages/data
+  - workspace/workspace_tests
+✗ No digest describes what was checked, so no artifact was written.
+✗ Re-run once the tree is settled.
+```
+
+Editing your working tree during a `bin/dk pr` is the usual cause. Let it finish,
+or re-run after you stop.
+
 ### Where the time went
 
 Every check records a `duration_seconds` beside its status, and the run records

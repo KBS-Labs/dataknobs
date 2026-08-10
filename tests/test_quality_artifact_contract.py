@@ -24,6 +24,8 @@ import ast
 import json
 import re
 import subprocess
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from tests._workspace import ROOT
@@ -573,6 +575,267 @@ def test_the_merge_driver_gitattributes_names_is_actually_defined():
         f"{GITATTRIBUTES.name} uses merge drivers {undefined} that "
         f"{GIT_SETUP.name} never configures. Git falls back to a text merge "
         "without warning, so the attribute would do nothing at all."
+    )
+
+
+GATE = ROOT / "bin" / "run-quality-checks.sh"
+
+#: The scripts the gate runs to *check* something, by the basename it invokes
+#: them under. Each must match a line or this guard measures "before the first
+#: check" against a boundary that is not there — the per-entry non-vacuity that
+#: ``CHECK_REFERENCES`` above exists to enforce, for the same reason.
+#:
+#: Service management and package sync are deliberately absent: they run before
+#: any check and read no verdict, so including them would pin the hashes ahead
+#: of setup rather than ahead of checking.
+CHECKER_INVOCATIONS = (
+    "lint-workflows.sh",
+    "lint-shell.sh",
+    "validate.sh",
+    "docs-checks.sh",
+    "test.sh",
+)
+
+
+def _gate_lines() -> list[str]:
+    return GATE.read_text(encoding="utf-8").splitlines()
+
+
+def _first_matching(lines: list[str], predicate: Callable[[str], bool]) -> int:
+    """1-based line number of the first match, or -1."""
+    return next((n for n, line in enumerate(lines, 1) if predicate(line.strip())), -1)
+
+
+def _last_matching(lines: list[str], predicate: Callable[[str], bool]) -> int:
+    """1-based line number of the last match, or -1."""
+    return next(
+        (n for n, line in reversed(list(enumerate(lines, 1))) if predicate(line.strip())),
+        -1,
+    )
+
+
+def test_the_recorded_hashes_describe_the_tree_that_was_checked() -> None:
+    """The attestation must hash what ran, not whatever is on disk at the end.
+
+    The hashes were computed after every check had finished, so the recorded
+    digest described the tree at the *end* of the run rather than the tree the
+    checks read. Walk it through: a file is checked at minute 1 holding content
+    A, edited to B at minute 2, and the run ends and hashes it as B. The
+    validator later compares disk (B) against recorded (B), they agree, and the
+    artifact attests content that no check ever saw.
+
+    Hashing at the start makes that edit surface as the ordinary "Package
+    content has changed since quality checks were run" the validator already
+    prints — no new mechanism, no new failure mode, and it fails closed, which
+    the end-hash version structurally cannot.
+
+    The re-check is the other half: hashing at both ends and requiring equality
+    is what lets the gate say *the tree moved while I was reading it* rather
+    than silently attesting a mixture. Note what it is — an equality of two
+    hashes, not an ordering of two clocks. The ``.run-in-progress`` marker
+    already carries a start timestamp, so comparing file mtimes against it
+    would be free; but mtime is settable, checkouts and rebases rewrite it, and
+    editors and formatters rewrite it on saves that change nothing. More
+    *sensitive* and less *reliable*, and a check that fails spuriously gets
+    suppressed — which is the whole subject of G4.
+
+    One case stays open and is recorded rather than closed: edit A→B→A entirely
+    within one run and both hashes agree while some check may have seen B. Only
+    a timestamp catches that, and it is the rarest case at the highest
+    flakiness cost.
+
+    Structural rather than behavioural, for the reason the marker guard in
+    ``test_quality_diagnostics.py`` is: exercising it for real means running
+    the gate from inside the gate's own test suite.
+    """
+    lines = _gate_lines()
+
+    def computes(line: str) -> bool:
+        return "package-hashes.py" in line and ("compute" in line)
+
+    first_hash = _first_matching(lines, computes)
+    assert first_hash > 0, (
+        f"nothing in {GATE.name} computes content hashes — if the command was "
+        "renamed, re-point this guard rather than deleting it"
+    )
+
+    # The earliest point at which the tree has been read for a verdict. Two
+    # independent sources, because either alone can be renamed out from under
+    # this: a checker invocation, and the first outcome a check records.
+    def invokes(basename: str) -> Callable[[str], bool]:
+        """A predicate for one checker, bound rather than captured.
+
+        A lambda closing over the loop variable would read whatever it held at
+        call time; a default argument would fix that but leaves the type
+        uninferable. A named factory says the same thing and stays checkable.
+        """
+        return lambda line: f"/{basename}" in line
+
+    boundaries: list[int] = []
+    for basename in CHECKER_INVOCATIONS:
+        found = _first_matching(lines, invokes(basename))
+        assert found > 0, (
+            f"{GATE.name} no longer invokes {basename}, so 'before the first "
+            "check' is being measured against a boundary that is not there"
+        )
+        boundaries.append(found)
+
+    first_record = _first_matching(
+        lines, lambda ln: re.match(r"record_check\s+[a-z_]+\b", ln) is not None
+    )
+    assert first_record > 0, f"no record_check calls found in {GATE.name}"
+    boundaries.append(first_record)
+
+    first_check = min(boundaries)
+    assert first_hash < first_check, (
+        f"{GATE.name} computes content hashes at line {first_hash}, after the "
+        f"first check reads the tree at line {first_check}. The recorded digest "
+        "then describes the tree at the end of the run rather than the one the "
+        "checks ran against, and an edit made mid-run is attested instead of "
+        "reported. Move the computation above the first check."
+    )
+
+    # And the far end: recompute, compare, refuse to attest a mixture.
+    recheck = _last_matching(lines, lambda ln: "package-hashes.py" in ln and "changed-since" in ln)
+    summary = _first_matching(lines, lambda ln: 'quality-summary.py" build' in ln)
+    last_record = _last_matching(
+        lines, lambda ln: re.match(r"record_check\s+[a-z_]+\b", ln) is not None
+    )
+    assert summary > 0, "the summary write moved; this guard needs its new shape"
+    assert recheck > 0, (
+        f"{GATE.name} never re-checks the hashes it recorded at line "
+        f"{first_hash}. Without it a tree edited mid-run is attested with the "
+        "start digest and no one is told the two halves disagree."
+    )
+    assert last_record < recheck < summary, (
+        f"the re-check sits at line {recheck}, outside the window between the "
+        f"last check ({last_record}) and the summary write ({summary}). Before "
+        "the last check it cannot see an edit made during one; after the "
+        "summary it reports on an artifact already written."
+    )
+
+    # The re-check answers three ways and the gate has to keep two of them
+    # apart. A bare ``if !`` collapses "the tree moved" into "the comparison
+    # could not be made", and the second then prints the first's message over
+    # an empty list of names — a failure announced with nothing named under it,
+    # which is the shape the documentation rows and the diagnose tool were both
+    # found in. Reading the code into a variable is what makes the two branches
+    # expressible at all, so that is what this asserts.
+    region = "\n".join(lines[recheck - 1 : summary - 1])
+    captured = re.search(r"(\w+)=\$\?", region)
+    assert captured, (
+        f"{GATE.name} never captures the re-check's exit code between lines "
+        f"{recheck} and {summary}, so it cannot tell 'the tree moved' from "
+        "'the comparison could not be made'. The second would then be reported "
+        "as the first, with no names under it."
+    )
+    variable = captured.group(1)
+    tested = re.findall(
+        r'\[\s*"\$' + re.escape(variable) + r'"\s*-(?:eq|ne)\s*(\d+)', region
+    )
+    assert len(set(tested)) > 1, (
+        f"{GATE.name} captures the re-check's exit code into ${variable} and "
+        f"then tests it against {sorted(set(tested))} — one outcome, so the "
+        "capture buys nothing. Branch on 'moved' separately from every other "
+        "non-zero, or the unusable-document case is reported as a changed tree."
+    )
+
+
+def _hashes(command: str) -> str:
+    """One of the producer's hash documents, as it prints it."""
+    return subprocess.run(
+        [sys.executable, str(PRODUCER), command],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _changed_since(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run the re-check the gate runs, over documents the caller supplies."""
+    return subprocess.run(
+        [sys.executable, str(PRODUCER), "changed-since", *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_still_tree_re_checks_clean() -> None:
+    """The ordinary run: the digests taken at the start still hold at the end.
+
+    Non-vacuity for the three tests below, and the case that decides whether
+    this mechanism is usable at all. A re-check that reported movement over an
+    untouched tree would fail every run, and a check that fails spuriously is
+    one that gets suppressed.
+    """
+    result = _changed_since(
+        "--packages", _hashes("compute"), "--workspace", _hashes("compute-workspace")
+    )
+    assert result.returncode == 0, (
+        "the re-check reported movement over a tree nothing touched:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+    assert not result.stdout.strip(), f"expected no names, got:\n{result.stdout}"
+
+
+def test_a_digest_that_stopped_describing_the_tree_is_named() -> None:
+    """The whole point: a recorded digest the tree has moved out from under.
+
+    Mutating a recorded value rather than editing a file, because the two are
+    indistinguishable to this comparison and only one of them leaves the
+    developer's working tree dirty when the assertion fails.
+    """
+    recorded = json.loads(_hashes("compute"))
+    package = next(name for name in recorded if name != "_algorithm_version")
+    recorded[package] = "0" * 64
+
+    result = _changed_since("--packages", json.dumps(recorded))
+
+    assert result.returncode == 1, (
+        f"a moved digest exited {result.returncode}, so the gate would have "
+        f"attested it:\n{result.stdout}{result.stderr}"
+    )
+    assert result.stdout.split() == [f"packages/{package}"], (
+        f"expected the moved package named on its own, got:\n{result.stdout}"
+    )
+
+
+def test_a_half_with_no_recorded_digests_is_reported_rather_than_passed() -> None:
+    """An absent digest set must not read as a verified one.
+
+    The gate falls back to ``{}`` when a hash computation fails, so this is
+    reachable rather than hypothetical. Returning "nothing moved" for it would
+    be this repository's own defect class in a new place: an absence rendered
+    as a pass, and the exit code says pass either way — so what distinguishes
+    them has to be said out loud.
+    """
+    result = _changed_since("--packages", "{}", "--workspace", "{}")
+
+    assert result.returncode == 0, "an empty document is not itself a failure"
+    assert not result.stdout.strip(), "nothing moved, so nothing should be named"
+    for half in ("packages", "workspace"):
+        assert half in result.stderr, (
+            f"no {half} digests were recorded and nothing said so — the run "
+            f"reads as re-checked:\n{result.stderr}"
+        )
+
+
+def test_an_unusable_document_does_not_read_as_a_moved_tree() -> None:
+    """Exit 2, not 1: the two send a developer to different programs.
+
+    "The tree moved" means re-run the gate. "The comparison could not be made"
+    means the gate handed this something unusable, and telling them to re-run
+    would be advice about the wrong program — they would do it, get the same
+    result, and have no more information than before.
+    """
+    result = _changed_since("--packages", "this is not json")
+
+    assert result.returncode == 2, (
+        f"an unreadable document exited {result.returncode}; 1 would have been "
+        "reported to the developer as a tree that changed under them"
     )
 
 
