@@ -113,6 +113,10 @@ module = [
     "more_itertools.*",
     "flask.*",
     "asyncpg.*",
+    # Imported inside a try/except ImportError by bin/check-services.py, as the
+    # more accurate of its two PostgreSQL liveness probes. Stubs are not carried
+    # for a driver nothing in the workspace depends on.
+    "psycopg2.*",
     "aioboto3.*",
     "pandas.*",
     "pandas.api.types.*",

@@ -70,7 +70,10 @@ def check_localstack(host: str = "localstack", port: int = 4566) -> bool:
         if response.status_code == 200:
             data = response.json()
             services = data.get("services", {})
-            return services.get("s3") == "available"
+            # bool() rather than returning the comparison directly: the decoded
+            # payload is untyped, so `x == "available"` is Any to a type checker
+            # and silently satisfies any declared return type.
+            return bool(services.get("s3") == "available")
     except Exception:
         pass
 
@@ -81,7 +84,7 @@ def check_localstack(host: str = "localstack", port: int = 4566) -> bool:
         with urllib.request.urlopen(f"http://{host}:{port}/_localstack/health", timeout=3) as response:
             data = json.loads(response.read().decode())
             services = data.get("services", {})
-            return services.get("s3") == "available"
+            return bool(services.get("s3") == "available")
     except Exception:
         return False
 
@@ -99,11 +102,11 @@ def check_ollama(host: str = "localhost", port: int = 11434) -> bool:
         import urllib.request
         import urllib.error
         with urllib.request.urlopen(f"http://{host}:{port}/api/tags", timeout=3) as response:
-            return response.status == 200
+            return bool(response.status == 200)
     except Exception:
         return False
 
-def main():
+def main() -> None:
     """Main function."""
     if len(sys.argv) < 2:
         print("Usage: check-services.py <service> [host] [port]")
