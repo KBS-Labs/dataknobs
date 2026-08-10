@@ -12,7 +12,31 @@ published API docs and IDE hovers and mean nothing to consumers.
 A prior one-time cleanup scrubbed the pre-existing leakage; this script
 is the recurring guard that prevents reintroduction.
 
-Scope: ``packages/*/src/**/*.py`` and ``packages/*/tests/**/*.py``.
+Scope: ``packages/*/src`` and ``packages/*/tests``, plus the first-party code
+belonging to no package -- ``bin/``, root ``tests/``, the workspace shim and
+the root conftest -- and every tracked shell script.
+
+That second half was outside the scan until it was measured.  The docstring
+justified the narrow scope by where labels do damage: rendered API docs and IDE
+hovers, which is shipped code.  True, and not the only reason -- a tracker
+label is a reference to a document the reader cannot open, and in ``bin/`` the
+reader is a maintainer rather than a consumer.  ``bin/`` is also where the
+guards that check this repository live, and where the longest explanatory prose
+gets written, so it was simultaneously the likeliest place for one to land and
+the one place nothing looked.  Widening it cost nothing: measured across all of
+it, the only hits were in this file.
+
+Both halves are asked for rather than listed -- ``package-discovery.sh
+workspace-targets`` for the Python, ``lint-shell.sh --print-targets`` for the
+shell -- because a fourth hand-kept copy of "which code is ours" is how the
+first three came to disagree.  Neither is allowed to fail quietly: a scope that
+silently narrows reports a clean scan over code it never read.
+
+Data files are deliberately out.  Measured, they contribute no true positives
+and eleven false ones, because the digit-suffix branches below are tuned for
+English prose about code: ``70b`` is a model's parameter count, ``447f`` a hash
+fragment, ``18a`` a Unicode codepoint.  The line is authored prose, not file
+count.
 
 ``Phase N`` is enforced only in its *leak* form -- a planning-phase tag
 NOT immediately followed by ``:``.  The legitimate runtime-pipeline-stage
@@ -35,23 +59,78 @@ label is found.  No autofix -- rewording requires human judgement.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "internal-label-allowlist.txt"
 
-# Default scan scope (repo-relative glob roots) when no paths are passed.
+# Default scan scope for package code (repo-relative glob roots).  The code
+# belonging to no package is asked for rather than listed -- see _extra_roots.
 DEFAULT_GLOBS = ("packages/*/src", "packages/*/tests")
+
+#: Files exempt from their own check, because describing a label requires
+#: writing one.  This module quotes fourteen across its docstring and its
+#: pattern comments, and the allowlist file is a table of them; keyed by exact
+#: substring, allowlisting them individually would mean editing that table
+#: every time the pattern gains a branch, which is the shape of upkeep nobody
+#: does.  Narrow on purpose: a genuine label written into this file is not
+#: caught, and there is no way to have both without a marker syntax that would
+#: itself need explaining.  The allowlist entry is dead under the current
+#: suffix rule -- a ``.txt`` is not scanned -- and is kept so that widening the
+#: scope to data files does not silently make this file fail its own check.
+SELF_DESCRIBING = frozenset({
+    "bin/check-internal-labels.py",
+    "bin/internal-label-allowlist.txt",
+})
+
+
+def _declared(command: list[str], what: str) -> list[str]:
+    """Run a declaration-printing helper and split its output into names.
+
+    ``check=True``, and a failure is not caught.  A scope that comes back empty
+    because the helper broke is indistinguishable in the report from a scope
+    with nothing in it, and this check announces success by printing a tick --
+    so degrading to a partial scan would print that tick over unread code.
+    """
+    result = subprocess.run(
+        command, cwd=ROOT, capture_output=True, text=True, check=True
+    )
+    names = result.stdout.split()
+    if not names:
+        msg = f"{what} named nothing: {' '.join(command)}"
+        raise RuntimeError(msg)
+    return names
+
+
+def _extra_roots() -> list[Path]:
+    """The first-party code belonging to no package, plus every shell script."""
+    workspace = _declared(
+        [str(ROOT / "bin" / "package-discovery.sh"), "workspace-targets"],
+        "workspace targets",
+    )
+    shell = _declared(
+        [str(ROOT / "bin" / "lint-shell.sh"), "--print-targets"],
+        "shell lint targets",
+    )
+    return [ROOT / name for name in (*workspace, *shell)]
 
 # Unambiguous tracker-label classes only.
 LABEL_PATTERN = re.compile(
-    r"Item [0-9]{1,3}"
+    # ``[ -]`` rather than a space: the hyphenated spelling is what an author
+    # reaches for mid-sentence (``the post-Item-116 contract``), and matching
+    # only the space form left seven of these in the scope this guard already
+    # covered -- one of them in shipped package source, which is the exact
+    # thing it exists to keep out of rendered API docs. The separator is the
+    # one degree of freedom an author has here, so both spellings are the
+    # class rather than two classes.
+    r"Item[ -][0-9]{1,3}"
     r"|Items [0-9]+\+[0-9]+"
     r"|consumer-gaps"
     r"|\bRC[0-9]+\b"
     r"|pre-Item"
-    r"|post-Item [0-9]"
+    r"|post-Item[ -][0-9]"
     # ``Phase N`` is enforced only in its *leak* form: a planning-phase
     # tag NOT immediately followed by ``:``.  Legitimate runtime-pipeline
     # -stage usage always takes the colon form (``# Phase 2: Deterministic
@@ -126,22 +205,39 @@ def load_allowlist() -> list[tuple[str, str]]:
 
 
 def iter_target_files(args: list[str]) -> list[Path]:
-    """Resolve CLI args (or the default scope) to a sorted list of .py files."""
+    """Resolve CLI args (or the default scope) to a sorted list of files.
+
+    A named file is scanned whatever its suffix -- naming it is the statement
+    that it should be -- while a directory contributes its ``*.py`` only.  The
+    shell half of the default scope arrives as individual paths from
+    ``lint-shell.sh``, so it needs no suffix rule here; extending a *directory*
+    walk to shell would mean a fourth copy of the suffix-or-shebang question
+    that three files in this repository already answer differently on purpose.
+    """
     files: set[Path] = set()
     if args:
         for arg in args:
             p = Path(arg)
             if not p.is_absolute():
                 p = ROOT / p
-            if p.is_file() and p.suffix == ".py":
+            if p.is_file():
                 files.add(p.resolve())
             elif p.is_dir():
                 files.update(f.resolve() for f in p.rglob("*.py"))
     else:
-        for glob in DEFAULT_GLOBS:
-            for root_dir in ROOT.glob(glob):
-                if root_dir.is_dir():
-                    files.update(f.resolve() for f in root_dir.rglob("*.py"))
+        roots = [
+            root_dir
+            for glob in DEFAULT_GLOBS
+            for root_dir in ROOT.glob(glob)
+            if root_dir.is_dir()
+        ]
+        for root_dir in roots:
+            files.update(f.resolve() for f in root_dir.rglob("*.py"))
+        for extra in _extra_roots():
+            if extra.is_dir():
+                files.update(f.resolve() for f in extra.rglob("*.py"))
+            elif extra.is_file():
+                files.add(extra.resolve())
     return sorted(files)
 
 
@@ -179,6 +275,8 @@ def main() -> int:
             rel_path = path.relative_to(ROOT).as_posix()
         except ValueError:
             rel_path = path.as_posix()
+        if rel_path in SELF_DESCRIBING:
+            continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             match = LABEL_PATTERN.search(line)
             if not match:

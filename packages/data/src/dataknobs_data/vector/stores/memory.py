@@ -301,7 +301,7 @@ class MemoryVectorStore(VectorStore):
         for vector_id, meta in zip(ids, metadata, strict=False):
             if vector_id in self.vectors:
                 self.metadata_store[vector_id] = meta
-                # Pre-Item-36 legacy pickles: IDs loaded before timestamp
+                # Legacy pickles: IDs written before timestamp
                 # tracking was introduced exist in ``self.vectors`` but
                 # not in ``self.timestamps``. Leave ``updated_at`` as
                 # None for those rows, consistent with pgvector's

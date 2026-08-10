@@ -35,3 +35,5 @@ packages/data/src/dataknobs_data/backends/elasticsearch.py	per-item 409	HTTP 409
 packages/llm/src/dataknobs_llm/llm/providers/bedrock.py	llama3-2-11b	public Llama model-id size tokens (vision family list; line also has llama3-2-90b)
 packages/llm/tests/test_bedrock_model_binding.py	llama3-2-90b	public Llama model-id in test fixture (meta.llama3-2-90b-instruct)
 packages/llm/tests/test_bedrock_model_binding.py	llama3-1-70b	public Llama model-id in test fixture (meta.llama3-1-70b-instruct)
+tests/test_internal_label_scope.py	Item 116	synthetic label the separator test matches against — the test cannot assert the pattern catches a spelling without writing that spelling
+tests/test_internal_label_scope.py	Item 210	synthetic label written into a tmp_path fixture to prove the guard reports it and exits 1

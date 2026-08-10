@@ -33,7 +33,7 @@ class TestDatabaseStorageFactory:
     
     @pytest.fixture
     def memory_config(self):
-        """Create configuration for memory backend (post-Item-116 contract).
+        """Create configuration for memory backend, on the current contract.
 
         ``StorageConfig.backend`` is the source of truth for backend
         selection; no redundant ``'type'`` / ``'backend'`` keys in
@@ -46,7 +46,7 @@ class TestDatabaseStorageFactory:
 
     @pytest.fixture
     def sqlite_config(self):
-        """Create configuration for SQLite backend (post-Item-116 contract)."""
+        """Create configuration for SQLite backend, on the current contract."""
         temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         temp_db.close()
 
@@ -569,7 +569,7 @@ class TestInMemoryStorageIsolation:
 
     @pytest.fixture
     def memory_config(self):
-        """Create a default InMemoryStorage config (post-Item-116 contract)."""
+        """Create a default InMemoryStorage config, on the current contract."""
         return StorageConfig(
             backend=StorageBackend.MEMORY,
             connection_params={},

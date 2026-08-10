@@ -425,7 +425,7 @@ class TestMemoryVectorStoreTimestamps:
 
     @pytest.mark.asyncio
     async def test_legacy_pickle_load_has_empty_timestamps(self, tmp_path):
-        """Pre-Item-36 pickle files load cleanly; legacy rows have no tracked ts."""
+        """Pickles written before timestamp tracking load cleanly, with no tracked ts."""
         persist_path = str(tmp_path / "legacy.pkl")
         # Write a legacy pickle file (no "timestamps" key).
         legacy = {
