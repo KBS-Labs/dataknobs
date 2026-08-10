@@ -95,12 +95,14 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
     # the contract layer) are deliberately NOT declared here — adopters
     # get the honest "not advertised" answer until the behaviour
     # exists. A backend widening its own set unions onto this base.
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
-        Capability.KEY_PATTERN_FILTERING,
-        Capability.CHANGE_SUBSCRIPTION,
-        Capability.BACKEND_STATE_OBSERVABILITY,
-        Capability.CALLBACK_REGISTRY,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {
+            Capability.KEY_PATTERN_FILTERING,
+            Capability.CHANGE_SUBSCRIPTION,
+            Capability.BACKEND_STATE_OBSERVABILITY,
+            Capability.CALLBACK_REGISTRY,
+        }
+    )
 
     # --- Tenant-context scoping (shared) ---
 
@@ -133,9 +135,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[KnowledgeFile]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """Return all files in the KB (used to compute the snapshot)."""
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
@@ -219,9 +219,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         return cls._identity_of_snapshot({f.path: f.checksum for f in files})
 
-    async def get_checksum(
-        self, domain_id: str, *, ctx: TenantContext | None = None
-    ) -> str:
+    async def get_checksum(self, domain_id: str, *, ctx: TenantContext | None = None) -> str:
         """Canonical content-snapshot identity of the whole KB.
 
         MD5 over the sorted ``path:checksum`` of every file. The empty
@@ -270,9 +268,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         current_version = self._snapshot_identity(files)
         current = {f.path: f for f in files}
         if version == current_version:
-            return ChangeSet(
-                added=[], modified=[], deleted=[], version=current_version
-            )
+            return ChangeSet(added=[], modified=[], deleted=[], version=current_version)
 
         snapshot = await self._load_content_snapshot(domain_id, version, ctx)
         added: list[KnowledgeFile] = []
@@ -307,9 +303,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
             ValueError: If ``domain_id`` does not exist.
         """
         try:
-            return not (
-                await self.list_changes_since(domain_id, version, ctx=ctx)
-            ).is_empty
+            return not (await self.list_changes_since(domain_id, version, ctx=ctx)).is_empty
         except InvalidVersionError:
             return True
 
@@ -436,9 +430,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         the registry is created on first access and cached on the
         instance). Backends fire through :meth:`_fire_state_write`.
         """
-        reg: CallbackRegistry | None = getattr(
-            self, "_state_write_callbacks", None
-        )
+        reg: CallbackRegistry | None = getattr(self, "_state_write_callbacks", None)
         if reg is None:
             reg = CallbackRegistry()
             self._state_write_callbacks = reg
@@ -462,9 +454,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         backend's running event loop (a sync ``fire`` would be rejected
         by the substrate's fan-out-in-running-loop guard).
         """
-        reg: CallbackRegistry | None = getattr(
-            self, "_state_write_callbacks", None
-        )
+        reg: CallbackRegistry | None = getattr(self, "_state_write_callbacks", None)
         if reg is None:
             return  # No registry constructed — zero overhead.
 

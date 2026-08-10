@@ -83,9 +83,7 @@ class TestPersistedProviderIdentity:
     """The node records the family key, not the configured spelling."""
 
     @pytest.mark.asyncio
-    async def test_lowercase_config_persists_the_family(
-        self, manager_for_spelling
-    ) -> None:
+    async def test_lowercase_config_persists_the_family(self, manager_for_spelling) -> None:
         manager = await manager_for_spelling("echo")
         await manager.add_message(role="user", content="Hello")
         await manager.complete()
@@ -93,9 +91,7 @@ class TestPersistedProviderIdentity:
         assert _assistant_metadata(manager)["provider"] == "echo"
 
     @pytest.mark.asyncio
-    async def test_capitalized_config_persists_the_same_family(
-        self, manager_for_spelling
-    ) -> None:
+    async def test_capitalized_config_persists_the_same_family(self, manager_for_spelling) -> None:
         """The regression guard.
 
         Writing ``config.provider`` raw persists ``"Echo"`` here while the
@@ -110,9 +106,7 @@ class TestPersistedProviderIdentity:
         assert _assistant_metadata(manager)["provider"] == "echo"
 
     @pytest.mark.asyncio
-    async def test_two_spellings_persist_one_key(
-        self, manager_for_spelling
-    ) -> None:
+    async def test_two_spellings_persist_one_key(self, manager_for_spelling) -> None:
         """Two deployments of one provider must not split an analytics join."""
         lower = await manager_for_spelling("echo")
         await lower.add_message(role="user", content="Hello")
@@ -122,7 +116,4 @@ class TestPersistedProviderIdentity:
         await upper.add_message(role="user", content="Hello")
         await upper.complete()
 
-        assert (
-            _assistant_metadata(lower)["provider"]
-            == _assistant_metadata(upper)["provider"]
-        )
+        assert _assistant_metadata(lower)["provider"] == _assistant_metadata(upper)["provider"]

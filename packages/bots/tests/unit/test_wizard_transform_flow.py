@@ -29,9 +29,7 @@ from dataknobs_llm.testing import scripted_schema_extractor
 # ── Test transform functions ──────────────────────────────────────────
 
 
-def generate_test_questions(
-    data: dict, context: object = None, **kwargs: object
-) -> None:
+def generate_test_questions(data: dict, context: object = None, **kwargs: object) -> None:
     """Simulate quiz question generation.
 
     Sets _questions on data dict (in-place mutation, returns None),
@@ -51,9 +49,7 @@ def generate_test_questions(
     ]
 
 
-def initialize_test_bank(
-    data: dict, context: object = None, **kwargs: object
-) -> None:
+def initialize_test_bank(data: dict, context: object = None, **kwargs: object) -> None:
     """Simulate bank initialization (in-place mutation, returns None)."""
     data.setdefault("_bank_questions", [])
     data.setdefault("_bank_reviewed", [])
@@ -63,9 +59,7 @@ _captured_contexts: list[Any] = []
 """Module-level list to capture TransformContext from transforms."""
 
 
-def submit_test_review(
-    data: dict, context: object = None, **kwargs: object
-) -> None:
+def submit_test_review(data: dict, context: object = None, **kwargs: object) -> None:
     """Simulate review submission.  Captures context for test inspection."""
     _captured_contexts.append(context)
     questions = data.get("_questions", [])
@@ -82,9 +76,7 @@ def submit_test_review(
     data["_review_failed"] = 0
 
 
-def context_capturing_transform(
-    data: dict, context: object = None, **kwargs: object
-) -> None:
+def context_capturing_transform(data: dict, context: object = None, **kwargs: object) -> None:
     """Transform that only captures its TransformContext for inspection."""
     _captured_contexts.append(context)
 
@@ -262,9 +254,7 @@ class TestWizardConfirmation:
         template, NOT immediately transition to the next stage.
         """
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"topic": "English grammar"}']
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"topic": "English grammar"}'])
 
         await manager.add_message(role="user", content="Create English grammar questions")
 
@@ -295,9 +285,7 @@ class TestWizardConfirmation:
         )
 
         # Turn 1: provide topic → confirmation
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         assert manager.metadata["wizard"]["fsm_state"]["current_stage"] == "define_topic"
 
@@ -330,9 +318,7 @@ class TestWizardConfirmation:
         )
 
         # Turn 1: topic extracted → confirmation shown
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         assert manager.metadata["wizard"]["fsm_state"]["current_stage"] == "define_topic"
 
@@ -356,9 +342,7 @@ class TestWizardConfirmation:
         response should be returned.
         """
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"difficulty": "hard"}']
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"difficulty": "hard"}'])
 
         await manager.add_message(role="user", content="Make it hard difficulty")
         await reasoning.generate(manager, llm=None)
@@ -380,13 +364,9 @@ class TestWizardTransformDataPropagation:
         wizard_state.data after the FSM transition.
         """
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"topic": "English grammar"}', "{}"]
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"topic": "English grammar"}', "{}"])
 
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         await manager.add_message(role="user", content="Looks good")
         await reasoning.generate(manager, llm=None)
@@ -405,13 +385,9 @@ class TestWizardTransformDataPropagation:
         response templates.
         """
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"topic": "English grammar"}', "{}"]
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"topic": "English grammar"}', "{}"])
 
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         await manager.add_message(role="user", content="Looks good")
         r2 = await reasoning.generate(manager, llm=None)
@@ -428,9 +404,7 @@ class TestWizardTransformDataPropagation:
     ) -> None:
         """Transforms that return None should not break the chain."""
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"topic": "Physics"}', "{}"]
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"topic": "Physics"}', "{}"])
 
         await manager.add_message(role="user", content="Create Physics quiz")
         await reasoning.generate(manager, llm=None)
@@ -464,9 +438,7 @@ class TestWizardReviewTransition:
         )
 
         # Turn 1: topic → confirmation
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
 
         # Turn 2: confirm → transition to generate_questions
@@ -480,8 +452,7 @@ class TestWizardReviewTransition:
 
         state = manager.metadata["wizard"]["fsm_state"]
         assert state["current_stage"] == "review_questions", (
-            f"Expected transition to review_questions, "
-            f"but stayed at {state['current_stage']}"
+            f"Expected transition to review_questions, but stayed at {state['current_stage']}"
         )
 
     @pytest.mark.asyncio
@@ -501,9 +472,7 @@ class TestWizardReviewTransition:
             ]
         )
 
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         await manager.add_message(role="user", content="Looks good")
         await reasoning.generate(manager, llm=None)
@@ -511,9 +480,7 @@ class TestWizardReviewTransition:
         r3 = await reasoning.generate(manager, llm=None)
 
         # Review template should show quality results
-        assert "Quality Review" in r3.content, (
-            f"Expected review results, got: {r3.content!r}"
-        )
+        assert "Quality Review" in r3.content, f"Expected review results, got: {r3.content!r}"
         assert "PASS" in r3.content
         assert "3" in r3.content  # 3 passed
 
@@ -535,9 +502,7 @@ class TestWizardReviewTransition:
             ]
         )
 
-        await manager.add_message(
-            role="user", content="Create English grammar questions"
-        )
+        await manager.add_message(role="user", content="Create English grammar questions")
         await reasoning.generate(manager, llm=None)
         await manager.add_message(role="user", content="Looks good")
         await reasoning.generate(manager, llm=None)
@@ -693,9 +658,7 @@ class TestWizardTransitionRecords:
         between stages.
         """
         manager, _ = conversation_manager_pair
-        reasoning, _ = _build_wizard(
-            extraction_responses=['{"topic": "Biology"}', "{}"]
-        )
+        reasoning, _ = _build_wizard(extraction_responses=['{"topic": "Biology"}', "{}"])
 
         await manager.add_message(role="user", content="Create Biology quiz")
         await reasoning.generate(manager, llm=None)

@@ -113,9 +113,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         self.summary_prompt: str = DEFAULT_SUMMARY_PROMPT
         self._messages: deque[dict[str, Any]] = deque()
         self._summary: str = ""
-        self._compiled_redactions = compile_history_redactions(
-            self.config.history_redactions
-        )
+        self._compiled_redactions = compile_history_redactions(self.config.history_redactions)
 
     def _resolve_prompt(self, prompt_resolver: PromptResolver | None) -> None:
         """Resolve ``summary_prompt`` (explicit > library > default).
@@ -147,9 +145,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         if self._prebuilt:
             return
         has_dedicated_llm = self.config.llm is not None
-        self.llm_provider = await _resolve_summary_llm(
-            self.config.llm, llm_provider
-        )
+        self.llm_provider = await _resolve_summary_llm(self.config.llm, llm_provider)
         self._owns_llm_provider = has_dedicated_llm
         self._resolve_prompt(prompt_resolver)
 
@@ -162,9 +158,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
     ) -> None:
         """Adopt a caller-owned LLM provider for ``from_components``."""
         if llm_provider is None:
-            raise TypeError(
-                "SummaryMemory.from_components requires llm_provider"
-            )
+            raise TypeError("SummaryMemory.from_components requires llm_provider")
         self.llm_provider = llm_provider
         self._owns_llm_provider = False
         self._resolve_prompt(prompt_resolver)
@@ -184,9 +178,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
             role: Message role (user, assistant, system)
             metadata: Optional metadata for the message
         """
-        self._messages.append(
-            {"content": content, "role": role, "metadata": metadata or {}}
-        )
+        self._messages.append({"content": content, "role": role, "metadata": metadata or {}})
 
         if len(self._messages) > self.recent_window:
             await self._summarize_oldest()
@@ -221,9 +213,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
 
         # Redact assistant content in the recent buffer; system + user
         # roles pass through (default redact_roles={"assistant"}).
-        context.extend(
-            apply_history_redactions(self._messages, self._compiled_redactions)
-        )
+        context.extend(apply_history_redactions(self._messages, self._compiled_redactions))
         return context
 
     def providers(self) -> dict[str, Any]:
@@ -259,9 +249,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         await close_if_owned(
             self.llm_provider,
             self._owns_llm_provider,
-            on_error=lambda _exc: logger.exception(
-                "Error closing summary LLM provider"
-            ),
+            on_error=lambda _exc: logger.exception("Error closing summary LLM provider"),
         )
 
     async def clear(self) -> None:

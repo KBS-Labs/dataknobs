@@ -13,9 +13,7 @@ from typing import Any, Callable, Dict, List, Union
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 
 
-def _enrichment_collides(
-    result: Dict[str, Any], field: str, *, overwrite: bool
-) -> bool:
+def _enrichment_collides(result: Dict[str, Any], field: str, *, overwrite: bool) -> bool:
     """Whether an enrichment write to ``field`` must be skipped.
 
     The single collision predicate shared by both enrichment forms: a write is
@@ -67,7 +65,7 @@ class FieldMapper(ITransformFunction):
         copy_unmapped: bool = True,
     ):
         """Initialize the field mapper.
-        
+
         Args:
             field_map: Dictionary mapping source field names to target names.
             drop_unmapped: If True, drop fields not in the mapping.
@@ -79,15 +77,15 @@ class FieldMapper(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by mapping field names.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with mapped field names.
         """
         result = {}
-        
+
         # Map specified fields
         for source, target in self.field_map.items():
             if source in data:
@@ -96,18 +94,18 @@ class FieldMapper(ITransformFunction):
                     value = self._get_nested(data, source)
                 else:
                     value = data[source]
-                
+
                 if "." in target:
                     self._set_nested(result, target, value)
                 else:
                     result[target] = value
-        
+
         # Handle unmapped fields
         if not self.drop_unmapped and self.copy_unmapped:
             for key, value in data.items():
                 if key not in self.field_map and key not in result:
                     result[key] = value
-        
+
         return result
 
     def _get_nested(self, data: Dict, path: str) -> Any:
@@ -149,7 +147,7 @@ class ValueNormalizer(ITransformFunction):
         fields: List[str] | None = None,
     ):
         """Initialize the value normalizer.
-        
+
         Args:
             normalizations: Dictionary of normalization types:
                 - "lowercase": Convert to lowercase
@@ -167,39 +165,37 @@ class ValueNormalizer(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by normalizing values.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with normalized values.
         """
         result = copy.deepcopy(data)
-        
+
         # Determine which fields to process
         fields_to_process = self.fields if self.fields else list(result.keys())
-        
+
         for field in fields_to_process:
             if field not in result:
                 continue
-            
+
             value = result[field]
             if not isinstance(value, str):
                 continue
-            
+
             # Apply normalizations for this field
-            field_normalizations = self.normalizations.get(
-                field, self.normalizations.get("*", [])
-            )
-            
+            field_normalizations = self.normalizations.get(field, self.normalizations.get("*", []))
+
             if isinstance(field_normalizations, str):
                 field_normalizations = [field_normalizations]
-            
+
             for normalization in field_normalizations:
                 value = self._apply_normalization(value, normalization)
-            
+
             result[field] = value
-        
+
         return result
 
     def _apply_normalization(self, value: str, normalization: str) -> str:
@@ -212,8 +208,8 @@ class ValueNormalizer(ITransformFunction):
             return value.strip()
         elif normalization == "snake_case":
             # Convert to snake_case
-            s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', value)
-            return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+            s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", value)
+            return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
         elif normalization == "camel_case":
             # Convert to camelCase
             parts = value.replace("-", "_").split("_")
@@ -223,9 +219,9 @@ class ValueNormalizer(ITransformFunction):
             parts = value.replace("-", "_").split("_")
             return "".join(p.capitalize() for p in parts)
         elif normalization == "remove_special":
-            return re.sub(r'[^a-zA-Z0-9\s]', '', value)
+            return re.sub(r"[^a-zA-Z0-9\s]", "", value)
         elif normalization == "normalize_spaces":
-            return re.sub(r'\s+', ' ', value).strip()
+            return re.sub(r"\s+", " ", value).strip()
         else:
             return value
 
@@ -250,7 +246,7 @@ class TypeConverter(ITransformFunction):
         strict: bool = False,
     ):
         """Initialize the type converter.
-        
+
         Args:
             conversions: Dictionary mapping field names to target types.
                         Can be type names (str, int, float, bool, list, dict),
@@ -262,21 +258,21 @@ class TypeConverter(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by converting field types.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with converted types.
         """
         result = copy.deepcopy(data)
-        
+
         for field, target_type in self.conversions.items():
             if field not in result:
                 continue
-            
+
             value = result[field]
-            
+
             try:
                 result[field] = self._convert_value(value, target_type)
             except Exception as e:
@@ -287,22 +283,21 @@ class TypeConverter(ITransformFunction):
                     # field name and target type say what went wrong without
                     # republishing the row.
                     raise TransformError(
-                        f"Failed to convert field '{field}' to "
-                        f"{target_type} ({type(e).__name__})"
+                        f"Failed to convert field '{field}' to {target_type} ({type(e).__name__})"
                     ) from e
                 # Keep original value if conversion fails and not strict
-        
+
         return result
 
     def _convert_value(self, value: Any, target_type: Union[str, type, Callable]) -> Any:
         """Convert a single value to target type."""
         if value is None:
             return None
-        
+
         # Handle callable converters
         if callable(target_type) and not isinstance(target_type, type):
             return target_type(value)
-        
+
         # Handle type names
         if isinstance(target_type, str):
             target_type = {
@@ -315,11 +310,11 @@ class TypeConverter(ITransformFunction):
                 "datetime": datetime.fromisoformat,
                 "json": json.loads,
             }.get(target_type, str)
-        
+
         # Special handling for bool conversion
         if target_type == bool and isinstance(value, str):
             return value.lower() in ["true", "yes", "1", "on"]
-        
+
         # Special handling for datetime
         if target_type == datetime.fromisoformat and isinstance(value, str):
             return datetime.fromisoformat(value)
@@ -345,7 +340,7 @@ class DataEnricher(ITransformFunction):
         overwrite: bool = False,
     ):
         """Initialize the data enricher.
-        
+
         Args:
             enrichments: Dictionary of fields to add/update.
                         Values can be static or callables.
@@ -356,10 +351,10 @@ class DataEnricher(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by adding enrichment fields.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with enrichments.
         """
@@ -379,8 +374,7 @@ class DataEnricher(ITransformFunction):
                     computed = value(data)
                 except Exception as e:
                     raise TransformError(
-                        f"Failed to compute enrichment for '{field}' "
-                        f"({type(e).__name__})"
+                        f"Failed to compute enrichment for '{field}' ({type(e).__name__})"
                     ) from e
             else:
                 computed = value
@@ -389,7 +383,7 @@ class DataEnricher(ITransformFunction):
             merge_enrichment_field(result, field, computed, overwrite=True)
 
         return result
-    
+
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         fields = list(self.enrichments.keys())
@@ -405,14 +399,14 @@ class FieldFilter(ITransformFunction):
         exclude: List[str] | None = None,
     ):
         """Initialize the field filter.
-        
+
         Args:
             include: List of fields to include (whitelist).
             exclude: List of fields to exclude (blacklist).
         """
         if include and exclude:
             raise ValueError("Cannot specify both include and exclude")
-        
+
         self.include = include
         self.exclude = exclude
 
@@ -438,12 +432,12 @@ class FieldFilter(ITransformFunction):
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         if self.include:
-            fields = ', '.join(self.include[:3])
+            fields = ", ".join(self.include[:3])
             if len(self.include) > 3:
                 fields += "..."
             return f"Include only fields: {fields}"
         elif self.exclude:
-            fields = ', '.join(self.exclude[:3])
+            fields = ", ".join(self.exclude[:3])
             if len(self.exclude) > 3:
                 fields += "..."
             return f"Exclude fields: {fields}"
@@ -460,7 +454,7 @@ class ValueReplacer(ITransformFunction):
         default_replacements: Dict[Any, Any] | None = None,
     ):
         """Initialize the value replacer.
-        
+
         Args:
             replacements: Dictionary mapping field names to replacement mappings.
             default_replacements: Default replacements for all fields.
@@ -491,7 +485,7 @@ class ValueReplacer(ITransformFunction):
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         fields = list(self.replacements.keys())[:3]
-        field_str = ', '.join(fields)
+        field_str = ", ".join(fields)
         if len(self.replacements) > 3:
             field_str += "..."
         return f"Replace values in fields: {field_str if fields else 'all fields'}"
@@ -506,7 +500,7 @@ class ArrayFlattener(ITransformFunction):
         depth: int = 1,
     ):
         """Initialize the array flattener.
-        
+
         Args:
             fields: List of fields containing arrays to flatten.
             depth: Number of levels to flatten (0 = fully flatten).
@@ -516,23 +510,23 @@ class ArrayFlattener(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by flattening arrays.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with flattened arrays.
         """
         result = copy.deepcopy(data)
-        
+
         for field in self.fields:
             if field not in result:
                 continue
-            
+
             value = result[field]
             if isinstance(value, list):
                 result[field] = self._flatten(value, self.depth)
-        
+
         return result
 
     def _flatten(self, arr: List, depth: int) -> List:
@@ -560,7 +554,7 @@ class ArrayFlattener(ITransformFunction):
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
-        fields = ', '.join(self.fields[:3])
+        fields = ", ".join(self.fields[:3])
         if len(self.fields) > 3:
             fields += "..."
         depth_str = "fully" if self.depth == 0 else f"to depth {self.depth}"
@@ -576,7 +570,7 @@ class DataSplitter(ITransformFunction):
         output_field: str = "records",
     ):
         """Initialize the data splitter.
-        
+
         Args:
             split_field: Field containing array to split on.
             output_field: Name of output field containing split records.
@@ -586,20 +580,20 @@ class DataSplitter(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by splitting into multiple records.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with split records.
         """
         if self.split_field not in data:
             raise TransformError(f"Split field '{self.split_field}' not found")
-        
+
         split_values = data[self.split_field]
         if not isinstance(split_values, list):
             raise TransformError("Split field must be a list")
-        
+
         # Create a record for each value
         records = []
         base_data = {k: v for k, v in data.items() if k != self.split_field}
@@ -621,7 +615,7 @@ class ChainTransformer(ITransformFunction):
 
     def __init__(self, transformers: List[ITransformFunction]):
         """Initialize the chain transformer.
-        
+
         Args:
             transformers: List of transformers to apply in sequence.
         """
@@ -668,7 +662,9 @@ def enrich(**enrichments: Any) -> DataEnricher:
     return DataEnricher(enrichments)
 
 
-def filter_fields(include: List[str] | None = None, exclude: List[str] | None = None) -> FieldFilter:
+def filter_fields(
+    include: List[str] | None = None, exclude: List[str] | None = None
+) -> FieldFilter:
     """Create a FieldFilter."""
     return FieldFilter(include, exclude)
 

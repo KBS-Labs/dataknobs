@@ -56,9 +56,9 @@ def _bot_from_record(record: Record) -> Bot:
 
 
 @pytest.fixture
-async def async_postgres_store(make_postgres_test_db) -> AsyncGenerator[
-    AsyncKeyedRecordStore[Bot], None
-]:
+async def async_postgres_store(
+    make_postgres_test_db,
+) -> AsyncGenerator[AsyncKeyedRecordStore[Bot], None]:
     """Per-test Postgres-backed ``AsyncKeyedRecordStore[Bot]``.
 
     Uses a ``test_keyed_store_`` table prefix (instead of the generic
@@ -121,15 +121,9 @@ class TestKeyedRecordStorePostgres:
 
     @pytest.mark.asyncio
     async def test_combined_filters_postgres(self, async_postgres_store):
-        await async_postgres_store.put(
-            "a", Bot("a", {}, status="active", tenant_id="t1")
-        )
-        await async_postgres_store.put(
-            "b", Bot("b", {}, status="inactive", tenant_id="t1")
-        )
-        await async_postgres_store.put(
-            "c", Bot("c", {}, status="active", tenant_id="t2")
-        )
+        await async_postgres_store.put("a", Bot("a", {}, status="active", tenant_id="t1"))
+        await async_postgres_store.put("b", Bot("b", {}, status="inactive", tenant_id="t1"))
+        await async_postgres_store.put("c", Bot("c", {}, status="active", tenant_id="t2"))
 
         active_t1 = await async_postgres_store.list(
             filter_data={"status": "active"},

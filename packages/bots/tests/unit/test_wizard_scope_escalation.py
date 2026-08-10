@@ -37,8 +37,7 @@ def _wizard_config() -> dict:
         .field("domain_id", field_type="string", required=True)
         .transition(
             "done",
-            "data.get('name') and data.get('domain_name') "
-            "and data.get('domain_id')",
+            "data.get('name') and data.get('domain_name') and data.get('domain_id')",
         )
         .stage("done", is_end=True, prompt="All done!")
         .build()

@@ -115,9 +115,7 @@ class RegistryPoller:
             raise ValueError("Poll interval must be positive")
         self._poll_interval = value
 
-    def add_change_callback(
-        self, callback: Callable[[str, EventType], Any]
-    ) -> None:
+    def add_change_callback(self, callback: Callable[[str, EventType], Any]) -> None:
         """Add a callback to be invoked on changes.
 
         The callback receives (instance_id, event_type) arguments.
@@ -128,9 +126,7 @@ class RegistryPoller:
         """
         self._change_callbacks.append(callback)
 
-    def remove_change_callback(
-        self, callback: Callable[[str, EventType], Any]
-    ) -> None:
+    def remove_change_callback(self, callback: Callable[[str, EventType], Any]) -> None:
         """Remove a previously added callback.
 
         Args:
@@ -229,9 +225,7 @@ class RegistryPoller:
         self._snapshot = {}
 
         for reg in registrations:
-            updated_at = (
-                reg.updated_at.isoformat() if reg.updated_at else None
-            )
+            updated_at = reg.updated_at.isoformat() if reg.updated_at else None
             config_hash = (
                 hash(str(sorted(reg.config.items())))
                 if self._track_content_changes and reg.config
@@ -253,9 +247,7 @@ class RegistryPoller:
 
         for reg in registrations:
             current_ids.add(reg.bot_id)
-            updated_at = (
-                reg.updated_at.isoformat() if reg.updated_at else None
-            )
+            updated_at = reg.updated_at.isoformat() if reg.updated_at else None
             config_hash = (
                 hash(str(sorted(reg.config.items())))
                 if self._track_content_changes and reg.config
@@ -270,14 +262,8 @@ class RegistryPoller:
                 old_updated_at, old_config_hash = self._snapshot[reg.bot_id]
 
                 # Check for updates
-                timestamp_changed = (
-                    updated_at is not None
-                    and updated_at != old_updated_at
-                )
-                content_changed = (
-                    self._track_content_changes
-                    and config_hash != old_config_hash
-                )
+                timestamp_changed = updated_at is not None and updated_at != old_updated_at
+                content_changed = self._track_content_changes and config_hash != old_config_hash
 
                 if timestamp_changed or content_changed:
                     changes[reg.bot_id] = EventType.UPDATED

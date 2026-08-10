@@ -31,9 +31,7 @@ pytestmark = pytest.mark.asyncio
 
 @requires_blockbuster
 async def test_sqlite_async_connect_does_not_block(tmp_path: Path) -> None:
-    db = AsyncSQLiteDatabase(
-        {"path": str(tmp_path / "nested" / "dir" / "records.sqlite")}
-    )
+    db = AsyncSQLiteDatabase({"path": str(tmp_path / "nested" / "dir" / "records.sqlite")})
     try:
         with assert_no_blocking():
             await db.connect()
@@ -45,8 +43,7 @@ async def test_sqlite_async_connect_does_not_block(tmp_path: Path) -> None:
 @requires_blockbuster
 async def test_duckdb_async_connect_does_not_block(tmp_path: Path) -> None:
     db = AsyncDuckDBDatabase(
-        {"path": str(tmp_path / "nested" / "dir" / "records.duckdb"),
-         "table": "records"}
+        {"path": str(tmp_path / "nested" / "dir" / "records.duckdb"), "table": "records"}
     )
     try:
         with assert_no_blocking():

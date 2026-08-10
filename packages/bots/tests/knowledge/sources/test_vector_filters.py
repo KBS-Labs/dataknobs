@@ -35,10 +35,12 @@ def _record(
 
 async def test_filter_slice_forwarded_to_kb() -> None:
     """Slice keyed by source name flows through as ``filter_metadata``."""
-    kb = ScriptedKnowledgeBase([
-        _record("alpha entry", "doc-1.md", 0, {"category": "alpha"}),
-        _record("beta entry", "doc-1.md", 1, {"category": "beta"}),
-    ])
+    kb = ScriptedKnowledgeBase(
+        [
+            _record("alpha entry", "doc-1.md", 0, {"category": "alpha"}),
+            _record("beta entry", "doc-1.md", 1, {"category": "beta"}),
+        ]
+    )
     source = VectorKnowledgeSource(kb, name="docs")
 
     intent = RetrievalIntent(
@@ -54,10 +56,12 @@ async def test_filter_slice_forwarded_to_kb() -> None:
 
 async def test_no_filter_slice_backward_compat() -> None:
     """Empty ``intent.filters`` passes ``None`` (preserves old behavior)."""
-    kb = ScriptedKnowledgeBase([
-        _record("a", "doc.md", 0),
-        _record("b", "doc.md", 1),
-    ])
+    kb = ScriptedKnowledgeBase(
+        [
+            _record("a", "doc.md", 0),
+            _record("b", "doc.md", 1),
+        ]
+    )
     source = VectorKnowledgeSource(kb, name="docs")
 
     intent = RetrievalIntent(text_queries=["anything"])
@@ -69,10 +73,12 @@ async def test_no_filter_slice_backward_compat() -> None:
 
 async def test_filter_slice_for_different_source_ignored() -> None:
     """Filter slice keyed by a different source name is ignored."""
-    kb = ScriptedKnowledgeBase([
-        _record("a", "doc.md", 0, {"category": "alpha"}),
-        _record("b", "doc.md", 1, {"category": "beta"}),
-    ])
+    kb = ScriptedKnowledgeBase(
+        [
+            _record("a", "doc.md", 0, {"category": "alpha"}),
+            _record("b", "doc.md", 1, {"category": "beta"}),
+        ]
+    )
     source = VectorKnowledgeSource(kb, name="docs")
 
     intent = RetrievalIntent(
@@ -87,10 +93,12 @@ async def test_filter_slice_for_different_source_ignored() -> None:
 
 async def test_empty_slice_treated_as_no_filter() -> None:
     """``intent.filters[name] == {}`` should not narrow results to nothing."""
-    kb = ScriptedKnowledgeBase([
-        _record("a", "doc.md", 0),
-        _record("b", "doc.md", 1),
-    ])
+    kb = ScriptedKnowledgeBase(
+        [
+            _record("a", "doc.md", 0),
+            _record("b", "doc.md", 1),
+        ]
+    )
     source = VectorKnowledgeSource(kb, name="docs")
 
     intent = RetrievalIntent(
@@ -105,26 +113,28 @@ async def test_empty_slice_treated_as_no_filter() -> None:
 
 async def test_multi_key_filter_forwarded() -> None:
     """Multi-key filter dicts flow through unchanged (AND semantics)."""
-    kb = ScriptedKnowledgeBase([
-        _record(
-            "match",
-            "doc-1.md",
-            0,
-            {"category": "premium", "section": "intro"},
-        ),
-        _record(
-            "wrong section",
-            "doc-1.md",
-            1,
-            {"category": "premium", "section": "advanced"},
-        ),
-        _record(
-            "wrong category",
-            "doc-1.md",
-            2,
-            {"category": "standard", "section": "intro"},
-        ),
-    ])
+    kb = ScriptedKnowledgeBase(
+        [
+            _record(
+                "match",
+                "doc-1.md",
+                0,
+                {"category": "premium", "section": "intro"},
+            ),
+            _record(
+                "wrong section",
+                "doc-1.md",
+                1,
+                {"category": "premium", "section": "advanced"},
+            ),
+            _record(
+                "wrong category",
+                "doc-1.md",
+                2,
+                {"category": "standard", "section": "intro"},
+            ),
+        ]
+    )
     source = VectorKnowledgeSource(kb, name="docs")
 
     intent = RetrievalIntent(

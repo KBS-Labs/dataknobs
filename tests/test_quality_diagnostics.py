@@ -155,8 +155,7 @@ def test_a_run_that_never_finished_is_not_reported_as_the_current_one(tmp_path):
     output = _diagnose(tmp_path, passing, started="2026-08-10T12:34:56Z")
 
     assert "2026-08-10T12:34:56Z" in output, (
-        f"{rel(DIAGNOSE)} read a run that never finished and said nothing about "
-        f"it:\n{output}"
+        f"{rel(DIAGNOSE)} read a run that never finished and said nothing about it:\n{output}"
     )
     # Before the summary, not after: under a "Quality Check Summary" heading the
     # same words read as a note about the summary rather than about which run it

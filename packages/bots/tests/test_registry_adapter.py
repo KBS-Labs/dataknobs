@@ -790,12 +790,8 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
 
     @pytest.mark.asyncio
     async def test_list_inactive_filter_metadata_and_combines(self, adapter):
-        await adapter.register(
-            "a", {}, status="inactive", metadata={"tenant_id": "t1"}
-        )
-        await adapter.register(
-            "b", {}, status="inactive", metadata={"tenant_id": "t2"}
-        )
+        await adapter.register("a", {}, status="inactive", metadata={"tenant_id": "t1"})
+        await adapter.register("b", {}, status="inactive", metadata={"tenant_id": "t2"})
         await adapter.register("c", {}, metadata={"tenant_id": "t1"})
 
         regs = await adapter.list_inactive(filter_metadata={"tenant_id": "t1"})
@@ -824,9 +820,7 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
         for i in range(5):
             await adapter.register(f"bot-{i}", {})
 
-        regs = await adapter.list_active(
-            sort=[SortSpec("bot_id", SortOrder.ASC)], limit=2
-        )
+        regs = await adapter.list_active(sort=[SortSpec("bot_id", SortOrder.ASC)], limit=2)
         assert [r.bot_id for r in regs] == ["bot-0", "bot-1"]
 
     @pytest.mark.asyncio
@@ -842,9 +836,7 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
     @pytest.mark.asyncio
     async def test_pagination_combines_with_filter_metadata(self, adapter):
         for i in range(6):
-            await adapter.register(
-                f"bot-{i}", {}, metadata={"tenant_id": "t1" if i < 3 else "t2"}
-            )
+            await adapter.register(f"bot-{i}", {}, metadata={"tenant_id": "t1" if i < 3 else "t2"})
 
         regs = await adapter.list_active(
             filter_metadata={"tenant_id": "t1"},
@@ -888,23 +880,11 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
     @pytest.mark.asyncio
     async def test_count_all_combines_status_and_filter_metadata(self, adapter):
         await adapter.register("a", {}, metadata={"tenant_id": "t1"})
-        await adapter.register(
-            "b", {}, status="inactive", metadata={"tenant_id": "t1"}
-        )
+        await adapter.register("b", {}, status="inactive", metadata={"tenant_id": "t1"})
         await adapter.register("c", {}, metadata={"tenant_id": "t2"})
 
-        assert (
-            await adapter.count_all(
-                status="active", filter_metadata={"tenant_id": "t1"}
-            )
-            == 1
-        )
-        assert (
-            await adapter.count_all(
-                status="inactive", filter_metadata={"tenant_id": "t1"}
-            )
-            == 1
-        )
+        assert await adapter.count_all(status="active", filter_metadata={"tenant_id": "t1"}) == 1
+        assert await adapter.count_all(status="inactive", filter_metadata={"tenant_id": "t1"}) == 1
 
     @pytest.mark.asyncio
     async def test_stream_yields_matching(self, adapter):
@@ -912,9 +892,7 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
             await adapter.register(f"bot-{i}", {}, metadata={"tenant_id": "t1"})
         await adapter.register("other", {}, metadata={"tenant_id": "t2"})
 
-        seen = [
-            reg async for reg in adapter.stream(filter_metadata={"tenant_id": "t1"})
-        ]
+        seen = [reg async for reg in adapter.stream(filter_metadata={"tenant_id": "t1"})]
         assert {r.bot_id for r in seen} == {"bot-0", "bot-1", "bot-2"}
 
     @pytest.mark.asyncio

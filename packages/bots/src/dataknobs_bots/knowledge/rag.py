@@ -139,9 +139,7 @@ class RAGKnowledgeBase(
 
         # Resolve chunker: injected instance > config-driven > default
         injected_chunker = self.components.get("chunker")
-        self._chunker: Chunker = injected_chunker or create_chunker(
-            self.chunking_config
-        )
+        self._chunker: Chunker = injected_chunker or create_chunker(self.chunking_config)
 
         # Resolve merger: injected MergerConfig > config dict > default
         merger_config = self.components.get("merger_config")
@@ -154,9 +152,7 @@ class RAGKnowledgeBase(
         if formatter_config is None and self.config.formatter is not None:
             formatter_config = FormatterConfig(**self.config.formatter)
         self.formatter = (
-            ContextFormatter(formatter_config)
-            if formatter_config
-            else ContextFormatter()
+            ContextFormatter(formatter_config) if formatter_config else ContextFormatter()
         )
 
         self.vector_store: Any = None
@@ -258,8 +254,7 @@ class RAGKnowledgeBase(
         """Adopt caller-owned store + embedder for ``from_components``."""
         if vector_store is None or embedding_provider is None:
             raise TypeError(
-                "RAGKnowledgeBase.from_components requires vector_store and "
-                "embedding_provider"
+                "RAGKnowledgeBase.from_components requires vector_store and embedding_provider"
             )
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -302,9 +297,7 @@ class RAGKnowledgeBase(
             ```
         """
         filepath = Path(filepath)
-        markdown_text = await asyncio.to_thread(
-            filepath.read_text, encoding="utf-8"
-        )
+        markdown_text = await asyncio.to_thread(filepath.read_text, encoding="utf-8")
 
         return await self.load_markdown_text(
             markdown_text,
@@ -718,18 +711,14 @@ class RAGKnowledgeBase(
         """
         if config is None:
             loaded = await self._load_kb_config_from_backend(backend, domain_id)
-            config = loaded if loaded is not None else KnowledgeBaseConfig(
-                name=domain_id
-            )
+            config = loaded if loaded is not None else KnowledgeBaseConfig(name=domain_id)
 
         effective_extra: dict[str, Any] = dict(extra_metadata or {})
         if tenant_id is not None:
             effective_extra["tenant_id"] = tenant_id
         composed = self._compose_extra_metadata(effective_extra)
 
-        source = BackendDocumentSource(
-            backend, domain_id, file_filter=file_filter
-        )
+        source = BackendDocumentSource(backend, domain_id, file_filter=file_filter)
         processor = DirectoryProcessor(config, source, chunker=self._chunker)
         return await self._ingest_from_processor_async(
             processor,
@@ -777,9 +766,7 @@ class RAGKnowledgeBase(
             data = await backend.get_file(domain_id, filename)
             if data is None:
                 continue
-            fmt: Literal["yaml", "json"] = (
-                "json" if filename.endswith(".json") else "yaml"
-            )
+            fmt: Literal["yaml", "json"] = "json" if filename.endswith(".json") else "yaml"
             try:
                 raw = parse_yaml_or_json(
                     data,
@@ -800,8 +787,7 @@ class RAGKnowledgeBase(
                 ) from e
             except ConfigLoadError as e:
                 raise IngestionConfigError(
-                    f"Failed to parse knowledge_base config {filename} "
-                    f"for domain {domain_id}: {e}"
+                    f"Failed to parse knowledge_base config {filename} for domain {domain_id}: {e}"
                 ) from e
             return KnowledgeBaseConfig.from_dict(raw, default_name=domain_id)
         return None
@@ -848,8 +834,7 @@ class RAGKnowledgeBase(
 
             if doc.has_errors:
                 results["errors"].extend(
-                    {"file": doc.source_file, "error": err}
-                    for err in doc.errors
+                    {"file": doc.source_file, "error": err} for err in doc.errors
                 )
                 results["documents"].append(doc_info)
                 continue
@@ -870,12 +855,8 @@ class RAGKnowledgeBase(
                     rate_limiter=rate_limiter,
                 )
             except Exception as e:
-                logger.exception(
-                    "Failed to embed/store chunks for %s", doc.source_file
-                )
-                results["errors"].append(
-                    {"file": doc.source_file, "error": str(e)}
-                )
+                logger.exception("Failed to embed/store chunks for %s", doc.source_file)
+                results["errors"].append({"file": doc.source_file, "error": str(e)})
                 doc_info["errors"].append(str(e))
                 results["documents"].append(doc_info)
                 continue
@@ -992,18 +973,12 @@ class RAGKnowledgeBase(
         # benefits without triggering a spurious immutable-key
         # warning per chunk.
         if metadata:
-            metadata = {
-                k: v
-                for k, v in metadata.items()
-                if k not in ("source", "filename")
-            }
+            metadata = {k: v for k, v in metadata.items() if k not in ("source", "filename")}
             if not metadata:
                 metadata = None
 
         source_stem = Path(source_file).stem if source_file else "doc"
-        chunk_prefix, chunk_separator = self._derive_chunk_prefix(
-            source_stem, metadata
-        )
+        chunk_prefix, chunk_separator = self._derive_chunk_prefix(source_stem, metadata)
 
         # Detect caller-attempted system-field overrides ONCE per
         # call rather than per chunk. The same ``metadata`` dict
@@ -1014,9 +989,7 @@ class RAGKnowledgeBase(
         warn_caller: dict[str, Any] | None = metadata
 
         for i, chunk in enumerate(chunks):
-            text_for_embedding = chunk.get("embedding_text") or chunk.get(
-                "text", ""
-            )
+            text_for_embedding = chunk.get("embedding_text") or chunk.get("text", "")
             if not text_for_embedding:
                 continue
 
@@ -1074,9 +1047,7 @@ class RAGKnowledgeBase(
             metadatas.append(chunk_metadata)
 
         if vectors:
-            await self.vector_store.add_vectors(
-                vectors=vectors, ids=ids, metadata=metadatas
-            )
+            await self.vector_store.add_vectors(vectors=vectors, ids=ids, metadata=metadatas)
 
         return len(vectors)
 
@@ -1197,9 +1168,7 @@ class RAGKnowledgeBase(
             composed["tenant_id"] = self._tenant_id
         return composed
 
-    def _resolve_read_filter(
-        self, filter_metadata: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
+    def _resolve_read_filter(self, filter_metadata: dict[str, Any] | None) -> dict[str, Any] | None:
         """The single place a read filter is formed for the store.
 
         Both :meth:`query` and :meth:`hybrid_query` (every
@@ -1540,15 +1509,17 @@ class RAGKnowledgeBase(
                 if hr.combined_score >= min_similarity:
                     record_metadata = _hr_meta(hr) or {}
 
-                    results.append({
-                        "text": record_metadata.get("text", ""),
-                        "source": record_metadata.get("source", ""),
-                        "heading_path": record_metadata.get("heading_path", ""),
-                        "similarity": hr.combined_score,
-                        "text_score": hr.text_score,
-                        "vector_score": hr.vector_score,
-                        "metadata": record_metadata,
-                    })
+                    results.append(
+                        {
+                            "text": record_metadata.get("text", ""),
+                            "source": record_metadata.get("source", ""),
+                            "heading_path": record_metadata.get("heading_path", ""),
+                            "similarity": hr.combined_score,
+                            "text_score": hr.text_score,
+                            "vector_score": hr.vector_score,
+                            "metadata": record_metadata,
+                        }
+                    )
         else:
             # Client-side hybrid search implementation
             # Step 1: Vector search (stale chunks hidden via the
@@ -1641,15 +1612,17 @@ class RAGKnowledgeBase(
                 if not chunk_metadata:
                     continue
 
-                results.append({
-                    "text": chunk_metadata.get("text", ""),
-                    "source": chunk_metadata.get("source", ""),
-                    "heading_path": chunk_metadata.get("heading_path", ""),
-                    "similarity": combined_score,
-                    "text_score": text_score_map.get(chunk_id),
-                    "vector_score": vector_score_map.get(chunk_id),
-                    "metadata": chunk_metadata,
-                })
+                results.append(
+                    {
+                        "text": chunk_metadata.get("text", ""),
+                        "source": chunk_metadata.get("source", ""),
+                        "heading_path": chunk_metadata.get("heading_path", ""),
+                        "similarity": combined_score,
+                        "text_score": text_score_map.get(chunk_id),
+                        "vector_score": vector_score_map.get(chunk_id),
+                        "metadata": chunk_metadata,
+                    }
+                )
 
         # Apply chunk merging if requested
         if merge_adjacent and results:
@@ -1858,9 +1831,7 @@ class RAGKnowledgeBase(
 
         # Close embedding provider (releases HTTP client sessions) — only
         # when owned; an injected provider is left open for the caller.
-        await close_if_owned(
-            self.embedding_provider, self._owns_embedding_provider
-        )
+        await close_if_owned(self.embedding_provider, self._owns_embedding_provider)
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.

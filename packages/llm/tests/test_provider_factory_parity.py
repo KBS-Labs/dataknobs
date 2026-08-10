@@ -50,9 +50,7 @@ PROVIDERS = [
     PROVIDERS,
     ids=[name for name, _ in PROVIDERS],
 )
-def test_provider_init_accepts_llm_config(
-    name: str, provider_cls: type
-) -> None:
+def test_provider_init_accepts_llm_config(name: str, provider_cls: type) -> None:
     """Every registered provider's ``__init__`` accepts an :class:`LLMConfig`.
 
     ``LLMProviderFactory.create`` calls ``provider_class(llm_config)``
@@ -69,9 +67,7 @@ def test_provider_init_accepts_llm_config(
     params = list(sig.parameters.values())
     # Skip ``self``; the first real parameter should be the config.
     real_params = [p for p in params if p.name != "self"]
-    assert real_params, (
-        f"{provider_cls.__name__}.__init__ has no parameters after `self`."
-    )
+    assert real_params, f"{provider_cls.__name__}.__init__ has no parameters after `self`."
     first = real_params[0]
     # The convention is ``__init__(self, config: LLMConfig | Config | dict | ...)``
     # — check that ``LLMConfig`` is at least allowed by the annotation,
@@ -96,9 +92,7 @@ def test_provider_init_accepts_llm_config(
     PROVIDERS,
     ids=[name for name, _ in PROVIDERS],
 )
-def test_provider_config_access_within_llmconfig(
-    name: str, provider_cls: type
-) -> None:
+def test_provider_config_access_within_llmconfig(name: str, provider_cls: type) -> None:
     """Every ``self.config.<attr>`` a provider reads is an :class:`LLMConfig` field.
 
     The body-access direction, complementary to
@@ -132,9 +126,7 @@ def test_llm_config_dataclass_is_complete() -> None:
     # specific options live in the ``options`` dict.
     expected_minimum = {"provider", "model", "api_key", "api_base"}
     missing = expected_minimum - field_names
-    assert not missing, (
-        f"LLMConfig is missing fields every provider relies on: {missing}"
-    )
+    assert not missing, f"LLMConfig is missing fields every provider relies on: {missing}"
 
 
 def test_registered_providers_audit_set() -> None:

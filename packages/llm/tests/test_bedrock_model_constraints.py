@@ -228,9 +228,7 @@ class TestBedrockConstraintsSurface:
         output ceiling and — newly for Bedrock — an input/context window, so the
         input budget engages where it was dead before.
         """
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0"))
         constraints = provider.get_constraints()
         assert constraints.rejected_params == frozenset()
         assert constraints.max_tokens_ceiling == 5120
@@ -238,9 +236,7 @@ class TestBedrockConstraintsSurface:
 
     def test_detect_unlisted_model_is_permissive(self) -> None:
         """An unlisted, non-Claude model resolves an all-permissive profile."""
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="acme.mystery-model-v9:0")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="acme.mystery-model-v9:0"))
         constraints = provider.get_constraints()
         assert constraints.rejected_params == frozenset()
         assert constraints.max_tokens_ceiling is None

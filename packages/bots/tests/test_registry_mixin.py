@@ -62,8 +62,6 @@ class TestAutoIngestionMixinErrorPath:
                 }
             }
         }
-        result = await mixin._ensure_knowledge_base_ingested(
-            domain_id="x", config=config
-        )
+        result = await mixin._ensure_knowledge_base_ingested(domain_id="x", config=config)
         assert result.error is not None
         assert result.completed_at is not None

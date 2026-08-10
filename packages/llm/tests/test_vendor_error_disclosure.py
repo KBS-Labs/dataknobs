@@ -146,9 +146,7 @@ class TestTheDetailSurvivesWhereItIsSafe:
 
     async def test_the_vendor_rendering_is_still_on_the_cause(self) -> None:
         err = _aiohttp_error(400)
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(400, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(400, raise_exc=err))])
         provider = _provider("ollama", "OllamaProvider", "ollama")
         provider._session = session
         provider._is_initialized = True
@@ -168,9 +166,7 @@ class TestTheDetailSurvivesWhereItIsSafe:
         ``ValidationError`` and the caller loses the one 400 it can act on.
         """
         provider = _provider("ollama", "OllamaProvider", "ollama")
-        err = make_client_response_error(
-            400, "maximum context length exceeded", url=SENTINEL_URL
-        )
+        err = make_client_response_error(400, "maximum context length exceeded", url=SENTINEL_URL)
 
         translated = provider._translate_api_error(err)
 
@@ -185,9 +181,7 @@ class TestTheDetailSurvivesWhereItIsSafe:
         already been decided by the time the message is written.
         """
         provider = _provider("ollama", "OllamaProvider", "ollama")
-        err = make_client_response_error(
-            400, "maximum context length exceeded", url=SENTINEL_URL
-        )
+        err = make_client_response_error(400, "maximum context length exceeded", url=SENTINEL_URL)
 
         overflow = str(provider._translate_api_error(err))
         other_400 = str(provider._translate_api_error(_aiohttp_error(400)))
@@ -258,9 +252,7 @@ class TestTheMessageIsNotTheProvidersToWrite:
         provider = _provider("ollama", "OllamaProvider", "ollama")
         provider.provider_name = "acme-gateway"
 
-        assert "acme-gateway" in str(
-            provider._dataknobs_error_for_status(400, "detail")
-        )
+        assert "acme-gateway" in str(provider._dataknobs_error_for_status(400, "detail"))
 
 
 class TestTranslationPolicyUnchanged:
@@ -281,13 +273,9 @@ class TestTranslationPolicyUnchanged:
         self, status: int | None, expected: type[Exception]
     ) -> None:
         provider = _provider("ollama", "OllamaProvider", "ollama")
-        assert isinstance(
-            provider._dataknobs_error_for_status(status, "detail"), expected
-        )
+        assert isinstance(provider._dataknobs_error_for_status(status, "detail"), expected)
 
     def test_retry_after_still_rides_along(self) -> None:
         provider = _provider("ollama", "OllamaProvider", "ollama")
-        translated: Any = provider._dataknobs_error_for_status(
-            429, "detail", retry_after=7.5
-        )
+        translated: Any = provider._dataknobs_error_for_status(429, "detail", retry_after=7.5)
         assert translated.retry_after == 7.5

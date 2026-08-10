@@ -38,7 +38,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         database: "SyncDatabase",
         name: str = "dataknobs_backend",
         text_field: str = "content",
-        metadata_field: str | None = None
+        metadata_field: str | None = None,
     ):
         """Initialize dataknobs backend adapter.
 
@@ -54,10 +54,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         self._metadata_field = metadata_field
 
     def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a record or field value by ID.
 
@@ -76,8 +73,8 @@ class DataknobsBackendAdapter(ResourceAdapter):
         """
         try:
             # Parse key for potential field extraction
-            if '.' in key:
-                parts = key.split('.', 1)
+            if "." in key:
+                parts = key.split(".", 1)
                 record_id = parts[0]
                 field_path = parts[1]
             else:
@@ -102,11 +99,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
             return default
 
     def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend.
 
@@ -135,16 +128,11 @@ class DataknobsBackendAdapter(ResourceAdapter):
             # Build filter for text search using LIKE operator
             # This searches for the query string anywhere in the text field
             search_filter = Filter(
-                field=self._text_field,
-                operator=Operator.LIKE,
-                value=f"%{query}%"
+                field=self._text_field, operator=Operator.LIKE, value=f"%{query}%"
             )
 
             # Build query object with filter and limit
-            query_obj = Query(
-                filters=[search_filter],
-                limit_value=k
-            )
+            query_obj = Query(filters=[search_filter], limit_value=k)
 
             # Execute search
             records = self._database.search(query_obj)
@@ -166,7 +154,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
                         metadata["metadata_field"] = metadata_value
 
                 # Add record ID and other metadata
-                if hasattr(record, 'storage_id') and record.storage_id:
+                if hasattr(record, "storage_id") and record.storage_id:
                     metadata["record_id"] = record.storage_id
 
                 # Merge with record metadata
@@ -174,9 +162,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
 
                 # Format result
                 result = BaseSearchLogic.format_search_result(
-                    content,
-                    score=score,
-                    metadata=metadata
+                    content, score=score, metadata=metadata
                 )
                 results.append(result)
 
@@ -185,13 +171,13 @@ class DataknobsBackendAdapter(ResourceAdapter):
                 results = BaseSearchLogic.filter_results(results, filters=filters)
 
             # Apply min_score filter
-            min_score = kwargs.get('min_score', 0.0)
+            min_score = kwargs.get("min_score", 0.0)
             if min_score > 0:
                 results = BaseSearchLogic.filter_results(results, min_score=min_score)
 
             # Deduplicate if requested
-            if kwargs.get('deduplicate', False):
-                results = BaseSearchLogic.deduplicate_results(results, key='content')
+            if kwargs.get("deduplicate", False):
+                results = BaseSearchLogic.deduplicate_results(results, key="content")
 
             return results[:k]
 
@@ -218,7 +204,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         database: "AsyncDatabase",
         name: str = "async_dataknobs_backend",
         text_field: str = "content",
-        metadata_field: str | None = None
+        metadata_field: str | None = None,
     ):
         """Initialize async dataknobs backend adapter.
 
@@ -234,10 +220,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         self._metadata_field = metadata_field
 
     async def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a record or field value by ID (async).
 
@@ -245,8 +228,8 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         """
         try:
             # Parse key for potential field extraction
-            if '.' in key:
-                parts = key.split('.', 1)
+            if "." in key:
+                parts = key.split(".", 1)
                 record_id = parts[0]
                 field_path = parts[1]
             else:
@@ -271,11 +254,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
             return default
 
     async def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend (async).
 
@@ -286,16 +265,11 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
 
             # Build filter for text search using LIKE operator
             search_filter = Filter(
-                field=self._text_field,
-                operator=Operator.LIKE,
-                value=f"%{query}%"
+                field=self._text_field, operator=Operator.LIKE, value=f"%{query}%"
             )
 
             # Build query object with filter and limit
-            query_obj = Query(
-                filters=[search_filter],
-                limit_value=k
-            )
+            query_obj = Query(filters=[search_filter], limit_value=k)
 
             # Execute search
             records = await self._database.search(query_obj)
@@ -317,7 +291,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
                         metadata["metadata_field"] = metadata_value
 
                 # Add record ID and other metadata
-                if hasattr(record, 'storage_id') and record.storage_id:
+                if hasattr(record, "storage_id") and record.storage_id:
                     metadata["record_id"] = record.storage_id
 
                 # Merge with record metadata
@@ -325,9 +299,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
 
                 # Format result
                 result = BaseSearchLogic.format_search_result(
-                    content,
-                    score=score,
-                    metadata=metadata
+                    content, score=score, metadata=metadata
                 )
                 results.append(result)
 
@@ -336,13 +308,13 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
                 results = BaseSearchLogic.filter_results(results, filters=filters)
 
             # Apply min_score filter
-            min_score = kwargs.get('min_score', 0.0)
+            min_score = kwargs.get("min_score", 0.0)
             if min_score > 0:
                 results = BaseSearchLogic.filter_results(results, min_score=min_score)
 
             # Deduplicate if requested
-            if kwargs.get('deduplicate', False):
-                results = BaseSearchLogic.deduplicate_results(results, key='content')
+            if kwargs.get("deduplicate", False):
+                results = BaseSearchLogic.deduplicate_results(results, key="content")
 
             return results[:k]
 

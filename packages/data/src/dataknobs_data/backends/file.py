@@ -188,8 +188,9 @@ class CSVFormat(FileFormat):
                             for key, value in row.items():
                                 if value and isinstance(value, str):
                                     # Try to parse as JSON if it looks like JSON
-                                    if (value.startswith('{') and value.endswith('}')) or \
-                                       (value.startswith('[') and value.endswith(']')):
+                                    if (value.startswith("{") and value.endswith("}")) or (
+                                        value.startswith("[") and value.endswith("]")
+                                    ):
                                         try:
                                             fields[key] = json.loads(value)
                                         except json.JSONDecodeError:
@@ -210,8 +211,9 @@ class CSVFormat(FileFormat):
                             for key, value in row.items():
                                 if value and isinstance(value, str):
                                     # Try to parse as JSON if it looks like JSON
-                                    if (value.startswith('{') and value.endswith('}')) or \
-                                       (value.startswith('[') and value.endswith(']')):
+                                    if (value.startswith("{") and value.endswith("}")) or (
+                                        value.startswith("[") and value.endswith("]")
+                                    ):
                                         try:
                                             fields[key] = json.loads(value)
                                         except json.JSONDecodeError:
@@ -405,7 +407,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """Async file-based database implementation.
 
@@ -437,9 +439,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
         if cfg.path is None:
             # Create a unique temporary file that won't conflict
             temp_file = tempfile.NamedTemporaryFile(
-                prefix=self._TEMP_PREFIX,
-                suffix=".json",
-                delete=False
+                prefix=self._TEMP_PREFIX, suffix=".json", delete=False
             )
             self.filepath = temp_file.name
             temp_file.close()
@@ -530,9 +530,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update a record in the file."""
         async with self._lock:
             data = await self._load_data()
@@ -547,9 +545,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return True
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record from the file.
 
         When ``expected_version`` is provided the content-hash token is
@@ -645,9 +641,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data({})
             return count
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 
         Matches ``create``'s atomic-insert contract: a colliding id — against an
@@ -662,9 +656,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
         """
         async with self._lock:
             data = await self._load_data()
-            prepared = prepare_atomic_batch(
-                records, data, self._prepare_record_for_storage
-            )
+            prepared = prepare_atomic_batch(records, data, self._prepare_record_for_storage)
             ids = []
             for record_copy, storage_id in prepared:
                 data[storage_id] = record_copy
@@ -672,9 +664,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return ids
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records in one load/save cycle.
 
         The batch sibling of ``create_batch``, with upsert semantics: a
@@ -707,9 +697,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently.
 
         ``_tx`` is accepted for interface parity and ignored (see
@@ -733,9 +721,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             return results
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from file."""
         # For file backend, we can use the default implementation
@@ -750,14 +736,12 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into file."""
         # Use the default implementation from mixin
@@ -770,10 +754,10 @@ class AsyncFileDatabase(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations.
-        
+
         Note: This implementation reads all records from disk to perform
         the search locally. For better performance with large datasets,
         consider using SQLite or a dedicated vector database.
@@ -784,14 +768,14 @@ class AsyncFileDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )
 
     async def close(self) -> None:
         """Close the database and clean up temporary files if needed."""
         # Clean up temporary file if it was created. The existence stats
         # and unlinks are blocking disk I/O, so run them off the loop.
-        if getattr(self, '_is_temp_file', False) and self.filepath:
+        if getattr(self, "_is_temp_file", False) and self.filepath:
             await asyncio.to_thread(self._cleanup_temp_files)
 
     def _cleanup_temp_files(self) -> None:
@@ -815,7 +799,7 @@ class SyncFileDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """Synchronous file-based database implementation.
 
@@ -847,9 +831,7 @@ class SyncFileDatabase(  # type: ignore[misc]
         if cfg.path is None:
             # Create a unique temporary file that won't conflict
             temp_file = tempfile.NamedTemporaryFile(
-                prefix=self._TEMP_PREFIX,
-                suffix=".json",
-                delete=False
+                prefix=self._TEMP_PREFIX, suffix=".json", delete=False
             )
             self.filepath = temp_file.name
             temp_file.close()
@@ -928,9 +910,7 @@ class SyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update a record in the file."""
         with self._lock:
             data = self._load_data()
@@ -1059,9 +1039,7 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         with self._lock:
             data = self._load_data()
-            prepared = prepare_atomic_batch(
-                records, data, self._prepare_record_for_storage
-            )
+            prepared = prepare_atomic_batch(records, data, self._prepare_record_for_storage)
             ids = []
             for record_copy, storage_id in prepared:
                 data[storage_id] = record_copy
@@ -1121,9 +1099,7 @@ class SyncFileDatabase(  # type: ignore[misc]
             return results
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from file."""
         # For file backend, we can use the default implementation
@@ -1138,14 +1114,12 @@ class SyncFileDatabase(  # type: ignore[misc]
 
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into file.
 
@@ -1177,10 +1151,10 @@ class SyncFileDatabase(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations.
-        
+
         Note: This implementation reads all records from disk to perform
         the search locally. For better performance with large datasets,
         consider using SQLite or a dedicated vector database.
@@ -1191,13 +1165,13 @@ class SyncFileDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )
 
     def close(self) -> None:
         """Close the database and clean up temporary files if needed."""
         # Clean up temporary file if it was created
-        if getattr(self, '_is_temp_file', False) and self.filepath:
+        if getattr(self, "_is_temp_file", False) and self.filepath:
             try:
                 if os.path.exists(self.filepath):
                     Path(self.filepath).unlink()

@@ -231,12 +231,8 @@ async def test_document_migrated_on_read_in_memory_async(migrator: Any) -> None:
 def test_document_migrated_on_read_in_memory_sync(migrator: Any) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
-    store_v2 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
+    store_v2 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db)
     try:
         store_v1.put_document("u1", "prefs", {"color": "dark"})
 
@@ -312,9 +308,7 @@ async def test_persist_migration_writes_back_async(migrator: Any) -> None:
 def test_persist_migration_writes_back_sync(migrator: Any) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
     store_v2 = UserStateStore.from_components(
         UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
         db=db,
@@ -342,18 +336,14 @@ class _ConflictOnUpdateAsyncDB(AsyncMemoryDatabase):
     ``create`` / ``upsert`` code, only the migration write-back conflicts.
     """
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         raise ConcurrencyError("simulated concurrent bump", context={"id": id})
 
 
 class _ConflictOnUpdateSyncDB(SyncMemoryDatabase):
     """Sync mirror of :class:`_ConflictOnUpdateAsyncDB`."""
 
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         raise ConcurrencyError("simulated concurrent bump", context={"id": id})
 
 
@@ -391,9 +381,7 @@ async def test_persist_migration_cas_conflict_swallowed_async(
 def test_persist_migration_cas_conflict_swallowed_sync(migrator: Any) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = _ConflictOnUpdateSyncDB()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
     store_v2 = UserStateStore.from_components(
         UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
         db=db,
@@ -440,23 +428,16 @@ async def test_downgrade_passthrough_warns_async(
         assert record.get_value("theme") == "dark"
         assert record.get_value("_section_version") == 2
         assert any(
-            "newer than" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            "newer than" in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
     finally:
         await store_v1.close()
 
 
-def test_downgrade_passthrough_warns_sync(
-    migrator: Any, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_downgrade_passthrough_warns_sync(migrator: Any, caplog: pytest.LogCaptureFixture) -> None:
     db = SyncMemoryDatabase()
-    store_v2 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db
-    )
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
+    store_v2 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db)
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
     try:
         store_v2.put_document("u1", "prefs", {"theme": "dark"})
 
@@ -467,8 +448,7 @@ def test_downgrade_passthrough_warns_sync(
         assert record.get_value("theme") == "dark"
         assert record.get_value("_section_version") == 2
         assert any(
-            "newer than" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            "newer than" in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
     finally:
         store_v1.close()
@@ -500,12 +480,8 @@ async def test_chain_gap_raises_at_read_async(migrator: Any) -> None:
 def test_chain_gap_raises_at_read_sync(migrator: Any) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
-    store_v3 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(3)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
+    store_v3 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(3)), db=db)
     try:
         store_v1.put_document("u1", "prefs", {"color": "dark"})
         with pytest.raises(ConfigurationError):
@@ -567,12 +543,8 @@ async def test_collection_query_migrates_records_async(migrator: Any) -> None:
 def test_collection_query_migrates_records_sync(migrator: Any) -> None:
     migrator("notes", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db
-    )
-    store_v2 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_coll_cfg(2)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db)
+    store_v2 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_coll_cfg(2)), db=db)
     try:
         store_v1.add_record("u1", "notes", {"color": "dark"})
         records = store_v2.query("u1", "notes")
@@ -704,10 +676,7 @@ async def test_upgrader_cannot_leak_scope_stamp_async(migrator: Any) -> None:
         assert "tenant_id" not in migrated.data
         # The coordinator's own re-stamp is authoritative (never the spoof).
         assert migrated.get_value("_section_version") == 2
-        assert (
-            migrated.get_value("_written_at")
-            == original.get_value("_written_at")
-        )
+        assert migrated.get_value("_written_at") == original.get_value("_written_at")
         assert migrated.get_value("_written_at") != "SPOOFED"
     finally:
         await store_v2.close()
@@ -716,12 +685,8 @@ async def test_upgrader_cannot_leak_scope_stamp_async(migrator: Any) -> None:
 def test_upgrader_cannot_leak_scope_stamp_sync(migrator: Any) -> None:
     migrator("prefs", 1, _leaky_upgrader)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
-    store_v2 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
+    store_v2 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(2)), db=db)
     try:
         store_v1.put_document("u1", "prefs", {"color": "dark"})
         original = store_v1.get_document("u1", "prefs")
@@ -733,10 +698,7 @@ def test_upgrader_cannot_leak_scope_stamp_sync(migrator: Any) -> None:
         assert migrated.get_value("tenant_id") is None
         assert "tenant_id" not in migrated.data
         assert migrated.get_value("_section_version") == 2
-        assert (
-            migrated.get_value("_written_at")
-            == original.get_value("_written_at")
-        )
+        assert migrated.get_value("_written_at") == original.get_value("_written_at")
         assert migrated.get_value("_written_at") != "SPOOFED"
     finally:
         store_v2.close()
@@ -777,9 +739,7 @@ async def test_persist_migration_emits_no_event_or_audit_async(
         UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
     )
     store_v2 = AsyncUserStateStore.from_components(
-        UserStateStoreConfig.from_dict(
-            _doc_cfg(2, persist_migrations=True, enable_event_log=True)
-        ),
+        UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True, enable_event_log=True)),
         db=db,
     )
     try:
@@ -804,13 +764,9 @@ async def test_persist_migration_emits_no_event_or_audit_async(
 def test_persist_migration_emits_no_event_or_audit_sync(migrator: Any) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
     store_v2 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(
-            _doc_cfg(2, persist_migrations=True, enable_event_log=True)
-        ),
+        UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True, enable_event_log=True)),
         db=db,
     )
     try:
@@ -890,9 +846,7 @@ def test_persist_migration_erasure_race_no_resurrection_sync(
 ) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = _EraseOnGetVersionSyncDB()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db)
     store_v2 = UserStateStore.from_components(
         UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
         db=db,
@@ -948,9 +902,7 @@ async def test_persist_migration_collection_writes_back_async(
 def test_persist_migration_collection_writes_back_sync(migrator: Any) -> None:
     migrator("notes", 1, _rename_color_to_theme)
     db = SyncMemoryDatabase()
-    store_v1 = UserStateStore.from_components(
-        UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db
-    )
+    store_v1 = UserStateStore.from_components(UserStateStoreConfig.from_dict(_coll_cfg(1)), db=db)
     store_v2 = UserStateStore.from_components(
         UserStateStoreConfig.from_dict(_coll_cfg(2, persist_migrations=True)),
         db=db,

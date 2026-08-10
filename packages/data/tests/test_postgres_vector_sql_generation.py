@@ -33,7 +33,7 @@ class TestBuildVectorIndexSqlQuotesIndexName:
         )
         index_name = get_vector_index_name("MyTable", "MyEmbedding", "cosine")
         assert f'"{index_name}"' in sql, (
-            f"Expected quoted '\"{ index_name}\"' in CREATE INDEX SQL; "
+            f"Expected quoted '\"{index_name}\"' in CREATE INDEX SQL; "
             f"got unquoted '{index_name}'. PostgreSQL folds it to lowercase "
             "in the catalog, so the quoted DROP INDEX in drop_vector_index "
             "silently finds nothing."

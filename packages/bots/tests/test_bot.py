@@ -98,9 +98,7 @@ class TestDynaBot:
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
-            "prompts": {
-                "helpful_assistant": "You are a helpful assistant."
-            },
+            "prompts": {"helpful_assistant": "You are a helpful assistant."},
             "system_prompt": "helpful_assistant",
         }
 
@@ -292,9 +290,7 @@ Remember to always verify customer identity before sharing sensitive information
 
         # Chat with llm_config_overrides
         response = await bot.chat(
-            "Hello",
-            context,
-            llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+            "Hello", context, llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
         )
         assert response is not None
         assert isinstance(response, str)
@@ -315,7 +311,7 @@ Remember to always verify customer identity before sharing sensitive information
         assert "config_overrides_applied" in assistant_metadata
         assert assistant_metadata["config_overrides_applied"] == {
             "model": "gpt-4-turbo",
-            "temperature": 0.9
+            "temperature": 0.9,
         }
 
         await bot.close()
@@ -333,9 +329,7 @@ Remember to always verify customer identity before sharing sensitive information
 
         # Override just the model
         response = await bot.chat(
-            "Hello",
-            context,
-            llm_config_overrides={"model": "different-model"}
+            "Hello", context, llm_config_overrides={"model": "different-model"}
         )
         assert response is not None
 
@@ -830,16 +824,12 @@ Remember to always verify customer identity before sharing sensitive information
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-stream-config-override", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-stream-config-override", client_id="test-client")
 
         # Stream with llm_config_overrides
         chunks = []
         async for chunk in bot.stream_chat(
-            "Hello",
-            context,
-            llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+            "Hello", context, llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
         ):
             chunks.append(chunk.delta)
 
@@ -860,7 +850,7 @@ Remember to always verify customer identity before sharing sensitive information
         assert "config_overrides_applied" in assistant_metadata
         assert assistant_metadata["config_overrides_applied"] == {
             "model": "gpt-4-turbo",
-            "temperature": 0.9
+            "temperature": 0.9,
         }
 
         await bot.close()
@@ -874,16 +864,12 @@ Remember to always verify customer identity before sharing sensitive information
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-stream-model-override", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-stream-model-override", client_id="test-client")
 
         # Stream with model override
         chunks = []
         async for chunk in bot.stream_chat(
-            "Hello",
-            context,
-            llm_config_overrides={"model": "different-model"}
+            "Hello", context, llm_config_overrides={"model": "different-model"}
         ):
             chunks.append(chunk.delta)
 
@@ -940,18 +926,16 @@ Remember to always verify customer identity before sharing sensitive information
             ) -> None:
                 pass  # Not called for streaming
 
-            async def post_stream(
-                self, message: str, response: str, context: BotContext
-            ) -> None:
-                self.post_stream_calls.append({
-                    "message": message,
-                    "response": response,
-                    "conversation_id": context.conversation_id,
-                })
+            async def post_stream(self, message: str, response: str, context: BotContext) -> None:
+                self.post_stream_calls.append(
+                    {
+                        "message": message,
+                        "response": response,
+                        "conversation_id": context.conversation_id,
+                    }
+                )
 
-            async def on_error(
-                self, error: Exception, message: str, context: BotContext
-            ) -> None:
+            async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
                 pass
 
             async def on_hook_error(
@@ -1008,9 +992,7 @@ Remember to always verify customer identity before sharing sensitive information
                 self.received_response: Any = None
                 self.received_kwargs: dict[str, Any] = {}
 
-            async def before_message(
-                self, message: str, context: BotContext
-            ) -> None:
+            async def before_message(self, message: str, context: BotContext) -> None:
                 pass
 
             async def after_message(
@@ -1019,14 +1001,10 @@ Remember to always verify customer identity before sharing sensitive information
                 self.received_response = response
                 self.received_kwargs = kwargs
 
-            async def post_stream(
-                self, message: str, response: str, context: BotContext
-            ) -> None:
+            async def post_stream(self, message: str, response: str, context: BotContext) -> None:
                 pass
 
-            async def on_error(
-                self, error: Exception, message: str, context: BotContext
-            ) -> None:
+            async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
                 pass
 
             async def on_hook_error(
@@ -1043,15 +1021,12 @@ Remember to always verify customer identity before sharing sensitive information
         tracker = ResponseTypeTracker()
         bot.middleware.append(tracker)
 
-        context = BotContext(
-            conversation_id="conv-mw-type", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-mw-type", client_id="test-client")
         await bot.chat("Hello", context)
 
         # The response passed to after_message must be a string
         assert isinstance(tracker.received_response, str), (
-            f"after_message received {type(tracker.received_response).__name__} "
-            f"instead of str"
+            f"after_message received {type(tracker.received_response).__name__} instead of str"
         )
 
         await bot.close()
@@ -1070,9 +1045,7 @@ Remember to always verify customer identity before sharing sensitive information
             def __init__(self) -> None:
                 self.received_kwargs: dict[str, Any] = {}
 
-            async def before_message(
-                self, message: str, context: BotContext
-            ) -> None:
+            async def before_message(self, message: str, context: BotContext) -> None:
                 pass
 
             async def after_message(
@@ -1080,14 +1053,10 @@ Remember to always verify customer identity before sharing sensitive information
             ) -> None:
                 self.received_kwargs = kwargs
 
-            async def post_stream(
-                self, message: str, response: str, context: BotContext
-            ) -> None:
+            async def post_stream(self, message: str, response: str, context: BotContext) -> None:
                 pass
 
-            async def on_error(
-                self, error: Exception, message: str, context: BotContext
-            ) -> None:
+            async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
                 pass
 
             async def on_hook_error(
@@ -1104,15 +1073,11 @@ Remember to always verify customer identity before sharing sensitive information
         tracker = KwargsTracker()
         bot.middleware.append(tracker)
 
-        context = BotContext(
-            conversation_id="conv-mw-kwargs", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-mw-kwargs", client_id="test-client")
         await bot.chat("Hello", context)
 
         # Should include provider info
-        assert "provider" in tracker.received_kwargs, (
-            "after_message kwargs missing 'provider'"
-        )
+        assert "provider" in tracker.received_kwargs, "after_message kwargs missing 'provider'"
 
         await bot.close()
 
@@ -1134,9 +1099,7 @@ Remember to always verify customer identity before sharing sensitive information
         cost_mw = CostTrackingMiddleware(track_tokens=True)
         bot.middleware.append(cost_mw)
 
-        context = BotContext(
-            conversation_id="conv-cost-mw", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-cost-mw", client_id="test-client")
 
         # This should not raise TypeError
         response = await bot.chat("What is 2 plus 2?", context)

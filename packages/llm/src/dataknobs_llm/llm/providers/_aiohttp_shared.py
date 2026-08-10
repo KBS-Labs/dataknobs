@@ -19,9 +19,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-async def raise_for_status_with_body(
-    response: Any, *, body: str | None = None
-) -> None:
+async def raise_for_status_with_body(response: Any, *, body: str | None = None) -> None:
     """Like ``ClientResponse.raise_for_status()``, but keep the response body.
 
     aiohttp's own :meth:`ClientResponse.raise_for_status` sets the raised

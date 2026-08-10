@@ -105,9 +105,7 @@ class TestBaseNoOpDefaults:
         strategy = _NoOpStrategy()
         manager = _StubManager()
         # Should not raise, even with foreign metadata keys.
-        strategy.restore_from_checkpoint(
-            manager, {"foreign_key": "value"}
-        )
+        strategy.restore_from_checkpoint(manager, {"foreign_key": "value"})
         assert manager.metadata == {}
 
     @pytest.mark.asyncio

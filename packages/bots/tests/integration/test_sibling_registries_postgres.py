@@ -57,14 +57,16 @@ async def postgres_db(make_postgres_test_db) -> AsyncGenerator[AsyncDatabase, No
     per-test table is unique and dropped on teardown.
     """
     for pg in make_postgres_test_db("test_sibling_registries_"):
-        db = AsyncPostgresDatabase({
-            "host": pg["host"],
-            "port": pg["port"],
-            "database": pg["database"],
-            "user": pg["user"],
-            "password": pg["password"],
-            "table": pg["table"],
-        })
+        db = AsyncPostgresDatabase(
+            {
+                "host": pg["host"],
+                "port": pg["port"],
+                "database": pg["database"],
+                "user": pg["user"],
+                "password": pg["password"],
+                "table": pg["table"],
+            }
+        )
         await db.connect()
         try:
             yield db
@@ -82,7 +84,8 @@ class TestArtifactRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_create_and_query_filter_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``query(filter_metadata=...)`` is pushed into the JSONB column."""
         registry = ArtifactRegistry(postgres_db)
@@ -111,7 +114,8 @@ class TestArtifactRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_combined_type_and_metadata_filter_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``artifact_type`` (data column) AND-combines with ``filter_metadata`` (JSONB)."""
         registry = ArtifactRegistry(postgres_db)
@@ -143,7 +147,8 @@ class TestArtifactRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_round_trip_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``create(..., metadata=...)`` round-trips through ``get()`` on PG."""
         registry = ArtifactRegistry(postgres_db)
@@ -188,12 +193,8 @@ def _make_rubric(
                 description="Test criterion",
                 weight=1.0,
                 levels=[
-                    RubricLevel(
-                        id="fail", label="Fail", description="Fail", score=0.0
-                    ),
-                    RubricLevel(
-                        id="pass", label="Pass", description="Pass", score=1.0
-                    ),
+                    RubricLevel(id="fail", label="Fail", description="Fail", score=0.0),
+                    RubricLevel(id="pass", label="Pass", description="Pass", score=1.0),
                 ],
                 scoring_method=ScoringMethod(
                     type=ScoringType.DETERMINISTIC,
@@ -211,7 +212,8 @@ class TestRubricRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_get_for_target_filter_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``get_for_target`` AND-combines ``target_type`` with ``filter_metadata`` on PG."""
         registry = RubricRegistry(postgres_db)
@@ -226,14 +228,13 @@ class TestRubricRegistryPostgres:
             _make_rubric("r3", target_type="content", metadata={"tenant_id": "acme"})
         )
 
-        acme = await registry.get_for_target(
-            "content", filter_metadata={"tenant_id": "acme"}
-        )
+        acme = await registry.get_for_target("content", filter_metadata={"tenant_id": "acme"})
         assert {r.id for r in acme} == {"r1", "r3"}
 
     @pytest.mark.asyncio
     async def test_list_all_filter_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``list_all`` honors ``filter_metadata`` against the JSONB column on PG."""
         registry = RubricRegistry(postgres_db)
@@ -246,7 +247,8 @@ class TestRubricRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_round_trip_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``register`` → ``get`` round-trips the metadata channel on PG."""
         registry = RubricRegistry(postgres_db)
@@ -315,7 +317,8 @@ class TestGeneratorRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_list_definitions_filter_metadata_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``list_definitions(filter_metadata=...)`` reaches the JSONB column on PG."""
         registry = GeneratorRegistry(postgres_db)
@@ -331,7 +334,8 @@ class TestGeneratorRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_get_definition_round_trip_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``register(..., metadata=...)`` round-trips through ``get_definition`` on PG.
 
@@ -356,7 +360,8 @@ class TestGeneratorRegistryPostgres:
 
     @pytest.mark.asyncio
     async def test_empty_filter_metadata_is_no_filter_postgres(
-        self, postgres_db: AsyncDatabase,
+        self,
+        postgres_db: AsyncDatabase,
     ) -> None:
         """``filter_metadata={}`` is equivalent to ``filter_metadata=None`` on PG."""
         registry = GeneratorRegistry(postgres_db)
@@ -366,7 +371,5 @@ class TestGeneratorRegistryPostgres:
 
         with_empty = await registry.list_definitions(filter_metadata={})
         with_none = await registry.list_definitions()
-        assert {d.generator_id for d in with_empty} == {
-            d.generator_id for d in with_none
-        }
+        assert {d.generator_id for d in with_empty} == {d.generator_id for d in with_none}
         assert len(with_empty) == 2

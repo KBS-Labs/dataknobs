@@ -342,8 +342,8 @@ class TestLLMResponsePatterns:
         """LLM explains before giving JSON (common pattern)."""
         extractor = JSONExtractor()
         text = (
-            'Based on the user\'s message "Let\'s set the tone to formal and academic", '
-            'I extracted the following:\n\n'
+            "Based on the user's message \"Let's set the tone to formal and academic\", "
+            "I extracted the following:\n\n"
             '{"tone": "formal and academic"}'
         )
         result = extractor.extract_jsons(text)
@@ -366,10 +366,7 @@ class TestLLMResponsePatterns:
     def test_llm_multiple_json_objects(self):
         """LLM returns multiple JSON objects (extraction + metadata)."""
         extractor = JSONExtractor()
-        text = (
-            '{"tone": "formal"}\n'
-            '{"style": "academic"}'
-        )
+        text = '{"tone": "formal"}\n{"style": "academic"}'
         result = extractor.extract_jsons(text)
 
         # Both objects extracted — but tone is "formal", not "formal and academic"
@@ -390,23 +387,21 @@ class TestLLMResponsePatterns:
     def test_llm_with_curly_brace_in_explanation(self):
         """LLM uses curly braces in explanatory text (e.g., template syntax)."""
         extractor = JSONExtractor()
-        text = (
-            'The user wants to set {tone} to a formal value.\n'
-            '{"tone": "formal and academic"}'
-        )
+        text = 'The user wants to set {tone} to a formal value.\n{"tone": "formal and academic"}'
         result = extractor.extract_jsons(text)
 
         # {tone} has matched braces so it should be found and fail json.loads
         # Then {"tone": "formal and academic"} should be found separately
-        valid_results = [r for r in result if isinstance(r, dict) and r.get("tone") == "formal and academic"]
+        valid_results = [
+            r for r in result if isinstance(r, dict) and r.get("tone") == "formal and academic"
+        ]
         assert len(valid_results) == 1
 
     def test_llm_with_unmatched_brace_in_explanation(self):
         """LLM has stray { in explanation — fallback scan recovers JSON."""
         extractor = JSONExtractor()
         text = (
-            'I see the user wants to configure {the writing tone.\n'
-            '{"tone": "formal and academic"}'
+            'I see the user wants to configure {the writing tone.\n{"tone": "formal and academic"}'
         )
         result = extractor.extract_jsons(text)
 
@@ -416,9 +411,7 @@ class TestLLMResponsePatterns:
     def test_llm_response_with_function_call_syntax(self):
         """LLM output with function-call-like braces in surrounding text."""
         extractor = JSONExtractor()
-        text = (
-            'set_tone({"tone": "formal and academic"})'
-        )
+        text = 'set_tone({"tone": "formal and academic"})'
         result = extractor.extract_jsons(text)
 
         assert len(result) == 1
@@ -455,9 +448,7 @@ class TestFindJsonObjectsStringAwareness:
         assert len(objects) >= 1
         # The full text should be the found object
         found_text = objects[0][0]
-        assert found_text == text, (
-            f"Expected full object but got premature close: {found_text!r}"
-        )
+        assert found_text == text, f"Expected full object but got premature close: {found_text!r}"
 
     def test_find_objects_with_open_brace_in_string(self):
         """{ in a string value should not increase nesting depth."""
@@ -467,9 +458,7 @@ class TestFindJsonObjectsStringAwareness:
 
         assert len(objects) >= 1
         found_text = objects[0][0]
-        assert found_text == text, (
-            f"Expected full object but got: {found_text!r}"
-        )
+        assert found_text == text, f"Expected full object but got: {found_text!r}"
 
     def test_find_objects_with_both_braces_in_string(self):
         """Both { and } in a string value — balanced but inside string."""
@@ -481,9 +470,7 @@ class TestFindJsonObjectsStringAwareness:
         found_text = objects[0][0]
         # If inner braces are balanced, the outer should still close correctly
         # even without string awareness (lucky coincidence)
-        assert found_text == text, (
-            f"Expected full object: {found_text!r}"
-        )
+        assert found_text == text, f"Expected full object: {found_text!r}"
 
     def test_find_objects_with_nested_json_in_string(self):
         """JSON-like content inside a string value."""
@@ -503,6 +490,4 @@ class TestFindJsonObjectsStringAwareness:
 
         assert len(objects) >= 1
         found_text = objects[0][0]
-        assert found_text == text, (
-            f"Escaped quotes broke object detection: {found_text!r}"
-        )
+        assert found_text == text, f"Escaped quotes broke object detection: {found_text!r}"

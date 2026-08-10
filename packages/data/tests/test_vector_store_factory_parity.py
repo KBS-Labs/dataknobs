@@ -44,9 +44,7 @@ VECTOR_BACKENDS = _registered_backend_classes()
     VECTOR_BACKENDS,
     ids=[name for name, _ in VECTOR_BACKENDS],
 )
-def test_vector_store_is_structured_config_consumer(
-    name: str, backend_cls: type
-) -> None:
+def test_vector_store_is_structured_config_consumer(name: str, backend_cls: type) -> None:
     """Every registered vector backend applies the structured-config pattern.
 
     Pins, without instantiating the backend (so optional-dependency

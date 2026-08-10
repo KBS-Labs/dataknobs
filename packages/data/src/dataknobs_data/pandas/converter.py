@@ -19,6 +19,7 @@ from .type_mapper import TypeMapper
 @dataclass
 class ConversionOptions:
     """Options for conversion between Records and DataFrames."""
+
     include_metadata: bool = False
     metadata_columns: list[str] | None = None  # Columns to treat as metadata
     flatten_nested: bool = False  # Flatten nested structures
@@ -71,23 +72,21 @@ class DataFrameConverter:
 
     def __init__(self, type_mapper: TypeMapper | None = None):
         """Initialize converter.
-        
+
         Args:
             type_mapper: Custom type mapper (uses default if None)
         """
         self.type_mapper = type_mapper or TypeMapper()
 
     def records_to_dataframe(
-        self,
-        records: list[Record],
-        options: ConversionOptions | None = None
+        self, records: list[Record], options: ConversionOptions | None = None
     ) -> pd.DataFrame:
         """Convert list of Records to DataFrame.
-        
+
         Args:
             records: List of Records to convert
             options: Conversion options
-            
+
         Returns:
             Pandas DataFrame
         """
@@ -128,7 +127,9 @@ class DataFrameConverter:
 
             # Add field columns in the order they appear in the record
             for field_name in first_record.fields.keys():
-                if options.flatten_nested and isinstance(first_record.fields[field_name].value, dict):
+                if options.flatten_nested and isinstance(
+                    first_record.fields[field_name].value, dict
+                ):
                     # Add flattened columns
                     for nested_key in first_record.fields[field_name].value.keys():
                         col_name = f"{field_name}.{nested_key}"
@@ -156,32 +157,28 @@ class DataFrameConverter:
             record_ids = [r.id for r in records]
 
             # Check if the IDs are from data fields
-            ids_from_fields = any(
-                'id' in r.fields or 'record_id' in r.fields
-                for r in records
-            )
+            ids_from_fields = any("id" in r.fields or "record_id" in r.fields for r in records)
 
             # Only set index if IDs exist, aren't from fields, and aren't UUIDs
-            if (any(record_ids) and not ids_from_fields and not all(
-                id and len(id) == 36 and id.count('-') == 4
-                for id in record_ids if id
-            )):
+            if (
+                any(record_ids)
+                and not ids_from_fields
+                and not all(id and len(id) == 36 and id.count("-") == 4 for id in record_ids if id)
+            ):
                 df.index = record_ids
                 df.index.name = "record_id"
 
         return df
 
     def dataframe_to_records(
-        self,
-        df: pd.DataFrame,
-        options: ConversionOptions | None = None
+        self, df: pd.DataFrame, options: ConversionOptions | None = None
     ) -> list[Record]:
         """Convert DataFrame to list of Records.
-        
+
         Args:
             df: DataFrame to convert
             options: Conversion options
-            
+
         Returns:
             List of Records
         """
@@ -202,7 +199,7 @@ class DataFrameConverter:
                             row_metadata.update(col_value)
                         else:
                             # Otherwise store it with the column name (without leading underscore)
-                            row_metadata[col.lstrip('_')] = col_value
+                            row_metadata[col.lstrip("_")] = col_value
 
             # Prepare row data (excluding metadata columns)
             row_data = {}
@@ -226,10 +223,10 @@ class DataFrameConverter:
 
     def record_to_series(self, record: Record) -> pd.Series:
         """Convert a single Record to a Pandas Series.
-        
+
         Args:
             record: Record to convert
-            
+
         Returns:
             Pandas Series
         """
@@ -247,23 +244,19 @@ class DataFrameConverter:
 
         return series
 
-    def series_to_record(
-        self,
-        series: pd.Series,
-        record_id: str | None = None
-    ) -> Record:
+    def series_to_record(self, series: pd.Series, record_id: str | None = None) -> Record:
         """Convert a Pandas Series to a Record.
-        
+
         Args:
             series: Series to convert
             record_id: Optional record ID
-            
+
         Returns:
             Record
         """
         # Get ID - series.name is Hashable, we need str | None
         id_value = record_id
-        if not id_value and hasattr(series, 'name'):
+        if not id_value and hasattr(series, "name"):
             name = series.name
             id_value = str(name) if name is not None else None
         record = Record(id=id_value)
@@ -280,28 +273,19 @@ class DataFrameConverter:
             field_value = self.type_mapper.convert_value_from_pandas(value, field_type)
 
             # Create field
-            field = Field(
-                name=str(column),
-                value=field_value,
-                type=field_type
-            )
+            field = Field(name=str(column), value=field_value, type=field_type)
             record.fields[str(column)] = field
 
         return record
 
-    def _series_to_record(
-        self,
-        row: pd.Series,
-        idx: Any,
-        options: ConversionOptions
-    ) -> Record:
+    def _series_to_record(self, row: pd.Series, idx: Any, options: ConversionOptions) -> Record:
         """Convert a DataFrame row to a Record.
-        
+
         Args:
             row: DataFrame row as Series
             idx: Row index
             options: Conversion options
-            
+
         Returns:
             Record
         """
@@ -332,21 +316,17 @@ class DataFrameConverter:
             field_value = self.type_mapper.convert_value_from_pandas(value, field_type)
 
             # Create field
-            field = Field(
-                name=str(column),
-                value=field_value,
-                type=field_type
-            )
+            field = Field(name=str(column), value=field_value, type=field_type)
             record.fields[str(column)] = field
 
         return record
 
     def _flatten_json_value(self, value: Any) -> Any:
         """Flatten JSON value for DataFrame insertion.
-        
+
         Args:
             value: JSON value (dict or list)
-            
+
         Returns:
             Flattened value or string representation
         """
@@ -373,18 +353,15 @@ class DataFrameConverter:
         return value
 
     def validate_conversion(
-        self,
-        records: list[Record],
-        df: pd.DataFrame,
-        options: ConversionOptions | None = None
+        self, records: list[Record], df: pd.DataFrame, options: ConversionOptions | None = None
     ) -> dict[str, Any]:
         """Validate conversion accuracy.
-        
+
         Args:
             records: Original records
             df: Converted DataFrame
             options: Conversion options used
-            
+
         Returns:
             Validation report
         """
@@ -396,7 +373,7 @@ class DataFrameConverter:
             "dataframe_row_count": len(df),
             "field_preservation": {},
             "type_preservation": {},
-            "value_accuracy": {}
+            "value_accuracy": {},
         }
 
         # Check field preservation
@@ -412,7 +389,7 @@ class DataFrameConverter:
             "original_fields": sorted(original_fields),
             "dataframe_columns": sorted(df_columns),
             "missing_fields": sorted(original_fields - df_columns),
-            "extra_columns": sorted(df_columns - original_fields)
+            "extra_columns": sorted(df_columns - original_fields),
         }
 
         # Check type preservation if enabled
@@ -428,7 +405,7 @@ class DataFrameConverter:
                                 raise TypeError("type_preservation should be a dict")
                             type_preservation[field_name] = {
                                 "expected": expected_dtype,
-                                "actual": df_dtype
+                                "actual": df_dtype,
                             }
 
         return report

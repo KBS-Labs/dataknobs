@@ -92,9 +92,7 @@ class TestBareStateTestInstanceArcCondition:
         gated out.
         """
         fsm = _build_fsm_with_registered_condition("gate")
-        engine = AsyncExecutionEngine(
-            fsm, custom_functions={"gate": HasField("flag")}
-        )
+        engine = AsyncExecutionEngine(fsm, custom_functions={"gate": HasField("flag")})
 
         ctx_ok = ExecutionContext()
         ctx_ok.data = {"flag": 1}
@@ -103,9 +101,7 @@ class TestBareStateTestInstanceArcCondition:
         assert ctx_ok.current_state == "end"
 
         fsm2 = _build_fsm_with_registered_condition("gate")
-        engine2 = AsyncExecutionEngine(
-            fsm2, custom_functions={"gate": HasField("flag")}
-        )
+        engine2 = AsyncExecutionEngine(fsm2, custom_functions={"gate": HasField("flag")})
         ctx_blocked = ExecutionContext()
         ctx_blocked.data = {"other": 1}
         success2, _ = await engine2.execute(ctx_blocked)
@@ -121,9 +117,7 @@ class TestBareStateTestInstanceArcCondition:
         coroutine's ``(passed, reason)`` is actually awaited and honored.
         """
         fsm = _build_fsm_with_registered_condition("gate")
-        engine = AsyncExecutionEngine(
-            fsm, custom_functions={"gate": AsyncHasField("flag")}
-        )
+        engine = AsyncExecutionEngine(fsm, custom_functions={"gate": AsyncHasField("flag")})
         ctx_ok = ExecutionContext()
         ctx_ok.data = {"flag": 1}
         success, _ = await engine.execute(ctx_ok)
@@ -131,9 +125,7 @@ class TestBareStateTestInstanceArcCondition:
         assert ctx_ok.current_state == "end"
 
         fsm2 = _build_fsm_with_registered_condition("gate")
-        engine2 = AsyncExecutionEngine(
-            fsm2, custom_functions={"gate": AsyncHasField("flag")}
-        )
+        engine2 = AsyncExecutionEngine(fsm2, custom_functions={"gate": AsyncHasField("flag")})
         ctx_blocked = ExecutionContext()
         ctx_blocked.data = {"other": 1}
         success2, _ = await engine2.execute(ctx_blocked)
@@ -286,6 +278,5 @@ class TestInitialStatePreValidationErrorFidelity:
             f"initial-entry reason, got: {error_text!r}"
         )
         assert "Pre-validation failed" in error_text, (
-            "the current run's specific rejection reason should surface, got: "
-            f"{error_text!r}"
+            f"the current run's specific rejection reason should surface, got: {error_text!r}"
         )

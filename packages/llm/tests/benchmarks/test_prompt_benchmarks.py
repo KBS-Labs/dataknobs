@@ -37,10 +37,7 @@ def test_benchmark_conditional_rendering(benchmark, renderer):
 def test_benchmark_jinja2_filters(benchmark, renderer):
     """Benchmark Jinja2 filter application."""
     template = "{{name|upper}} - {{text|truncate(50)}}"
-    params = {
-        "name": "alice",
-        "text": "This is a longer text that needs to be truncated to fit"
-    }
+    params = {"name": "alice", "text": "This is a longer text that needs to be truncated to fit"}
 
     result = benchmark(renderer.render, template, params, mode=TemplateMode.JINJA2)
     assert "ALICE" in result.content
@@ -62,12 +59,7 @@ def test_benchmark_jinja2_loops(benchmark, renderer):
     {{ loop.index }}. {{ item.name }} - {{ item.value }}
     {% endfor %}
     """
-    params = {
-        "items": [
-            {"name": f"Item {i}", "value": i * 10}
-            for i in range(10)
-        ]
-    }
+    params = {"items": [{"name": f"Item {i}", "value": i * 10} for i in range(10)]}
 
     result = benchmark(renderer.render, template, params, mode=TemplateMode.JINJA2)
     assert "Item 0" in result.content
@@ -89,10 +81,10 @@ def test_benchmark_complex_template(benchmark, renderer):
             "email": "alice@example.com",
             "city": "New York",
             "country": "USA",
-            "premium": True
+            "premium": True,
         },
         "prefs": {"theme": "dark", "language": "en"},
-        "settings": {"notifications": "on", "privacy": "strict"}
+        "settings": {"notifications": "on", "privacy": "strict"},
     }
 
     result = benchmark(renderer.render, template, params, mode=TemplateMode.MIXED)

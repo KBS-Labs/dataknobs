@@ -86,8 +86,7 @@ class _ToolLoopDelivery(ABC):
         ]
         if missing:
             raise TypeError(
-                f"{cls.__name__} must define class-level message strings: "
-                f"{', '.join(missing)}"
+                f"{cls.__name__} must define class-level message strings: {', '.join(missing)}"
             )
 
     @abstractmethod
@@ -128,12 +127,9 @@ class _BufferedDelivery(_ToolLoopDelivery):
 
     MSG_TIMEOUT = "Tool execution loop exceeded wall-clock timeout (%.1fs)"
     MSG_BUDGET = "Tool loop budget exhausted before LLM re-call (%.1fs budget)"
-    MSG_CAP = (
-        "Tool execution loop reached max iterations (%d) with pending tool_calls"
-    )
+    MSG_CAP = "Tool execution loop reached max iterations (%d) with pending tool_calls"
     MSG_RECALL_TIMEOUT = (
-        "LLM re-call exceeded remaining tool loop budget "
-        "(%.1fs remaining of %.1fs)"
+        "LLM re-call exceeded remaining tool loop budget (%.1fs remaining of %.1fs)"
     )
 
     def __init__(
@@ -170,9 +166,7 @@ class _BufferedDelivery(_ToolLoopDelivery):
                 remaining,
                 self._turn_timeout,
                 extra={
-                    "conversation_id": getattr(
-                        turn.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(turn.manager, "conversation_id", None),
                 },
             )
             self.broke = True
@@ -182,17 +176,9 @@ class _BufferedDelivery(_ToolLoopDelivery):
 class _StreamingDelivery(_ToolLoopDelivery):
     """Streaming (``stream_chat``) delivery — chunks re-streamed through."""
 
-    MSG_TIMEOUT = (
-        "Streaming tool execution loop exceeded wall-clock timeout (%.1fs)"
-    )
-    MSG_BUDGET = (
-        "Streaming tool loop budget exhausted before LLM re-stream "
-        "(%.1fs budget)"
-    )
-    MSG_CAP = (
-        "Streaming tool execution loop reached max iterations (%d) "
-        "with pending tool_calls"
-    )
+    MSG_TIMEOUT = "Streaming tool execution loop exceeded wall-clock timeout (%.1fs)"
+    MSG_BUDGET = "Streaming tool loop budget exhausted before LLM re-stream (%.1fs budget)"
+    MSG_CAP = "Streaming tool execution loop reached max iterations (%d) with pending tool_calls"
 
     def __init__(
         self,
@@ -230,9 +216,7 @@ class _StreamingDelivery(_ToolLoopDelivery):
         # per-call deadline, only the pre-stream budget gate in the core.
         return self._restream(turn)
 
-    async def _restream(
-        self, turn: TurnState
-    ) -> AsyncIterator[LLMStreamResponse]:
+    async def _restream(self, turn: TurnState) -> AsyncIterator[LLMStreamResponse]:
         async for chunk in turn.manager.stream_complete(**self._recall_kwargs):
             turn.stream_chunks.append(chunk.delta)
             if chunk.is_final or chunk.usage:

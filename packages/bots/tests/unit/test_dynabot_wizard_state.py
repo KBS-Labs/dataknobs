@@ -156,9 +156,11 @@ class TestInstanceNormalizeWizardState:
     def bot(self) -> DynaBot:
         """Create a minimal DynaBot for testing normalization."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        library = ConfigPromptLibrary({
-            "system": {"assistant": {"template": "You are a bot."}},
-        })
+        library = ConfigPromptLibrary(
+            {
+                "system": {"assistant": {"template": "You are a bot."}},
+            }
+        )
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         return DynaBot(
@@ -199,9 +201,11 @@ class TestGetWizardState:
     def bot(self, storage: DataknobsConversationStorage) -> DynaBot:
         """Create a minimal DynaBot for testing."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        library = ConfigPromptLibrary({
-            "system": {"assistant": {"template": "You are a bot."}},
-        })
+        library = ConfigPromptLibrary(
+            {
+                "system": {"assistant": {"template": "You are a bot."}},
+            }
+        )
         builder = AsyncPromptBuilder(library=library)
         return DynaBot(
             llm=provider,
@@ -269,20 +273,20 @@ class TestGetWizardState:
             assert "stage_index" in state
             assert "progress" in state
 
-    async def test_returns_normalized_state_from_nested_format(
-        self, bot: DynaBot
-    ) -> None:
+    async def test_returns_normalized_state_from_nested_format(self, bot: DynaBot) -> None:
         """Verify legacy nested format is normalized correctly."""
-        manager = SimpleNamespace(metadata={
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "stage_index": 1,
-                    "data": {"config": "value"},
-                    "history": ["welcome", "configure"],
+        manager = SimpleNamespace(
+            metadata={
+                "wizard": {
+                    "fsm_state": {
+                        "current_stage": "configure",
+                        "stage_index": 1,
+                        "data": {"config": "value"},
+                        "history": ["welcome", "configure"],
+                    }
                 }
             }
-        })
+        )
         bot._conversation_managers["conv-123"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-123")
@@ -350,12 +354,14 @@ class TestGetWizardState:
         )
         await storage.save_conversation(state)
 
-        manager = SimpleNamespace(metadata={
-            "wizard": {
-                "current_stage": "new_stage",
-                "data": {"version": "fresh"},
+        manager = SimpleNamespace(
+            metadata={
+                "wizard": {
+                    "current_stage": "new_stage",
+                    "data": {"version": "fresh"},
+                }
             }
-        })
+        )
         bot._conversation_managers["conv-both"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-both")
@@ -364,9 +370,7 @@ class TestGetWizardState:
         assert result["current_stage"] == "new_stage"
         assert result["data"] == {"version": "fresh"}
 
-    async def test_returns_none_when_not_in_cache_or_storage(
-        self, bot: DynaBot
-    ) -> None:
+    async def test_returns_none_when_not_in_cache_or_storage(self, bot: DynaBot) -> None:
         """Verify None is returned when conversation is nowhere."""
         result = await bot.get_wizard_state("totally-missing")
         assert result is None

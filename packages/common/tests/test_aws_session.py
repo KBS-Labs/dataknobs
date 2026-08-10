@@ -31,9 +31,7 @@ def test_session_config_from_dict_accepts_region_name() -> None:
 
 
 def test_region_name_wins_over_region_when_both_present() -> None:
-    cfg = AwsSessionConfig.from_dict(
-        {"region": "us-east-1", "region_name": "eu-west-1"}
-    )
+    cfg = AwsSessionConfig.from_dict({"region": "us-east-1", "region_name": "eu-west-1"})
     assert cfg.region_name == "eu-west-1"
 
 
@@ -154,9 +152,7 @@ def test_to_boto_config_kwargs_omits_timeouts_by_default() -> None:
 
 def test_to_boto_config_kwargs_includes_timeouts_when_given() -> None:
     """Explicit timeouts flow through to the botocore Config kwargs."""
-    kwargs = AwsSessionConfig().to_boto_config_kwargs(
-        connect_timeout=10, read_timeout=70
-    )
+    kwargs = AwsSessionConfig().to_boto_config_kwargs(connect_timeout=10, read_timeout=70)
     assert kwargs["connect_timeout"] == 10
     assert kwargs["read_timeout"] == 70
 
@@ -191,9 +187,7 @@ class TestSessionClientKwargs:
 
     def test_applies_timeouts(self) -> None:
         """Read timeout wires the consumer's budget onto the client (rule 2)."""
-        kwargs = AwsSessionConfig().to_session_client_kwargs(
-            connect_timeout=10, read_timeout=60.0
-        )
+        kwargs = AwsSessionConfig().to_session_client_kwargs(connect_timeout=10, read_timeout=60.0)
         boto_config = kwargs["config"]
         assert boto_config.connect_timeout == 10
         assert boto_config.read_timeout == 60.0

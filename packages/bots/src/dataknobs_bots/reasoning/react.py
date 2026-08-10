@@ -102,10 +102,7 @@ def _is_truncated_tool_call(response: Any) -> bool:
     blocks is abandoned in full — including any complete blocks — since a
     truncated turn's block completeness (and array parse) cannot be trusted.
     """
-    return bool(
-        getattr(response, "truncated", False)
-        and getattr(response, "tool_calls", None)
-    )
+    return bool(getattr(response, "truncated", False) and getattr(response, "tool_calls", None))
 
 
 @dataclass
@@ -221,11 +218,9 @@ class ReActReasoning(
         #: strategy + optional dedicated summary provider are built lazily on
         #: first compaction (they need the runtime provider); a consumer may
         #: inject a bespoke ``CompactionStrategy`` via the components channel.
-        self._history_compaction: HistoryCompactionConfig | None = (
-            config.history_compaction
-        )
-        self._compaction_strategy: CompactionStrategy | None = (
-            self.components.get("compaction_strategy")
+        self._history_compaction: HistoryCompactionConfig | None = config.history_compaction
+        self._compaction_strategy: CompactionStrategy | None = self.components.get(
+            "compaction_strategy"
         )
         self._summary_provider: Any = None
         self._owns_summary_provider = False
@@ -236,12 +231,8 @@ class ReActReasoning(
         self._artifact_registry = self.components.get("artifact_registry")
         self._review_executor = self.components.get("review_executor")
         self._context_builder = self.components.get("context_builder")
-        self._extra_context: dict[str, Any] | None = self.components.get(
-            "extra_context"
-        )
-        self._prompt_refresher: Callable[[], str] | None = self.components.get(
-            "prompt_refresher"
-        )
+        self._extra_context: dict[str, Any] | None = self.components.get("extra_context")
+        self._prompt_refresher: Callable[[], str] | None = self.components.get("prompt_refresher")
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -316,9 +307,7 @@ class ReActReasoning(
             # retain a stale trace from an earlier tool-using turn (mirrors the
             # MAX_ITERATIONS status-only append).
             if handle.trace is not None:
-                handle.trace.append(
-                    {"status": ReActTerminationReason.COMPLETED.value}
-                )
+                handle.trace.append({"status": ReActTerminationReason.COMPLETED.value})
             await self._record_termination(
                 manager,
                 ReActTerminationReason.COMPLETED,
@@ -441,8 +430,7 @@ class ReActReasoning(
             # abandon.  ``Exception`` (not ``BaseException``) so cancellation
             # propagates.
             logger.warning(
-                "ReAct: truncation retry failed (%s) — abandoning "
-                "(terminal synthesis)",
+                "ReAct: truncation retry failed (%s) — abandoning (terminal synthesis)",
                 e,
                 extra={"conversation_id": conv_id, "iteration": iteration},
             )
@@ -451,8 +439,7 @@ class ReActReasoning(
             return response
         if _is_truncated_tool_call(retry):
             logger.warning(
-                "ReAct: retry still truncated at max_tokens=%d — abandoning "
-                "(terminal synthesis)",
+                "ReAct: retry still truncated at max_tokens=%d — abandoning (terminal synthesis)",
                 budget,
                 extra={"conversation_id": conv_id, "iteration": iteration},
             )
@@ -562,9 +549,7 @@ class ReActReasoning(
         cfg = self._history_compaction
         assert cfg is not None
         strategy = await self._get_compaction_strategy(llm)
-        return await strategy.compact(
-            manager, keep_recent_iterations=cfg.keep_recent_iterations
-        )
+        return await strategy.compact(manager, keep_recent_iterations=cfg.keep_recent_iterations)
 
     async def _maybe_compact_history(self, manager: Any, llm: Any) -> None:
         """Proactively compact the history when it exceeds the token budget.
@@ -586,12 +571,9 @@ class ReActReasoning(
             compacted = await self._compact_now(manager, llm)
             if compacted:
                 logger.debug(
-                    "ReAct: proactively compacted %d tool iterations "
-                    "(history over budget)",
+                    "ReAct: proactively compacted %d tool iterations (history over budget)",
                     compacted,
-                    extra={"conversation_id": getattr(
-                        manager, "conversation_id", None
-                    )},
+                    extra={"conversation_id": getattr(manager, "conversation_id", None)},
                 )
 
     async def _complete_with_reactive_compaction(
@@ -614,8 +596,7 @@ class ReActReasoning(
             conv_id = getattr(manager, "conversation_id", None)
             if compacted:
                 logger.info(
-                    "ReAct: context overflow — compacted %d tool iterations "
-                    "and retrying once",
+                    "ReAct: context overflow — compacted %d tool iterations and retrying once",
                     compacted,
                     extra={"conversation_id": conv_id},
                 )
@@ -633,9 +614,7 @@ class ReActReasoning(
 
     async def close(self) -> None:
         """Release a dedicated summary provider this strategy built + owns."""
-        await close_if_owned(
-            self._summary_provider, self._owns_summary_provider
-        )
+        await close_if_owned(self._summary_provider, self._owns_summary_provider)
         await super().close()
 
     async def process_input(
@@ -658,9 +637,7 @@ class ReActReasoning(
             Process result indicating the iteration outcome.
         """
         if not isinstance(handle, ReActTurnHandle):
-            raise TypeError(
-                f"Expected ReActTurnHandle, got {type(handle).__name__}"
-            )
+            raise TypeError(f"Expected ReActTurnHandle, got {type(handle).__name__}")
 
         log_level = logging.DEBUG if handle.verbose else logging.INFO
 
@@ -670,16 +647,12 @@ class ReActReasoning(
                 log_level,
                 "ReAct: Max iterations reached, generating final response",
                 extra={
-                    "conversation_id": getattr(
-                        handle.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(handle.manager, "conversation_id", None),
                     "iterations_used": handle.max_iterations,
                 },
             )
             if handle.trace is not None:
-                handle.trace.append(
-                    {"status": ReActTerminationReason.MAX_ITERATIONS.value}
-                )
+                handle.trace.append({"status": ReActTerminationReason.MAX_ITERATIONS.value})
             await self._record_termination(
                 handle.manager,
                 ReActTerminationReason.MAX_ITERATIONS,
@@ -714,9 +687,7 @@ class ReActReasoning(
             log_level,
             "ReAct: Starting iteration",
             extra={
-                "conversation_id": getattr(
-                    handle.manager, "conversation_id", None
-                ),
+                "conversation_id": getattr(handle.manager, "conversation_id", None),
                 "iteration": handle.iteration + 1,
                 "max_iterations": handle.max_iterations,
             },
@@ -733,25 +704,18 @@ class ReActReasoning(
             response = await self._complete_with_reactive_compaction(
                 handle.manager,
                 handle.llm,
-                lambda: handle.manager.complete(
-                    tools=handle.tools, **handle.kwargs
-                ),
+                lambda: handle.manager.complete(tools=handle.tools, **handle.kwargs),
             )
         except ToolsNotSupportedError as e:
             logger.error(
-                "ReAct: Model '%s' does not support tools — "
-                "returning graceful response to user",
+                "ReAct: Model '%s' does not support tools — returning graceful response to user",
                 e.model,
                 extra={
-                    "conversation_id": getattr(
-                        handle.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(handle.manager, "conversation_id", None),
                 },
             )
             if handle.trace is not None:
-                handle.trace.append(
-                    {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
-                )
+                handle.trace.append({"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value})
             await self._record_termination(
                 handle.manager,
                 ReActTerminationReason.TOOLS_NOT_SUPPORTED,
@@ -791,9 +755,7 @@ class ReActReasoning(
                 log_level,
                 "ReAct: No tool calls in response, finishing",
                 extra={
-                    "conversation_id": getattr(
-                        handle.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(handle.manager, "conversation_id", None),
                     "iteration": handle.iteration + 1,
                 },
             )
@@ -820,9 +782,7 @@ class ReActReasoning(
                 "abandoning the incomplete tool call and synthesizing a "
                 "final answer",
                 extra={
-                    "conversation_id": getattr(
-                        handle.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(handle.manager, "conversation_id", None),
                     "iteration": handle.iteration + 1,
                     "tools": [tc.name for tc in response.tool_calls],
                 },
@@ -852,9 +812,7 @@ class ReActReasoning(
             log_level,
             "ReAct: Tool calls requested",
             extra={
-                "conversation_id": getattr(
-                    handle.manager, "conversation_id", None
-                ),
+                "conversation_id": getattr(handle.manager, "conversation_id", None),
                 "iteration": handle.iteration + 1,
                 "num_tools": num_tool_calls,
                 "tools": [tc.name for tc in response.tool_calls],
@@ -863,20 +821,13 @@ class ReActReasoning(
 
         # Duplicate detection — keyed on the shared tool_call_signature so the
         # loop's duplicate-break guard and the orphan-pairing repair agree.
-        current_calls = [
-            tool_call_signature(tc) for tc in response.tool_calls
-        ]
+        current_calls = [tool_call_signature(tc) for tc in response.tool_calls]
 
-        if (
-            handle.prev_tool_calls is not None
-            and current_calls == handle.prev_tool_calls
-        ):
+        if handle.prev_tool_calls is not None and current_calls == handle.prev_tool_calls:
             logger.warning(
                 "ReAct: Duplicate tool calls detected, breaking loop",
                 extra={
-                    "conversation_id": getattr(
-                        handle.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(handle.manager, "conversation_id", None),
                     "iteration": handle.iteration + 1,
                     "duplicate_calls": [tc.name for tc in response.tool_calls],
                 },
@@ -890,9 +841,7 @@ class ReActReasoning(
             # (e.g. Anthropic), leaving the tool_use dangling.
             handle.final_response = None  # finalize_turn does synthesis
             if handle.trace is not None:
-                iteration_trace["status"] = (
-                    ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
-                )
+                iteration_trace["status"] = ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
                 handle.trace.append(iteration_trace)
             await self._record_termination(
                 handle.manager,
@@ -908,8 +857,7 @@ class ReActReasoning(
         if handle.trace is not None:
             iteration_trace["status"] = "continued"
             iteration_trace["tool_calls"] = [
-                {"name": tc.name, "parameters": tc.parameters}
-                for tc in response.tool_calls
+                {"name": tc.name, "parameters": tc.parameters} for tc in response.tool_calls
             ]
             handle.trace.append(iteration_trace)
 
@@ -943,9 +891,7 @@ class ReActReasoning(
             LLM response object.
         """
         if not isinstance(handle, ReActTurnHandle):
-            raise TypeError(
-                f"Expected ReActTurnHandle, got {type(handle).__name__}"
-            )
+            raise TypeError(f"Expected ReActTurnHandle, got {type(handle).__name__}")
 
         # If process_input stored a final response, return it
         if handle.final_response is not None:
@@ -982,9 +928,7 @@ class ReActReasoning(
             :class:`LLMStreamResponse` chunks.
         """
         if not isinstance(handle, ReActTurnHandle):
-            raise TypeError(
-                f"Expected ReActTurnHandle, got {type(handle).__name__}"
-            )
+            raise TypeError(f"Expected ReActTurnHandle, got {type(handle).__name__}")
         return self._stream_finalize(handle)
 
     async def _stream_finalize(
@@ -1061,9 +1005,7 @@ class ReActReasoning(
             # store_trace is on, write a fresh status-only trace so
             # ``reasoning_trace`` can't retain a stale earlier-turn trace.
             if trace is not None:
-                trace.append(
-                    {"status": ReActTerminationReason.COMPLETED.value}
-                )
+                trace.append({"status": ReActTerminationReason.COMPLETED.value})
             await self._record_termination(
                 manager,
                 ReActTerminationReason.COMPLETED,
@@ -1125,13 +1067,7 @@ class ReActReasoning(
                     extra={"conversation_id": manager.conversation_id},
                 )
                 if trace is not None:
-                    trace.append(
-                        {
-                            "status": (
-                                ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
-                            )
-                        }
-                    )
+                    trace.append({"status": (ReActTerminationReason.TOOLS_NOT_SUPPORTED.value)})
                 await self._record_termination(
                     manager,
                     ReActTerminationReason.TOOLS_NOT_SUPPORTED,
@@ -1155,7 +1091,11 @@ class ReActReasoning(
             # (default) or when the retry is still truncated.
             if _is_truncated_tool_call(response):
                 response = await self._maybe_retry_truncated_tool_call(
-                    response, manager, tools, kwargs, iteration=iteration + 1,
+                    response,
+                    manager,
+                    tools,
+                    kwargs,
+                    iteration=iteration + 1,
                 )
 
             # Check if we have tool calls
@@ -1171,9 +1111,7 @@ class ReActReasoning(
                 )
 
                 if trace is not None:
-                    iteration_trace["status"] = (
-                        ReActTerminationReason.COMPLETED.value
-                    )
+                    iteration_trace["status"] = ReActTerminationReason.COMPLETED.value
                     trace.append(iteration_trace)
                 await self._record_termination(
                     manager,
@@ -1231,9 +1169,7 @@ class ReActReasoning(
 
             # Duplicate detection: compare the shared tool_call_signature
             # with the previous iteration to avoid infinite loops
-            current_calls = [
-                tool_call_signature(tc) for tc in response.tool_calls
-            ]
+            current_calls = [tool_call_signature(tc) for tc in response.tool_calls]
 
             if prev_tool_calls is not None and current_calls == prev_tool_calls:
                 logger.warning(
@@ -1253,9 +1189,7 @@ class ReActReasoning(
                 # lift system messages to a top-level param (e.g. Anthropic),
                 # leaving the tool_use dangling.
                 if trace is not None:
-                    iteration_trace["status"] = (
-                        ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
-                    )
+                    iteration_trace["status"] = ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
                     trace.append(iteration_trace)
                 await self._record_termination(
                     manager,
@@ -1316,9 +1250,7 @@ class ReActReasoning(
                         # Context-aware tools will extract _context and use it
                         # Regular tools will ignore _context via **kwargs
                         t0 = time.monotonic()
-                        result = await tool.execute(
-                            **tool_call.parameters, _context=tool_context
-                        )
+                        result = await tool.execute(**tool_call.parameters, _context=tool_context)
                         duration_ms = (time.monotonic() - t0) * 1000
                         try:
                             observation = f"Tool result: {json.dumps(result, default=str)}"
@@ -1328,12 +1260,14 @@ class ReActReasoning(
                         tool_trace["result"] = str(result)
 
                         # Record for DynaBot on_tool_executed middleware hook
-                        self._tool_executions.append(ToolExecution(
-                            tool_name=tool_call.name,
-                            parameters=tool_call.parameters,
-                            result=result,
-                            duration_ms=duration_ms,
-                        ))
+                        self._tool_executions.append(
+                            ToolExecution(
+                                tool_name=tool_call.name,
+                                parameters=tool_call.parameters,
+                                result=result,
+                                duration_ms=duration_ms,
+                            )
+                        )
 
                         logger.log(
                             log_level,
@@ -1363,11 +1297,13 @@ class ReActReasoning(
                     tool_trace["error"] = str(e)
 
                     # Record failed execution for middleware hook
-                    self._tool_executions.append(ToolExecution(
-                        tool_name=tool_call.name,
-                        parameters=tool_call.parameters,
-                        error=str(e),
-                    ))
+                    self._tool_executions.append(
+                        ToolExecution(
+                            tool_name=tool_call.name,
+                            parameters=tool_call.parameters,
+                            error=str(e),
+                        )
+                    )
 
                     logger.error(
                         "ReAct: Tool execution failed",
@@ -1412,9 +1348,7 @@ class ReActReasoning(
             )
 
             if trace is not None:
-                trace.append(
-                    {"status": ReActTerminationReason.MAX_ITERATIONS.value}
-                )
+                trace.append({"status": ReActTerminationReason.MAX_ITERATIONS.value})
             await self._record_termination(
                 manager,
                 ReActTerminationReason.MAX_ITERATIONS,
@@ -1515,9 +1449,7 @@ class ReActReasoning(
             logger.warning(
                 "ReAct: Failed to record termination reason",
                 extra={
-                    "conversation_id": getattr(
-                        manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(manager, "conversation_id", None),
                     "error": str(e),
                 },
             )
@@ -1528,8 +1460,7 @@ class ReActReasoning(
         # also_publish_to bus delivery are awaited correctly.
         reg = getattr(self, "_termination_callbacks", None)
         if reg is not None and (
-            reg.callback_count(REACT_TERMINATION_TOPIC)
-            or reg.supports_event_bus_emission()
+            reg.callback_count(REACT_TERMINATION_TOPIC) or reg.supports_event_bus_emission()
         ):
             await reg.fire_async(REACT_TERMINATION_TOPIC, payload)
 

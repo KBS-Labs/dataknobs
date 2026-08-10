@@ -148,8 +148,7 @@ def _parse_sort(sort: list[str] | None) -> list[SortSpec] | None:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    f"sort entry {entry!r} has invalid order {order_str!r}; "
-                    "must be 'asc' or 'desc'"
+                    f"sort entry {entry!r} has invalid order {order_str!r}; must be 'asc' or 'desc'"
                 ),
             )
         specs.append(
@@ -272,9 +271,7 @@ def create_registry_router(backend: RegistryBackend) -> APIRouter:
         return reg.to_dict()
 
     @router.put("/configs/{bot_id}")
-    async def update_config(
-        bot_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def update_config(bot_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         if "config" not in payload:
             raise HTTPException(
                 status_code=422,

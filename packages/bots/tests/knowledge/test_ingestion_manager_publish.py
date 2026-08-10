@@ -62,9 +62,7 @@ class _FailingBus:
 async def test_end_payload_carries_tenant_id_when_bound() -> None:
     source = await _make_source()
     rag = await _make_rag()
-    manager = KnowledgeIngestionManager(
-        source=source, destination=rag, tenant_id="acme"
-    )
+    manager = KnowledgeIngestionManager(source=source, destination=rag, tenant_id="acme")
 
     captured: list[dict] = []
     manager.lifecycle_callbacks.register(INGEST_DOMAIN_END, captured.append)
@@ -99,21 +97,13 @@ async def test_end_payload_omits_tenant_id_when_unbound() -> None:
 async def test_start_fires_before_end() -> None:
     source = await _make_source()
     rag = await _make_rag()
-    manager = KnowledgeIngestionManager(
-        source=source, destination=rag, tenant_id="acme"
-    )
+    manager = KnowledgeIngestionManager(source=source, destination=rag, tenant_id="acme")
 
     order: list[str] = []
-    manager.lifecycle_callbacks.register(
-        INGEST_DOMAIN_START, lambda ev: order.append("start")
-    )
-    manager.lifecycle_callbacks.register(
-        INGEST_DOMAIN_END, lambda ev: order.append("end")
-    )
+    manager.lifecycle_callbacks.register(INGEST_DOMAIN_START, lambda ev: order.append("start"))
+    manager.lifecycle_callbacks.register(INGEST_DOMAIN_END, lambda ev: order.append("end"))
     start_payloads: list[dict] = []
-    manager.lifecycle_callbacks.register(
-        INGEST_DOMAIN_START, start_payloads.append
-    )
+    manager.lifecycle_callbacks.register(INGEST_DOMAIN_START, start_payloads.append)
 
     await manager.ingest("d1")
 
@@ -185,9 +175,7 @@ async def test_failing_event_bus_does_not_abort_ingest() -> None:
     source = await _make_source()
     rag = await _make_rag()
     bus = _FailingBus()
-    manager = KnowledgeIngestionManager(
-        source=source, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=source, destination=rag, event_bus=bus)
 
     # Must NOT raise despite the bus failing on both start and end.
     result = await manager.ingest("d1")
@@ -218,9 +206,7 @@ async def test_failing_event_bus_does_not_mask_ingest_error() -> None:
 
     rag.ingest_from_backend = _boom  # type: ignore[method-assign]
 
-    manager = KnowledgeIngestionManager(
-        source=source, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=source, destination=rag, event_bus=bus)
 
     with pytest.raises(RuntimeError, match="ingest exploded"):
         await manager.ingest("d1")
@@ -234,9 +220,7 @@ async def test_failing_event_bus_does_not_mask_ingest_error() -> None:
 async def test_tenant_filtered_callback_on_lifecycle_registry() -> None:
     source = await _make_source()
     rag = await _make_rag()
-    manager = KnowledgeIngestionManager(
-        source=source, destination=rag, tenant_id="acme"
-    )
+    manager = KnowledgeIngestionManager(source=source, destination=rag, tenant_id="acme")
 
     acme_hits: list[dict] = []
     other_hits: list[dict] = []

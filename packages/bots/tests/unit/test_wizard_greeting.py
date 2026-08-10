@@ -23,6 +23,7 @@ from dataknobs_llm.llm.providers.echo import EchoProvider
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def greeting_wizard_config() -> dict[str, Any]:
     """Wizard config with a response_template on the start stage."""
@@ -66,6 +67,7 @@ def greeting_wizard_reasoning(
 # ---------------------------------------------------------------------------
 # TestWizardReasoningGreet
 # ---------------------------------------------------------------------------
+
 
 class TestWizardReasoningGreet:
     """Tests for WizardReasoning.greet() directly."""
@@ -202,9 +204,7 @@ class TestWizardReasoningGreet:
         conversation_manager: ConversationManager,
     ) -> None:
         """greet() without initial_context works as before (backward compat)."""
-        response = await greeting_wizard_reasoning.greet(
-            conversation_manager, llm=None
-        )
+        response = await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
         assert response is not None
         assert "Welcome to the wizard" in response.content
 
@@ -228,6 +228,7 @@ class TestWizardReasoningGreet:
 # TestReasoningStrategyGreetDefault
 # ---------------------------------------------------------------------------
 
+
 class TestReasoningStrategyGreetDefault:
     """Tests that non-wizard strategies return None from greet()."""
 
@@ -246,6 +247,7 @@ class TestReasoningStrategyGreetDefault:
 # ---------------------------------------------------------------------------
 # TestDynaBotGreet (integration)
 # ---------------------------------------------------------------------------
+
 
 class TestDynaBotGreet:
     """Integration tests using DynaBot.from_config()."""
@@ -378,9 +380,7 @@ class TestDynaBotGreet:
                 client_id="test",
             )
 
-            greeting = await bot.greet(
-                context, initial_context={"user_name": "Bob"}
-            )
+            greeting = await bot.greet(context, initial_context={"user_name": "Bob"})
 
             assert greeting == "Hello Bob!"
 

@@ -38,9 +38,7 @@ def _vec(seed: int) -> np.ndarray:
 
 
 def _store(persist_path: str) -> MemoryVectorStore:
-    return MemoryVectorStore(
-        {"dimensions": _DIM, "metric": "cosine", "persist_path": persist_path}
-    )
+    return MemoryVectorStore({"dimensions": _DIM, "metric": "cosine", "persist_path": persist_path})
 
 
 @requires_blockbuster
@@ -94,15 +92,13 @@ async def test_persist_round_trip(tmp_path: Path) -> None:
     path = str(tmp_path / "store.pkl")
     writer = _store(path)
     await writer.initialize()
-    await writer.add_vectors(
-        [_vec(1), _vec(2)], ids=["a", "b"], metadata=[{"k": "v"}, {"k": "w"}]
-    )
+    await writer.add_vectors([_vec(1), _vec(2)], ids=["a", "b"], metadata=[{"k": "v"}, {"k": "w"}])
     await writer.save()
 
     reader = _store(path)
     await reader.initialize()  # loads from disk via the offloaded load()
 
-    (vec_a, meta_a), = await reader.get_vectors(["a"], include_timestamps=True)
+    ((vec_a, meta_a),) = await reader.get_vectors(["a"], include_timestamps=True)
     assert vec_a is not None
     np.testing.assert_array_almost_equal(vec_a, writer.vectors["a"])
     assert meta_a is not None and meta_a["k"] == "v"

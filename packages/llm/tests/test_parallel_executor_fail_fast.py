@@ -55,9 +55,7 @@ def _patch_dispatching_complete(
             counter[content] = counter.get(content, 0) + 1
         handler = handlers.get(content)
         if handler is None:
-            raise AssertionError(
-                f"No handler registered for content {content!r}"
-            )
+            raise AssertionError(f"No handler registered for content {content!r}")
         return await handler(messages)
 
     provider.complete = dispatching_complete  # type: ignore[assignment]
@@ -112,13 +110,15 @@ async def test_execute_fail_fast_cancels_remaining_on_first_error(
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
     start = time.monotonic()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("fail")),
-        "b": LLMTask(messages=_msg("slow1")),
-        "c": LLMTask(messages=_msg("slow2")),
-        "d": LLMTask(messages=_msg("slow3")),
-        "e": LLMTask(messages=_msg("slow4")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("fail")),
+            "b": LLMTask(messages=_msg("slow1")),
+            "c": LLMTask(messages=_msg("slow2")),
+            "d": LLMTask(messages=_msg("slow3")),
+            "e": LLMTask(messages=_msg("slow4")),
+        }
+    )
     elapsed = time.monotonic() - start
 
     # Far below the 1.0s slow-task delay; CI-stable headroom.
@@ -148,11 +148,13 @@ async def test_execute_mixed_fail_fast_cancels_remaining(
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
     start = time.monotonic()
-    results = await executor.execute_mixed({
-        "fail_llm": LLMTask(messages=_msg("fail")),
-        "slow_llm": LLMTask(messages=_msg("slow_llm")),
-        "slow_det": DeterministicTask(fn=slow_async_fn, args=(1.0,)),
-    })
+    results = await executor.execute_mixed(
+        {
+            "fail_llm": LLMTask(messages=_msg("fail")),
+            "slow_llm": LLMTask(messages=_msg("slow_llm")),
+            "slow_det": DeterministicTask(fn=slow_async_fn, args=(1.0,)),
+        }
+    )
     elapsed = time.monotonic() - start
 
     # Far below the 1.0s slow-task delay; CI-stable headroom.
@@ -180,21 +182,22 @@ async def test_execute_mixed_fail_fast_preserves_completed_results(
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
     start = time.monotonic()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("a")),
-        "b": LLMTask(messages=_msg("b")),
-        "c": LLMTask(messages=_msg("c")),
-        "d": LLMTask(messages=_msg("d")),
-        "e": LLMTask(messages=_msg("e")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("a")),
+            "b": LLMTask(messages=_msg("b")),
+            "c": LLMTask(messages=_msg("c")),
+            "d": LLMTask(messages=_msg("d")),
+            "e": LLMTask(messages=_msg("e")),
+        }
+    )
     elapsed = time.monotonic() - start
 
     # Should resolve well before the 1s slow task would finish.
     assert elapsed < 0.5, f"fail_fast should short-circuit, elapsed={elapsed}"
     for tag in ("a", "b", "c"):
         assert results[tag].success is True, (
-            f"task {tag!r} should have completed before failure: "
-            f"error={results[tag].error}"
+            f"task {tag!r} should have completed before failure: error={results[tag].error}"
         )
         assert isinstance(results[tag].value, LLMResponse)
     assert results["d"].success is False
@@ -215,11 +218,13 @@ async def test_execute_fail_fast_default_off(provider: EchoProvider) -> None:
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
     # No fail_fast kwarg, executor default False.
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("fail")),
-        "b": LLMTask(messages=_msg("ok1")),
-        "c": LLMTask(messages=_msg("ok2")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("fail")),
+            "b": LLMTask(messages=_msg("ok1")),
+            "c": LLMTask(messages=_msg("ok2")),
+        }
+    )
 
     assert results["a"].success is False
     assert isinstance(results["a"].error, RuntimeError)
@@ -287,12 +292,14 @@ async def test_fail_fast_with_retry_config(provider: EchoProvider) -> None:
     retry = RetryConfig(max_attempts=3, initial_delay=0.0)
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
-    results = await executor.execute({
-        "task0": LLMTask(messages=_msg("task0"), retry=retry),
-        "task1": LLMTask(messages=_msg("task1")),
-        "task2": LLMTask(messages=_msg("task2")),
-        "task3": LLMTask(messages=_msg("task3")),
-    })
+    results = await executor.execute(
+        {
+            "task0": LLMTask(messages=_msg("task0"), retry=retry),
+            "task1": LLMTask(messages=_msg("task1")),
+            "task2": LLMTask(messages=_msg("task2")),
+            "task3": LLMTask(messages=_msg("task3")),
+        }
+    )
 
     # task0 retried fully (3 attempts) before signalling failure.
     assert counter["task0"] == 3
@@ -312,22 +319,26 @@ async def test_fail_fast_no_failures_completes_normally(
     provider: EchoProvider,
 ) -> None:
     """Under fail_fast=True, all-success runs return all results successfully."""
-    provider.set_responses([
-        text_response("r1"),
-        text_response("r2"),
-        text_response("r3"),
-        text_response("r4"),
-        text_response("r5"),
-    ])
+    provider.set_responses(
+        [
+            text_response("r1"),
+            text_response("r2"),
+            text_response("r3"),
+            text_response("r4"),
+            text_response("r5"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("q1")),
-        "b": LLMTask(messages=_msg("q2")),
-        "c": LLMTask(messages=_msg("q3")),
-        "d": LLMTask(messages=_msg("q4")),
-        "e": LLMTask(messages=_msg("q5")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("q1")),
+            "b": LLMTask(messages=_msg("q2")),
+            "c": LLMTask(messages=_msg("q3")),
+            "d": LLMTask(messages=_msg("q4")),
+            "e": LLMTask(messages=_msg("q5")),
+        }
+    )
 
     assert len(results) == 5
     for tag in ("a", "b", "c", "d", "e"):

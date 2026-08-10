@@ -187,11 +187,7 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
     # ``register_sensitive_interior_key`` cannot mutate it mid-iteration.
     with _sensitive_keys_lock:
         extras = frozenset(_EXTRA_SENSITIVE_INTERIOR_KEYS)
-    return (
-        _DEFAULT_SENSITIVE_KEYS
-        | extras
-        | frozenset(name.lower() for name in sensitive_fields)
-    )
+    return _DEFAULT_SENSITIVE_KEYS | extras | frozenset(name.lower() for name in sensitive_fields)
 
 
 # Default (and minimum) safety bound on ``_redact_value`` recursion. Config
@@ -205,9 +201,7 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
 _DEFAULT_MAX_REDACT_DEPTH = 6
 
 
-def _redact_value(
-    value: Any, sensitive_keys: frozenset[str], depth: int, max_depth: int
-) -> Any:
+def _redact_value(value: Any, sensitive_keys: frozenset[str], depth: int, max_depth: int) -> Any:
     """Build a display copy of ``value`` with sensitive interior keys masked.
 
     Descends into ``Mapping`` and ``list``/``tuple`` values, replacing the
@@ -240,9 +234,7 @@ def _redact_value(
     # (e.g. a namedtuple) can't be faithfully reconstructed from an iterable,
     # so it is left verbatim rather than risk altering its repr.
     if type(value) is tuple:
-        return tuple(
-            _redact_value(v, sensitive_keys, depth + 1, max_depth) for v in value
-        )
+        return tuple(_redact_value(v, sensitive_keys, depth + 1, max_depth) for v in value)
     return value
 
 
@@ -297,11 +289,7 @@ def _type_is_coercible(declared: Any) -> bool:
     origin = get_origin(declared)
     if origin is None:
         return False
-    return any(
-        _type_is_coercible(arg)
-        for arg in get_args(declared)
-        if arg is not type(None)
-    )
+    return any(_type_is_coercible(arg) for arg in get_args(declared) if arg is not type(None))
 
 
 def _coerce_field(declared: Any, value: Any) -> Any:
@@ -352,12 +340,7 @@ def _coerce_field(declared: Any, value: Any) -> Any:
     if origin in _UNION_ORIGINS:
         if value is None:
             return value
-        coercible_arms = [
-            arg
-            for arg in args
-            if arg is not type(None)
-            and _type_is_coercible(arg)
-        ]
+        coercible_arms = [arg for arg in args if arg is not type(None) and _type_is_coercible(arg)]
         if len(coercible_arms) != 1:
             return value
         return _coerce_field(coercible_arms[0], value)
@@ -369,8 +352,7 @@ def _coerce_field(declared: Any, value: Any) -> Any:
         if origin is tuple and not (len(args) == 2 and args[1] is Ellipsis):
             # Fixed-length tuple: coerce positionally.
             coerced_items = [
-                _coerce_field(args[i], v) if i < len(args) else v
-                for i, v in enumerate(value)
+                _coerce_field(args[i], v) if i < len(args) else v for i, v in enumerate(value)
             ]
         else:
             elem_type = args[0]
@@ -786,9 +768,7 @@ class StructuredConfig:
             elif isinstance(value, (list, tuple)):
                 for element in value:
                     if isinstance(element, Mapping):
-                        self._validate_polymorphic_section(
-                            field_name, binding, element
-                        )
+                        self._validate_polymorphic_section(field_name, binding, element)
         # Recurse through statically-typed nested ``StructuredConfig``
         # fields (and their containers) so one ``parent.validate()`` covers
         # the whole config tree, not only the polymorphic raw-dict sections.
@@ -886,8 +866,7 @@ class _SkipValidation:
     def __new__(cls) -> Self:
         if cls._instance is not None:
             raise TypeError(
-                "Use the SKIP_VALIDATION singleton; do not instantiate "
-                "_SkipValidation directly."
+                "Use the SKIP_VALIDATION singleton; do not instantiate _SkipValidation directly."
             )
         instance = super().__new__(cls)
         cls._instance = instance
@@ -936,9 +915,7 @@ ConfigClassResolver = Callable[[Mapping[str, Any]], ConfigClassResolution]
 #: ``dataknobs-data`` registers ``"vector_store"``). The string binding plus a
 #: runtime registration is what keeps adoption coupling-free — a parent config
 #: names the registry without importing the child config type.
-config_registries: Registry[ConfigClassResolver] = Registry(
-    "config_section_resolvers"
-)
+config_registries: Registry[ConfigClassResolver] = Registry("config_section_resolvers")
 
 
 @functools.cache
@@ -976,9 +953,7 @@ def _hook_keyword_spec(func: Callable[..., Any]) -> tuple[bool, frozenset[str]]:
     return accepts_var_keyword, frozenset(names)
 
 
-def _components_for_hook(
-    func: Callable[..., Any], components: Mapping[str, Any]
-) -> dict[str, Any]:
+def _components_for_hook(func: Callable[..., Any], components: Mapping[str, Any]) -> dict[str, Any]:
     """Select the collaborators a hook can bind by keyword.
 
     Delivers every component when the hook declares ``**kwargs``; otherwise
@@ -1256,15 +1231,9 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         if not self.INTERNAL_COMPONENTS:
             return dict(self._components)
-        return {
-            k: v
-            for k, v in self._components.items()
-            if k not in self.INTERNAL_COMPONENTS
-        }
+        return {k: v for k, v in self._components.items() if k not in self.INTERNAL_COMPONENTS}
 
-    def set_component(
-        self, name: str, value: Any, *, allow_overwrite: bool = True
-    ) -> None:
+    def set_component(self, name: str, value: Any, *, allow_overwrite: bool = True) -> None:
         """Inject or replace an injected collaborator after construction.
 
         Construction-time injection (:meth:`from_config`,
@@ -1317,9 +1286,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
             )
         self._components[name] = value
 
-    def set_components(
-        self, values: Mapping[str, Any], *, allow_overwrite: bool = True
-    ) -> None:
+    def set_components(self, values: Mapping[str, Any], *, allow_overwrite: bool = True) -> None:
         """Inject or replace several injected collaborators at once.
 
         Bulk form of :meth:`set_component` — the shape a caller previously
@@ -1378,9 +1345,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         return cls.expected_components() - set(available)
 
-    def missing_components(
-        self, available: Iterable[str] | None = None
-    ) -> frozenset[str]:
+    def missing_components(self, available: Iterable[str] | None = None) -> frozenset[str]:
         """Expected collaborators not currently present (pure diff, no raise).
 
         The composable building block behind :meth:`require_components`.
@@ -1398,9 +1363,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         present = self._components if available is None else available
         return type(self).missing_from(present)
 
-    def require_components(
-        self, available: Iterable[str] | None = None
-    ) -> None:
+    def require_components(self, available: Iterable[str] | None = None) -> None:
         """Raise ``ConfigurationError`` if any required collaborator is missing.
 
         The blessed loud check — the reference impl of "raise if under-wired",
@@ -1448,9 +1411,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
             )
 
     @classmethod
-    def _coerce_config(
-        cls, config: Mapping[str, Any] | StructuredConfig
-    ) -> ConfigT:
+    def _coerce_config(cls, config: Mapping[str, Any] | StructuredConfig) -> ConfigT:
         """Coerce a dict-or-typed ``config`` argument to a typed ``ConfigT``.
 
         Shared by :meth:`from_config` and any subclass that overrides
@@ -1564,9 +1525,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
                 ) from exc
         obj = cls(cfg, _components=collaborators or None)
         obj._prebuilt = True
-        obj._adopt_components(
-            **_components_for_hook(cls._adopt_components, obj._components)
-        )
+        obj._adopt_components(**_components_for_hook(cls._adopt_components, obj._components))
         return obj
 
     def _setup(self) -> None:

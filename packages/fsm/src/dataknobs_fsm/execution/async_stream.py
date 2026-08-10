@@ -16,6 +16,7 @@ from dataknobs_fsm.streaming.core import StreamConfig
 @dataclass
 class AsyncStreamResult:
     """Result from async stream processing."""
+
     total_processed: int
     successful: int
     failed: int
@@ -28,7 +29,7 @@ class AsyncStreamResult:
 
 class AsyncStreamExecutor:
     """Asynchronous executor for stream processing.
-    
+
     This executor handles:
     - True async stream processing
     - Async iterators and generators
@@ -36,16 +37,16 @@ class AsyncStreamExecutor:
     - Real-time progress reporting
     - Memory-efficient chunk processing
     """
-    
+
     def __init__(
         self,
         fsm: FSM,
         stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
-        progress_callback: Union[Callable, None] = None
+        progress_callback: Union[Callable, None] = None,
     ):
         """Initialize async stream executor.
-        
+
         Args:
             fsm: FSM to execute.
             stream_config: Stream configuration.
@@ -63,66 +64,60 @@ class AsyncStreamExecutor:
         # engine returned un-awaited coroutines for them) and the engine
         # offloads its own blocking I/O instead of being parked in a thread.
         self.engine = AsyncExecutionEngine(fsm)
-        
+
         # Backpressure management
         self._pending_chunks = 0
         self._backpressure_threshold = self.stream_config.backpressure_threshold
         self._semaphore = asyncio.Semaphore(self.stream_config.parallelism)
-    
+
     async def execute_stream(
         self,
         source: Union[AsyncIterator[Any], List[Any]],
         sink: Union[Callable, None] = None,
         chunk_size: int = 100,
-        max_transitions: int = 1000
+        max_transitions: int = 1000,
     ) -> AsyncStreamResult:
         """Execute stream processing asynchronously.
-        
+
         Args:
             source: Async iterator or list of items.
             sink: Optional async sink function.
             chunk_size: Size of processing chunks.
             max_transitions: Maximum transitions per item.
-            
+
         Returns:
             Stream processing result.
         """
         progress = StreamProgress()
         start_time = time.time()
-        
+
         # Create base context
         # Use SINGLE mode since we process items individually
         context_template = ExecutionContext(
-            data_mode=ProcessingMode.SINGLE,
-            transaction_mode=TransactionMode.NONE
+            data_mode=ProcessingMode.SINGLE, transaction_mode=TransactionMode.NONE
         )
-        
+
         # Process stream
         try:
             # Convert source to async iterator if needed
-            if hasattr(source, '__aiter__'):
+            if hasattr(source, "__aiter__"):
                 stream = source
-            elif hasattr(source, '__iter__'):
+            elif hasattr(source, "__iter__"):
                 # Convert sync iterator to async
                 stream = self._sync_to_async_iter(source)
             else:
                 raise ValueError("Source must be an iterator or async iterator")
-            
+
             # Process in chunks
             chunk = []
             chunk_num = 0
-            
+
             async for item in stream:
                 # Handle both individual items and pre-chunked lists
                 if isinstance(item, list):
                     # Already chunked (e.g., from streaming file reader)
                     await self._process_chunk(
-                        item,
-                        chunk_num,
-                        context_template,
-                        max_transitions,
-                        progress,
-                        sink
+                        item, chunk_num, context_template, max_transitions, progress, sink
                     )
                     chunk_num += 1
                 else:
@@ -132,36 +127,29 @@ class AsyncStreamExecutor:
                     if len(chunk) >= chunk_size:
                         # Process chunk
                         await self._process_chunk(
-                            chunk,
-                            chunk_num,
-                            context_template,
-                            max_transitions,
-                            progress,
-                            sink
+                            chunk, chunk_num, context_template, max_transitions, progress, sink
                         )
                         chunk = []
                         chunk_num += 1
-                    
+
                     # Apply backpressure if needed
-                    if self.enable_backpressure and self._pending_chunks >= self._backpressure_threshold:
+                    if (
+                        self.enable_backpressure
+                        and self._pending_chunks >= self._backpressure_threshold
+                    ):
                         await asyncio.sleep(0.1)
-            
+
             # Process remaining items
             if chunk:
                 await self._process_chunk(
-                    chunk,
-                    chunk_num,
-                    context_template,
-                    max_transitions,
-                    progress,
-                    sink
+                    chunk, chunk_num, context_template, max_transitions, progress, sink
                 )
-        
+
         finally:
             # Clean up
-            if hasattr(source, 'aclose'):
+            if hasattr(source, "aclose"):
                 await source.aclose()
-        
+
         # Calculate final statistics
         duration = time.time() - start_time
         return AsyncStreamResult(
@@ -172,9 +160,9 @@ class AsyncStreamExecutor:
             throughput=progress.records_processed / duration if duration > 0 else 0,
             emitted=progress.records_emitted,
             excluded_by_state=dict(progress.excluded_by_state),
-            error_details=progress.errors[:10]  # First 10 errors
+            error_details=progress.errors[:10],  # First 10 errors
         )
-    
+
     async def _process_chunk(
         self,
         items: List[Any],
@@ -182,10 +170,10 @@ class AsyncStreamExecutor:
         context_template: ExecutionContext,
         max_transitions: int,
         progress: StreamProgress,
-        sink: Union[Callable, None]
+        sink: Union[Callable, None],
     ):
         """Process a chunk of items.
-        
+
         Args:
             items: Items to process.
             chunk_num: Chunk number.
@@ -195,24 +183,21 @@ class AsyncStreamExecutor:
             sink: Optional sink function.
         """
         self._pending_chunks += 1
-        
+
         try:
             # Create tasks for parallel processing
             tasks = []
             for i, item in enumerate(items):
                 task = asyncio.create_task(
                     self._process_item(
-                        item,
-                        progress.records_processed + i,
-                        context_template,
-                        max_transitions
+                        item, progress.records_processed + i, context_template, max_transitions
                     )
                 )
                 tasks.append(task)
-            
+
             # Wait for all tasks
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             # Process results
             successful_results = []
             for i, result in enumerate(results):
@@ -234,13 +219,13 @@ class AsyncStreamExecutor:
                         if emit:
                             successful_results.append(value)
                         else:
-                            key = final_state or ''
+                            key = final_state or ""
                             progress.excluded_by_state[key] = (
                                 progress.excluded_by_state.get(key, 0) + 1
                             )
                     else:
                         progress.errors.append((progress.records_processed + i, Exception(value)))
-            
+
             # Count records that contribute to the output (passed the
             # emit_output gate) so the caller can report records_written for
             # the streaming path, symmetric with batch/whole.
@@ -254,25 +239,21 @@ class AsyncStreamExecutor:
                     # Run sync sink in executor
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, sink, successful_results)
-            
+
             # Update progress
             progress.chunks_processed += 1
             progress.records_processed += len(items)
             progress.last_chunk_time = time.time()
-            
+
             # Fire progress callback
             if self.progress_callback:
                 await self._fire_progress_callback(progress)
-        
+
         finally:
             self._pending_chunks -= 1
-    
+
     async def _process_item(
-        self,
-        item: Any,
-        index: int,
-        context_template: ExecutionContext,
-        max_transitions: int
+        self, item: Any, index: int, context_template: ExecutionContext, max_transitions: int
     ) -> Tuple[bool, Any, bool, str | None]:
         """Process a single item.
 
@@ -322,47 +303,47 @@ class AsyncStreamExecutor:
             return True
         state_def = self.fsm.get_state(state_name)
         return getattr(state_def, "emit_output", True) if state_def else True
-    
+
     async def _sync_to_async_iter(self, sync_iter):
         """Convert sync iterator to async iterator.
-        
+
         Args:
             sync_iter: Synchronous iterator.
-            
+
         Yields:
             Items from the iterator.
         """
         for item in sync_iter:
             yield item
             await asyncio.sleep(0)  # Allow other tasks to run
-    
+
     def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
-        
+
         Returns:
             Initial state name or None.
         """
         # Get main network
-        main_network = getattr(self.fsm, 'main_network', None)
+        main_network = getattr(self.fsm, "main_network", None)
         if isinstance(main_network, str):
             if main_network in self.fsm.networks:
                 network = self.fsm.networks[main_network]
-                if hasattr(network, 'initial_states') and network.initial_states:
+                if hasattr(network, "initial_states") and network.initial_states:
                     return next(iter(network.initial_states))
-        elif main_network and hasattr(main_network, 'initial_states'):
+        elif main_network and hasattr(main_network, "initial_states"):
             if main_network.initial_states:
                 return next(iter(main_network.initial_states))
-        
+
         # Fallback: check all networks
         for network in self.fsm.networks.values():
-            if hasattr(network, 'initial_states') and network.initial_states:
+            if hasattr(network, "initial_states") and network.initial_states:
                 return next(iter(network.initial_states))
-        
+
         return None
-    
+
     async def _fire_progress_callback(self, progress: StreamProgress):
         """Fire progress callback.
-        
+
         Args:
             progress: Progress information.
         """

@@ -85,9 +85,7 @@ async def db(s3_db_config) -> AsyncIterator[AsyncS3Database]:
 @pytest.fixture
 async def vector_db(s3_db_config) -> AsyncIterator[AsyncS3Database]:
     """A connected vector-enabled AsyncS3Database (cosine), cleared on teardown."""
-    database = await _connect(
-        {**s3_db_config, "vector_enabled": True, "vector_metric": "cosine"}
-    )
+    database = await _connect({**s3_db_config, "vector_enabled": True, "vector_metric": "cosine"})
     yield database
     await database.clear()
     await database.close()
@@ -287,9 +285,7 @@ async def test_search_offset_limit_projection(db) -> None:
         await db.create(Record(data={"name": f"n{i}", "value": i}))
 
     # offset + limit over a stable sort.
-    page = await db.search(
-        Query().sort("value", SortOrder.ASC).offset(1).limit(2)
-    )
+    page = await db.search(Query().sort("value", SortOrder.ASC).offset(1).limit(2))
     assert [r.get_field("value").value for r in page] == [1, 2]
 
     # limit=0 → empty (Python-slice semantics, not "no limit").
@@ -379,9 +375,7 @@ async def test_concurrent_creates_and_reads(db) -> None:
 
     records = await asyncio.gather(*(db.read(rid) for rid in ids))
     assert all(r is not None for r in records)
-    assert {r.get_field("name").value for r in records} == {
-        f"c{i}" for i in range(10)
-    }
+    assert {r.get_field("name").value for r in records} == {f"c{i}" for i in range(10)}
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +430,5 @@ async def test_vector_search_metric_selection(vector_db) -> None:
     cosine = await vector_db.vector_search([1.0, 0.0], k=2)
     assert [r.record.get_field("name").value for r in cosine] == ["unit", "long"]
 
-    dot = await vector_db.vector_search(
-        [1.0, 0.0], k=2, metric=DistanceMetric.DOT_PRODUCT
-    )
+    dot = await vector_db.vector_search([1.0, 0.0], k=2, metric=DistanceMetric.DOT_PRODUCT)
     assert [r.record.get_field("name").value for r in dot] == ["long", "unit"]

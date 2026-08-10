@@ -49,9 +49,7 @@ class TestDynaBotEnvironmentAware:
         }
 
     @pytest.mark.asyncio
-    async def test_from_environment_aware_config_with_dict(
-        self, portable_config, env_config
-    ):
+    async def test_from_environment_aware_config_with_dict(self, portable_config, env_config):
         """Test creating DynaBot from dict with $resource references."""
         bot = await DynaBot.from_environment_aware_config(
             portable_config,
@@ -80,9 +78,7 @@ class TestDynaBotEnvironmentAware:
         assert bot.default_temperature == 0.5
 
     @pytest.mark.asyncio
-    async def test_from_environment_aware_config_with_custom_config_key(
-        self, env_config
-    ):
+    async def test_from_environment_aware_config_with_custom_config_key(self, env_config):
         """Test using custom config_key."""
         config = {
             "my_bot_config": {
@@ -106,9 +102,7 @@ class TestDynaBotEnvironmentAware:
         assert bot is not None
 
     @pytest.mark.asyncio
-    async def test_from_environment_aware_config_with_none_config_key(
-        self, env_config
-    ):
+    async def test_from_environment_aware_config_with_none_config_key(self, env_config):
         """Test with config_key=None (use root config)."""
         # Config without nesting
         config = {
@@ -279,9 +273,7 @@ class TestBotManagerEnvironmentAware:
         assert manager.environment is None
 
     @pytest.mark.asyncio
-    async def test_get_or_create_with_environment(
-        self, env_config, portable_config
-    ):
+    async def test_get_or_create_with_environment(self, env_config, portable_config):
         """Test creating bot with environment resolution."""
         manager = BotManager(environment=env_config)
 
@@ -304,9 +296,7 @@ class TestBotManagerEnvironmentAware:
         assert bot is not None
 
     @pytest.mark.asyncio
-    async def test_get_or_create_explicit_use_environment_true(
-        self, env_config, portable_config
-    ):
+    async def test_get_or_create_explicit_use_environment_true(self, env_config, portable_config):
         """Test explicit use_environment=True."""
         manager = BotManager(environment=env_config)
 
@@ -319,9 +309,7 @@ class TestBotManagerEnvironmentAware:
         assert bot is not None
 
     @pytest.mark.asyncio
-    async def test_get_or_create_explicit_use_environment_false(
-        self, env_config, resolved_config
-    ):
+    async def test_get_or_create_explicit_use_environment_false(self, env_config, resolved_config):
         """Test explicit use_environment=False skips resolution."""
         manager = BotManager(environment=env_config)
 
@@ -442,9 +430,7 @@ class TestEnvironmentSwitching:
         }
 
     @pytest.mark.asyncio
-    async def test_same_config_different_environments(
-        self, portable_config, dev_env, prod_env
-    ):
+    async def test_same_config_different_environments(self, portable_config, dev_env, prod_env):
         """Test same portable config resolves differently per environment."""
         env_aware = EnvironmentAwareConfig(
             config=portable_config,
@@ -465,9 +451,7 @@ class TestEnvironmentSwitching:
         assert dev_resolved_again["llm"]["model"] == "dev-model"
 
     @pytest.mark.asyncio
-    async def test_bot_creation_per_environment(
-        self, portable_config, dev_env, prod_env
-    ):
+    async def test_bot_creation_per_environment(self, portable_config, dev_env, prod_env):
         """Test creating bots with different environments."""
         # Create bot for dev
         dev_bot = await DynaBot.from_environment_aware_config(
@@ -519,9 +503,7 @@ class TestResolutionThroughAnAlreadyExpandedEnvironment:
             }
         )
 
-    def test_a_resource_value_reaches_the_factory_expanded_exactly_once(
-        self, env
-    ):
+    def test_a_resource_value_reaches_the_factory_expanded_exactly_once(self, env):
         assert env.substituted is True
 
         config = EnvironmentAwareConfig(
@@ -538,14 +520,9 @@ class TestResolutionThroughAnAlreadyExpandedEnvironment:
 
         resolved = config.resolve_for_build("bot")
 
-        assert (
-            resolved["conversation_storage"]["connection_string"]
-            == "postgres://u:p${x}ss@h/db"
-        )
+        assert resolved["conversation_storage"]["connection_string"] == "postgres://u:p${x}ss@h/db"
 
-    def test_a_nested_reference_carried_by_the_environment_too(
-        self, monkeypatch
-    ):
+    def test_a_nested_reference_carried_by_the_environment_too(self, monkeypatch):
         """A `$resource` block inside a resource the environment supplies.
 
         Built with the nesting in place rather than written in afterwards:
@@ -580,7 +557,4 @@ class TestResolutionThroughAnAlreadyExpandedEnvironment:
 
         resolved = config.resolve_for_build("bot")
 
-        assert (
-            resolved["db"]["replica"]["connection_string"]
-            == "postgres://u:p${x}ss@h/db"
-        )
+        assert resolved["db"]["replica"]["connection_string"] == "postgres://u:p${x}ss@h/db"

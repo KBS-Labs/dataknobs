@@ -10,10 +10,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
 from types import SimpleNamespace
 
-from dataknobs_fsm.core.data_wrapper import (
-    ensure_dict,
-    wrap_for_lambda
-)
+from dataknobs_fsm.core.data_wrapper import ensure_dict, wrap_for_lambda
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
@@ -24,7 +21,7 @@ from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelector,
     TransitionSelectionMode,
-    TraversalStrategy
+    TraversalStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,10 +42,10 @@ class BaseExecutionEngine(ABC):
     def __init__(
         self,
         fsm: FSM,
-        strategy: 'TraversalStrategy',
+        strategy: "TraversalStrategy",
         selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID,
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
     ):
         """Initialize base execution engine.
 
@@ -67,8 +64,7 @@ class BaseExecutionEngine(ABC):
 
         # Initialize transition selector
         self.transition_selector = TransitionSelector(
-            mode=selection_mode,
-            default_strategy=strategy
+            mode=selection_mode, default_strategy=strategy
         )
 
         # Execution statistics
@@ -87,28 +83,28 @@ class BaseExecutionEngine(ABC):
             Name of initial state or None.
         """
         # Try to get main_network attribute
-        main_network = getattr(self.fsm, 'main_network', None)
+        main_network = getattr(self.fsm, "main_network", None)
 
         # Handle string reference to network
         if isinstance(main_network, str):
             if main_network in self.fsm.networks:
                 network = self.fsm.networks[main_network]
-                if hasattr(network, 'initial_states') and network.initial_states:
+                if hasattr(network, "initial_states") and network.initial_states:
                     return next(iter(network.initial_states))
         # Handle direct network object
-        elif main_network and hasattr(main_network, 'initial_states'):
+        elif main_network and hasattr(main_network, "initial_states"):
             if main_network.initial_states:
                 return next(iter(main_network.initial_states))
 
         # Fallback to fsm.name for compatibility
-        if hasattr(self.fsm, 'name') and self.fsm.name in self.fsm.networks:
+        if hasattr(self.fsm, "name") and self.fsm.name in self.fsm.networks:
             network = self.fsm.networks[self.fsm.name]
-            if hasattr(network, 'initial_states') and network.initial_states:
+            if hasattr(network, "initial_states") and network.initial_states:
                 return next(iter(network.initial_states))
 
         # Last resort: check all networks for any initial state
         for network in self.fsm.networks.values():
-            if hasattr(network, 'initial_states') and network.initial_states:
+            if hasattr(network, "initial_states") and network.initial_states:
                 return next(iter(network.initial_states))
 
         return None
@@ -127,12 +123,12 @@ class BaseExecutionEngine(ABC):
 
         # Check all networks for this state
         for network in self.fsm.networks.values():
-            if hasattr(network, 'final_states') and state_name in network.final_states:
+            if hasattr(network, "final_states") and state_name in network.final_states:
                 return True
             # Also check states directly
-            if hasattr(network, 'states') and state_name in network.states:
+            if hasattr(network, "states") and state_name in network.states:
                 state = network.states[state_name]
-                if hasattr(state, 'type') and state.type == StateType.END:
+                if hasattr(state, "type") and state.type == StateType.END:
                     return True
 
         return False
@@ -147,15 +143,11 @@ class BaseExecutionEngine(ABC):
             Current network or None.
         """
         return NetworkSelector.get_current_network(
-            self.fsm,
-            context,
-            enable_intelligent_selection=True
+            self.fsm, context, enable_intelligent_selection=True
         )
 
     def prepare_state_transform(
-        self,
-        state_def: Any,
-        context: ExecutionContext
+        self, state_def: Any, context: ExecutionContext
     ) -> Tuple[List[Any], SimpleNamespace]:
         """Prepare state transform execution (common logic).
 
@@ -169,10 +161,10 @@ class BaseExecutionEngine(ABC):
         transform_functions = []
 
         # Check for transform functions on the state
-        if hasattr(state_def, 'transform_functions') and state_def.transform_functions:
+        if hasattr(state_def, "transform_functions") and state_def.transform_functions:
             transform_functions = state_def.transform_functions
         # Also check for single transform function
-        elif hasattr(state_def, 'transform_function') and state_def.transform_function:
+        elif hasattr(state_def, "transform_function") and state_def.transform_function:
             transform_functions = [state_def.transform_function]
 
         # Create a wrapper for transforms that expect state.data access pattern
@@ -182,10 +174,7 @@ class BaseExecutionEngine(ABC):
         return transform_functions, state_obj
 
     def process_transform_result(
-        self,
-        result: Any,
-        context: ExecutionContext,
-        state_name: str
+        self, result: Any, context: ExecutionContext, state_name: str
     ) -> None:
         """Process transform result (common logic).
 
@@ -197,26 +186,22 @@ class BaseExecutionEngine(ABC):
         if result is not None:
             # Handle ExecutionResult objects from unified function manager
             from dataknobs_fsm.functions.base import ExecutionResult
+
             if isinstance(result, ExecutionResult):
                 if result.success:
-                        # Ensure we store plain dict data
+                    # Ensure we store plain dict data
                     context.data = ensure_dict(result.data)
                 else:
                     # Transform failed - handle the error
                     self.handle_transform_error(
-                        Exception(result.error or "Transform failed"),
-                        context,
-                        state_name
+                        Exception(result.error or "Transform failed"), context, state_name
                     )
             else:
                 # Ensure we always store plain dict data, not wrappers
                 context.data = ensure_dict(result)
 
     def handle_transform_error(
-        self,
-        error: Exception,
-        context: ExecutionContext,
-        state_name: str
+        self, error: Exception, context: ExecutionContext, state_name: str
     ) -> None:
         """Handle transform error (common logic).
 
@@ -230,7 +215,7 @@ class BaseExecutionEngine(ABC):
             context: Execution context.
             state_name: Name of current state.
         """
-        if not hasattr(context, 'failed_states'):
+        if not hasattr(context, "failed_states"):
             context.failed_states = set()
         context.failed_states.add(state_name)
 
@@ -263,7 +248,7 @@ class BaseExecutionEngine(ABC):
         Returns:
             True if any state has recorded a failure for this record.
         """
-        return bool(getattr(context, 'failed_states', None))
+        return bool(getattr(context, "failed_states", None))
 
     def failed_states_sorted(self, context: ExecutionContext) -> List[str]:
         """Sorted list of states whose transform failed for this record.
@@ -278,7 +263,7 @@ class BaseExecutionEngine(ABC):
         Returns:
             Sorted list of failed state names (empty if none).
         """
-        return sorted(getattr(context, 'failed_states', None) or set())
+        return sorted(getattr(context, "failed_states", None) or set())
 
     def should_skip_state_transforms(
         self,
@@ -310,12 +295,9 @@ class BaseExecutionEngine(ABC):
         """
         if not self.record_has_failed(context):
             return False
-        return not getattr(state_def, 'run_on_failure', False)
+        return not getattr(state_def, "run_on_failure", False)
 
-    def finalize_single_result(
-        self,
-        context: ExecutionContext
-    ) -> Tuple[bool, Any]:
+    def finalize_single_result(self, context: ExecutionContext) -> Tuple[bool, Any]:
         """Build the ``(success, value)`` result for a record at a final state.
 
         A record reaches a final state even when one of its state transforms
@@ -336,16 +318,10 @@ class BaseExecutionEngine(ABC):
         """
         failed = self.failed_states_sorted(context)
         if failed:
-            return False, (
-                "State transform failed in: " + ", ".join(failed)
-            )
+            return False, ("State transform failed in: " + ", ".join(failed))
         return True, context.data
 
-    def apply_data_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str]
-    ) -> Dict[str, Any]:
+    def apply_data_mapping(self, data: Any, mapping: Dict[str, str]) -> Dict[str, Any]:
         """Map a parent context's data into a child (sub-network) shape.
 
         Shared by both engines' push-arc handlers so parent→child field
@@ -361,7 +337,7 @@ class BaseExecutionEngine(ABC):
             when it is not already a dict).
         """
         if not mapping:
-            return data if isinstance(data, dict) else {'value': data}
+            return data if isinstance(data, dict) else {"value": data}
 
         mapped = {}
         source_data = data if isinstance(data, dict) else {}
@@ -375,10 +351,7 @@ class BaseExecutionEngine(ABC):
         return mapped
 
     def apply_result_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str],
-        parent_data: Dict[str, Any]
+        self, data: Any, mapping: Dict[str, str], parent_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Map a child (sub-network) result back onto the parent's data.
 
@@ -447,8 +420,8 @@ class BaseExecutionEngine(ABC):
             ``(network_name, explicit_initial_state_or_None)``.
         """
         target = push_arc.target_network
-        if ':' in target:
-            network_name, initial_state = target.split(':', 1)
+        if ":" in target:
+            network_name, initial_state = target.split(":", 1)
             return network_name, initial_state.strip()
         return target, None
 
@@ -499,9 +472,7 @@ class BaseExecutionEngine(ABC):
         return data
 
     @staticmethod
-    def _state_resource_owner_for_name(
-        context: ExecutionContext, state_name: str
-    ) -> str:
+    def _state_resource_owner_for_name(context: ExecutionContext, state_name: str) -> str:
         """Owner key for a state's resource acquisitions, keyed by state *name*.
 
         The key is fully determined by the state name + execution id, so the
@@ -510,7 +481,7 @@ class BaseExecutionEngine(ABC):
         sub-network the default ``get_state`` lookup would not find). Shared so
         a state's acquire and its later release cannot drift onto two formats.
         """
-        execution_id = getattr(context, 'execution_id', 'unknown')
+        execution_id = getattr(context, "execution_id", "unknown")
         return f"state_{state_name}_{execution_id}"
 
     def begin_subflow(
@@ -528,9 +499,7 @@ class BaseExecutionEngine(ABC):
         overwriting them, so :meth:`rollback_push` (failed entry) and the pop
         (result mapping + resource restore) can undo/consume them precisely.
         """
-        prev_parent_state_resources = getattr(
-            context, 'parent_state_resources', {}
-        )
+        prev_parent_state_resources = getattr(context, "parent_state_resources", {})
         # The pushing state's own resources are inherited by the sub-network
         # while it runs (so the push must not release them); they are released
         # for the parent level on pop, when the parent resumes at return_state.
@@ -538,7 +507,7 @@ class BaseExecutionEngine(ABC):
         # the pop can release exactly that state's acquisitions.
         pushing_state_owner = (
             self._state_resource_owner_for_name(context, context.current_state)
-            if getattr(context, 'current_state_owned_resources', None)
+            if getattr(context, "current_state_owned_resources", None)
             else None
         )
         parent_data = context.data
@@ -600,7 +569,7 @@ class BaseExecutionEngine(ABC):
         """
         if frame is not None:
             context.parent_state_resources = frame.prev_parent_state_resources or {}
-        elif hasattr(context, 'parent_state_resources'):
+        elif hasattr(context, "parent_state_resources"):
             context.parent_state_resources = {}
 
     def apply_subflow_result_mapping(
@@ -618,18 +587,14 @@ class BaseExecutionEngine(ABC):
         if frame is None:
             return
         push_arc = frame.push_arc
-        if push_arc is not None and getattr(push_arc, 'result_mapping', None):
+        if push_arc is not None and getattr(push_arc, "result_mapping", None):
             context.data = self.apply_result_mapping(
                 context.data,
                 push_arc.result_mapping,
                 frame.parent_data,
             )
 
-    def evaluate_arc_condition_common(
-        self,
-        arc: ArcDefinition,
-        context: ExecutionContext
-    ) -> bool:
+    def evaluate_arc_condition_common(self, arc: ArcDefinition, context: ExecutionContext) -> bool:
         """Evaluate arc condition (common logic).
 
         Args:
@@ -640,7 +605,7 @@ class BaseExecutionEngine(ABC):
             True if arc condition is met.
         """
         # If arc has no condition, it's always valid
-        if not hasattr(arc, 'condition') or not arc.condition:
+        if not hasattr(arc, "condition") or not arc.condition:
             return True
 
         # Evaluate the condition function
@@ -649,8 +614,8 @@ class BaseExecutionEngine(ABC):
             func_context = FunctionContext(
                 state_name=context.current_state or "",
                 function_name="arc_condition",
-                metadata={'arc': arc.name if hasattr(arc, 'name') else None},
-                resources={}
+                metadata={"arc": arc.name if hasattr(arc, "name") else None},
+                resources={},
             )
 
             # Try different function signatures
@@ -671,19 +636,25 @@ class BaseExecutionEngine(ABC):
             Dictionary of execution statistics.
         """
         return {
-            'execution_count': self._execution_count,
-            'transition_count': self._transition_count,
-            'error_count': self._error_count,
-            'total_execution_time': self._total_execution_time,
-            'average_execution_time': (
+            "execution_count": self._execution_count,
+            "transition_count": self._transition_count,
+            "error_count": self._error_count,
+            "total_execution_time": self._total_execution_time,
+            "average_execution_time": (
                 self._total_execution_time / self._execution_count
-                if self._execution_count > 0 else 0
-            )
+                if self._execution_count > 0
+                else 0
+            ),
         }
 
     @abstractmethod
-    def execute(self, context: ExecutionContext, data: Any = None,
-                max_transitions: int = 1000, arc_name: str | None = None) -> Tuple[bool, Any]:
+    def execute(
+        self,
+        context: ExecutionContext,
+        data: Any = None,
+        max_transitions: int = 1000,
+        arc_name: str | None = None,
+    ) -> Tuple[bool, Any]:
         """Execute the FSM with given context.
 
         This method must be implemented by sync and async engines.
@@ -700,8 +671,9 @@ class BaseExecutionEngine(ABC):
         pass
 
     @abstractmethod
-    def _execute_single(self, context: ExecutionContext,
-                       max_transitions: int, arc_name: str | None = None) -> Any:
+    def _execute_single(
+        self, context: ExecutionContext, max_transitions: int, arc_name: str | None = None
+    ) -> Any:
         """Execute single mode processing.
 
         Must be implemented by subclasses.

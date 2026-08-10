@@ -141,9 +141,7 @@ class BufferedTransaction:
         for record in records:
             self._stage(("create", record))
 
-    async def upsert(
-        self, id_or_record: str | Record, record: Record | None = None
-    ) -> None:
+    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> None:
         """Stage an upsert (same calling convention as ``AsyncDatabase.upsert``)."""
         self._stage(("upsert", (id_or_record, record)))
 
@@ -235,9 +233,7 @@ class BufferedTransaction:
                 if kind == "create":
                     affected += len(await self._db.create_batch(payload, _tx=tx))
                 elif kind == "delete":
-                    affected += sum(
-                        1 for ok in await self._db.delete_batch(payload, _tx=tx) if ok
-                    )
+                    affected += sum(1 for ok in await self._db.delete_batch(payload, _tx=tx) if ok)
                 else:  # "upsert"
                     affected += len(await self._db.upsert_batch(payload, _tx=tx))
             return affected

@@ -34,7 +34,7 @@ class FSMData(MutableMapping):
             data: Initial data dictionary. Defaults to empty dict.
         """
         # Store data in __dict__ to avoid recursion with __getattr__
-        object.__setattr__(self, '_data', data if data is not None else {})
+        object.__setattr__(self, "_data", data if data is not None else {})
 
     # Dict-style access methods
     def __getitem__(self, key: str) -> Any:
@@ -64,17 +64,19 @@ class FSMData(MutableMapping):
     # Attribute-style access methods
     def __getattr__(self, name: str) -> Any:
         """Get attribute using dot notation."""
-        if name.startswith('_'):
+        if name.startswith("_"):
             # Don't intercept private attributes
             raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
         try:
             return self._data[name]
         except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'") from None
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from None
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set attribute using dot notation."""
-        if name.startswith('_'):
+        if name.startswith("_"):
             # Store private attributes normally
             object.__setattr__(self, name, value)
         else:
@@ -82,13 +84,15 @@ class FSMData(MutableMapping):
 
     def __delattr__(self, name: str) -> None:
         """Delete attribute using dot notation."""
-        if name.startswith('_'):
+        if name.startswith("_"):
             object.__delattr__(self, name)
         else:
             try:
                 del self._data[name]
             except KeyError:
-                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'") from None
+                raise AttributeError(
+                    f"'{type(self).__name__}' object has no attribute '{name}'"
+                ) from None
 
     # Dict-like methods
     def get(self, key: str, default: Any = None) -> Any:
@@ -107,7 +111,7 @@ class FSMData(MutableMapping):
         """Get items view."""
         return self._data.items()
 
-    def update(self, other: Union[Dict[str, Any], 'FSMData'] = None, **kwargs) -> None:
+    def update(self, other: Union[Dict[str, Any], "FSMData"] = None, **kwargs) -> None:
         """Update data from dict or another FSMData."""
         if other is not None:
             if isinstance(other, FSMData):
@@ -120,11 +124,11 @@ class FSMData(MutableMapping):
         """Clear all data."""
         self._data.clear()
 
-    def copy(self) -> 'FSMData':
+    def copy(self) -> "FSMData":
         """Create a shallow copy."""
         return FSMData(self._data.copy())
 
-    def deepcopy(self) -> 'FSMData':
+    def deepcopy(self) -> "FSMData":
         """Create a deep copy."""
         return FSMData(copy.deepcopy(self._data))
 
@@ -154,7 +158,7 @@ class FSMData(MutableMapping):
         return self._data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'FSMData':
+    def from_dict(cls, data: Dict[str, Any]) -> "FSMData":
         """Create from dictionary.
 
         Args:
@@ -251,17 +255,17 @@ def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper, Any]) -> 
         # invariant), so it is already in the target shape — calling .to_dict()
         # on it would raise AttributeError.
         return data.data
-    elif hasattr(data, '_data'):
+    elif hasattr(data, "_data"):
         # Handle other wrapper types
         return data._data
-    elif hasattr(data, 'data'):
+    elif hasattr(data, "data"):
         # Handle objects with data attribute
         inner = data.data
         if isinstance(inner, dict):
             return inner
         elif isinstance(inner, FSMData):
             return inner.to_dict()
-        elif hasattr(inner, '_data'):
+        elif hasattr(inner, "_data"):
             return inner._data
     # Last resort - try to convert
     return dict(data) if data else {}

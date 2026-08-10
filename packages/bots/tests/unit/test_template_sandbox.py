@@ -35,30 +35,26 @@ class TestNormalRendering:
 
     def test_dict_get(self) -> None:
         env = create_template_env()
-        result = env.from_string(
-            "{{ data.get('goal', 'default') }}"
-        ).render(data={"goal": "fitness"})
+        result = env.from_string("{{ data.get('goal', 'default') }}").render(
+            data={"goal": "fitness"}
+        )
         assert result == "fitness"
 
     def test_dict_get_fallback(self) -> None:
         env = create_template_env()
-        result = env.from_string(
-            "{{ data.get('missing', 'fallback') }}"
-        ).render(data={})
+        result = env.from_string("{{ data.get('missing', 'fallback') }}").render(data={})
         assert result == "fallback"
 
     def test_loop(self) -> None:
         env = create_template_env()
-        result = env.from_string(
-            "{% for item in items %}{{ item }} {% endfor %}"
-        ).render(items=["a", "b", "c"])
+        result = env.from_string("{% for item in items %}{{ item }} {% endfor %}").render(
+            items=["a", "b", "c"]
+        )
         assert result == "a b c "
 
     def test_conditional(self) -> None:
         env = create_template_env()
-        result = env.from_string(
-            "{% if active %}yes{% else %}no{% endif %}"
-        ).render(active=True)
+        result = env.from_string("{% if active %}yes{% else %}no{% endif %}").render(active=True)
         assert result == "yes"
 
     def test_filter(self) -> None:
@@ -89,23 +85,17 @@ class TestSSTIBlocked:
         """The canonical SSTI RCE payload is blocked."""
         env = create_template_env()
         with pytest.raises(SecurityError):
-            env.from_string(
-                "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-            ).render()
+            env.from_string("{{ ''.__class__.__mro__[1].__subclasses__() }}").render()
 
     def test_globals_access_via_cycler(self) -> None:
         env = create_template_env()
         with pytest.raises(SecurityError):
-            env.from_string(
-                "{{ cycler.__init__.__globals__ }}"
-            ).render()
+            env.from_string("{{ cycler.__init__.__globals__ }}").render()
 
     def test_globals_access_via_string(self) -> None:
         env = create_template_env()
         with pytest.raises(SecurityError):
-            env.from_string(
-                "{{ ''.__init__.__globals__ }}"
-            ).render()
+            env.from_string("{{ ''.__init__.__globals__ }}").render()
 
     def test_ssti_in_strict_mode(self) -> None:
         env = create_template_env(strict=True)

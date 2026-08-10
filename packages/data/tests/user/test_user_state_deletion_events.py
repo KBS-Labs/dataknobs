@@ -213,9 +213,7 @@ def test_prune_fires_event_sync() -> None:
 
 async def test_prune_on_query_delete_is_observable_async() -> None:
     clock = _Clock(_START)
-    store = await AsyncUserStateStore.from_config(
-        _config(prune_on_query=True), now=clock
-    )
+    store = await AsyncUserStateStore.from_config(_config(prune_on_query=True), now=clock)
     try:
         captured = _capture(store)
         await store.add_record("u1", "activity", {"event": "old"})
@@ -319,9 +317,7 @@ async def test_delete_events_are_metadata_only_with_tenant() -> None:
             ]
         )
     )
-    store = AsyncUserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
+    store = AsyncUserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
     try:
         captured = _capture(store)
         await store.add_record("u1", "profile", {"ssn": "secret"})
@@ -357,9 +353,7 @@ def test_delete_events_are_metadata_only_with_tenant_sync() -> None:
             ]
         )
     )
-    store = UserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
+    store = UserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
     try:
         captured = _capture(store)
         store.add_record("u1", "profile", {"ssn": "secret"})

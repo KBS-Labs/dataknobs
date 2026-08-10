@@ -132,9 +132,7 @@ async def test_async_error_propagates_without_on_error() -> None:
 
 async def test_async_error_isolated_with_on_error() -> None:
     captured: list[Exception] = []
-    await close_if_owned(
-        RaisingAsyncClosable(), True, on_error=captured.append
-    )
+    await close_if_owned(RaisingAsyncClosable(), True, on_error=captured.append)
     assert len(captured) == 1
     assert isinstance(captured[0], RuntimeError)
 
@@ -162,9 +160,7 @@ async def test_async_base_exception_always_propagates(
     # BaseException subclasses (cancellation, interpreter shutdown) are
     # never swallowed, even with on_error supplied.
     with pytest.raises(base_exc):
-        await close_if_owned(
-            RaisingBaseClosable(), True, on_error=captured.append
-        )
+        await close_if_owned(RaisingBaseClosable(), True, on_error=captured.append)
     assert captured == []
 
 
@@ -217,9 +213,7 @@ def test_sync_base_exception_always_propagates(
     captured: list[Exception] = []
     # BaseException subclasses are never swallowed, even with on_error.
     with pytest.raises(base_exc):
-        close_if_owned_sync(
-            RaisingBaseSyncClosable(), True, on_error=captured.append
-        )
+        close_if_owned_sync(RaisingBaseSyncClosable(), True, on_error=captured.append)
     assert captured == []
 
 
@@ -296,9 +290,7 @@ async def test_aclose_base_exception_always_propagates(
     # here under shutdown is the case most likely to be dropped when
     # mirroring a sibling by hand, and the one that matters most.
     with pytest.raises(base_exc):
-        await aclose_if_owned(
-            RaisingBaseAclosable(), True, on_error=captured.append
-        )
+        await aclose_if_owned(RaisingBaseAclosable(), True, on_error=captured.append)
     assert captured == []
 
 
@@ -367,9 +359,9 @@ class TestUnclosableOwnedResourceIsAudible:
             await aclose_if_owned(resource, True)
 
         assert not resource.closed, "aclose_if_owned must not fall back to close()"
-        assert any(
-            "aclose" in record.getMessage() for record in caplog.records
-        ), "the skipped close left no diagnostic at any level"
+        assert any("aclose" in record.getMessage() for record in caplog.records), (
+            "the skipped close left no diagnostic at any level"
+        )
 
     async def test_close_logs_when_the_owned_resource_has_no_close(
         self, caplog: pytest.LogCaptureFixture
@@ -402,9 +394,7 @@ class TestUnclosableOwnedResourceIsAudible:
 
         assert caplog.records == []
 
-    async def test_none_is_not_reported(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_none_is_not_reported(self, caplog: pytest.LogCaptureFixture) -> None:
         """A collaborator that was never built is absence, not misuse."""
         with caplog.at_level(logging.DEBUG, logger="dataknobs_common.lifecycle"):
             await close_if_owned(None, True)

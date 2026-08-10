@@ -68,58 +68,69 @@ def sample_records():
     from dataknobs_data import Record
 
     return [
-        Record({
-            "name": "Alice Johnson",
-            "age": 28,
-            "email": "alice@example.com",
-            "department": "Engineering",
-            "salary": 95000.50,
-            "active": True,
-            "joined_date": "2021-03-15",
-            "skills": ["Python", "PostgreSQL", "Docker"],
-        }, metadata={"source": "test", "version": 1}),
-
-        Record({
-            "name": "Bob Smith",
-            "age": 35,
-            "email": "bob@example.com",
-            "department": "Marketing",
-            "salary": 82000.00,
-            "active": True,
-            "joined_date": "2019-07-22",
-            "skills": ["SEO", "Content Marketing", "Analytics"],
-        }, metadata={"source": "test", "version": 1}),
-
-        Record({
-            "name": "Charlie Brown",
-            "age": 42,
-            "email": "charlie@example.com",
-            "department": "Engineering",
-            "salary": 120000.75,
-            "active": False,
-            "joined_date": "2018-01-10",
-            "skills": ["Java", "Kubernetes", "AWS"],
-        }, metadata={"source": "test", "version": 2}),
-
-        Record({
-            "name": "Diana Prince",
-            "age": 31,
-            "email": "diana@example.com",
-            "department": "HR",
-            "salary": 78000.00,
-            "active": True,
-            "joined_date": "2020-09-05",
-            "skills": ["Recruitment", "Training", "Compliance"],
-        }, metadata={"source": "test", "version": 1}),
-
-        Record({
-            "name": "Eve Anderson",
-            "age": 29,
-            "email": "eve@example.com",
-            "department": "Engineering",
-            "salary": 105000.25,
-            "active": True,
-            "joined_date": "2022-02-28",
-            "skills": ["React", "Node.js", "MongoDB"],
-        }, metadata={"source": "test", "version": 1}),
+        Record(
+            {
+                "name": "Alice Johnson",
+                "age": 28,
+                "email": "alice@example.com",
+                "department": "Engineering",
+                "salary": 95000.50,
+                "active": True,
+                "joined_date": "2021-03-15",
+                "skills": ["Python", "PostgreSQL", "Docker"],
+            },
+            metadata={"source": "test", "version": 1},
+        ),
+        Record(
+            {
+                "name": "Bob Smith",
+                "age": 35,
+                "email": "bob@example.com",
+                "department": "Marketing",
+                "salary": 82000.00,
+                "active": True,
+                "joined_date": "2019-07-22",
+                "skills": ["SEO", "Content Marketing", "Analytics"],
+            },
+            metadata={"source": "test", "version": 1},
+        ),
+        Record(
+            {
+                "name": "Charlie Brown",
+                "age": 42,
+                "email": "charlie@example.com",
+                "department": "Engineering",
+                "salary": 120000.75,
+                "active": False,
+                "joined_date": "2018-01-10",
+                "skills": ["Java", "Kubernetes", "AWS"],
+            },
+            metadata={"source": "test", "version": 2},
+        ),
+        Record(
+            {
+                "name": "Diana Prince",
+                "age": 31,
+                "email": "diana@example.com",
+                "department": "HR",
+                "salary": 78000.00,
+                "active": True,
+                "joined_date": "2020-09-05",
+                "skills": ["Recruitment", "Training", "Compliance"],
+            },
+            metadata={"source": "test", "version": 1},
+        ),
+        Record(
+            {
+                "name": "Eve Anderson",
+                "age": 29,
+                "email": "eve@example.com",
+                "department": "Engineering",
+                "salary": 105000.25,
+                "active": True,
+                "joined_date": "2022-02-28",
+                "skills": ["React", "Node.js", "MongoDB"],
+            },
+            metadata={"source": "test", "version": 1},
+        ),
     ]

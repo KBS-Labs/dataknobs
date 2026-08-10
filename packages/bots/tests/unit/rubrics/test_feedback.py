@@ -25,12 +25,8 @@ from dataknobs_bots.rubrics.models import (
 
 # --- Fixtures ---
 
-FAIL_LEVEL = RubricLevel(
-    id="fail", label="Fail", description="Does not meet criteria", score=0.0
-)
-PASS_LEVEL = RubricLevel(
-    id="pass", label="Pass", description="Meets minimum criteria", score=0.7
-)
+FAIL_LEVEL = RubricLevel(id="fail", label="Fail", description="Does not meet criteria", score=0.0)
+PASS_LEVEL = RubricLevel(id="pass", label="Pass", description="Meets minimum criteria", score=0.7)
 EXCELLENT_LEVEL = RubricLevel(
     id="excellent", label="Excellent", description="Exceeds expectations", score=1.0
 )
@@ -94,7 +90,9 @@ class TestDeterministicSummary:
         criterion = _make_criterion("c1", name="Title Check")
         rubric = _make_rubric([criterion])
         result = CriterionResult(
-            criterion_id="c1", level_id="pass", score=0.7,
+            criterion_id="c1",
+            level_id="pass",
+            score=0.7,
             scoring_method_used=ScoringType.DETERMINISTIC,
         )
         evaluation = _make_evaluation(rubric, [result], 0.7, passed=True)
@@ -111,7 +109,9 @@ class TestDeterministicSummary:
         criterion = _make_criterion("c1", name="Title Check")
         rubric = _make_rubric([criterion])
         result = CriterionResult(
-            criterion_id="c1", level_id="fail", score=0.0,
+            criterion_id="c1",
+            level_id="fail",
+            score=0.0,
             scoring_method_used=ScoringType.DETERMINISTIC,
         )
         evaluation = _make_evaluation(rubric, [result], 0.0, passed=False)
@@ -125,7 +125,9 @@ class TestDeterministicSummary:
         criterion = _make_criterion("c1", name="Word Count")
         rubric = _make_rubric([criterion])
         result = CriterionResult(
-            criterion_id="c1", level_id="fail", score=0.0,
+            criterion_id="c1",
+            level_id="fail",
+            score=0.0,
             scoring_method_used=ScoringType.DETERMINISTIC,
         )
         evaluation = _make_evaluation(rubric, [result], 0.0, passed=False)
@@ -139,7 +141,9 @@ class TestDeterministicSummary:
         criterion = _make_criterion("c1", name="Quality")
         rubric = _make_rubric([criterion])
         result = CriterionResult(
-            criterion_id="c1", level_id="excellent", score=1.0,
+            criterion_id="c1",
+            level_id="excellent",
+            score=1.0,
             scoring_method_used=ScoringType.DETERMINISTIC,
         )
         evaluation = _make_evaluation(rubric, [result], 1.0, passed=True)
@@ -191,7 +195,9 @@ class TestCriterionFeedback:
     def test_error_criterion(self) -> None:
         criterion = _make_criterion("c1", name="Quality Check")
         result = CriterionResult(
-            criterion_id="c1", level_id="error", score=0.0,
+            criterion_id="c1",
+            level_id="error",
+            score=0.0,
             notes="Something went wrong",
         )
 
@@ -204,7 +210,9 @@ class TestCriterionFeedback:
     def test_unable_to_evaluate(self) -> None:
         criterion = _make_criterion("c1", name="LLM Check")
         result = CriterionResult(
-            criterion_id="c1", level_id="unable_to_evaluate", score=0.0,
+            criterion_id="c1",
+            level_id="unable_to_evaluate",
+            score=0.0,
         )
 
         feedback = generate_criterion_feedback(criterion, result)

@@ -17,64 +17,42 @@ class TestArtifactStatusTransitions:
         validate_transition(ArtifactStatus.DRAFT, ArtifactStatus.ARCHIVED)
 
     def test_pending_review_to_in_review(self) -> None:
-        validate_transition(
-            ArtifactStatus.PENDING_REVIEW, ArtifactStatus.IN_REVIEW
-        )
+        validate_transition(ArtifactStatus.PENDING_REVIEW, ArtifactStatus.IN_REVIEW)
 
     def test_pending_review_back_to_draft(self) -> None:
-        validate_transition(
-            ArtifactStatus.PENDING_REVIEW, ArtifactStatus.DRAFT
-        )
+        validate_transition(ArtifactStatus.PENDING_REVIEW, ArtifactStatus.DRAFT)
 
     def test_in_review_to_approved(self) -> None:
-        validate_transition(
-            ArtifactStatus.IN_REVIEW, ArtifactStatus.APPROVED
-        )
+        validate_transition(ArtifactStatus.IN_REVIEW, ArtifactStatus.APPROVED)
 
     def test_in_review_to_needs_revision(self) -> None:
-        validate_transition(
-            ArtifactStatus.IN_REVIEW, ArtifactStatus.NEEDS_REVISION
-        )
+        validate_transition(ArtifactStatus.IN_REVIEW, ArtifactStatus.NEEDS_REVISION)
 
     def test_in_review_to_rejected(self) -> None:
-        validate_transition(
-            ArtifactStatus.IN_REVIEW, ArtifactStatus.REJECTED
-        )
+        validate_transition(ArtifactStatus.IN_REVIEW, ArtifactStatus.REJECTED)
 
     def test_draft_to_superseded(self) -> None:
         validate_transition(ArtifactStatus.DRAFT, ArtifactStatus.SUPERSEDED)
 
     def test_needs_revision_to_draft(self) -> None:
-        validate_transition(
-            ArtifactStatus.NEEDS_REVISION, ArtifactStatus.DRAFT
-        )
+        validate_transition(ArtifactStatus.NEEDS_REVISION, ArtifactStatus.DRAFT)
 
     def test_needs_revision_to_superseded(self) -> None:
-        validate_transition(
-            ArtifactStatus.NEEDS_REVISION, ArtifactStatus.SUPERSEDED
-        )
+        validate_transition(ArtifactStatus.NEEDS_REVISION, ArtifactStatus.SUPERSEDED)
 
     def test_approved_to_superseded(self) -> None:
-        validate_transition(
-            ArtifactStatus.APPROVED, ArtifactStatus.SUPERSEDED
-        )
+        validate_transition(ArtifactStatus.APPROVED, ArtifactStatus.SUPERSEDED)
 
     def test_rejected_to_archived(self) -> None:
-        validate_transition(
-            ArtifactStatus.REJECTED, ArtifactStatus.ARCHIVED
-        )
+        validate_transition(ArtifactStatus.REJECTED, ArtifactStatus.ARCHIVED)
 
     def test_invalid_draft_to_approved(self) -> None:
         with pytest.raises(InvalidTransitionError):
-            validate_transition(
-                ArtifactStatus.DRAFT, ArtifactStatus.APPROVED
-            )
+            validate_transition(ArtifactStatus.DRAFT, ArtifactStatus.APPROVED)
 
     def test_invalid_approved_to_draft(self) -> None:
         with pytest.raises(InvalidTransitionError):
-            validate_transition(
-                ArtifactStatus.APPROVED, ArtifactStatus.DRAFT
-            )
+            validate_transition(ArtifactStatus.APPROVED, ArtifactStatus.DRAFT)
 
     def test_invalid_archived_to_anything(self) -> None:
         for target in ArtifactStatus:
@@ -92,6 +70,4 @@ class TestArtifactStatusTransitions:
             if status == ArtifactStatus.ARCHIVED:
                 continue
             reachable = ARTIFACT_STATUS.get_reachable(status.value)
-            assert "archived" in reachable, (
-                f"{status.value} cannot reach archived"
-            )
+            assert "archived" in reachable, f"{status.value} cannot reach archived"

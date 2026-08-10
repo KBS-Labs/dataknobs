@@ -51,9 +51,7 @@ async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
     a.client.delete_collection(name=a.collection_name)
     await a.close()
 
-    b = ChromaVectorStore(
-        {"dimensions": 384, "metric": "cosine", "collection_name": "bleed_dst"}
-    )
+    b = ChromaVectorStore({"dimensions": 384, "metric": "cosine", "collection_name": "bleed_dst"})
     await b.initialize()
     try:
         await b.add_vectors(
@@ -109,9 +107,7 @@ async def test_nonscalar_metadata_round_trips() -> None:
     The cross-backend contract: Memory/FAISS preserve real list/dict
     values, so Chroma must too despite chromadb's scalar-only store.
     """
-    store = ChromaVectorStore(
-        {"dimensions": 4, "collection_name": "roundtrip"}
-    )
+    store = ChromaVectorStore({"dimensions": 4, "collection_name": "roundtrip"})
     await store.initialize()
     try:
         meta = {
@@ -126,7 +122,7 @@ async def test_nonscalar_metadata_round_trips() -> None:
             ids=["r1"],
             metadata=[meta],
         )
-        (_, got), = await store.get_vectors(["r1"])
+        ((_, got),) = await store.get_vectors(["r1"])
         assert got == meta
     finally:
         await store.close()

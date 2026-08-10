@@ -115,9 +115,7 @@ async def test_undeclared_scalar_key_post_filters(make_chroma_store):
 
     # ``domain_id`` not declared scalar → post-filtered.
     where, post = store._partition_filter_for_chroma({"domain_id": "x"})
-    assert where is None, (
-        f"undeclared scalar key must NOT push down to Chroma where; got {where!r}"
-    )
+    assert where is None, f"undeclared scalar key must NOT push down to Chroma where; got {where!r}"
     assert post == {"domain_id": "x"}
 
     # Behavior is correct regardless.
@@ -232,6 +230,5 @@ async def test_count_with_post_filter_still_materializes(make_chroma_store):
 
     assert n == 2
     assert "metadatas" in (captured.get("include") or []), (
-        f"Post-filter count must materialize metadata; "
-        f"got include={captured.get('include')!r}"
+        f"Post-filter count must materialize metadata; got include={captured.get('include')!r}"
     )

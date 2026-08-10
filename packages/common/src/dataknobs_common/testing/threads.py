@@ -66,9 +66,7 @@ DK_AITER_PUMP_THREAD: str = _PUMP_THREAD_NAME
 #: Names of every dataknobs-managed daemon thread a ``close()`` is expected
 #: to release. Sourced from the modules that create them, so renaming one
 #: there cannot leave this set silently stale.
-DK_DAEMON_THREAD_NAMES: frozenset[str] = frozenset(
-    {DK_SYNC_BRIDGE_THREAD, DK_AITER_PUMP_THREAD}
-)
+DK_DAEMON_THREAD_NAMES: frozenset[str] = frozenset({DK_SYNC_BRIDGE_THREAD, DK_AITER_PUMP_THREAD})
 
 
 def live_dk_daemon_threads(

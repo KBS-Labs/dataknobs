@@ -148,9 +148,7 @@ async def test_csv_records_round_trip(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_jsonl_chunks_open_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_jsonl_chunks_open_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.jsonl"
     _write_jsonl(path, 3)
     threads: list[str] = []
@@ -162,9 +160,7 @@ async def test_jsonl_chunks_open_on_worker_thread(
     assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
-async def test_csv_chunks_open_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_csv_chunks_open_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.csv"
     path.write_text("name,value\nalice,1\nbob,2\n")
     threads: list[str] = []
@@ -175,9 +171,7 @@ async def test_csv_chunks_open_on_worker_thread(
     assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
-async def test_text_chunks_open_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_text_chunks_open_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.txt"
     path.write_text("a\nb\nc\n")
     threads: list[str] = []
@@ -235,9 +229,7 @@ async def test_writer_does_not_block(tmp_path: Path) -> None:
     assert records == [{"i": 0}, {"i": 1}]
 
 
-async def test_writer_opens_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_writer_opens_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     """Structural proof the writer's blocking ``open`` runs off the loop.
 
     Records the thread ``open()`` is invoked on (the flush's ``json.dump`` /

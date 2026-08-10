@@ -102,7 +102,9 @@ class WeatherTool(Tool):
             "wind_speed": 8,
         }
 
-        print(f"  → Weather: {location} is {mock_weather['condition']}, {mock_weather['temperature']}°F")
+        print(
+            f"  → Weather: {location} is {mock_weather['condition']}, {mock_weather['temperature']}°F"
+        )
         return mock_weather
 
 

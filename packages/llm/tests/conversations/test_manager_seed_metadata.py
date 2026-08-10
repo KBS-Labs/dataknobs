@@ -72,9 +72,7 @@ class TestSeedMetadataNewAPI:
     """Behavioural pins for the new seed-* methods."""
 
     @pytest.mark.asyncio
-    async def test_seed_metadata_pre_state_survives_materialization(
-        self, test_components
-    ):
+    async def test_seed_metadata_pre_state_survives_materialization(self, test_components):
         """Reproducing pin from the brief — fails against HEAD before the
         new method lands.
 
@@ -95,9 +93,7 @@ class TestSeedMetadataNewAPI:
         assert manager.state.metadata["active_project_id"] == "proj-42"
 
     @pytest.mark.asyncio
-    async def test_resume_aliases_seed_bucket_to_state_metadata(
-        self, test_components
-    ):
+    async def test_resume_aliases_seed_bucket_to_state_metadata(self, test_components):
         """Pin the resume-from-seed alias contract.
 
         Before the alias landed, ``resume()`` left ``_initial_metadata``
@@ -114,9 +110,7 @@ class TestSeedMetadataNewAPI:
         Reproducing pin — fails on the pre-fix tree (``is not`` was the
         pinned invariant); passes once ``resume()`` aliases the buckets.
         """
-        manager = await _new_manager(
-            test_components, metadata={"user_id": "alice"}
-        )
+        manager = await _new_manager(test_components, metadata={"user_id": "alice"})
         await manager.add_message(role="user", content="hi")
         conv_id = manager.conversation_id
 
@@ -135,9 +129,7 @@ class TestSeedMetadataNewAPI:
         assert resumed.get_seed_metadata("user_id") == "alice"
 
     @pytest.mark.asyncio
-    async def test_seed_metadata_post_state_writes_propagate_under_resume(
-        self, test_components
-    ):
+    async def test_seed_metadata_post_state_writes_propagate_under_resume(self, test_components):
         """Post-resume ``seed_metadata`` writes show up in both buckets.
 
         With the alias in place, the two-bucket abstraction collapses
@@ -147,9 +139,7 @@ class TestSeedMetadataNewAPI:
         seed family promises (writes durable through state, observable
         via both accessors) is what we pin here.
         """
-        manager = await _new_manager(
-            test_components, metadata={"user_id": "alice"}
-        )
+        manager = await _new_manager(test_components, metadata={"user_id": "alice"})
         await manager.add_message(role="user", content="hi")
         conv_id = manager.conversation_id
 
@@ -177,9 +167,7 @@ class TestSeedMetadataNewAPI:
         """
         manager = await _new_manager(test_components)
 
-        manager.update_seed_metadata(
-            {"active_project_id": "proj-1", "tenant_id": "tenant-a"}
-        )
+        manager.update_seed_metadata({"active_project_id": "proj-1", "tenant_id": "tenant-a"})
 
         assert manager.state is None
         assert manager.get_seed_metadata("active_project_id") == "proj-1"
@@ -191,9 +179,7 @@ class TestSeedMetadataNewAPI:
         assert manager.state.metadata["tenant_id"] == "tenant-a"
 
     @pytest.mark.asyncio
-    async def test_remove_seed_metadata_removes_from_both_buckets(
-        self, test_components
-    ):
+    async def test_remove_seed_metadata_removes_from_both_buckets(self, test_components):
         """Pre-state remove → key absent post-materialization. Post-state
         remove (under resume) → key absent from both accessors.
 
@@ -213,9 +199,7 @@ class TestSeedMetadataNewAPI:
         assert "active_project_id" not in manager.state.metadata
 
         # Post-resume path — buckets are aliased, removal touches one dict.
-        manager2 = await _new_manager(
-            test_components, metadata={"active_project_id": "proj-2"}
-        )
+        manager2 = await _new_manager(test_components, metadata={"active_project_id": "proj-2"})
         await manager2.add_message(role="user", content="hi")
         conv_id = manager2.conversation_id
 
@@ -235,9 +219,7 @@ class TestSeedMetadataNewAPI:
         assert "active_project_id" not in resumed._initial_metadata
 
     @pytest.mark.asyncio
-    async def test_remove_seed_metadata_missing_key_is_silent(
-        self, test_components
-    ):
+    async def test_remove_seed_metadata_missing_key_is_silent(self, test_components):
         """``remove_seed_metadata`` on a missing key must not raise — same
         idempotent shape as ``set``/``update``.
         """
@@ -251,9 +233,7 @@ class TestSeedMetadataNewAPI:
         manager.remove_seed_metadata("never_set")  # still no raise
 
     @pytest.mark.asyncio
-    async def test_get_seed_metadata_returns_copy_pre_state(
-        self, test_components
-    ):
+    async def test_get_seed_metadata_returns_copy_pre_state(self, test_components):
         """Pre-state whole-dict return is a copy: mutating it must not
         write back into the seed bucket.
         """
@@ -267,9 +247,7 @@ class TestSeedMetadataNewAPI:
         assert "b" not in manager._initial_metadata
 
     @pytest.mark.asyncio
-    async def test_get_seed_metadata_returns_live_dict_post_state(
-        self, test_components
-    ):
+    async def test_get_seed_metadata_returns_live_dict_post_state(self, test_components):
         """Post-state whole-dict return is the live ``state.metadata``
         (consistent with the existing ``metadata`` property).
         """
@@ -283,9 +261,7 @@ class TestSeedMetadataNewAPI:
         assert manager.get_seed_metadata("new_key") == "new_value"
 
     @pytest.mark.asyncio
-    async def test_get_seed_metadata_returns_default_for_missing_key(
-        self, test_components
-    ):
+    async def test_get_seed_metadata_returns_default_for_missing_key(self, test_components):
         """Both pre- and post-state, ``get_seed_metadata(key, default)``
         returns ``default`` when the key is absent.
         """
@@ -333,9 +309,7 @@ class TestExistingMetadataMethodsPreStatePins:
 
     @pytest.mark.asyncio
     async def test_remove_metadata_silent_no_op_pre_state(self, test_components):
-        manager = await _new_manager(
-            test_components, metadata={"existing": "value"}
-        )
+        manager = await _new_manager(test_components, metadata={"existing": "value"})
 
         # ``remove_metadata`` pre-state must not raise and must not touch
         # the seed bucket either — its silent-no-op contract is total.
@@ -358,9 +332,7 @@ class TestExistingMetadataMethodsPreStatePins:
         trap the design rejected — a future PR that "fixes" the property
         to return the seed would silently break this test.
         """
-        manager = await _new_manager(
-            test_components, metadata={"seeded": "value"}
-        )
+        manager = await _new_manager(test_components, metadata={"seeded": "value"})
 
         assert manager.state is None
         assert manager.metadata == {}
@@ -379,9 +351,7 @@ class TestPublicSave:
     """
 
     @pytest.mark.asyncio
-    async def test_save_persists_state_so_resume_sees_writes(
-        self, test_components
-    ):
+    async def test_save_persists_state_so_resume_sees_writes(self, test_components):
         """Reproducing pin — fails on pre-fix HEAD (``AttributeError`` —
         no ``save`` method). Once the public ``save()`` lands, a sync
         ``seed_metadata`` write followed by ``await manager.save()``
@@ -425,9 +395,7 @@ class TestAddSeedMetadata:
     """
 
     @pytest.mark.asyncio
-    async def test_add_seed_metadata_pre_state_writes_seed_no_raise(
-        self, test_components
-    ):
+    async def test_add_seed_metadata_pre_state_writes_seed_no_raise(self, test_components):
         """Pre-state, the call writes to the seed bucket and does not
         raise (unlike ``add_metadata`` which raises pre-state).
 
@@ -446,9 +414,7 @@ class TestAddSeedMetadata:
         assert manager.state.metadata["active_project_id"] == "proj-9"
 
     @pytest.mark.asyncio
-    async def test_add_seed_metadata_post_state_persists_immediately(
-        self, test_components
-    ):
+    async def test_add_seed_metadata_post_state_persists_immediately(self, test_components):
         """Post-state, the call writes to both buckets AND persists.
 
         A subsequent ``resume()`` observes the value without any
@@ -475,9 +441,7 @@ class TestAddSeedMetadata:
         assert resumed.get_seed_metadata("active_project_id") == "proj-9"
 
     @pytest.mark.asyncio
-    async def test_add_seed_metadata_post_resume_persists(
-        self, test_components
-    ):
+    async def test_add_seed_metadata_post_resume_persists(self, test_components):
         """After ``resume()``, the call still writes both buckets (now
         aliased) and persists. Pins the symmetry across the post-state
         lifecycle.
@@ -518,9 +482,7 @@ class TestStrictOrphanDefault:
     """
 
     @pytest.mark.asyncio
-    async def test_get_seed_metadata_rejects_orphan_default(
-        self, test_components
-    ):
+    async def test_get_seed_metadata_rejects_orphan_default(self, test_components):
         manager = await _new_manager(test_components)
 
         with pytest.raises(TypeError, match="default"):
@@ -532,9 +494,7 @@ class TestStrictOrphanDefault:
             manager.get_seed_metadata(default="fallback")
 
     @pytest.mark.asyncio
-    async def test_get_metadata_rejects_orphan_default(
-        self, test_components
-    ):
+    async def test_get_metadata_rejects_orphan_default(self, test_components):
         """The existing ``get_metadata`` family shares the orphan-default
         quirk; the strict contract applies to both for symmetry.
         """
@@ -549,9 +509,7 @@ class TestStrictOrphanDefault:
             manager.get_metadata(default="fallback")
 
     @pytest.mark.asyncio
-    async def test_get_metadata_default_with_key_still_works(
-        self, test_components
-    ):
+    async def test_get_metadata_default_with_key_still_works(self, test_components):
         """The strict contract MUST NOT regress the normal
         ``(key, default)`` shape — that is the documented use of the
         ``default`` parameter and is exercised throughout the codebase.

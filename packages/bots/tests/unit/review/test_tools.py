@@ -191,9 +191,7 @@ class TestRunAllReviewsTool:
         )
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id=artifact.id))
 
         assert result["all_passed"] is True
         assert result["review_count"] == 0
@@ -235,9 +233,7 @@ class TestRunAllReviewsTool:
         )
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id=artifact.id))
 
         assert result["all_passed"] is True
         assert result["review_count"] == 2
@@ -253,9 +249,7 @@ class TestRunAllReviewsTool:
         )
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id="nonexistent")
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id="nonexistent"))
 
         assert "error" in result
 
@@ -277,9 +271,7 @@ class TestGetReviewResultsTool:
         tool = GetReviewResultsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id=artifact.id))
 
         assert result["review_count"] == 0
         assert result["all_passed"] is True
@@ -310,9 +302,7 @@ class TestGetReviewResultsTool:
         tool = GetReviewResultsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id=artifact.id))
 
         assert result["review_count"] == 2
         assert result["all_passed"] is False
@@ -324,8 +314,6 @@ class TestGetReviewResultsTool:
         tool = GetReviewResultsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id="nonexistent")
-        )
+        result = asyncio.run(tool.execute_with_context(context, artifact_id="nonexistent"))
 
         assert "error" in result

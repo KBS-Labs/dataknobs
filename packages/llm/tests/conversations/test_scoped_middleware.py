@@ -1,4 +1,5 @@
 """Tests for ConversationManager.scoped_middleware."""
+
 from __future__ import annotations
 
 import tempfile
@@ -110,9 +111,7 @@ async def manager_factory():
         prompt_dir = Path(tmpdir) / "prompts"
         _create_prompts(prompt_dir)
 
-        config = LLMConfig(
-            provider="echo", model="echo-model", options={"echo_prefix": ""}
-        )
+        config = LLMConfig(provider="echo", model="echo-model", options={"echo_prefix": ""})
         llm = EchoProvider(config)
         builder = AsyncPromptBuilder(library=FileSystemPromptLibrary(prompt_dir))
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
@@ -203,9 +202,7 @@ class TestScopedMiddleware:
         assert manager.middleware == [perm]
 
     @pytest.mark.asyncio
-    async def test_content_mutation_survives_to_persisted_node(
-        self, manager_factory
-    ):
+    async def test_content_mutation_survives_to_persisted_node(self, manager_factory):
         """Scoped-middleware response mutations flow to the persisted assistant node.
 
         Regression guard for the consumer-facing citation-rendering use case:
@@ -286,9 +283,7 @@ class TestScopedMiddleware:
         assert manager.middleware == []
 
     @pytest.mark.asyncio
-    async def test_stream_complete_full_drain_runs_process_response(
-        self, manager_factory
-    ):
+    async def test_stream_complete_full_drain_runs_process_response(self, manager_factory):
         """Fully draining stream_complete fires process_response in onion order."""
         manager = await manager_factory()
         events: list[str] = []

@@ -285,9 +285,9 @@ def test_the_unanchored_glob_check_is_per_occurrence():
     assert _unanchored_globs("uv run ruff check packages/*/src")
     assert not _unanchored_globs('uv run ruff check "$PROJECT_ROOT"/packages/*/src')
     assert not _unanchored_globs('uv run ruff check "$PROJECT_ROOT/packages/*/src"')
-    assert _unanchored_globs(
-        'uv run ruff check "$PROJECT_ROOT"/packages/*/src packages/*/tests'
-    ), "an anchored target elsewhere in the command must not vouch for a bare one"
+    assert _unanchored_globs('uv run ruff check "$PROJECT_ROOT"/packages/*/src packages/*/tests'), (
+        "an anchored target elsewhere in the command must not vouch for a bare one"
+    )
 
 
 def test_every_linter_invocation_in_dk_names_absolute_targets():

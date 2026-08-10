@@ -108,7 +108,10 @@ class MergeDecision:
 
     @classmethod
     def transform(
-        cls, value: Any, *, reason: str | None = None,
+        cls,
+        value: Any,
+        *,
+        reason: str | None = None,
     ) -> MergeDecision:
         """Accept but substitute a different value."""
         return cls(action="transform", value=value, reason=reason)
@@ -263,27 +266,30 @@ class SchemaGroundingFilter:
             return MergeDecision.accept(reason="grounding=skip")
 
         result = is_field_grounded(
-            field, new_value, user_message, schema_property,
+            field,
+            new_value,
+            user_message,
+            schema_property,
             config=self._config,
         )
 
         if result.grounded:
             expanded = self._try_expand(
-                new_value, user_message, schema_property,
+                new_value,
+                user_message,
+                schema_property,
             )
             if expanded is not None:
                 return MergeDecision.transform(
-                    expanded, reason="expanded partial extraction",
+                    expanded,
+                    reason="expanded partial extraction",
                 )
             return MergeDecision.accept(reason="grounded")
 
         if existing_value is None:
             if x_ext.get("require_grounded", False):
                 return MergeDecision.reject(
-                    reason=(
-                        f"require_grounded: extracted {new_value!r} "
-                        f"not grounded in message"
-                    ),
+                    reason=(f"require_grounded: extracted {new_value!r} not grounded in message"),
                 )
             # No existing data to protect --- benefit of the doubt.
             return MergeDecision.accept(
@@ -326,8 +332,12 @@ class CompositeMergeFilter:
         last_reason: str | None = None
         for f in self._filters:
             decision = f.filter(
-                field, current_value, existing_value,
-                user_message, schema_property, wizard_data,
+                field,
+                current_value,
+                existing_value,
+                user_message,
+                schema_property,
+                wizard_data,
             )
             if decision.action == "reject":
                 return decision
@@ -337,6 +347,7 @@ class CompositeMergeFilter:
                 transformed = True
         if transformed:
             return MergeDecision.transform(
-                current_value, reason=last_reason,
+                current_value,
+                reason=last_reason,
             )
         return MergeDecision.accept(reason=last_reason)

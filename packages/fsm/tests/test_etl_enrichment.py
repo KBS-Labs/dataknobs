@@ -204,9 +204,7 @@ async def test_on_missing_ignore_null_error(tmp_path: Path) -> None:
     """``enrichment_on_missing`` controls how an unmatched lookup is handled."""
     rows = [{"id": "1", "name": "Alice", "country_code": "ZZ"}]  # no ZZ in ref
     ref = str(tmp_path / "ref.json")
-    await _seed(
-        ref, [{"id": "US", "code": "US", "name": "United States", "region": "NA"}]
-    )
+    await _seed(ref, [{"id": "US", "code": "US", "name": "United States", "region": "NA"}])
 
     def source_with(sub: str) -> str:
         return str(tmp_path / f"src_{sub}.json")
@@ -230,9 +228,7 @@ async def test_on_missing_ignore_null_error(tmp_path: Path) -> None:
     s_null = source_with("null")
     t_null = str(tmp_path / "t_null.json")
     await _seed(s_null, rows)
-    etl = _build_etl(
-        s_null, t_null, enrichment_sources=[spec], enrichment_on_missing="null"
-    )
+    etl = _build_etl(s_null, t_null, enrichment_sources=[spec], enrichment_on_missing="null")
     m = await etl.run()
     out = await _read_target(t_null)
     assert m["loaded"] == 1 and out[0]["region"] is None, (m, out)
@@ -270,9 +266,9 @@ async def test_enrichment_failure_counts_as_error(tmp_path: Path) -> None:
 
     assert metrics["errors"] == 3, metrics
     assert metrics["loaded"] == 0, metrics
-    assert metrics["extracted"] == (
-        metrics["loaded"] + metrics["rejected"] + metrics["errors"]
-    ), metrics
+    assert metrics["extracted"] == (metrics["loaded"] + metrics["rejected"] + metrics["errors"]), (
+        metrics
+    )
     # Metric keys are unchanged vs the no-enrichment shape (no new terminal).
     assert set(metrics) == {
         "extracted",
@@ -393,9 +389,7 @@ def test_match_without_database_source_is_rejected() -> None:
         ETLConfig(
             source_db={"type": "file", "path": "s"},
             target_db={"type": "file", "path": "t"},
-            enrichment_sources=[
-                {"match": {"country_code": "code"}, "fields": ["region"]}
-            ],
+            enrichment_sources=[{"match": {"country_code": "code"}, "fields": ["region"]}],
         )
 
 

@@ -33,6 +33,7 @@ from dataknobs_xization.markdown.md_parser import MarkdownParser
 # Test helpers
 # ---------------------------------------------------------------------------
 
+
 class PlaintextChunker(Chunker):
     """Simple test chunker that splits on double newlines."""
 
@@ -79,6 +80,7 @@ Content under sub-heading.
 # Chunker ABC
 # ---------------------------------------------------------------------------
 
+
 class TestChunkerABC:
     """Tests for the Chunker ABC contract."""
 
@@ -105,6 +107,7 @@ class TestChunkerABC:
 # DocumentInfo
 # ---------------------------------------------------------------------------
 
+
 class TestDocumentInfo:
     def test_defaults(self):
         info = DocumentInfo()
@@ -122,6 +125,7 @@ class TestDocumentInfo:
 # ---------------------------------------------------------------------------
 # MarkdownTreeChunker
 # ---------------------------------------------------------------------------
+
 
 class TestMarkdownTreeChunker:
     def test_is_chunker_subclass(self):
@@ -154,17 +158,21 @@ class TestMarkdownTreeChunker:
         assert len(chunks) > 0
 
     def test_from_config_quality_filter_dict(self):
-        chunker = MarkdownTreeChunker.from_config({
-            "quality_filter": {"min_content_chars": 10, "min_words": 2},
-        })
+        chunker = MarkdownTreeChunker.from_config(
+            {
+                "quality_filter": {"min_content_chars": 10, "min_words": 2},
+            }
+        )
         chunks = chunker.chunk(SAMPLE_MARKDOWN)
         for c in chunks:
             assert c.metadata.content_length >= 10
 
     def test_from_config_heading_inclusion_string(self):
-        chunker = MarkdownTreeChunker.from_config({
-            "heading_inclusion": "both",
-        })
+        chunker = MarkdownTreeChunker.from_config(
+            {
+                "heading_inclusion": "both",
+            }
+        )
         chunks = chunker.chunk(SAMPLE_MARKDOWN)
         assert len(chunks) > 0
 
@@ -214,6 +222,7 @@ class TestMarkdownTreeChunker:
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
 
 class TestChunkerRegistry:
     def test_default_markdown_tree_registered(self):
@@ -287,9 +296,7 @@ class TestChunkerRegistry:
     def test_dotted_import_missing_attribute(self):
         """The other half of a typo: right module, wrong name."""
         with pytest.raises(ConfigurationError):
-            create_chunker(
-                {"chunker": f"{PlaintextChunker.__module__}:NoSuchChunker"}
-            )
+            create_chunker({"chunker": f"{PlaintextChunker.__module__}:NoSuchChunker"})
 
     def test_dotted_import_not_chunker_subclass(self):
         # int is not a Chunker subclass
@@ -315,14 +322,17 @@ class TestChunkerRegistry:
 # End-to-end: custom chunker produces expected chunks
 # ---------------------------------------------------------------------------
 
+
 class TestCustomChunkerEndToEnd:
     def test_plaintext_chunker_via_registry(self):
         register_chunker("plaintext_e2e", PlaintextChunker, override=True)
         try:
-            chunker = create_chunker({
-                "chunker": "plaintext_e2e",
-                "max_chunk_size": 500,
-            })
+            chunker = create_chunker(
+                {
+                    "chunker": "plaintext_e2e",
+                    "max_chunk_size": 500,
+                }
+            )
             chunks = chunker.chunk(
                 "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
                 DocumentInfo(source="test.txt", content_type="text/plain"),
@@ -337,6 +347,7 @@ class TestCustomChunkerEndToEnd:
 # ---------------------------------------------------------------------------
 # DirectoryProcessor with custom chunker
 # ---------------------------------------------------------------------------
+
 
 class TestDirectoryProcessorCustomChunker:
     """Test that DirectoryProcessor dispatches to a custom chunker."""
@@ -451,6 +462,7 @@ class TestDirectoryProcessorCustomChunker:
 # Parser character positions
 # ---------------------------------------------------------------------------
 
+
 class TestParserCharPositions:
     """Tests for character offset tracking in MarkdownParser."""
 
@@ -463,7 +475,7 @@ class TestParserCharPositions:
         node = nodes[0].data
         assert node.char_start == 0
         assert node.char_end == len(source)
-        assert source[node.char_start:node.char_end] == source
+        assert source[node.char_start : node.char_end] == source
 
     def test_heading_positions(self):
         source = "# Heading\n\nBody text."
@@ -474,7 +486,7 @@ class TestParserCharPositions:
         assert heading.node_type == "heading"
         assert heading.char_start == 0
         assert heading.char_end == 9
-        assert source[heading.char_start:heading.char_end] == "# Heading"
+        assert source[heading.char_start : heading.char_end] == "# Heading"
 
     def test_multiline_positions(self):
         source = "Line one.\nLine two.\nLine three."
@@ -484,7 +496,7 @@ class TestParserCharPositions:
         # Three body lines
         assert len(nodes) == 3
         for node in nodes:
-            span = source[node.data.char_start:node.data.char_end]
+            span = source[node.data.char_start : node.data.char_end]
             assert node.data.text in span
 
     def test_code_block_spans_full_block(self):
@@ -510,7 +522,7 @@ class TestParserCharPositions:
         assert first.char_end == 6  # "First."
         assert second.char_start == 8  # after "First.\n\n"
         assert second.char_end == 15  # "Second."
-        assert source[second.char_start:second.char_end] == "Second."
+        assert source[second.char_start : second.char_end] == "Second."
 
     def test_crlf_line_endings(self):
         """Character positions must be correct for \\r\\n line endings."""
@@ -520,14 +532,14 @@ class TestParserCharPositions:
         # Heading
         heading = tree.children[0].data
         assert heading.node_type == "heading"
-        assert source[heading.char_start:heading.char_end] == "# Title"
+        assert source[heading.char_start : heading.char_end] == "# Title"
         # Body
         body_nodes = tree.collect_terminal_nodes(
             accept_node_fn=lambda n: n.data.node_type == "body"
         )
         assert len(body_nodes) == 1
         body = body_nodes[0].data
-        assert source[body.char_start:body.char_end] == "Body text."
+        assert source[body.char_start : body.char_end] == "Body text."
 
     def test_mixed_line_endings(self):
         """Handles mixed \\n and \\r\\n in same document."""
@@ -537,13 +549,14 @@ class TestParserCharPositions:
         nodes = tree.collect_terminal_nodes()
         assert len(nodes) == 3
         for node in nodes:
-            span = source[node.data.char_start:node.data.char_end]
+            span = source[node.data.char_start : node.data.char_end]
             assert node.data.text == span
 
 
 # ---------------------------------------------------------------------------
 # split_text utility
 # ---------------------------------------------------------------------------
+
 
 class TestSplitText:
     def test_short_text_returns_single(self):
@@ -575,6 +588,7 @@ class TestSplitText:
 # ---------------------------------------------------------------------------
 # Chunk positions through chunker pipeline
 # ---------------------------------------------------------------------------
+
 
 class TestChunkPositions:
     def test_single_section_positions(self):
@@ -619,6 +633,7 @@ class TestChunkPositions:
 # ChunkTransform ABC
 # ---------------------------------------------------------------------------
 
+
 class TestChunkTransformABC:
     def test_cannot_instantiate_abc(self):
         with pytest.raises(TypeError):
@@ -645,9 +660,11 @@ class TestChunkTransformABC:
 # CompositeChunker
 # ---------------------------------------------------------------------------
 
+
 class TestCompositeChunker:
     def test_applies_transforms_in_order(self):
         """Transforms are applied sequentially."""
+
         class AppendSuffix(ChunkTransform):
             def __init__(self, suffix: str):
                 self.suffix = suffix
@@ -672,6 +689,7 @@ class TestCompositeChunker:
 
     def test_reindexes_after_transforms(self):
         """chunk_index is re-numbered 0..N after transforms."""
+
         class DropFirst(ChunkTransform):
             def transform(self, chunks, document_info=None):
                 return chunks[1:] if len(chunks) > 1 else chunks
@@ -699,9 +717,11 @@ class TestCompositeChunker:
 # Built-in transforms
 # ---------------------------------------------------------------------------
 
+
 class TestMergeSmallChunks:
-    def _make_chunk(self, text: str, headings: list[str] | None = None,
-                    char_start: int = 0, char_end: int = 0) -> Chunk:
+    def _make_chunk(
+        self, text: str, headings: list[str] | None = None, char_start: int = 0, char_end: int = 0
+    ) -> Chunk:
         return Chunk(
             text=text,
             metadata=ChunkMetadata(
@@ -810,10 +830,12 @@ class TestQualityFilterTransform:
         long_enough = self._make_chunk(
             "This sentence has more than enough words and characters to pass all filters."
         )
-        result = QualityFilterTransform({
-            "min_content_chars": 10,
-            "min_words": 2,
-        }).transform([short, long_enough])
+        result = QualityFilterTransform(
+            {
+                "min_content_chars": 10,
+                "min_words": 2,
+            }
+        ).transform([short, long_enough])
         assert len(result) == 1
         assert result[0].text == long_enough.text
 
@@ -826,6 +848,7 @@ class TestQualityFilterTransform:
 # Transform registry
 # ---------------------------------------------------------------------------
 
+
 class TestTransformRegistry:
     def test_builtin_transforms_registered(self):
         assert transform_registry.is_registered("merge_small")
@@ -835,10 +858,7 @@ class TestTransformRegistry:
     def test_register_and_use_custom_transform(self):
         class UpperTransform(ChunkTransform):
             def transform(self, chunks, document_info=None):
-                return [
-                    Chunk(text=c.text.upper(), metadata=c.metadata)
-                    for c in chunks
-                ]
+                return [Chunk(text=c.text.upper(), metadata=c.metadata) for c in chunks]
 
             @classmethod
             def from_config(cls, config):
@@ -851,9 +871,7 @@ class TestTransformRegistry:
             transform_registry.unregister("upper_test")
 
     @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
-    def test_a_transform_resolves_by_dotted_path_under_either_separator(
-        self, separator
-    ):
+    def test_a_transform_resolves_by_dotted_path_under_either_separator(self, separator):
         """``transforms`` takes a dotted path too, and by the same rules.
 
         ``_ensure_registered`` serves both registries, so the gate deciding
@@ -865,9 +883,11 @@ class TestTransformRegistry:
         """
         path = f"{MergeSmallChunks.__module__}{separator}MergeSmallChunks"
         try:
-            chunker = create_chunker({
-                "transforms": [{path: {"min_size": 100}}],
-            })
+            chunker = create_chunker(
+                {
+                    "transforms": [{path: {"min_size": 100}}],
+                }
+            )
             assert isinstance(chunker, CompositeChunker)
             # The registration is the resolution: `_ensure_registered` puts the
             # resolved class under its own path, so this is what distinguishes
@@ -899,35 +919,42 @@ class TestTransformRegistry:
 # Config-driven pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestConfigDrivenPipeline:
     def test_no_transforms_returns_plain_chunker(self):
         chunker = create_chunker({"max_chunk_size": 500})
         assert isinstance(chunker, MarkdownTreeChunker)
 
     def test_transforms_returns_composite(self):
-        chunker = create_chunker({
-            "max_chunk_size": 500,
-            "transforms": [
-                {"merge_small": {"min_size": 100}},
-            ],
-        })
+        chunker = create_chunker(
+            {
+                "max_chunk_size": 500,
+                "transforms": [
+                    {"merge_small": {"min_size": 100}},
+                ],
+            }
+        )
         assert isinstance(chunker, CompositeChunker)
 
     def test_empty_transforms_returns_plain_chunker(self):
-        chunker = create_chunker({
-            "max_chunk_size": 500,
-            "transforms": [],
-        })
+        chunker = create_chunker(
+            {
+                "max_chunk_size": 500,
+                "transforms": [],
+            }
+        )
         # Empty transforms list → no wrapper
         assert isinstance(chunker, MarkdownTreeChunker)
 
     def test_pipeline_produces_chunks(self):
-        chunker = create_chunker({
-            "max_chunk_size": 500,
-            "transforms": [
-                {"merge_small": {"min_size": 50}},
-            ],
-        })
+        chunker = create_chunker(
+            {
+                "max_chunk_size": 500,
+                "transforms": [
+                    {"merge_small": {"min_size": 50}},
+                ],
+            }
+        )
         chunks = chunker.chunk("# Title\n\nContent here.\n\n## Sub\n\nMore content.")
         assert len(chunks) > 0
         # chunk_index should be sequential
@@ -935,21 +962,25 @@ class TestConfigDrivenPipeline:
             assert c.metadata.chunk_index == i
 
     def test_multiple_transforms_in_pipeline(self):
-        chunker = create_chunker({
-            "max_chunk_size": 500,
-            "transforms": [
-                {"split_large": {"max_size": 50}},
-                {"merge_small": {"min_size": 10}},
-            ],
-        })
+        chunker = create_chunker(
+            {
+                "max_chunk_size": 500,
+                "transforms": [
+                    {"split_large": {"max_size": 50}},
+                    {"merge_small": {"min_size": 10}},
+                ],
+            }
+        )
         assert isinstance(chunker, CompositeChunker)
         chunks = chunker.chunk("# A\n\n" + "Word " * 30)
         assert len(chunks) > 0
 
     def test_invalid_transform_entry_raises(self):
         with pytest.raises(ValueError, match="exactly one key"):
-            create_chunker({
-                "transforms": [
-                    {"a": {}, "b": {}},  # Two keys — invalid
-                ],
-            })
+            create_chunker(
+                {
+                    "transforms": [
+                        {"a": {}, "b": {}},  # Two keys — invalid
+                    ],
+                }
+            )

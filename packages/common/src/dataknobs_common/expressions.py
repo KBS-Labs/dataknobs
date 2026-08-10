@@ -145,8 +145,7 @@ def _validate_ast(code: str) -> str | None:
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("__") and node.attr.endswith("__"):
                 return (
-                    f"Access to dunder attribute '{node.attr}' is not "
-                    f"allowed in safe expressions"
+                    f"Access to dunder attribute '{node.attr}' is not allowed in safe expressions"
                 )
             # Block .format() / .format_map() — format-spec attribute
             # access ({N.attr}) bypasses the AST dunder check.
@@ -159,15 +158,8 @@ def _validate_ast(code: str) -> str | None:
                     f"AST validation."
                 )
         # Block dunder names as variables: __builtins__, __import__, etc.
-        if (
-            isinstance(node, ast.Name)
-            and node.id.startswith("__")
-            and node.id.endswith("__")
-        ):
-            return (
-                f"Access to dunder name '{node.id}' is not "
-                f"allowed in safe expressions"
-            )
+        if isinstance(node, ast.Name) and node.id.startswith("__") and node.id.endswith("__"):
+            return f"Access to dunder name '{node.id}' is not allowed in safe expressions"
 
     return None
 

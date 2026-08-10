@@ -23,6 +23,7 @@ projected, or observability-aware semantics compose the other
 :class:`~dataknobs_bots.reasoning.state_bridge.StateBridge` reference
 implementations with a custom ``on_turn_start`` / ``on_turn_end`` hook.
 """
+
 from __future__ import annotations
 
 import logging
@@ -136,7 +137,6 @@ def write_to_inbox(manager: Any, key: str, payload: dict[str, Any]) -> None:
     """
     if not hasattr(manager, "metadata"):
         raise AttributeError(
-            f"{type(manager).__name__} has no 'metadata' attribute; "
-            f"cannot write inbox payload."
+            f"{type(manager).__name__} has no 'metadata' attribute; cannot write inbox payload."
         )
     manager.metadata[key] = payload

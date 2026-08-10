@@ -69,9 +69,7 @@ if TYPE_CHECKING:
 
 
 # Operators that use the ``.keyword`` sub-field for exact matching on strings.
-_KEYWORD_EQUALITY_OPS = frozenset(
-    {Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN}
-)
+_KEYWORD_EQUALITY_OPS = frozenset({Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN})
 # Pattern operators always match against the full, un-analyzed value, so they
 # unconditionally target the ``.keyword`` sub-field. ``REGEX`` is here (not on
 # the analyzed base path) so a pattern matches the whole string rather than a
@@ -205,9 +203,7 @@ def _bounds(value: Any) -> tuple[Any, Any]:
     """Unpack a two-element BETWEEN bound, raising on a malformed value."""
     if isinstance(value, (list, tuple)) and len(value) == 2:
         return value[0], value[1]
-    raise ValueError(
-        f"BETWEEN/NOT_BETWEEN requires a two-element bound, got: {value!r}"
-    )
+    raise ValueError(f"BETWEEN/NOT_BETWEEN requires a two-element bound, got: {value!r}")
 
 
 def build_bool_query(filters: Sequence[Filter]) -> dict[str, Any]:
@@ -234,9 +230,7 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
         return build_filter_es_query(condition.filter)
 
     if isinstance(condition, LogicCondition):
-        clauses = [
-            build_complex_es_query(sub) for sub in condition.conditions
-        ]
+        clauses = [build_complex_es_query(sub) for sub in condition.conditions]
         clauses = [c for c in clauses if c]
 
         if condition.operator == LogicOperator.AND:

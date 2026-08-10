@@ -354,9 +354,7 @@ class TestWizardHooksFromConfig:
 
     def test_from_config_missing_module(self) -> None:
         with pytest.raises(ConfigurationError, match="nonexistent.module"):
-            WizardHooks.from_config(
-                {"on_enter": [{"function": "nonexistent.module:func"}]}
-            )
+            WizardHooks.from_config({"on_enter": [{"function": "nonexistent.module:func"}]})
 
     def test_from_config_string_format(self) -> None:
         """The bare-string entry shape fails the same way as the dict shape."""
@@ -465,7 +463,8 @@ class TestWizardHooksFromConfig:
 
     @pytest.mark.asyncio
     async def test_from_config_callbacks_land_on_init_lifecycle(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Non-empty-config regression test: callbacks declared in
         ``config`` are registered against the ``__init__``-constructed
@@ -500,16 +499,15 @@ class TestWizardHooksFromConfig:
             raising=False,
         )
 
-        hooks = WizardHooks.from_config({
-            "on_turn_start": [
-                {
-                    "function": (
-                        "dataknobs_bots.reasoning.lifecycle"
-                        ":_regression_test_tracker"
-                    ),
-                },
-            ],
-        })
+        hooks = WizardHooks.from_config(
+            {
+                "on_turn_start": [
+                    {
+                        "function": ("dataknobs_bots.reasoning.lifecycle:_regression_test_tracker"),
+                    },
+                ],
+            }
+        )
 
         # Callback registered against the surviving registry.
         assert hooks.hook_count["turn_start"] == 1
@@ -548,14 +546,10 @@ class TestWizardHooksIntegration:
         # Create wizard with hooks
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
-        reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks
-        )
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks)
 
         await manager.add_message(role="user", content="I want to create something")
-        provider.set_responses(
-            ["Welcome! Let me help you create something."]
-        )
+        provider.set_responses(["Welcome! Let me help you create something."])
 
         # Generate should trigger hooks
         await reasoning.generate(manager, llm=None)
@@ -584,9 +578,7 @@ class TestWizardHooksIntegration:
         # Create wizard with hooks
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
-        reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks
-        )
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks)
 
         # Set up manager at non-start stage
         await manager.add_message(role="user", content="restart")

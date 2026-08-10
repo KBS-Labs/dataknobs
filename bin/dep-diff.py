@@ -85,6 +85,7 @@ def git_staged(path: str) -> str | None:
 
 # --- Terminal colors ---
 
+
 def _supports_color() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 

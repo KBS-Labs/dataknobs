@@ -60,8 +60,7 @@ def normalize_record_callable(
             )
         ]
         wants_context = (
-            any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
-            or len(params) >= 2
+            any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
         )
     except (TypeError, ValueError):
         # Builtins / C-callables with no introspectable signature: be permissive

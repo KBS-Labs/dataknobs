@@ -564,9 +564,7 @@ class FromConfigHandler(BaseHandler):
     """Handler with a from_config classmethod."""
 
     @classmethod
-    def from_config(
-        cls, config: Dict[str, Any], **kwargs: Any
-    ) -> "FromConfigHandler":
+    def from_config(cls, config: Dict[str, Any], **kwargs: Any) -> "FromConfigHandler":
         instance = cls("from_config", config)
         instance.extra = kwargs  # type: ignore[attr-defined]
         return instance
@@ -648,18 +646,14 @@ class TestPluginRegistryCreate:
 
     def test_create_no_default_fallback(self) -> None:
         """create() does not use default_factory."""
-        registry = PluginRegistry[BaseHandler](
-            "test", default_factory=BaseHandler
-        )
+        registry = PluginRegistry[BaseHandler]("test", default_factory=BaseHandler)
 
         with pytest.raises(NotFoundError):
             registry.create("missing", {})
 
     def test_create_validates_type(self) -> None:
         """create() validates against validate_type."""
-        registry = PluginRegistry[BaseHandler](
-            "test", validate_type=BaseHandler
-        )
+        registry = PluginRegistry[BaseHandler]("test", validate_type=BaseHandler)
         registry.register("bad", lambda cfg, **kw: "not a handler")  # type: ignore[arg-type]
 
         with pytest.raises(OperationError, match="BaseHandler"):
@@ -673,6 +667,7 @@ class TestPluginRegistryCreate:
         the connection URL it was handed; the message names the key and the
         exception type, and the original travels on ``__cause__``.
         """
+
         def bad_factory(config: Dict[str, Any], **kwargs: Any) -> BaseHandler:
             raise RuntimeError("boom")
 
@@ -714,9 +709,7 @@ class TestPluginRegistryConfigKey:
 
     def test_create_extracts_key_from_config(self) -> None:
         """config_key field used as lookup key."""
-        registry = PluginRegistry[PlainClassHandler](
-            "test", config_key="strategy"
-        )
+        registry = PluginRegistry[PlainClassHandler]("test", config_key="strategy")
         registry.register("simple", PlainClassHandler)
 
         result = registry.create(config={"strategy": "simple", "val": 1})
@@ -734,14 +727,10 @@ class TestPluginRegistryConfigKey:
 
     def test_create_explicit_key_overrides_config_key(self) -> None:
         """Explicit key takes precedence over config_key extraction."""
-        registry = PluginRegistry[PlainClassHandler](
-            "test", config_key="strategy"
-        )
+        registry = PluginRegistry[PlainClassHandler]("test", config_key="strategy")
         registry.register("explicit", PlainClassHandler)
 
-        result = registry.create(
-            "explicit", config={"strategy": "other", "val": 1}
-        )
+        result = registry.create("explicit", config={"strategy": "other", "val": 1})
         assert result.config == {"strategy": "other", "val": 1}
 
     def test_create_no_config_key_requires_explicit_key(self) -> None:
@@ -753,9 +742,7 @@ class TestPluginRegistryConfigKey:
 
     def test_create_no_key_no_default_no_field(self) -> None:
         """ValueError when config lacks field and no default."""
-        registry = PluginRegistry[BaseHandler](
-            "test", config_key="strategy"
-        )
+        registry = PluginRegistry[BaseHandler]("test", config_key="strategy")
 
         with pytest.raises(ValueError, match="config must contain"):
             registry.create(config={"val": 1})
@@ -788,9 +775,7 @@ class TestPluginRegistryConfigKey:
         )
         registry.register("pg", PlainClassHandler)
 
-        result = registry.create(
-            config={"backend": "pg", "host": "localhost", "port": 5432}
-        )
+        result = registry.create(config={"backend": "pg", "host": "localhost", "port": 5432})
         assert result.config == {"host": "localhost", "port": 5432}
 
     def test_strip_config_key_no_effect_with_explicit_key(self) -> None:
@@ -801,9 +786,7 @@ class TestPluginRegistryConfigKey:
         registry.register("mem", PlainClassHandler)
 
         # Explicit key — config passed through unchanged
-        result = registry.create(
-            "mem", config={"backend": "mem", "size": 100}
-        )
+        result = registry.create("mem", config={"backend": "mem", "size": 100})
         assert result.config == {"backend": "mem", "size": 100}
 
 
@@ -812,9 +795,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_register_and_get_case_insensitive(self) -> None:
         """'Foo' and 'foo' resolve to same registration."""
-        registry = PluginRegistry[BaseHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("Foo", CustomHandler)
 
         h = registry.get("foo", config={})
@@ -825,9 +806,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_is_registered_case_insensitive(self) -> None:
         """is_registered ignores case."""
-        registry = PluginRegistry[BaseHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("MyPlugin", CustomHandler)
 
         assert registry.is_registered("myplugin")
@@ -836,9 +815,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_get_factory_case_insensitive(self) -> None:
         """get_factory ignores case."""
-        registry = PluginRegistry[BaseHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("Handler", CustomHandler)
 
         assert registry.get_factory("handler") is CustomHandler
@@ -846,9 +823,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_unregister_case_insensitive(self) -> None:
         """unregister ignores case."""
-        registry = PluginRegistry[BaseHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("Plugin", CustomHandler)
 
         registry.unregister("PLUGIN")
@@ -856,9 +831,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_list_keys_returns_canonical(self) -> None:
         """All keys stored in lowercase."""
-        registry = PluginRegistry[BaseHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("Alpha", CustomHandler)
         registry.register("BETA", AnotherHandler)
 
@@ -867,9 +840,7 @@ class TestPluginRegistryCanonicalizeKeys:
 
     def test_create_case_insensitive(self) -> None:
         """create() ignores case."""
-        registry = PluginRegistry[PlainClassHandler](
-            "test", canonicalize_keys=True
-        )
+        registry = PluginRegistry[PlainClassHandler]("test", canonicalize_keys=True)
         registry.register("handler", PlainClassHandler)
 
         result = registry.create("HANDLER", {"v": 1})
@@ -895,9 +866,7 @@ class TestPluginRegistryLazyInit:
             calls.append(1)
             reg.register("auto", CustomHandler)
 
-        registry = PluginRegistry[BaseHandler](
-            "test", on_first_access=init_cb
-        )
+        registry = PluginRegistry[BaseHandler]("test", on_first_access=init_cb)
 
         assert len(calls) == 0
         assert registry.is_registered("auto")
@@ -916,13 +885,12 @@ class TestPluginRegistryLazyInit:
 
     def test_callback_can_register(self) -> None:
         """Callback calls register() without deadlock (re-entrant)."""
+
         def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
             reg.register("a", CustomHandler)
             reg.register("b", AnotherHandler)
 
-        registry = PluginRegistry[BaseHandler](
-            "test", on_first_access=init_cb
-        )
+        registry = PluginRegistry[BaseHandler]("test", on_first_access=init_cb)
 
         keys = registry.list_keys()
         assert "a" in keys
@@ -938,9 +906,7 @@ class TestPluginRegistryLazyInit:
                 raise RuntimeError("first attempt fails")
             reg.register("h", CustomHandler)
 
-        registry = PluginRegistry[BaseHandler](
-            "test", on_first_access=flaky_init
-        )
+        registry = PluginRegistry[BaseHandler]("test", on_first_access=flaky_init)
 
         # First access fails
         with pytest.raises(RuntimeError, match="first attempt fails"):
@@ -958,9 +924,7 @@ class TestPluginRegistryLazyInit:
         def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
             received.append(reg)
 
-        registry = PluginRegistry[BaseHandler](
-            "test", on_first_access=init_cb
-        )
+        registry = PluginRegistry[BaseHandler]("test", on_first_access=init_cb)
 
         registry.list_keys()
         assert received[0] is registry
@@ -972,9 +936,7 @@ class TestPluginRegistryLazyInit:
         def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
             calls.append(1)
 
-        registry = PluginRegistry[BaseHandler](
-            "test", on_first_access=init_cb
-        )
+        registry = PluginRegistry[BaseHandler]("test", on_first_access=init_cb)
 
         registry.list_keys()
         registry.is_registered("x")
@@ -989,10 +951,14 @@ class TestPluginRegistryMetadata:
     def test_register_with_metadata(self) -> None:
         """Metadata stored and retrievable."""
         registry = PluginRegistry[BaseHandler]("test")
-        registry.register("h", CustomHandler, metadata={
-            "description": "Custom handler",
-            "version": "1.0",
-        })
+        registry.register(
+            "h",
+            CustomHandler,
+            metadata={
+                "description": "Custom handler",
+                "version": "1.0",
+            },
+        )
 
         meta = registry.get_metadata("h")
         assert meta == {"description": "Custom handler", "version": "1.0"}
@@ -1048,9 +1014,7 @@ class TestFirstAccessAtomicity:
             calls["n"] += 1
             raise RuntimeError("boom")
 
-        registry: PluginRegistry[Any] = PluginRegistry(
-            "atomic_init", on_first_access=populator
-        )
+        registry: PluginRegistry[Any] = PluginRegistry("atomic_init", on_first_access=populator)
 
         # First access surfaces the populator's own error.
         with pytest.raises(RuntimeError, match="boom"):
@@ -1069,9 +1033,7 @@ class TestFirstAccessAtomicity:
             reg.register("a", lambda: 1)
             reg.register("b", lambda: 2)
 
-        registry: PluginRegistry[Any] = PluginRegistry(
-            "good_init", on_first_access=populator
-        )
+        registry: PluginRegistry[Any] = PluginRegistry("good_init", on_first_access=populator)
 
         assert registry.is_registered("a")
         assert registry.is_registered("b")

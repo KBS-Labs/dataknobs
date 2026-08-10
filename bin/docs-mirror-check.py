@@ -206,9 +206,7 @@ def _exception_map(pair: dict) -> dict[str, str]:
     return out
 
 
-def _apply_line_exceptions(
-    lines: list[str], exmap: dict[str, str]
-) -> tuple[list[str], list[str]]:
+def _apply_line_exceptions(lines: list[str], exmap: dict[str, str]) -> tuple[list[str], list[str]]:
     """Apply canonicalized package->site line substitutions to ``lines``.
 
     ``line_exceptions`` match by exact (canonicalized) line *content*, not by
@@ -226,10 +224,7 @@ def _apply_line_exceptions(
             counts[ln] = counts.get(ln, 0) + 1
     ambiguous = sorted(key for key, count in counts.items() if count > 1)
     ambiguous_set = set(ambiguous)
-    out = [
-        exmap[ln] if ln in exmap and ln not in ambiguous_set else ln
-        for ln in lines
-    ]
+    out = [exmap[ln] if ln in exmap and ln not in ambiguous_set else ln for ln in lines]
     return out, ambiguous
 
 
@@ -252,9 +247,7 @@ def check_mirror(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None
         return
 
     exmap = _exception_map(pair)
-    pkg_lines, ambiguous = _apply_line_exceptions(
-        canonicalize_text(_read(pkg_path)), exmap
-    )
+    pkg_lines, ambiguous = _apply_line_exceptions(canonicalize_text(_read(pkg_path)), exmap)
     if ambiguous:
         rel_pkg = pkg_path.relative_to(ROOT)
         for key in ambiguous:
@@ -401,9 +394,7 @@ def check_shared_sections(pair: dict, pkg_dir: Path, site_dir: Path, res: Result
     rel_site = site_path.relative_to(ROOT)
     for name in sections:
         absent = [
-            edge
-            for edge in ("start", "end")
-            if not _has_section_marker(pkg_text, name, edge)
+            edge for edge in ("start", "end") if not _has_section_marker(pkg_text, name, edge)
         ]
         if absent:
             res.fail(
@@ -460,8 +451,7 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
     def _add(store: dict[str, str], name: str, bucket: str, side: str) -> None:
         if name in store:
             res.fail(
-                f"manifest: {side} doc '{name}' classified twice "
-                f"({store[name]} and {bucket})."
+                f"manifest: {side} doc '{name}' classified twice ({store[name]} and {bucket})."
             )
         store[name] = bucket
 
@@ -628,7 +618,9 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Enforce the package<->site doc-mirror invariant.")
     parser.add_argument("--check", action="store_true", help="Check for drift (default).")
-    parser.add_argument("--fix", action="store_true", help="Regenerate mirror site files from source.")
+    parser.add_argument(
+        "--fix", action="store_true", help="Regenerate mirror site files from source."
+    )
     parser.add_argument("--package", metavar="NAME", help="Restrict to one manifest package.")
     args = parser.parse_args(argv)
 

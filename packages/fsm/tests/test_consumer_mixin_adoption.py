@@ -82,6 +82,7 @@ class _FakeResourceProvider:
     def validate(self, _resource: object) -> bool:
         return True
 
+
 # (consumer_cls, config_cls, typed_config, equivalent_dict, default_constructible)
 ADOPTERS = [
     (
@@ -199,9 +200,7 @@ def test_mixing_typed_config_with_kwargs_raises(
     [(a[0], a[1]) for a in ADOPTERS if a[4]],
     ids=[a[0].__name__ for a in ADOPTERS if a[4]],
 )
-def test_default_construction_for_all_default_configs(
-    consumer_cls, config_cls
-) -> None:
+def test_default_construction_for_all_default_configs(consumer_cls, config_cls) -> None:
     """Adopters whose config has all-default fields build with no args."""
     obj = consumer_cls()
     assert isinstance(obj.config, config_cls)
@@ -247,9 +246,7 @@ def test_error_recovery_workflow_setup_state() -> None:
 
 
 def test_api_orchestrator_setup_state() -> None:
-    ao = APIOrchestrator.from_config(
-        {"endpoints": [{"name": "b", "url": "http://y"}]}
-    )
+    ao = APIOrchestrator.from_config({"endpoints": [{"name": "b", "url": "http://y"}]})
     # Nested APIEndpoint is rebuilt as a typed instance by from_dict recursion.
     assert isinstance(ao.config.endpoints[0], APIEndpoint)
     assert ao.config.endpoints[0].name == "b"
@@ -337,9 +334,7 @@ def test_resource_pool_default_and_dict_and_kwargs_config() -> None:
 def test_resource_pool_from_config_delivers_provider() -> None:
     """``from_config(config, provider=...)`` threads the collaborator."""
     provider = _FakeResourceProvider()
-    pool = ResourcePool.from_config(
-        {"min_size": 0, "max_size": 2}, provider=provider
-    )
+    pool = ResourcePool.from_config({"min_size": 0, "max_size": 2}, provider=provider)
     assert pool.provider is provider
     assert pool.config.max_size == 2
 
@@ -354,6 +349,4 @@ def test_resource_pool_config_is_read_only() -> None:
 def test_resource_pool_mixing_typed_config_with_kwargs_raises() -> None:
     """A typed PoolConfig plus loose config kwargs is a construction error."""
     with pytest.raises(TypeError):
-        ResourcePool(
-            _FakeResourceProvider(), PoolConfig(min_size=0), max_size=9
-        )
+        ResourcePool(_FakeResourceProvider(), PoolConfig(min_size=0), max_size=9)

@@ -515,7 +515,7 @@ class AsyncSimpleFSM:
         config: str | Path | dict[str, Any],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         resources: dict[str, Any] | None = None,
-        custom_functions: dict[str, Callable] | None = None
+        custom_functions: dict[str, Callable] | None = None,
     ):
         """Initialize AsyncSimpleFSM from configuration.
 
@@ -532,6 +532,7 @@ class AsyncSimpleFSM:
         # Build FSM using shared build logic (registers custom functions
         # with both ConfigLoader and FSMBuilder before building)
         from dataknobs_fsm.config.builder import build_fsm
+
         self._fsm = build_fsm(config, custom_functions)
         self._config = self._fsm.config
 
@@ -545,7 +546,7 @@ class AsyncSimpleFSM:
     def _setup_resources(self) -> None:
         """Set up resources from configuration."""
         # Register resources from config
-        if hasattr(self._config, 'resources'):
+        if hasattr(self._config, "resources"):
             for resource_config in self._config.resources:
                 try:
                     resource = self._create_resource_provider(resource_config)
@@ -556,7 +557,7 @@ class AsyncSimpleFSM:
                     # when a state tries to acquire it.
                     logger.warning(
                         "Failed to register resource '%s': %s",
-                        getattr(resource_config, 'name', '?'),
+                        getattr(resource_config, "name", "?"),
                         e,
                     )
 
@@ -591,11 +592,12 @@ class AsyncSimpleFSM:
 
         # Create context
         from ..core.modes import ProcessingMode
+
         context = ContextFactory.create_context(
             fsm=self._fsm,
             data=record,
             data_mode=ProcessingMode.SINGLE,
-            resource_manager=self._resource_manager
+            resource_manager=self._resource_manager,
         )
 
         try:
@@ -604,22 +606,17 @@ class AsyncSimpleFSM:
 
             # Format result
             return ResultFormatter.format_single_result(
-                context=context,
-                success=success,
-                result=result
+                context=context, success=success, result=result
             )
         except Exception as e:
-            return ResultFormatter.format_error_result(
-                context=context,
-                error=e
-            )
+            return ResultFormatter.format_error_result(context=context, error=e)
 
     async def process_batch(
         self,
         data: list[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: Callable | None = None
+        on_progress: Callable | None = None,
     ) -> list[dict[str, Any]]:
         """Process multiple records in parallel batches asynchronously.
 
@@ -655,21 +652,25 @@ class AsyncSimpleFSM:
         formatted_results = []
         for result in results:
             if result.success:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', 'unknown'),
-                    'data': result.result,
-                    'path': result.metadata.get('path', []),
-                    'success': True,
-                    'error': None
-                })
+                formatted_results.append(
+                    {
+                        "final_state": result.metadata.get("final_state", "unknown"),
+                        "data": result.result,
+                        "path": result.metadata.get("path", []),
+                        "success": True,
+                        "error": None,
+                    }
+                )
             else:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', None),
-                    'data': result.result if result.result else {},
-                    'path': result.metadata.get('path', []),
-                    'success': False,
-                    'error': str(result.error) if result.error else str(result.result)
-                })
+                formatted_results.append(
+                    {
+                        "final_state": result.metadata.get("final_state", None),
+                        "data": result.result if result.result else {},
+                        "path": result.metadata.get("path", []),
+                        "success": False,
+                        "error": str(result.error) if result.error else str(result.result),
+                    }
+                )
 
         return formatted_results
 
@@ -679,13 +680,13 @@ class AsyncSimpleFSM:
         sink: str | Path | None = None,
         chunk_size: int = 100,
         on_progress: Callable | None = None,
-        input_format: str = 'auto',
-        output_format: str = 'auto',
-        text_field_name: str = 'text',
-        csv_delimiter: str = ',',
+        input_format: str = "auto",
+        output_format: str = "auto",
+        text_field_name: str = "text",
+        csv_delimiter: str = ",",
         csv_has_header: bool = True,
         skip_empty_lines: bool = True,
-        use_streaming: bool = False
+        use_streaming: bool = False,
     ) -> dict[str, Any]:
         """Process a stream of data through the FSM asynchronously.
 
@@ -712,17 +713,11 @@ class AsyncSimpleFSM:
             ``duration`` and ``throughput``.
         """
         # Configure streaming
-        stream_config = CoreStreamConfig(
-            chunk_size=chunk_size,
-            parallelism=4,
-            memory_limit_mb=1024
-        )
+        stream_config = CoreStreamConfig(chunk_size=chunk_size, parallelism=4, memory_limit_mb=1024)
 
         # Create async stream executor
         stream_executor = AsyncStreamExecutor(
-            fsm=self._fsm,
-            stream_config=stream_config,
-            progress_callback=on_progress
+            fsm=self._fsm, stream_config=stream_config, progress_callback=on_progress
         )
 
         # Choose between streaming and regular mode
@@ -740,12 +735,12 @@ class AsyncSimpleFSM:
                 text_field_name=text_field_name,
                 csv_delimiter=csv_delimiter,
                 csv_has_header=csv_has_header,
-                skip_empty_lines=skip_empty_lines
+                skip_empty_lines=skip_empty_lines,
             )
 
             # Handle sink for streaming mode. 'auto' lets the writer derive the
             # format from the sink extension (its None default).
-            writer_format = None if output_format == 'auto' else output_format
+            writer_format = None if output_format == "auto" else output_format
             sink_func = None
             cleanup_func = None
             if sink:
@@ -766,7 +761,7 @@ class AsyncSimpleFSM:
                     text_field_name=text_field_name,
                     csv_delimiter=csv_delimiter,
                     csv_has_header=csv_has_header,
-                    skip_empty_lines=skip_empty_lines
+                    skip_empty_lines=skip_empty_lines,
                 )
             else:
                 # Already an async iterator
@@ -774,30 +769,26 @@ class AsyncSimpleFSM:
 
             # Handle sink for regular mode. 'auto' maps to the writer's None
             # default (derive the format from the sink extension).
-            writer_format = None if output_format == 'auto' else output_format
+            writer_format = None if output_format == "auto" else output_format
             sink_func = None
             cleanup_func = None
             if sink:
-                sink_func, cleanup_func = create_file_writer(
-                    sink, output_format=writer_format
-                )
+                sink_func, cleanup_func = create_file_writer(sink, output_format=writer_format)
 
         try:
             # Execute stream using async executor
             result = await stream_executor.execute_stream(
-                source=stream_source,
-                sink=sink_func,
-                chunk_size=chunk_size
+                source=stream_source, sink=sink_func, chunk_size=chunk_size
             )
 
             return {
-                'total_processed': result.total_processed,
-                'successful': result.successful,
-                'failed': result.failed,
-                'emitted': result.emitted,
-                'excluded_by_state': result.excluded_by_state,
-                'duration': result.duration,
-                'throughput': result.throughput
+                "total_processed": result.total_processed,
+                "successful": result.successful,
+                "failed": result.failed,
+                "emitted": result.emitted,
+                "excluded_by_state": result.excluded_by_state,
+                "duration": result.duration,
+                "throughput": result.throughput,
             }
         finally:
             # Clean up any resources (e.g., close files). A sync cleanup
@@ -832,14 +823,11 @@ class AsyncSimpleFSM:
         if start_state.schema:
             validation_result = start_state.schema.validate(record)
             return {
-                'valid': validation_result.valid,
-                'errors': validation_result.errors if not validation_result.valid else []
+                "valid": validation_result.valid,
+                "errors": validation_result.errors if not validation_result.valid else [],
             }
         else:
-            return {
-                'valid': True,
-                'errors': []
-            }
+            return {"valid": True, "errors": []}
 
     def get_state(self, name: str) -> Any:
         """Get a state definition by name (or ``None`` if absent).
@@ -891,7 +879,7 @@ class AsyncSimpleFSM:
 async def create_async_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs
+    **kwargs,
 ) -> AsyncSimpleFSM:
     """Factory function to create an AsyncSimpleFSM instance.
 

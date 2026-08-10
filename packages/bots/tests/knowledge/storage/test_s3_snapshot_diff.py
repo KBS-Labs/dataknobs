@@ -39,16 +39,10 @@ def test_unknown_change_detection_mode_raises() -> None:
 
 def test_from_config_threads_change_detection_mode() -> None:
     """``change_detection_mode`` flows through ``from_config``."""
-    be = S3KnowledgeBackend.from_config(
-        {"bucket": "b", "change_detection_mode": "s3_versioning"}
-    )
+    be = S3KnowledgeBackend.from_config({"bucket": "b", "change_detection_mode": "s3_versioning"})
     assert be._change_detection_mode == "s3_versioning"
     # Default when omitted.
-    assert (
-        S3KnowledgeBackend.from_config({"bucket": "b"})
-        ._change_detection_mode
-        == "snapshot"
-    )
+    assert S3KnowledgeBackend.from_config({"bucket": "b"})._change_detection_mode == "snapshot"
 
 
 # --- LocalStack integration tests ---
@@ -64,13 +58,9 @@ _INTEGRATION_MARKS = [
 ]
 
 
-async def _backend(
-    cfg: dict[str, Any], mode: str
-) -> S3KnowledgeBackend:
+async def _backend(cfg: dict[str, Any], mode: str) -> S3KnowledgeBackend:
     """Build and initialize a backend against the LocalStack bucket."""
-    be = S3KnowledgeBackend.from_config(
-        {**cfg, "change_detection_mode": mode}
-    )
+    be = S3KnowledgeBackend.from_config({**cfg, "change_detection_mode": mode})
     await be.initialize()
     return be
 
@@ -112,9 +102,7 @@ class TestSnapshotMode:
         finally:
             await be.close()
 
-    async def test_unretained_version_raises_and_is_swallowed(
-        self, s3_kb_config
-    ) -> None:
+    async def test_unretained_version_raises_and_is_swallowed(self, s3_kb_config) -> None:
         be = await _backend(s3_kb_config, "snapshot")
         try:
             await be.create_kb("d")
@@ -130,9 +118,7 @@ class TestSnapshotMode:
 class TestS3VersioningMode:
     pytestmark = _INTEGRATION_MARKS
 
-    async def test_minimal_diff_via_version_history(
-        self, s3_kb_versioned_config
-    ) -> None:
+    async def test_minimal_diff_via_version_history(self, s3_kb_versioned_config) -> None:
         """No snapshot objects written — the diff is reconstructed from
         the metadata object's S3 version history."""
         be = await _backend(s3_kb_versioned_config, "s3_versioning")
@@ -152,22 +138,14 @@ class TestS3VersioningMode:
             assert sorted(cs.deleted) == ["b.md"]
 
             # Fast path writes NO _snapshots/ objects.
-            snapshot_prefix = (
-                f"{be._prefix}d/{be.SNAPSHOTS_DIR}/"
-            )
-            async with be._session.client(
-                "s3", **be._client_kwargs
-            ) as s3:
-                listed = await s3.list_objects_v2(
-                    Bucket=be._bucket, Prefix=snapshot_prefix
-                )
+            snapshot_prefix = f"{be._prefix}d/{be.SNAPSHOTS_DIR}/"
+            async with be._session.client("s3", **be._client_kwargs) as s3:
+                listed = await s3.list_objects_v2(Bucket=be._bucket, Prefix=snapshot_prefix)
             assert listed.get("KeyCount", 0) == 0
         finally:
             await be.close()
 
-    async def test_versioning_disabled_falls_back_safely(
-        self, s3_kb_config
-    ) -> None:
+    async def test_versioning_disabled_falls_back_safely(self, s3_kb_config) -> None:
         """With bucket versioning off only the current metadata version
         is listed, so a stale version is unresolvable → InvalidVersionError
         → ``has_changes_since`` reports "changed" (a correct, non-minimal

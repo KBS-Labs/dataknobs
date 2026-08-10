@@ -10,6 +10,7 @@ try:
     from dataknobs_llm.llm.providers import EchoProvider
     from dataknobs_llm.prompts.implementations.config_library import ConfigPromptLibrary
     from dataknobs_llm.prompts.builders.async_prompt_builder import AsyncPromptBuilder
+
     try:
         from dataknobs_common.databases.async_memory_database import AsyncMemoryDatabase
     except ImportError:
@@ -68,16 +69,8 @@ class ConversationBenchmark:
         """
         # Simple config with test prompts
         config = {
-            "system": {
-                "test": {
-                    "template": "You are a helpful assistant."
-                }
-            },
-            "user": {
-                "test": {
-                    0: {"template": "User message: {{text}}"}
-                }
-            }
+            "system": {"test": {"template": "You are a helpful assistant."}},
+            "user": {"test": {0: {"template": "User message: {{text}}"}}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -89,10 +82,7 @@ class ConversationBenchmark:
         storage = DataknobsConversationStorage(backend)
 
         manager = await ConversationManager.create(
-            llm=llm,
-            prompt_builder=builder,
-            storage=storage,
-            system_prompt_name="test"
+            llm=llm, prompt_builder=builder, storage=storage, system_prompt_name="test"
         )
 
         return manager
@@ -105,9 +95,7 @@ class ConversationBenchmark:
         for i in range(self.iterations):
             start = time.perf_counter()
             await manager.add_message(
-                role="user",
-                prompt_name="test",
-                params={"text": f"Message {i}"}
+                role="user", prompt_name="test", params={"text": f"Message {i}"}
             )
             end = time.perf_counter()
             times.append(end - start)
@@ -216,8 +204,10 @@ class ConversationBenchmark:
             print(f"Running {name}...")
             result = await benchmark_func()
             results.append(result)
-            print(f"  {result.operations_per_second:.0f} ops/sec "
-                  f"({result.mean_time * 1000:.3f}ms mean)")
+            print(
+                f"  {result.operations_per_second:.0f} ops/sec "
+                f"({result.mean_time * 1000:.3f}ms mean)"
+            )
 
         print()
         print("Conversation benchmarks complete!")

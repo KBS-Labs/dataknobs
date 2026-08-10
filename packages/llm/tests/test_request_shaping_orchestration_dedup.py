@@ -80,9 +80,7 @@ def _ollama(model: str, **cfg: Any) -> OllamaProvider:
 
 
 def _huggingface(model: str, **cfg: Any) -> HuggingFaceProvider:
-    return HuggingFaceProvider(
-        LLMConfig(provider="huggingface", model=model, **cfg)
-    )
+    return HuggingFaceProvider(LLMConfig(provider="huggingface", model=model, **cfg))
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +118,7 @@ class TestRequestShapingParity:
         """
         p = _openai(_OPENAI_REASONING)
         rf = {"type": "json_object"}
-        wire = p._build_api_kwargs(
-            p.config, {"user": "u", "response_format": rf}
-        )
+        wire = p._build_api_kwargs(p.config, {"user": "u", "response_format": rf})
         assert wire["user"] == "u"
         assert wire["response_format"] == rf
 
@@ -146,9 +142,7 @@ class TestRequestShapingParity:
         p = _bedrock(_BEDROCK_CLAUDE45)
         ceiling = p.get_constraints().max_tokens_ceiling
         assert ceiling is not None
-        req = p._build_converse_request(
-            "hi", p.config, None, {"max_tokens": ceiling + 10_000}
-        )
+        req = p._build_converse_request("hi", p.config, None, {"max_tokens": ceiling + 10_000})
         assert req["inferenceConfig"]["maxTokens"] == ceiling
 
     def test_p4_bedrock_system_and_guardrail_read_unshaped_fields(self) -> None:
@@ -172,9 +166,7 @@ class TestRequestShapingParity:
                 "guardrail_version": "DRAFT",
             },
         )
-        req = p._build_converse_request(
-            "hi", p.config, None, {"max_tokens": 512}
-        )
+        req = p._build_converse_request("hi", p.config, None, {"max_tokens": 512})
         assert req["system"] == [{"text": "SYS"}]
         assert req["guardrailConfig"] == {
             "guardrailIdentifier": "gid-1",
@@ -229,9 +221,7 @@ class TestShapeRequestParams:
         p = _openai(_OPENAI_REASONING)
         ceiling = p.get_constraints().max_tokens_ceiling
         assert ceiling is not None
-        result = p._shape_request_params(
-            p.config, {"max_tokens": ceiling + 1000}
-        )
+        result = p._shape_request_params(p.config, {"max_tokens": ceiling + 1000})
         # Folded + clamped in canonical config space; not left in wire_extra.
         assert "max_tokens" not in result.wire_extra
         assert result.config.max_tokens == ceiling
@@ -273,9 +263,7 @@ class TestShapeRequestParams:
         """
         p = _openai(_OPENAI_REASONING)
         result = p._shape_request_params(p.config)
-        assert result.constraints.param_remaps.get("max_tokens") == (
-            "max_completion_tokens"
-        )
+        assert result.constraints.param_remaps.get("max_tokens") == ("max_completion_tokens")
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +311,7 @@ class TestOrchestrationSharedOnBase:
         for cls, name in BUILD_METHODS.items():
             source = inspect.getsource(getattr(cls, name))
             assert "_shape_request_params" in source, (
-                f"{cls.__name__}.{name} must route through "
-                f"_shape_request_params"
+                f"{cls.__name__}.{name} must route through _shape_request_params"
             )
             assert "shaped_fields" not in source, (
                 f"{cls.__name__}.{name} re-inlines the shaped_fields split"
@@ -360,6 +347,5 @@ class TestOrchestrationSharedOnBase:
         """
         shipped = _shipped_providers()
         assert shipped >= set(BUILD_METHODS), (
-            f"provider enumeration lost a known adopter: "
-            f"{set(BUILD_METHODS) - shipped}"
+            f"provider enumeration lost a known adopter: {set(BUILD_METHODS) - shipped}"
         )

@@ -91,8 +91,7 @@ def test_resolve_dotted_returns_a_non_callable_without_complaint() -> None:
 @pytest.mark.parametrize(
     "ref",
     ["", "   ", "nodots", ":name", "module:", ".name", "module."],
-    ids=["empty", "blank", "no-separator", "no-module", "no-attr",
-         "dot-no-module", "dot-no-attr"],
+    ids=["empty", "blank", "no-separator", "no-module", "no-attr", "dot-no-module", "dot-no-attr"],
 )
 def test_malformed_references_are_rejected(ref: str) -> None:
     with pytest.raises(DottedPathError) as excinfo:
@@ -220,10 +219,7 @@ def test_the_constructor_of_a_conforming_class_is_still_not_run() -> None:
     counter away: this class raises if constructed at all, so the test fails
     loudly rather than by an assertion on a number.
     """
-    assert (
-        resolve_class(f"{HERE}:ExplodesOnConstruction", Shaped)
-        is ExplodesOnConstruction
-    )
+    assert resolve_class(f"{HERE}:ExplodesOnConstruction", Shaped) is ExplodesOnConstruction
 
 
 def test_a_module_level_function_is_not_a_class() -> None:
@@ -249,17 +245,13 @@ def test_a_non_runtime_checkable_base_raises_typeerror_unwrapped() -> None:
 
 
 def test_none_resolves_to_none() -> None:
-    assert (
-        resolve_optional_callable(None, field_name="hook", owner="thing") is None
-    )
+    assert resolve_optional_callable(None, field_name="hook", owner="thing") is None
 
 
 def test_a_present_but_broken_reference_still_raises() -> None:
-    """"Omitted" and "wrong" are different states; only the first is optional."""
+    """ "Omitted" and "wrong" are different states; only the first is optional."""
     with pytest.raises(DottedPathError):
-        resolve_optional_callable(
-            f"{HERE}:no_such_attribute", field_name="hook", owner="thing"
-        )
+        resolve_optional_callable(f"{HERE}:no_such_attribute", field_name="hook", owner="thing")
 
 
 def test_the_error_names_the_config_site() -> None:
@@ -350,9 +342,7 @@ def test_an_exploding_module_reports_import_failed_not_module_not_found(
     assert "hunter2" not in str(excinfo.value)
 
 
-def test_a_module_missing_a_dependency_reports_module_not_found(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_module_missing_a_dependency_reports_module_not_found(tmp_path, monkeypatch) -> None:
     """The target exists; something it imports does not.
 
     This is the optional-dependency case — a tool whose module imports an SDK
@@ -374,9 +364,7 @@ def test_a_module_missing_a_dependency_reports_module_not_found(
     assert excinfo.value.reason is DottedPathReason.MODULE_NOT_FOUND
 
 
-def test_a_broken_from_import_reports_import_failed(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_broken_from_import_reports_import_failed(tmp_path, monkeypatch) -> None:
     """A plain ``ImportError`` means the module began executing and failed.
 
     ``ModuleNotFoundError`` is an ``ImportError`` subclass, so the ordering of
@@ -420,16 +408,12 @@ def _write_lazy_export_module(tmp_path, monkeypatch, name: str, raises: str):
     """
     import sys
 
-    (tmp_path / f"{name}.py").write_text(
-        f"def __getattr__(attr):\n    raise {raises}\n"
-    )
+    (tmp_path / f"{name}.py").write_text(f"def __getattr__(attr):\n    raise {raises}\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     sys.modules.pop(name, None)
 
 
-def test_a_lazy_export_that_raises_is_still_a_dotted_path_error(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_lazy_export_that_raises_is_still_a_dotted_path_error(tmp_path, monkeypatch) -> None:
     """The attribute lookup is a *second* execution point, not just a read.
 
     A PEP 562 module-level ``__getattr__`` runs arbitrary code, and the
@@ -443,7 +427,9 @@ def test_a_lazy_export_that_raises_is_still_a_dotted_path_error(
     every failure of this function must arrive as one exception type.
     """
     _write_lazy_export_module(
-        tmp_path, monkeypatch, "dk_lazy_raises_fixture",
+        tmp_path,
+        monkeypatch,
+        "dk_lazy_raises_fixture",
         "ImportError('lazy export is broken')",
     )
 
@@ -467,7 +453,9 @@ def test_a_lazy_export_missing_its_dependency_reports_module_not_found(
     the reason a caller's ``optional: true`` is entitled to swallow.
     """
     _write_lazy_export_module(
-        tmp_path, monkeypatch, "dk_lazy_missing_dep_fixture",
+        tmp_path,
+        monkeypatch,
+        "dk_lazy_missing_dep_fixture",
         "ModuleNotFoundError(\"No module named 'dk_no_such_sdk'\")",
     )
 

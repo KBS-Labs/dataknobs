@@ -17,6 +17,7 @@ here; consumers needing a custom combiner can wrap the inner
 classifiers in their own ``IntentClassifier`` implementation and
 register it via :data:`intent_classifier_backends`.
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -39,8 +40,7 @@ class CompositeIntentClassifier(IntentClassifier):
     ) -> None:
         if not classifiers:
             raise ValueError(
-                "CompositeIntentClassifier requires at least one "
-                "inner classifier",
+                "CompositeIntentClassifier requires at least one inner classifier",
             )
         self._classifiers = list(classifiers)
         self._strategy = strategy
@@ -57,8 +57,10 @@ class CompositeIntentClassifier(IntentClassifier):
                 if result.intent is not None:
                     return result
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
 
         # "vote" strategy
@@ -71,8 +73,10 @@ class CompositeIntentClassifier(IntentClassifier):
                 first_match.setdefault(result.intent.name, result)
         if not votes:
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
         winner, _ = votes.most_common(1)[0]
         return first_match[winner]

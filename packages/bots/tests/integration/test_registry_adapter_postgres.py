@@ -43,14 +43,16 @@ async def postgres_registry_adapter(
     where the database connection is shared across multiple consumers.
     """
     for pg in make_postgres_test_db("test_bot_registry_"):
-        db = AsyncPostgresDatabase({
-            "host": pg["host"],
-            "port": pg["port"],
-            "database": pg["database"],
-            "user": pg["user"],
-            "password": pg["password"],
-            "table": pg["table"],
-        })
+        db = AsyncPostgresDatabase(
+            {
+                "host": pg["host"],
+                "port": pg["port"],
+                "database": pg["database"],
+                "user": pg["user"],
+                "password": pg["password"],
+                "table": pg["table"],
+            }
+        )
         await db.connect()
         adapter = DataKnobsRegistryAdapter(database=db)
         await adapter.initialize()
@@ -66,7 +68,8 @@ class TestDataKnobsRegistryAdapterPostgres:
 
     @pytest.mark.asyncio
     async def test_multi_tenant_filter_metadata(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """Reproducer for the canonical multi-tenant filter case.
 
@@ -88,19 +91,16 @@ class TestDataKnobsRegistryAdapterPostgres:
             "bot-c", {"llm": "echo"}, metadata={"tenant_id": "t1"}
         )
 
-        t1_bots = await postgres_registry_adapter.list_active(
-            filter_metadata={"tenant_id": "t1"}
-        )
+        t1_bots = await postgres_registry_adapter.list_active(filter_metadata={"tenant_id": "t1"})
         assert {b.bot_id for b in t1_bots} == {"bot-a", "bot-c"}
 
-        t2_bots = await postgres_registry_adapter.list_active(
-            filter_metadata={"tenant_id": "t2"}
-        )
+        t2_bots = await postgres_registry_adapter.list_active(filter_metadata={"tenant_id": "t2"})
         assert {b.bot_id for b in t2_bots} == {"bot-b"}
 
     @pytest.mark.asyncio
     async def test_metadata_round_trip_postgres(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """``register(..., metadata=...)`` round-trips via the JSONB column.
 
@@ -128,7 +128,8 @@ class TestDataKnobsRegistryAdapterPostgres:
 
     @pytest.mark.asyncio
     async def test_combined_status_and_metadata_filter(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """``list_active`` AND-combines ``status='active'`` with ``filter_metadata``.
 
@@ -136,9 +137,7 @@ class TestDataKnobsRegistryAdapterPostgres:
         be pushed into the SQL WHERE clause and combined.  Inactive
         rows matching the metadata filter must NOT be returned.
         """
-        await postgres_registry_adapter.register(
-            "active-acme", {}, metadata={"tenant_id": "acme"}
-        )
+        await postgres_registry_adapter.register("active-acme", {}, metadata={"tenant_id": "acme"})
         await postgres_registry_adapter.register(
             "inactive-acme",
             {},
@@ -156,7 +155,8 @@ class TestDataKnobsRegistryAdapterPostgres:
 
     @pytest.mark.asyncio
     async def test_count_with_metadata_filter(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """``count(filter_metadata=...)`` returns the matching active row count.
 
@@ -165,15 +165,9 @@ class TestDataKnobsRegistryAdapterPostgres:
         a ``SELECT COUNT(*) WHERE`` pushdown, every consumer benefits
         without code changes.
         """
-        await postgres_registry_adapter.register(
-            "a", {}, metadata={"tenant_id": "t1"}
-        )
-        await postgres_registry_adapter.register(
-            "b", {}, metadata={"tenant_id": "t1"}
-        )
-        await postgres_registry_adapter.register(
-            "c", {}, metadata={"tenant_id": "t2"}
-        )
+        await postgres_registry_adapter.register("a", {}, metadata={"tenant_id": "t1"})
+        await postgres_registry_adapter.register("b", {}, metadata={"tenant_id": "t1"})
+        await postgres_registry_adapter.register("c", {}, metadata={"tenant_id": "t2"})
         await postgres_registry_adapter.register(
             "d",
             {},
@@ -181,27 +175,18 @@ class TestDataKnobsRegistryAdapterPostgres:
             metadata={"tenant_id": "t1"},
         )
 
-        assert (
-            await postgres_registry_adapter.count(filter_metadata={"tenant_id": "t1"})
-            == 2
-        )
-        assert (
-            await postgres_registry_adapter.count(filter_metadata={"tenant_id": "t2"})
-            == 1
-        )
+        assert await postgres_registry_adapter.count(filter_metadata={"tenant_id": "t1"}) == 2
+        assert await postgres_registry_adapter.count(filter_metadata={"tenant_id": "t2"}) == 1
         assert await postgres_registry_adapter.count() == 3
 
     @pytest.mark.asyncio
     async def test_empty_filter_metadata_is_no_filter_postgres(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """``filter_metadata={}`` is equivalent to ``filter_metadata=None`` on PG too."""
-        await postgres_registry_adapter.register(
-            "a", {}, metadata={"tenant_id": "t1"}
-        )
-        await postgres_registry_adapter.register(
-            "b", {}, metadata={"tenant_id": "t2"}
-        )
+        await postgres_registry_adapter.register("a", {}, metadata={"tenant_id": "t1"})
+        await postgres_registry_adapter.register("b", {}, metadata={"tenant_id": "t2"})
 
         with_empty = await postgres_registry_adapter.list_active(filter_metadata={})
         with_none = await postgres_registry_adapter.list_active()
@@ -210,7 +195,8 @@ class TestDataKnobsRegistryAdapterPostgres:
 
     @pytest.mark.asyncio
     async def test_metadata_persisted_to_jsonb_column(
-        self, postgres_registry_adapter: DataKnobsRegistryAdapter,
+        self,
+        postgres_registry_adapter: DataKnobsRegistryAdapter,
     ) -> None:
         """Read the raw record back: metadata is in ``record.metadata``, not ``record.data``.
 

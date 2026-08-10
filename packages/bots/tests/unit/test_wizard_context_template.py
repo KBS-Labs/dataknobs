@@ -184,9 +184,7 @@ class TestBuildStageContext:
 
         assert result == "CUSTOM: test"
 
-    def test_build_stage_context_default_without_template(
-        self, simple_fsm: WizardFSM
-    ) -> None:
+    def test_build_stage_context_default_without_template(self, simple_fsm: WizardFSM) -> None:
         """_build_stage_context uses default when no template."""
         reasoning = WizardReasoning(wizard_fsm=simple_fsm, context_template=None)
 
@@ -200,9 +198,7 @@ class TestBuildStageContext:
         assert "Stage: test" in result
         assert "Goal: Do something" in result
 
-    def test_default_context_includes_collected_data(
-        self, simple_fsm: WizardFSM
-    ) -> None:
+    def test_default_context_includes_collected_data(self, simple_fsm: WizardFSM) -> None:
         """Default context format includes collected data section."""
         reasoning = WizardReasoning(wizard_fsm=simple_fsm, context_template=None)
 
@@ -242,9 +238,7 @@ stages:
   - name: done
     is_end: true
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(config_content)
             config_path = Path(f.name)
 

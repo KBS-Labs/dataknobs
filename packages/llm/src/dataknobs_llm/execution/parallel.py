@@ -184,9 +184,7 @@ class ParallelLLMExecutor:
         if not tasks:
             return {}
 
-        effective_fail_fast = (
-            self._fail_fast if fail_fast is None else fail_fast
-        )
+        effective_fail_fast = self._fail_fast if fail_fast is None else fail_fast
         semaphore = asyncio.Semaphore(self._max_concurrency)
         start_all = time.monotonic()
 
@@ -242,9 +240,7 @@ class ParallelLLMExecutor:
         if not tasks:
             return {}
 
-        effective_fail_fast = (
-            self._fail_fast if fail_fast is None else fail_fast
-        )
+        effective_fail_fast = self._fail_fast if fail_fast is None else fail_fast
         semaphore = asyncio.Semaphore(self._max_concurrency)
         start_all = time.monotonic()
 
@@ -302,9 +298,7 @@ class ParallelLLMExecutor:
         Returns:
             List of TaskResult in execution order.
         """
-        effective_fail_fast = (
-            self._fail_fast if fail_fast is None else fail_fast
-        )
+        effective_fail_fast = self._fail_fast if fail_fast is None else fail_fast
         results: list[TaskResult] = []
         for i, task in enumerate(tasks):
             tag = task.tag or f"step_{i}"
@@ -351,9 +345,7 @@ class ParallelLLMExecutor:
                 }
 
             effective_timeout = (
-                task.timeout
-                if task.timeout is not None
-                else self._default_per_task_timeout
+                task.timeout if task.timeout is not None else self._default_per_task_timeout
             )
 
             async def _bounded_complete(
@@ -366,9 +358,7 @@ class ParallelLLMExecutor:
                         messages, config_overrides=config_overrides
                     )
                 return await asyncio.wait_for(
-                    self._provider.complete(
-                        messages, config_overrides=config_overrides
-                    ),
+                    self._provider.complete(messages, config_overrides=config_overrides),
                     timeout=effective_timeout,
                 )
 
@@ -387,9 +377,7 @@ class ParallelLLMExecutor:
                 )
             duration = (time.monotonic() - start) * 1000
             logger.debug("LLM task '%s' completed in %.1fms", tag, duration)
-            return TaskResult(
-                tag=tag, success=True, value=response, duration_ms=duration
-            )
+            return TaskResult(tag=tag, success=True, value=response, duration_ms=duration)
         except asyncio.CancelledError:
             # Defensive: in Python 3.12+ CancelledError extends BaseException
             # so it already escapes the `except Exception` block below. The
@@ -398,24 +386,14 @@ class ParallelLLMExecutor:
             raise
         except TimeoutError as e:
             duration = (time.monotonic() - start) * 1000
-            logger.warning(
-                "LLM task '%s' timed out after %.1fms", tag, duration
-            )
-            return TaskResult(
-                tag=tag, success=False, value=None, error=e, duration_ms=duration
-            )
+            logger.warning("LLM task '%s' timed out after %.1fms", tag, duration)
+            return TaskResult(tag=tag, success=False, value=None, error=e, duration_ms=duration)
         except Exception as e:
             duration = (time.monotonic() - start) * 1000
-            logger.warning(
-                "LLM task '%s' failed after %.1fms: %s", tag, duration, e
-            )
-            return TaskResult(
-                tag=tag, success=False, value=None, error=e, duration_ms=duration
-            )
+            logger.warning("LLM task '%s' failed after %.1fms: %s", tag, duration, e)
+            return TaskResult(tag=tag, success=False, value=None, error=e, duration_ms=duration)
 
-    async def _execute_single_deterministic(
-        self, tag: str, task: DeterministicTask
-    ) -> TaskResult:
+    async def _execute_single_deterministic(self, tag: str, task: DeterministicTask) -> TaskResult:
         """Execute a single deterministic task.
 
         Sync callables are run in a thread executor to avoid blocking.
@@ -430,46 +408,32 @@ class ParallelLLMExecutor:
         start = time.monotonic()
         logger.debug("Starting deterministic task '%s'", tag)
         effective_timeout = (
-            task.timeout
-            if task.timeout is not None
-            else self._default_per_task_timeout
+            task.timeout if task.timeout is not None else self._default_per_task_timeout
         )
         try:
             if asyncio.iscoroutinefunction(task.fn):
                 inner = task.fn(*task.args, **task.kwargs)
             else:
                 loop = asyncio.get_running_loop()
-                inner = loop.run_in_executor(
-                    None, lambda: task.fn(*task.args, **task.kwargs)
-                )
+                inner = loop.run_in_executor(None, lambda: task.fn(*task.args, **task.kwargs))
             if effective_timeout is None:
                 value = await inner
             else:
                 value = await asyncio.wait_for(inner, timeout=effective_timeout)
             duration = (time.monotonic() - start) * 1000
             logger.debug("Deterministic task '%s' completed in %.1fms", tag, duration)
-            return TaskResult(
-                tag=tag, success=True, value=value, duration_ms=duration
-            )
+            return TaskResult(tag=tag, success=True, value=value, duration_ms=duration)
         except asyncio.CancelledError:
             # Defensive: see note in _execute_single_llm.
             raise
         except TimeoutError as e:
             duration = (time.monotonic() - start) * 1000
-            logger.warning(
-                "Deterministic task '%s' timed out after %.1fms", tag, duration
-            )
-            return TaskResult(
-                tag=tag, success=False, value=None, error=e, duration_ms=duration
-            )
+            logger.warning("Deterministic task '%s' timed out after %.1fms", tag, duration)
+            return TaskResult(tag=tag, success=False, value=None, error=e, duration_ms=duration)
         except Exception as e:
             duration = (time.monotonic() - start) * 1000
-            logger.warning(
-                "Deterministic task '%s' failed after %.1fms: %s", tag, duration, e
-            )
-            return TaskResult(
-                tag=tag, success=False, value=None, error=e, duration_ms=duration
-            )
+            logger.warning("Deterministic task '%s' failed after %.1fms: %s", tag, duration, e)
+            return TaskResult(tag=tag, success=False, value=None, error=e, duration_ms=duration)
 
     async def _gather_fail_fast(
         self,
@@ -511,9 +475,7 @@ class ParallelLLMExecutor:
         pending: set[asyncio.Task[TaskResult]] = set(order)
         try:
             while pending:
-                done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 for d in done:
                     if d.cancelled():
                         # Cancelled by us below; resolved as CancelledError
@@ -545,8 +507,7 @@ class ParallelLLMExecutor:
                             success=False,
                             value=None,
                             error=exc,
-                            duration_ms=(time.monotonic() - start_times[d])
-                            * 1000,
+                            duration_ms=(time.monotonic() - start_times[d]) * 1000,
                         )
                     completed[d] = result
                     if not result.success and not failure_seen:
@@ -573,9 +534,7 @@ class ParallelLLMExecutor:
                         tag=tag_for[t],
                         success=False,
                         value=None,
-                        error=asyncio.CancelledError(
-                            "Cancelled by ParallelLLMExecutor fail_fast"
-                        ),
+                        error=asyncio.CancelledError("Cancelled by ParallelLLMExecutor fail_fast"),
                         duration_ms=(time.monotonic() - start_times[t]) * 1000,
                     )
                 )

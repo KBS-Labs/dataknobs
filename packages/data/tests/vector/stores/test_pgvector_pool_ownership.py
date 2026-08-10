@@ -83,9 +83,7 @@ async def pg_table_name(
     async def _drop() -> None:
         conn = await asyncpg.connect(_get_test_connection_string())
         try:
-            await conn.execute(
-                f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE"
-            )
+            await conn.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE")
         finally:
             await conn.close()
 
@@ -118,13 +116,9 @@ async def test_injected_pool_survives_store_close(
     Reproduce-first: pre-gate, ``close()`` closes the injected pool, so
     ``external.is_closing()`` is ``True`` and the direct query fails.
     """
-    external = await asyncpg.create_pool(
-        _get_test_connection_string(), min_size=1, max_size=2
-    )
+    external = await asyncpg.create_pool(_get_test_connection_string(), min_size=1, max_size=2)
     try:
-        store = PgVectorStore.from_components(
-            _store_config(pg_table_name), pool=external
-        )
+        store = PgVectorStore.from_components(_store_config(pg_table_name), pool=external)
         await store.initialize()
         # Sanity: the store works against the injected pool.
         assert await store.count() == 0
@@ -174,16 +168,10 @@ async def test_two_stores_share_one_pool(
     stores. Closing the first store must not tear down the pool the second
     still depends on.
     """
-    external = await asyncpg.create_pool(
-        _get_test_connection_string(), min_size=1, max_size=3
-    )
+    external = await asyncpg.create_pool(_get_test_connection_string(), min_size=1, max_size=3)
     try:
-        store_a = PgVectorStore.from_components(
-            _store_config(pg_table_name), pool=external
-        )
-        store_b = PgVectorStore.from_components(
-            _store_config(pg_table_name), pool=external
-        )
+        store_a = PgVectorStore.from_components(_store_config(pg_table_name), pool=external)
+        store_b = PgVectorStore.from_components(_store_config(pg_table_name), pool=external)
         await store_a.initialize()
         await store_b.initialize()
 
@@ -254,13 +242,9 @@ async def test_injected_store_reopens_after_close(
     the reference, so ``initialize()`` after ``close()`` reuses the same
     pool (it never fabricates one) and the store is fully usable again.
     """
-    external = await asyncpg.create_pool(
-        _get_test_connection_string(), min_size=1, max_size=2
-    )
+    external = await asyncpg.create_pool(_get_test_connection_string(), min_size=1, max_size=2)
     try:
-        store = PgVectorStore.from_components(
-            _store_config(pg_table_name), pool=external
-        )
+        store = PgVectorStore.from_components(_store_config(pg_table_name), pool=external)
         await store.initialize()
         assert await store.count() == 0
 

@@ -77,9 +77,7 @@ class TestArtifactRegistryCRUD:
         assert artifact.version == "1.0.0"
 
     @pytest.mark.asyncio
-    async def test_create_with_provenance(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_create_with_provenance(self, registry: ArtifactRegistry) -> None:
         """Test artifact creation with explicit provenance."""
         provenance = create_provenance(
             created_by="bot:test",
@@ -109,9 +107,7 @@ class TestArtifactRegistryCRUD:
         assert "tag2" in artifact.tags
 
     @pytest.mark.asyncio
-    async def test_create_with_type_definition(
-        self, registry_with_types: ArtifactRegistry
-    ) -> None:
+    async def test_create_with_type_definition(self, registry_with_types: ArtifactRegistry) -> None:
         """Test creation inherits type definition defaults."""
         artifact = await registry_with_types.create(
             artifact_type="questions",
@@ -164,9 +160,7 @@ class TestArtifactRegistryVersioning:
     """Tests for versioning via revise()."""
 
     @pytest.mark.asyncio
-    async def test_revise_creates_new_version(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_revise_creates_new_version(self, registry: ArtifactRegistry) -> None:
         """Test that revise bumps version and updates content."""
         original = await registry.create(
             artifact_type="content",
@@ -187,9 +181,7 @@ class TestArtifactRegistryVersioning:
         assert revised.id == original.id
 
     @pytest.mark.asyncio
-    async def test_revise_marks_old_superseded(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_revise_marks_old_superseded(self, registry: ArtifactRegistry) -> None:
         """Test that revise marks old version as superseded."""
         original = await registry.create(
             artifact_type="content",
@@ -210,9 +202,7 @@ class TestArtifactRegistryVersioning:
         assert old.status == ArtifactStatus.SUPERSEDED
 
     @pytest.mark.asyncio
-    async def test_revise_adds_revision_record(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_revise_adds_revision_record(self, registry: ArtifactRegistry) -> None:
         """Test that revise adds a revision to provenance."""
         original = await registry.create(
             artifact_type="content",
@@ -234,9 +224,7 @@ class TestArtifactRegistryVersioning:
         assert revision.previous_version == "1.0.0"
 
     @pytest.mark.asyncio
-    async def test_revise_not_found_raises(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_revise_not_found_raises(self, registry: ArtifactRegistry) -> None:
         """Test that revising non-existent artifact raises ValueError."""
         with pytest.raises(ValueError, match="not found"):
             await registry.revise(
@@ -325,9 +313,7 @@ class TestArtifactRegistryStatusTransitions:
     """Tests for status management."""
 
     @pytest.mark.asyncio
-    async def test_set_status_valid(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_set_status_valid(self, registry: ArtifactRegistry) -> None:
         """Test valid status transition."""
         artifact = await registry.create(
             artifact_type="content",
@@ -343,9 +329,7 @@ class TestArtifactRegistryStatusTransitions:
         assert updated.status == ArtifactStatus.PENDING_REVIEW
 
     @pytest.mark.asyncio
-    async def test_set_status_invalid_raises(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_set_status_invalid_raises(self, registry: ArtifactRegistry) -> None:
         """Test invalid status transition raises."""
         artifact = await registry.create(
             artifact_type="content",
@@ -357,9 +341,7 @@ class TestArtifactRegistryStatusTransitions:
             await registry.set_status(artifact.id, ArtifactStatus.APPROVED)
 
     @pytest.mark.asyncio
-    async def test_set_status_not_found_raises(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_set_status_not_found_raises(self, registry: ArtifactRegistry) -> None:
         """Test set_status for missing artifact raises ValueError."""
         with pytest.raises(ValueError, match="not found"):
             await registry.set_status("nonexistent", ArtifactStatus.ARCHIVED)
@@ -371,15 +353,9 @@ class TestArtifactRegistryQuery:
     @pytest.mark.asyncio
     async def test_query_by_type(self, registry: ArtifactRegistry) -> None:
         """Test querying by artifact type."""
-        await registry.create(
-            artifact_type="content", name="A1", content={"a": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="A2", content={"a": 2}
-        )
-        await registry.create(
-            artifact_type="config", name="B1", content={"b": 1}
-        )
+        await registry.create(artifact_type="content", name="A1", content={"a": 1})
+        await registry.create(artifact_type="content", name="A2", content={"a": 2})
+        await registry.create(artifact_type="config", name="B1", content={"b": 1})
 
         content_artifacts = await registry.query(artifact_type="content")
         assert len(content_artifacts) == 2
@@ -388,16 +364,10 @@ class TestArtifactRegistryQuery:
         assert len(config_artifacts) == 1
 
     @pytest.mark.asyncio
-    async def test_query_by_status(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_by_status(self, registry: ArtifactRegistry) -> None:
         """Test querying by status."""
-        a1 = await registry.create(
-            artifact_type="content", name="Draft", content={"v": 1}
-        )
-        a2 = await registry.create(
-            artifact_type="content", name="Reviewed", content={"v": 2}
-        )
+        a1 = await registry.create(artifact_type="content", name="Draft", content={"v": 1})
+        a2 = await registry.create(artifact_type="content", name="Reviewed", content={"v": 2})
         await registry.set_status(a2.id, ArtifactStatus.PENDING_REVIEW)
 
         drafts = await registry.query(status=ArtifactStatus.DRAFT)
@@ -428,9 +398,7 @@ class TestArtifactRegistryQuery:
         assert results[0].name == "Tagged"
 
     @pytest.mark.asyncio
-    async def test_query_no_results(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_no_results(self, registry: ArtifactRegistry) -> None:
         """Test querying with no matches."""
         results = await registry.query(artifact_type="nonexistent")
         assert len(results) == 0
@@ -440,9 +408,7 @@ class TestArtifactRegistryReviewIntegration:
     """Tests for rubric-based review integration."""
 
     @pytest.mark.asyncio
-    async def test_submit_for_review_no_executor(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_submit_for_review_no_executor(self, registry: ArtifactRegistry) -> None:
         """Test submit_for_review without rubric components."""
         artifact = await registry.create(
             artifact_type="content",
@@ -458,9 +424,7 @@ class TestArtifactRegistryReviewIntegration:
         assert updated.status == ArtifactStatus.IN_REVIEW
 
     @pytest.mark.asyncio
-    async def test_submit_for_review_not_found(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_submit_for_review_not_found(self, registry: ArtifactRegistry) -> None:
         """Test submit_for_review with missing artifact."""
         with pytest.raises(ValueError, match="not found"):
             await registry.submit_for_review("nonexistent")
@@ -470,9 +434,7 @@ class TestArtifactRegistryHooks:
     """Tests for lifecycle hooks."""
 
     @pytest.mark.asyncio
-    async def test_on_create_hook(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_on_create_hook(self, registry: ArtifactRegistry) -> None:
         """Test on_create hook is called."""
         created_artifacts: list[Artifact] = []
 
@@ -491,9 +453,7 @@ class TestArtifactRegistryHooks:
         assert created_artifacts[0].id == artifact.id
 
     @pytest.mark.asyncio
-    async def test_on_status_change_hook(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_on_status_change_hook(self, registry: ArtifactRegistry) -> None:
         """Test on_status_change hook is called."""
         status_changes: list[Artifact] = []
 
@@ -524,9 +484,7 @@ class TestArtifactRegistryMetadata:
     """
 
     @pytest.mark.asyncio
-    async def test_create_with_metadata_preserved(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_create_with_metadata_preserved(self, registry: ArtifactRegistry) -> None:
         """Metadata passed to create() round-trips through get()."""
         artifact = await registry.create(
             artifact_type="content",
@@ -541,9 +499,7 @@ class TestArtifactRegistryMetadata:
         assert retrieved.metadata == {"tenant_id": "acme", "correlation_id": "req-1"}
 
     @pytest.mark.asyncio
-    async def test_create_without_metadata_defaults_empty(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_create_without_metadata_defaults_empty(self, registry: ArtifactRegistry) -> None:
         """Omitting metadata stores an empty dict, not None — matches model default."""
         artifact = await registry.create(
             artifact_type="content",
@@ -555,9 +511,7 @@ class TestArtifactRegistryMetadata:
         assert retrieved.metadata == {}
 
     @pytest.mark.asyncio
-    async def test_get_version_returns_metadata(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_get_version_returns_metadata(self, registry: ArtifactRegistry) -> None:
         """Versioned snapshots preserve metadata too (both writes go through the store)."""
         artifact = await registry.create(
             artifact_type="content",
@@ -570,9 +524,7 @@ class TestArtifactRegistryMetadata:
         assert snapshot.metadata == {"tenant_id": "acme"}
 
     @pytest.mark.asyncio
-    async def test_query_filter_metadata_matches(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_filter_metadata_matches(self, registry: ArtifactRegistry) -> None:
         """``filter_metadata`` routes through the metadata column and matches AND-style."""
         await registry.create(
             artifact_type="content",
@@ -644,9 +596,7 @@ class TestArtifactRegistryMetadata:
         assert [a.name for a in results] == ["Acme Content"]
 
     @pytest.mark.asyncio
-    async def test_revise_inherits_metadata_by_default(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_revise_inherits_metadata_by_default(self, registry: ArtifactRegistry) -> None:
         """``revise()`` without explicit metadata carries the current version's metadata."""
         original = await registry.create(
             artifact_type="content",
@@ -736,19 +686,11 @@ class TestArtifactRegistryQueryPagination:
     """
 
     @pytest.mark.asyncio
-    async def test_query_sort_by_name_asc(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_sort_by_name_asc(self, registry: ArtifactRegistry) -> None:
         """Sort by name ascending returns artifacts in name order."""
-        await registry.create(
-            artifact_type="content", name="Charlie", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="Alice", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="Bob", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="Charlie", content={"v": 1})
+        await registry.create(artifact_type="content", name="Alice", content={"v": 1})
+        await registry.create(artifact_type="content", name="Bob", content={"v": 1})
 
         results = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.ASC)],
@@ -756,19 +698,11 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in results] == ["Alice", "Bob", "Charlie"]
 
     @pytest.mark.asyncio
-    async def test_query_sort_by_name_desc(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_sort_by_name_desc(self, registry: ArtifactRegistry) -> None:
         """Sort by name descending returns artifacts in reverse name order."""
-        await registry.create(
-            artifact_type="content", name="Charlie", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="Alice", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="Bob", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="Charlie", content={"v": 1})
+        await registry.create(artifact_type="content", name="Alice", content={"v": 1})
+        await registry.create(artifact_type="content", name="Bob", content={"v": 1})
 
         results = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.DESC)],
@@ -776,9 +710,7 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in results] == ["Charlie", "Bob", "Alice"]
 
     @pytest.mark.asyncio
-    async def test_query_limit_applies_after_dedup(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_limit_applies_after_dedup(self, registry: ArtifactRegistry) -> None:
         """``limit`` returns N deduplicated artifacts, not N database rows.
 
         Each create writes both a latest pointer and a versioned
@@ -786,15 +718,9 @@ class TestArtifactRegistryQueryPagination:
         return 2 artifacts (not, for example, 2 records that may all
         be snapshots).
         """
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="C", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
+        await registry.create(artifact_type="content", name="C", content={"v": 1})
 
         results = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.ASC)],
@@ -804,19 +730,11 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in results] == ["A", "B"]
 
     @pytest.mark.asyncio
-    async def test_query_offset_applies_after_dedup(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_offset_applies_after_dedup(self, registry: ArtifactRegistry) -> None:
         """``offset`` skips deduplicated artifacts, not raw rows."""
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="C", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
+        await registry.create(artifact_type="content", name="C", content={"v": 1})
 
         results = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.ASC)],
@@ -825,14 +743,10 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in results] == ["B", "C"]
 
     @pytest.mark.asyncio
-    async def test_query_limit_and_offset_combine(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_limit_and_offset_combine(self, registry: ArtifactRegistry) -> None:
         """``offset`` first, then ``limit`` — standard pagination semantics."""
         for name in ["A", "B", "C", "D", "E"]:
-            await registry.create(
-                artifact_type="content", name=name, content={"v": 1}
-            )
+            await registry.create(artifact_type="content", name=name, content={"v": 1})
 
         page = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.ASC)],
@@ -842,9 +756,7 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in page] == ["B", "C"]
 
     @pytest.mark.asyncio
-    async def test_query_limit_with_versioned_artifacts(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_limit_with_versioned_artifacts(self, registry: ArtifactRegistry) -> None:
         """Pre-existing versions don't leak through ``limit``.
 
         Revising an artifact creates additional snapshot rows.  After
@@ -855,9 +767,7 @@ class TestArtifactRegistryQueryPagination:
         DRAFT → SUPERSEDED is a direct allowed transition, so
         ``revise()`` runs from DRAFT without manual state shepherding.
         """
-        a = await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
+        a = await registry.create(artifact_type="content", name="A", content={"v": 1})
         await registry.revise(
             artifact_id=a.id,
             new_content={"v": 2},
@@ -870,9 +780,7 @@ class TestArtifactRegistryQueryPagination:
             reason="r3",
             triggered_by="t",
         )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
 
         results = await registry.query(
             sort=[SortSpec(field="name", order=SortOrder.ASC)],
@@ -886,9 +794,7 @@ class TestArtifactRegistryQueryPagination:
         assert latest_a.content == {"v": 3}
 
     @pytest.mark.asyncio
-    async def test_query_sort_combines_with_filters(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_sort_combines_with_filters(self, registry: ArtifactRegistry) -> None:
         """Sort works alongside ``artifact_type`` and ``filter_metadata``."""
         await registry.create(
             artifact_type="content",
@@ -923,13 +829,9 @@ class TestArtifactRegistryQueryPagination:
         assert [a.name for a in results] == ["Alice", "Charlie"]
 
     @pytest.mark.asyncio
-    async def test_query_limit_zero_returns_empty(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_query_limit_zero_returns_empty(self, registry: ArtifactRegistry) -> None:
         """``limit=0`` returns no artifacts (consistent with Python slice)."""
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
 
         results = await registry.query(limit=0)
         assert results == []
@@ -939,50 +841,34 @@ class TestArtifactRegistryQueryPagination:
         self, registry: ArtifactRegistry
     ) -> None:
         """``offset`` past the end returns empty list, not error."""
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
 
         results = await registry.query(offset=10)
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_count_empty_registry_returns_zero(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_empty_registry_returns_zero(self, registry: ArtifactRegistry) -> None:
         """Count over an empty registry is zero."""
         assert await registry.count() == 0
 
     @pytest.mark.asyncio
-    async def test_count_returns_distinct_artifact_count(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_returns_distinct_artifact_count(self, registry: ArtifactRegistry) -> None:
         """Count returns the number of distinct artifacts, not raw rows."""
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="config", name="C", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
+        await registry.create(artifact_type="config", name="C", content={"v": 1})
 
         assert await registry.count() == 3
 
     @pytest.mark.asyncio
-    async def test_count_with_versioned_artifacts_dedups(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_with_versioned_artifacts_dedups(self, registry: ArtifactRegistry) -> None:
         """Versioned snapshots are deduplicated in the count.
 
         After one revision, artifact A has 3 raw rows (pointer + 2
         snapshots).  ``count()`` must return 1 for the single distinct
         artifact, not 3.
         """
-        a = await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
+        a = await registry.create(artifact_type="content", name="A", content={"v": 1})
         await registry.revise(
             artifact_id=a.id,
             new_content={"v": 2},
@@ -993,35 +879,21 @@ class TestArtifactRegistryQueryPagination:
         assert await registry.count() == 1
 
     @pytest.mark.asyncio
-    async def test_count_by_type(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_by_type(self, registry: ArtifactRegistry) -> None:
         """Count respects ``artifact_type`` filter."""
-        await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="config", name="C", content={"v": 1}
-        )
+        await registry.create(artifact_type="content", name="A", content={"v": 1})
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
+        await registry.create(artifact_type="config", name="C", content={"v": 1})
 
         assert await registry.count(artifact_type="content") == 2
         assert await registry.count(artifact_type="config") == 1
         assert await registry.count(artifact_type="nonexistent") == 0
 
     @pytest.mark.asyncio
-    async def test_count_by_status(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_by_status(self, registry: ArtifactRegistry) -> None:
         """Count respects ``status`` filter."""
-        a = await registry.create(
-            artifact_type="content", name="A", content={"v": 1}
-        )
-        await registry.create(
-            artifact_type="content", name="B", content={"v": 1}
-        )
+        a = await registry.create(artifact_type="content", name="A", content={"v": 1})
+        await registry.create(artifact_type="content", name="B", content={"v": 1})
         await registry.set_status(a.id, ArtifactStatus.PENDING_REVIEW)
 
         assert await registry.count(status=ArtifactStatus.DRAFT) == 1
@@ -1029,9 +901,7 @@ class TestArtifactRegistryQueryPagination:
         assert await registry.count(status=ArtifactStatus.ARCHIVED) == 0
 
     @pytest.mark.asyncio
-    async def test_count_by_tags(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_by_tags(self, registry: ArtifactRegistry) -> None:
         """Count respects ``tags`` filter (AND-style match)."""
         await registry.create(
             artifact_type="content",
@@ -1057,9 +927,7 @@ class TestArtifactRegistryQueryPagination:
         assert await registry.count(tags=["science"]) == 1
 
     @pytest.mark.asyncio
-    async def test_count_with_filter_metadata(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_with_filter_metadata(self, registry: ArtifactRegistry) -> None:
         """Count routes through the metadata channel."""
         await registry.create(
             artifact_type="content",
@@ -1081,15 +949,11 @@ class TestArtifactRegistryQueryPagination:
         )
 
         assert await registry.count(filter_metadata={"tenant_id": "acme"}) == 2
-        assert (
-            await registry.count(filter_metadata={"tenant_id": "globex"}) == 1
-        )
+        assert await registry.count(filter_metadata={"tenant_id": "globex"}) == 1
         assert await registry.count(filter_metadata={"tenant_id": "none"}) == 0
 
     @pytest.mark.asyncio
-    async def test_count_combines_filters(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_combines_filters(self, registry: ArtifactRegistry) -> None:
         """Count AND-combines ``artifact_type`` and ``filter_metadata``."""
         await registry.create(
             artifact_type="content",
@@ -1119,9 +983,7 @@ class TestArtifactRegistryQueryPagination:
         )
 
     @pytest.mark.asyncio
-    async def test_count_matches_query_length(
-        self, registry: ArtifactRegistry
-    ) -> None:
+    async def test_count_matches_query_length(self, registry: ArtifactRegistry) -> None:
         """count(...) and len(query(...)) agree for the same filter shape."""
         for name in ["A", "B", "C", "D"]:
             await registry.create(

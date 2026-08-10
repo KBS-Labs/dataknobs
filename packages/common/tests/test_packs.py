@@ -186,7 +186,7 @@ def test_unanimous_conflict_across_enabled_packs_raises() -> None:
 
 
 def test_unanimous_agreeing_values_reconcile(registry: PackRegistry[DemoPack]) -> None:
-    """"base" and "top" both declare tier="std"; "mid" leaves it at default."""
+    """ "base" and "top" both declare tier="std"; "mid" leaves it at default."""
     assert registry.resolve({"base": {}, "mid": {}, "top": {}}).spec.tier == "std"
 
 
@@ -391,9 +391,7 @@ def test_composition_key_that_is_not_a_field_is_rejected() -> None:
     class GhostRule(PackSpec):
         real: str | None = None
 
-        _COMPOSITION = MappingProxyType(
-            {"real": MergeKind.LAST_WINS, "ghost": MergeKind.LAST_WINS}
-        )
+        _COMPOSITION = MappingProxyType({"real": MergeKind.LAST_WINS, "ghost": MergeKind.LAST_WINS})
 
     with pytest.raises(ConfigurationError) as excinfo:
         PackRegistry("bad", GhostRule)
@@ -641,9 +639,7 @@ def test_the_two_vocabularies_share_no_value() -> None:
     assert _Elsewhere.KEY_OVERRIDE == PackWarningCode.KEY_OVERRIDE
     assert {PackWarningCode.KEY_OVERRIDE} == {_Elsewhere.KEY_OVERRIDE}
 
-    shared = {m.value for m in PackWarningCode} & {
-        m.value for m in PackResolutionReason
-    }
+    shared = {m.value for m in PackWarningCode} & {m.value for m in PackResolutionReason}
     assert not shared, (
         f"{sorted(shared)} appears in both vocabularies; a warning code and "
         f"a resolution reason that compare equal cannot be told apart by "
@@ -658,9 +654,7 @@ def test_a_code_or_reason_given_as_a_bare_value_is_coerced() -> None:
     equivalence — but it is normalized on the way in, so a consumer reading
     ``warning.code.name`` never has to wonder which it got.
     """
-    assert PackWarning(code="key_override", message="m").code is (
-        PackWarningCode.KEY_OVERRIDE
-    )
+    assert PackWarning(code="key_override", message="m").code is (PackWarningCode.KEY_OVERRIDE)
     assert PackResolutionError("m", reason="unknown_pack").reason is (
         PackResolutionReason.UNKNOWN_PACK
     )
@@ -669,17 +663,11 @@ def test_a_code_or_reason_given_as_a_bare_value_is_coerced() -> None:
 @pytest.mark.parametrize(
     ("build", "bad"),
     [
-        pytest.param(
-            lambda v: PackWarning(code=v, message="m"), "not_a_code", id="code"
-        ),
-        pytest.param(
-            lambda v: PackResolutionError("m", reason=v), "not_a_reason", id="reason"
-        ),
+        pytest.param(lambda v: PackWarning(code=v, message="m"), "not_a_code", id="code"),
+        pytest.param(lambda v: PackResolutionError("m", reason=v), "not_a_reason", id="reason"),
     ],
 )
-def test_an_unknown_code_or_reason_is_rejected(
-    build: Callable[[Any], Any], bad: str
-) -> None:
+def test_an_unknown_code_or_reason_is_rejected(build: Callable[[Any], Any], bad: str) -> None:
     """Fail closed, like every other value this module accepts.
 
     Both fields were annotated as their vocabulary while accepting any
@@ -696,9 +684,7 @@ def test_an_unknown_code_or_reason_is_rejected(
 
 
 def test_from_dict_normalizes_lists_to_tuples() -> None:
-    spec = DemoPack.from_dict(
-        {"name": "loaded", "checks": ["a", "b"], "steps": [{"class": "X"}]}
-    )
+    spec = DemoPack.from_dict({"name": "loaded", "checks": ["a", "b"], "steps": [{"class": "X"}]})
 
     assert spec.checks == ("a", "b")
     assert isinstance(spec.checks, tuple)
@@ -831,9 +817,7 @@ class SentinelPack(PackSpec):
     mode: str | None = UNSET
     tier: str | None = UNSET
 
-    _COMPOSITION = MappingProxyType(
-        {"mode": MergeKind.LAST_WINS, "tier": MergeKind.UNANIMOUS}
-    )
+    _COMPOSITION = MappingProxyType({"mode": MergeKind.LAST_WINS, "tier": MergeKind.UNANIMOUS})
 
 
 def test_unset_default_lets_a_higher_pack_contribute_none() -> None:
@@ -886,9 +870,7 @@ class TenantDemoPack(DemoPack):
 
     tenant: str | None = None
 
-    _COMPOSITION = MappingProxyType(
-        {**DemoPack._COMPOSITION, "tenant": MergeKind.LAST_WINS}
-    )
+    _COMPOSITION = MappingProxyType({**DemoPack._COMPOSITION, "tenant": MergeKind.LAST_WINS})
 
 
 @dataclass(frozen=True)
@@ -1216,9 +1198,7 @@ def test_locked_becomes_load_bearing_across_layers(
 def test_an_unlocked_pack_can_still_be_disabled_by_a_later_layer(
     registry: PackRegistry[DemoPack],
 ) -> None:
-    resolution = registry.resolve(
-        merge_bindings({"base": {}}, {"base": {"enabled": False}})
-    )
+    resolution = registry.resolve(merge_bindings({"base": {}}, {"base": {"enabled": False}}))
 
     assert resolution.packs == ()
 
@@ -1362,11 +1342,11 @@ def _observed_resolution_reasons() -> set[Enum]:
     reg.register_pack(DemoPack(name="b", priority=1, tier="pro"))
 
     provocations: list[dict[str, Any]] = [
-        {"nope": {}},                               # unknown_pack
-        {"a": {"lockd": True}},                     # unknown_binding_key
+        {"nope": {}},  # unknown_pack
+        {"a": {"lockd": True}},  # unknown_binding_key
         {"a": {"locked": True, "enabled": False}},  # locked_pack_disabled
-        {"a": {}, "b": {}},                         # field_conflict on UNANIMOUS tier
-        {"a": {"enabled": "yes"}},                  # invalid_binding
+        {"a": {}, "b": {}},  # field_conflict on UNANIMOUS tier
+        {"a": {"enabled": "yes"}},  # invalid_binding
     ]
 
     seen: set[Enum] = set()
@@ -1379,9 +1359,7 @@ def _observed_resolution_reasons() -> set[Enum]:
 
 _VOCABULARIES = [
     pytest.param(PackWarningCode, _observed_warning_codes, id="PackWarningCode"),
-    pytest.param(
-        PackResolutionReason, _observed_resolution_reasons, id="PackResolutionReason"
-    ),
+    pytest.param(PackResolutionReason, _observed_resolution_reasons, id="PackResolutionReason"),
 ]
 
 _VOCABULARY_CLASSES = [
@@ -1511,9 +1489,7 @@ def test_guard_rejects_a_deleted_table_row() -> None:
     """
     row = "| `KEY_OVERRIDE` | `key_override` |"
     text = _guide_text()
-    without_row = "\n".join(
-        line for line in text.splitlines() if not line.startswith(row)
-    )
+    without_row = "\n".join(line for line in text.splitlines() if not line.startswith(row))
     assert "key_override" in without_row, (
         "this test's premise is that the value survives elsewhere in the "
         "guide; if it no longer does, containment would have caught this"

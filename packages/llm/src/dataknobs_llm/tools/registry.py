@@ -42,10 +42,7 @@ def _execute_accepts_var_keyword(tool: Tool) -> bool:
         sig = inspect.signature(tool.execute)
     except (TypeError, ValueError):
         return False
-    return any(
-        p.kind is inspect.Parameter.VAR_KEYWORD
-        for p in sig.parameters.values()
-    )
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
 
 
 class ToolRegistry(Registry[Tool]):
@@ -97,9 +94,7 @@ class ToolRegistry(Registry[Tool]):
         super().__init__(name="tools", enable_metrics=True)
         self._track_executions = track_executions
         self._execution_tracker: ExecutionTracker | None = (
-            ExecutionTracker(max_history=max_execution_history)
-            if track_executions
-            else None
+            ExecutionTracker(max_history=max_execution_history) if track_executions else None
         )
 
     def register_tool(self, tool: Tool) -> None:
@@ -617,11 +612,7 @@ class ToolRegistry(Registry[Tool]):
             True
         """
         # Determine max history from current tracker
-        max_history = (
-            self._execution_tracker._max_history
-            if self._execution_tracker
-            else 100
-        )
+        max_history = self._execution_tracker._max_history if self._execution_tracker else 100
 
         new_registry = ToolRegistry(
             track_executions=self._track_executions,

@@ -40,9 +40,7 @@ class KnowledgeSearchTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "knowledge_search",
-            "description": (
-                "Search the knowledge base for relevant information."
-            ),
+            "description": ("Search the knowledge base for relevant information."),
             "tags": ("general", "rag"),
             "requires": ("knowledge_base",),
         }

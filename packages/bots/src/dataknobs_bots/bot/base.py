@@ -118,9 +118,7 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "current_stage": current_stage,
-        "stage_index": (
-            wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)
-        ),
+        "stage_index": (wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)),
         "total_stages": wizard_meta.get("total_stages", 0),
         "progress": wizard_meta.get("progress", 0.0),
         "completed": wizard_meta.get("completed", False),
@@ -182,9 +180,7 @@ class _CheckpointLog:
     entries: list[tuple[str | None, int]] = field(default_factory=list)
     dropped: int = 0
 
-    def append(
-        self, checkpoint: tuple[str | None, int], max_size: int | None
-    ) -> None:
+    def append(self, checkpoint: tuple[str | None, int], max_size: int | None) -> None:
         """Record a checkpoint, tail-capping the front to ``max_size`` entries.
 
         Appends ``checkpoint`` as the newest turn's undo target, then — when a
@@ -464,9 +460,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._finalize_timeout_message = self.config.tool_loop_timeout_message
         # Resolve the dotted-path context_transform now (cheap, sync). The
         # pre-built shape overrides this with a directly-supplied callable.
-        self._context_transform = self._resolve_context_transform(
-            self.config.context_transform
-        )
+        self._context_transform = self._resolve_context_transform(self.config.context_transform)
         # Build the prompt envelope once. The string value was validated
         # by DynaBotConfig.__post_init__, so the enum lookup here cannot
         # raise on a valid snapshot.
@@ -475,9 +469,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             PromptEnvelopeStyle,
         )
 
-        self._prompt_envelope = PromptEnvelope(
-            PromptEnvelopeStyle(self.config.prompt_envelope)
-        )
+        self._prompt_envelope = PromptEnvelope(PromptEnvelopeStyle(self.config.prompt_envelope))
         # Access-ordered LRU cache of live conversation managers. ``max_size``
         # is ``None`` by default (unbounded — today's single-user behavior).
         # When a positive bound is configured, evicting a conversation
@@ -485,9 +477,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # point (``_on_conversation_evicted`` -> ``_drop_conversation_cache``),
         # and the in-flight conversation of an active turn is pinned so it is
         # never evicted out from under its own turn.
-        self._conversation_managers: BoundedLRUCache[
-            str, ConversationManager
-        ] = BoundedLRUCache(
+        self._conversation_managers: BoundedLRUCache[str, ConversationManager] = BoundedLRUCache(
             max_size=self._max_cached_conversations,
             on_evict=self._on_conversation_evicted,
         )
@@ -873,9 +863,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if platform_middleware is not None:
             components["platform_middleware"] = platform_middleware
         if platform_conversation_middleware is not None:
-            components["platform_conversation_middleware"] = (
-                platform_conversation_middleware
-            )
+            components["platform_conversation_middleware"] = platform_conversation_middleware
         if reasoning_components is not None:
             components["reasoning_components"] = reasoning_components
         # Async-canonical construction: route through the structured-config
@@ -1039,14 +1027,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # open question and an `issubclass` gate here could reject
             # configurations that work today. Tracked separately.
             storage_class = resolve_callable(storage_class_path)
-            conversation_storage: ConversationStorage = await storage_class.create(
-                storage_config
-            )
+            conversation_storage: ConversationStorage = await storage_class.create(storage_config)
         else:
             # Default: use DataknobsConversationStorage with database backend
-            conversation_storage = await DataknobsConversationStorage.create(
-                storage_config
-            )
+            conversation_storage = await DataknobsConversationStorage.create(storage_config)
 
         # Build composed prompt library with precedence:
         #   1. Inline prompts (config.prompts) — highest priority
@@ -1071,9 +1055,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         if prompt_type in structured_config:
                             structured_config[prompt_type][prompt_name] = prompt_content
                     else:
-                        structured_config["system"][prompt_name] = {
-                            "template": prompt_content
-                        }
+                        structured_config["system"][prompt_name] = {"template": prompt_content}
 
                 composed_libraries.append(ConfigPromptLibrary(structured_config))
                 library_names.append("inline_config")
@@ -1089,9 +1071,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     from dataknobs_llm.prompts import FileSystemPromptLibrary
 
                     lib_path = lib_config.get("path", "")
-                    composed_libraries.append(
-                        FileSystemPromptLibrary(Path(lib_path))
-                    )
+                    composed_libraries.append(FileSystemPromptLibrary(Path(lib_path)))
                     library_names.append(f"filesystem:{lib_path}")
                 elif lib_type == "config":
                     lib_prompts = lib_config.get("prompts", {})
@@ -1122,7 +1102,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         library_names.append("extraction_defaults")
 
         library = CompositePromptLibrary(
-            libraries=composed_libraries, names=library_names,
+            libraries=composed_libraries,
+            names=library_names,
         )
         prompt_builder = AsyncPromptBuilder(library)
 
@@ -1135,7 +1116,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         memory = None
         if self.config.memory is not None:
             memory = await create_memory_from_config(
-                self.config.memory, llm_provider=llm,
+                self.config.memory,
+                llm_provider=llm,
                 prompt_resolver=prompt_resolver,
             )
 
@@ -1166,9 +1148,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         tool_registry = ToolRegistry()
         if self.config.tools:
             for tool_config in self.config.tools:
-                tool = self._resolve_tool(
-                    tool_config, tool_ctx, tool_dependencies or None
-                )
+                tool = self._resolve_tool(tool_config, tool_ctx, tool_dependencies or None)
                 if tool:
                     tool_registry.register_tool(tool)
 
@@ -1242,15 +1222,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # redundant.  Leaving it on causes KB-augmented messages as
             # query-generation input, wasting tokens and risking
             # timeouts with thinking models.
-            if (
-                strategy_caps.manages_sources
-                and knowledge_base is not None
-                and kb_auto_context
-            ):
+            if strategy_caps.manages_sources and knowledge_base is not None and kb_auto_context:
                 kb_auto_context = False
                 logger.info(
-                    "%s: auto_context disabled "
-                    "(retrieval is structural).",
+                    "%s: auto_context disabled (retrieval is structural).",
                     type(reasoning_strategy).__name__,
                 )
 
@@ -1576,9 +1551,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # later turn), store ``current_node_id`` exactly as before — the
         # system-root ``""`` and every real node id are unchanged.
         checkpoint_node: str | None = (
-            turn.manager.state.current_node_id
-            if turn.manager.state
-            else None
+            turn.manager.state.current_node_id if turn.manager.state else None
         )
         self._turn_checkpoints[conv_id].append(
             (checkpoint_node, mem_count),
@@ -1592,9 +1565,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         msg_metadata: dict[str, Any] | None = None
         if full_message != turn.message:
             msg_metadata = {"raw_content": turn.message}
-        await turn.manager.add_message(
-            content=full_message, role="user", metadata=msg_metadata
-        )
+        await turn.manager.add_message(content=full_message, role="user", metadata=msg_metadata)
 
         # Update memory
         if self.memory:
@@ -1653,18 +1624,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
             if tool is None:
                 observation = "Tool not found"
-                target_list.append(ToolExecution(
-                    tool_name=tool_name,
-                    parameters=tool_call.parameters,
-                    error="Tool not found",
-                ))
+                target_list.append(
+                    ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        error="Tool not found",
+                    )
+                )
                 logger.warning(
                     "Tool not found: %s",
                     tool_name,
                     extra={
-                        "conversation_id": getattr(
-                            turn.manager, "conversation_id", None
-                        ),
+                        "conversation_id": getattr(turn.manager, "conversation_id", None),
                     },
                 )
             else:
@@ -1690,68 +1661,61 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     )
                     duration_ms = (time.monotonic() - t0) * 1000
                     try:
-                        observation = (
-                            f"Tool result: {json.dumps(result, default=str)}"
-                        )
+                        observation = f"Tool result: {json.dumps(result, default=str)}"
                     except (TypeError, ValueError):
                         observation = f"Tool result: {result}"
 
-                    target_list.append(ToolExecution(
-                        tool_name=tool_name,
-                        parameters=tool_call.parameters,
-                        result=result,
-                        duration_ms=duration_ms,
-                    ))
+                    target_list.append(
+                        ToolExecution(
+                            tool_name=tool_name,
+                            parameters=tool_call.parameters,
+                            result=result,
+                            duration_ms=duration_ms,
+                        )
+                    )
                     logger.info(
                         "Tool executed: %s",
                         tool_name,
                         extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
+                            "conversation_id": getattr(turn.manager, "conversation_id", None),
                             "duration_ms": round(duration_ms, 1),
                             "result_length": len(str(result)),
                         },
                     )
                 except TimeoutError:
                     duration_ms = (time.monotonic() - t0) * 1000
-                    observation = (
-                        f"Error: tool timed out after "
-                        f"{self._tool_timeout:.1f}s"
+                    observation = f"Error: tool timed out after {self._tool_timeout:.1f}s"
+                    target_list.append(
+                        ToolExecution(
+                            tool_name=tool_name,
+                            parameters=tool_call.parameters,
+                            error=(f"Timed out after {self._tool_timeout:.1f}s"),
+                            duration_ms=duration_ms,
+                        )
                     )
-                    target_list.append(ToolExecution(
-                        tool_name=tool_name,
-                        parameters=tool_call.parameters,
-                        error=(
-                            f"Timed out after {self._tool_timeout:.1f}s"
-                        ),
-                        duration_ms=duration_ms,
-                    ))
                     logger.warning(
                         "Tool execution timed out: %s (%.1fs limit)",
                         tool_name,
                         self._tool_timeout,
                         extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
+                            "conversation_id": getattr(turn.manager, "conversation_id", None),
                             "duration_ms": round(duration_ms, 1),
                         },
                     )
                 except Exception as exc:
                     observation = f"Error: {exc!s}"
-                    target_list.append(ToolExecution(
-                        tool_name=tool_name,
-                        parameters=tool_call.parameters,
-                        error=str(exc),
-                    ))
+                    target_list.append(
+                        ToolExecution(
+                            tool_name=tool_name,
+                            parameters=tool_call.parameters,
+                            error=str(exc),
+                        )
+                    )
                     logger.error(
                         "Tool execution failed: %s",
                         tool_name,
                         extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
+                            "conversation_id": getattr(turn.manager, "conversation_id", None),
                             "error": str(exc),
                         },
                         exc_info=True,
@@ -1798,11 +1762,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         #
         # Lazy import matches the existing ``..reasoning`` deferral pattern
         # (avoids the bot ↔ reasoning circular import).
-        if (
-            self.tool_registry
-            and turn.manager is not None
-            and turn.tool_loop_left_pending_call
-        ):
+        if self.tool_registry and turn.manager is not None and turn.tool_loop_left_pending_call:
             from ..reasoning.tool_pairing import pair_orphan_tool_calls_on_manager
 
             await pair_orphan_tool_calls_on_manager(turn.manager)
@@ -1943,9 +1903,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 "budget (%.1fs) — returning graceful fallback",
                 budget,
                 extra={
-                    "conversation_id": getattr(
-                        turn.manager, "conversation_id", None
-                    ),
+                    "conversation_id": getattr(turn.manager, "conversation_id", None),
                 },
             )
             # This degradation site is the natural emission point for a
@@ -2011,8 +1969,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             if not result.needs_tool_execution or not self.tool_registry:
                 if result.needs_tool_execution and not self.tool_registry:
                     logger.warning(
-                        "Strategy requested tool execution but no tools "
-                        "are registered — skipping",
+                        "Strategy requested tool execution but no tools are registered — skipping",
                     )
                 break
 
@@ -2102,9 +2059,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             if not self.tool_registry or not delivery.has_pending():
                 break
             if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                logger.warning(
-                    delivery.MSG_TIMEOUT, self._tool_loop_timeout, extra=extra
-                )
+                logger.warning(delivery.MSG_TIMEOUT, self._tool_loop_timeout, extra=extra)
                 break
             await self._execute_tools(turn, delivery.pending_calls())
             delivery.accumulate_usage(turn)
@@ -2113,9 +2068,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             delivery.clear_pending_after_execute()
             remaining = self._remaining_loop_budget(loop_start)
             if remaining <= 0:
-                logger.warning(
-                    delivery.MSG_BUDGET, self._tool_loop_timeout, extra=extra
-                )
+                logger.warning(delivery.MSG_BUDGET, self._tool_loop_timeout, extra=extra)
                 break
             chunks = await delivery.recall(turn, remaining)
             if chunks is not None:
@@ -2126,9 +2079,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         else:
             # Loop completed without break — cap hit.
             if self.tool_registry and delivery.has_pending():
-                logger.warning(
-                    delivery.MSG_CAP, self._max_tool_iterations, extra=extra
-                )
+                logger.warning(delivery.MSG_CAP, self._max_tool_iterations, extra=extra)
 
     def _llm_model_name(self) -> str:
         """Best-effort model identifier for a synthesized fallback response."""
@@ -2207,28 +2158,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    yield self._log_and_build_finalize_timeout_chunk(
-                        budget, turn
-                    )
+                    yield self._log_and_build_finalize_timeout_chunk(budget, turn)
                     return
                 try:
-                    chunk = await asyncio.wait_for(
-                        agen.__anext__(), timeout=remaining
-                    )
+                    chunk = await asyncio.wait_for(agen.__anext__(), timeout=remaining)
                 except StopAsyncIteration:
                     return
                 except TimeoutError:
-                    yield self._log_and_build_finalize_timeout_chunk(
-                        budget, turn
-                    )
+                    yield self._log_and_build_finalize_timeout_chunk(budget, turn)
                     return
                 yield chunk
         finally:
             await self._close_finalize_source(agen)
 
-    async def _close_finalize_source(
-        self, agen: AsyncIterator[LLMStreamResponse]
-    ) -> None:
+    async def _close_finalize_source(self, agen: AsyncIterator[LLMStreamResponse]) -> None:
         """Close a truncated finalize source, bounding the teardown itself.
 
         Closing the source runs its ``GeneratorExit`` cleanup (a real provider
@@ -2242,9 +2185,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if aclose is None:
             return
         try:
-            await asyncio.wait_for(
-                aclose(), timeout=_FINALIZE_SOURCE_CLOSE_TIMEOUT
-            )
+            await asyncio.wait_for(aclose(), timeout=_FINALIZE_SOURCE_CLOSE_TIMEOUT)
         except TimeoutError:
             logger.warning(
                 "Finalize source close exceeded %.1fs — abandoning teardown to "
@@ -2261,9 +2202,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             "(%.1fs) — truncating with graceful fallback",
             budget,
             extra={
-                "conversation_id": getattr(
-                    turn.manager, "conversation_id", None
-                ),
+                "conversation_id": getattr(turn.manager, "conversation_id", None),
             },
         )
         # Natural emission point for a structured finalize_timeout termination
@@ -2314,9 +2253,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if first_error is not None:
             raise first_error
 
-    async def _call_before_message_middleware(
-        self, message: str, context: BotContext
-    ) -> None:
+    async def _call_before_message_middleware(self, message: str, context: BotContext) -> None:
         """Dispatch before_message to all middleware.
 
         Every middleware gets called even if an earlier one raises.
@@ -2366,9 +2303,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     "Middleware %s.after_message raised",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "after_message", exc, context
-                )
+                await self._call_on_hook_error_middleware("after_message", exc, context)
 
     async def _call_post_stream_middleware(
         self, message: str, response: str, context: BotContext
@@ -2392,9 +2327,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     "Middleware %s.post_stream raised",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "post_stream", exc, context
-                )
+                await self._call_on_hook_error_middleware("post_stream", exc, context)
 
     async def _call_on_error_middleware(
         self, error: Exception, message: str, context: BotContext
@@ -2423,9 +2356,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     "Middleware %s.on_error raised during error dispatch",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "on_error", exc, context
-                )
+                await self._call_on_hook_error_middleware("on_error", exc, context)
 
     async def _call_on_hook_error_middleware(
         self, hook_name: str, error: Exception, context: BotContext
@@ -2475,9 +2406,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     "Middleware %s.after_turn raised",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "after_turn", exc, turn.context
-                )
+                await self._call_on_hook_error_middleware("after_turn", exc, turn.context)
 
     async def _call_finally_turn_middleware(self, turn: TurnState) -> None:
         """Dispatch finally_turn to all middleware.
@@ -2504,9 +2433,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         "Middleware %s.finally_turn raised",
                         type(mw).__name__,
                     )
-                    await self._call_on_hook_error_middleware(
-                        "finally_turn", exc, turn.context
-                    )
+                    await self._call_on_hook_error_middleware("finally_turn", exc, turn.context)
         finally:
             # Release the in-flight pin taken in _get_or_create_conversation.
             # This is the one method every turn driver calls inside its
@@ -2543,9 +2470,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     "Middleware %s.on_tool_executed raised",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "on_tool_executed", exc, context
-                )
+                await self._call_on_hook_error_middleware("on_tool_executed", exc, context)
 
     async def chat(
         self,
@@ -2652,18 +2577,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     },
                     turn_timeout=self._tool_loop_timeout,
                 )
-                async for _chunk in self._run_monolithic_tool_loop(
-                    turn, buffered
-                ):
+                async for _chunk in self._run_monolithic_tool_loop(turn, buffered):
                     pass  # buffered mode yields nothing
                 response = buffered.response
 
             turn.response = response
             # Terminating response still carrying tool_calls == the loop broke
             # or hit the cap with an unexecuted (orphan) tool_use in history.
-            turn.tool_loop_left_pending_call = bool(
-                getattr(response, "tool_calls", None)
-            )
+            turn.tool_loop_left_pending_call = bool(getattr(response, "tool_calls", None))
             turn.response_content = self._extract_response_content(response)
             turn.populate_from_response(response, self.llm)
             await self._finalize_turn(turn)
@@ -2897,13 +2818,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 )
 
                 if handle.early_response:
-                    content = self._extract_response_content(
-                        handle.early_response
-                    )
+                    content = self._extract_response_content(handle.early_response)
                     turn.stream_chunks.append(content)
-                    turn.populate_from_response(
-                        handle.early_response, self.llm
-                    )
+                    turn.populate_from_response(handle.early_response, self.llm)
                     yield LLMStreamResponse(
                         delta=content,
                         is_final=True,
@@ -2911,20 +2828,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     )
                 else:
                     loop_start = time.monotonic()
-                    early_response, tool_results = (
-                        await self._run_phased_process_loop(
-                            strategy, handle, turn, loop_start
-                        )
+                    early_response, tool_results = await self._run_phased_process_loop(
+                        strategy, handle, turn, loop_start
                     )
 
                     if early_response is not None:
-                        content = self._extract_response_content(
-                            early_response
-                        )
+                        content = self._extract_response_content(early_response)
                         turn.stream_chunks.append(content)
-                        turn.populate_from_response(
-                            early_response, self.llm
-                        )
+                        turn.populate_from_response(early_response, self.llm)
                         yield LLMStreamResponse(
                             delta=content,
                             is_final=True,
@@ -2938,17 +2849,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         # mere entry-gate, is required.
                         budget = self._finalize_budget(loop_start)
                         async for chunk in self._bounded_finalize_stream(
-                            strategy.stream_finalize_turn(
-                                handle, tool_results
-                            ),
+                            strategy.stream_finalize_turn(handle, tool_results),
                             budget,
                             turn,
                         ):
                             turn.stream_chunks.append(chunk.delta)
                             if chunk.is_final or chunk.usage:
-                                turn.populate_from_final_stream_chunk(
-                                    chunk, self.llm
-                                )
+                                turn.populate_from_final_stream_chunk(chunk, self.llm)
                             yield chunk
 
                         # Merge phased tool executions into turn state
@@ -2984,9 +2891,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     if isinstance(chunk, LLMStreamResponse):
                         turn.stream_chunks.append(chunk.delta)
                         if chunk.is_final or chunk.usage:
-                            turn.populate_from_final_stream_chunk(
-                                chunk, self.llm
-                            )
+                            turn.populate_from_final_stream_chunk(chunk, self.llm)
                         # Intercept tool_calls: suppress is_final so the
                         # consumer knows more content may follow.
                         if chunk.tool_calls and self.tool_registry:
@@ -3005,13 +2910,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         turn.stream_chunks.append(content)
                         turn.populate_from_response(chunk, self.llm)
                         # Check for tool_calls on the LLMResponse
-                        if (
-                            getattr(chunk, "tool_calls", None)
-                            and self.tool_registry
-                        ):
+                        if getattr(chunk, "tool_calls", None) and self.tool_registry:
                             pending_tool_calls = chunk.tool_calls
                             yield LLMStreamResponse(
-                                delta=content, is_final=False,
+                                delta=content,
+                                is_final=False,
                             )
                         else:
                             yield LLMStreamResponse(
@@ -3145,9 +3048,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     conversation_id,
                 )
 
-    def _on_conversation_evicted(
-        self, conversation_id: str, _manager: ConversationManager
-    ) -> None:
+    def _on_conversation_evicted(self, conversation_id: str, _manager: ConversationManager) -> None:
         """LRU-eviction hook — route the drop through the single choke point.
 
         Fired by the bounded manager cache when it evicts the LRU conversation
@@ -3299,9 +3200,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         return None
 
-    def _normalize_wizard_state(
-        self, wizard_meta: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _normalize_wizard_state(self, wizard_meta: dict[str, Any]) -> dict[str, Any]:
         """Normalize wizard metadata to canonical structure.
 
         Delegates to the module-level ``normalize_wizard_state()`` function.
@@ -3354,9 +3253,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         await close_if_owned(
             self.reasoning_strategy,
             self._owns_reasoning_strategy,
-            on_error=lambda _exc: logger.exception(
-                "Error closing reasoning strategy"
-            ),
+            on_error=lambda _exc: logger.exception("Error closing reasoning strategy"),
         )
         await close_if_owned(
             self.memory,
@@ -3367,18 +3264,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         await close_if_owned(
             self.conversation_storage,
             self._owns_conversation_storage,
-            on_error=lambda _exc: logger.exception(
-                "Error closing conversation storage"
-            ),
+            on_error=lambda _exc: logger.exception("Error closing conversation storage"),
         )
         # Close main LLM provider only if DynaBot created it.
         # When from_config(llm=...) was used, the caller owns the lifecycle.
         await close_if_owned(
             self.llm,
             self._owns_llm,
-            on_error=lambda _exc: logger.exception(
-                "Error closing main LLM provider"
-            ),
+            on_error=lambda _exc: logger.exception("Error closing main LLM provider"),
         )
 
     async def __aenter__(self) -> Self:
@@ -3404,9 +3297,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         await self.close()
 
-    def get_conversation_manager(
-        self, conversation_id: str
-    ) -> ConversationManager | None:
+    def get_conversation_manager(self, conversation_id: str) -> ConversationManager | None:
         """Get a cached conversation manager by conversation ID.
 
         Returns ``None`` if no manager exists for the given ID (i.e. no
@@ -3422,9 +3313,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         return self._conversation_managers.get(conversation_id)
 
-    async def _get_or_create_conversation(
-        self, context: BotContext
-    ) -> ConversationManager:
+    async def _get_or_create_conversation(self, context: BotContext) -> ConversationManager:
         """Get or create conversation manager for context.
 
         Args:
@@ -3528,9 +3417,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                kb_body = self.knowledge_base.format_context(
-                    kb_results, wrap_in_tags=False
-                )
+                kb_body = self.knowledge_base.format_context(kb_results, wrap_in_tags=False)
                 if self._context_transform:
                     kb_body = self._context_transform(kb_body)
                 sections.append(envelope.knowledge_base_section(kb_body))
@@ -3637,11 +3524,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             #     }
             # }
         """
-        optional = (
-            tool_config.get("optional", False)
-            if isinstance(tool_config, dict)
-            else False
-        )
+        optional = tool_config.get("optional", False) if isinstance(tool_config, dict) else False
         # Bound before the try so the instantiation handler below can name the
         # spec that failed even when the failure happened before the direct
         # branch assigned it.
@@ -3656,7 +3539,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     match = re.match(r"xref:tools\[([^\]]+)\]", tool_config)
                     if not match:
                         if optional:
-                            logger.warning("Skipping optional tool: Invalid xref format: %s", tool_config)
+                            logger.warning(
+                                "Skipping optional tool: Invalid xref format: %s", tool_config
+                            )
                             return None
                         raise ConfigurationError(f"Invalid xref format: {tool_config}")
 
@@ -3701,7 +3586,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 # (the string path recomputes optional=False for strings).
                 import re
 
-                match = re.match(r"xref:tools\[([^\]]+)\]", xref_str) if isinstance(xref_str, str) else None
+                match = (
+                    re.match(r"xref:tools\[([^\]]+)\]", xref_str)
+                    if isinstance(xref_str, str)
+                    else None
+                )
                 if not match:
                     logger.warning("Skipping optional tool: Invalid xref format: %s", xref_str)
                     return None
@@ -3750,9 +3639,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 # Instantiate the tool — prefer from_config() if available,
                 # which allows tools to construct complex internal
                 # dependencies from simple YAML-compatible params.
-                if hasattr(tool_class, "from_config") and callable(
-                    tool_class.from_config
-                ):
+                if hasattr(tool_class, "from_config") and callable(tool_class.from_config):
                     tool = tool_class.from_config(params)
                 else:
                     tool = tool_class(**params)
@@ -3979,13 +3866,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         return sum(
             1
             for m in manager.messages
-            if (m.get("role") if isinstance(m, dict)
-                else getattr(m, "role", "")) == "user"
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "user"
         )
 
-    async def rewind_to_turn(
-        self, context: BotContext, turn: int
-    ) -> UndoResult:
+    async def rewind_to_turn(self, context: BotContext, turn: int) -> UndoResult:
         """Rewind conversation to after the given turn number.
 
         Turn 0 is the first user-bot exchange. Rewinding to turn -1
@@ -4016,9 +3900,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         target_count = turn + 1
 
         if target_count < 0 or target_count > total:
-            raise ValueError(
-                f"Invalid turn {turn}: conversation has {total} turns"
-            )
+            raise ValueError(f"Invalid turn {turn}: conversation has {total} turns")
 
         # When ``max_undo_checkpoints`` trimmed the front, the oldest retained
         # checkpoint sits at absolute index ``dropped`` (rewindable turns start
@@ -4061,9 +3943,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             result = await self.undo_last_turn(context)
         return result
 
-    def _restore_wizard_from_node(
-        self, manager: ConversationManager, node_id: str | None
-    ) -> None:
+    def _restore_wizard_from_node(self, manager: ConversationManager, node_id: str | None) -> None:
         """Reinstate strategy state from a checkpoint node's metadata.
 
         Bot-side responsibility: locate the node and validate its data
@@ -4091,9 +3971,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if not isinstance(node_data, ConversationNode):
             return
 
-        self.reasoning_strategy.restore_from_checkpoint(
-            manager, node_data.metadata
-        )
+        self.reasoning_strategy.restore_from_checkpoint(manager, node_data.metadata)
 
     def _undo_banks_to_checkpoint(
         self, manager: ConversationManager, checkpoint_node_id: str | None

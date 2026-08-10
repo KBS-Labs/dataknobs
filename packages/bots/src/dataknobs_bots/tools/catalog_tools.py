@@ -150,7 +150,8 @@ class ListCatalogTool(ContextAwareTool):
         """
         try:
             catalog = _get_catalog_from_context(
-                context, catalog_override=self._catalog,
+                context,
+                catalog_override=self._catalog,
             )
         except ValueError as exc:
             return error_response(str(exc))
@@ -238,14 +239,16 @@ class SaveToCatalogTool(ContextAwareTool):
         """
         try:
             artifact = _get_artifact_from_context(
-                context, artifact_override=self._artifact,
+                context,
+                artifact_override=self._artifact,
             )
         except ValueError as exc:
             return error_response(str(exc))
 
         try:
             catalog = _get_catalog_from_context(
-                context, catalog_override=self._catalog,
+                context,
+                catalog_override=self._catalog,
             )
         except ValueError as exc:
             return error_response(str(exc))
@@ -366,14 +369,16 @@ class LoadFromCatalogTool(ContextAwareTool):
 
         try:
             catalog = _get_catalog_from_context(
-                context, catalog_override=self._catalog,
+                context,
+                catalog_override=self._catalog,
             )
         except ValueError as exc:
             return error_response(str(exc))
 
         try:
             artifact = _get_artifact_from_context(
-                context, artifact_override=self._artifact,
+                context,
+                artifact_override=self._artifact,
             )
         except ValueError as exc:
             return error_response(str(exc))
@@ -382,8 +387,7 @@ class LoadFromCatalogTool(ContextAwareTool):
         if not found:
             available = [e["name"] for e in catalog.list()]
             return error_response(
-                f"No artifact named '{entry_name}' in catalog. "
-                f"Available: {available}",
+                f"No artifact named '{entry_name}' in catalog. Available: {available}",
             )
 
         compiled = artifact.compile()
@@ -403,9 +407,9 @@ class LoadFromCatalogTool(ContextAwareTool):
             loaded={
                 "name": entry_name,
                 "fields": {
-                    k: v for k, v in compiled.items()
-                    if not k.startswith("_")
-                    and not isinstance(v, list)
+                    k: v
+                    for k, v in compiled.items()
+                    if not k.startswith("_") and not isinstance(v, list)
                 },
                 "sections": section_summary,
             },

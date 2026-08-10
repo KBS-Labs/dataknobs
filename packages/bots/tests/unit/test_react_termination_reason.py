@@ -83,9 +83,7 @@ async def _phased_termination(
         tools=[_EchoTool()],
     ) as harness:
         await harness.chat("please do the multi-step task")
-        conv = await harness.bot.get_conversation(
-            harness.context.conversation_id
-        )
+        conv = await harness.bot.get_conversation(harness.context.conversation_id)
         assert conv is not None
         return conv.metadata.get("reasoning_termination")
 
@@ -159,9 +157,7 @@ class TestReproduce:
 
 class TestPerReasonPhased:
     async def test_completed(self) -> None:
-        term = await _phased_termination(
-            {"max_iterations": 5}, [text_response("Done immediately")]
-        )
+        term = await _phased_termination({"max_iterations": 5}, [text_response("Done immediately")])
         assert term is not None
         assert term["reason"] == ReActTerminationReason.COMPLETED.value
         assert term["iterations_used"] == 1
@@ -201,9 +197,7 @@ class TestPerReasonPhased:
             ],
         )
         assert term is not None
-        assert (
-            term["reason"] == ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
-        )
+        assert term["reason"] == ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
         assert term["iterations_used"] == 2
 
     async def test_tools_not_supported(self) -> None:
@@ -225,9 +219,7 @@ class TestPerReasonPhased:
         assert result.action == "tools_not_supported"
         term = manager.metadata.get("reasoning_termination")
         assert term is not None
-        assert (
-            term["reason"] == ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
-        )
+        assert term["reason"] == ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
         assert term["iterations_used"] == 1
 
     async def test_truncation_retry_exhausted(self) -> None:
@@ -246,10 +238,7 @@ class TestPerReasonPhased:
             ],
         )
         assert term is not None
-        assert (
-            term["reason"]
-            == ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED.value
-        )
+        assert term["reason"] == ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED.value
         assert term["iterations_used"] == 1
 
 
@@ -298,10 +287,7 @@ class TestMonolithicGenerate:
         await strategy.generate(manager, llm, tools=[_EchoTool()])
         term = manager.metadata.get("reasoning_termination")
         assert term is not None
-        assert (
-            term["reason"]
-            == ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED.value
-        )
+        assert term["reason"] == ReActTerminationReason.TRUNCATION_RETRY_EXHAUSTED.value
 
     async def test_duplicate_tool_calls(self) -> None:
         """DUPLICATE_TOOL_CALLS terminal branch fires in the monolithic path.
@@ -320,9 +306,7 @@ class TestMonolithicGenerate:
         await strategy.generate(manager, llm, tools=[_EchoTool()])
         term = manager.metadata.get("reasoning_termination")
         assert term is not None
-        assert (
-            term["reason"] == ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
-        )
+        assert term["reason"] == ReActTerminationReason.DUPLICATE_TOOL_CALLS.value
         assert term["iterations_used"] == 2
 
     async def test_truncated_tool_call(self) -> None:
@@ -356,9 +340,7 @@ class TestMonolithicGenerate:
         await strategy.generate(manager, llm, tools=[_EchoTool()])
         term = manager.metadata.get("reasoning_termination")
         assert term is not None
-        assert (
-            term["reason"] == ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
-        )
+        assert term["reason"] == ReActTerminationReason.TOOLS_NOT_SUPPORTED.value
         assert term["iterations_used"] == 1
 
 
@@ -370,9 +352,7 @@ class TestMonolithicGenerate:
 class TestAlwaysOn:
     async def test_store_trace_false_still_records_reason(self) -> None:
         # store_trace omitted → defaults False.
-        term = await _phased_termination(
-            {"max_iterations": 5}, [text_response("Done")]
-        )
+        term = await _phased_termination({"max_iterations": 5}, [text_response("Done")])
         assert term is not None
         assert term["reason"] == ReActTerminationReason.COMPLETED.value
 
@@ -397,9 +377,7 @@ class TestCallbackFanout:
             def _cb(payload: dict[str, Any]) -> None:
                 captured.append(payload)
 
-            strategy.termination_callbacks.register(
-                REACT_TERMINATION_TOPIC, _cb
-            )
+            strategy.termination_callbacks.register(REACT_TERMINATION_TOPIC, _cb)
             await harness.chat("do the task")
 
         assert len(captured) == 1
@@ -430,16 +408,11 @@ class TestCallbackFanout:
 
         assert len(received) == 1
         assert received[0].topic == REACT_TERMINATION_TOPIC
-        assert (
-            received[0].payload["reason"]
-            == ReActTerminationReason.COMPLETED.value
-        )
+        assert received[0].payload["reason"] == ReActTerminationReason.COMPLETED.value
 
     async def test_no_callback_registered_is_zero_overhead(self) -> None:
         """No subscriber → no error, metadata path still works (lazy registry)."""
-        term = await _phased_termination(
-            {"max_iterations": 5}, [text_response("Done")]
-        )
+        term = await _phased_termination({"max_iterations": 5}, [text_response("Done")])
         assert term is not None
         assert term["reason"] == ReActTerminationReason.COMPLETED.value
 
@@ -452,9 +425,7 @@ class TestCallbackFanout:
 class TestNoDrift:
     async def test_completed_trace_matches_metadata(self) -> None:
         async with await BotTestHarness.create(
-            bot_config=_bot_config(
-                {"max_iterations": 5, "store_trace": True}
-            ),
+            bot_config=_bot_config({"max_iterations": 5, "store_trace": True}),
             main_responses=[
                 tool_call_response("echo", {"text": "a"}),
                 text_response("Done"),
@@ -462,9 +433,7 @@ class TestNoDrift:
             tools=[_EchoTool()],
         ) as harness:
             await harness.chat("do the task")
-            conv = await harness.bot.get_conversation(
-                harness.context.conversation_id
-            )
+            conv = await harness.bot.get_conversation(harness.context.conversation_id)
             trace = conv.metadata.get("reasoning_trace")
             term = conv.metadata.get("reasoning_termination")
 
@@ -474,9 +443,7 @@ class TestNoDrift:
 
     async def test_max_iterations_trace_matches_metadata(self) -> None:
         async with await BotTestHarness.create(
-            bot_config=_bot_config(
-                {"max_iterations": 2, "store_trace": True}
-            ),
+            bot_config=_bot_config({"max_iterations": 2, "store_trace": True}),
             main_responses=[
                 tool_call_response("echo", {"text": "a"}),
                 tool_call_response("echo", {"text": "b"}),
@@ -485,9 +452,7 @@ class TestNoDrift:
             tools=[_EchoTool()],
         ) as harness:
             await harness.chat("do the task")
-            conv = await harness.bot.get_conversation(
-                harness.context.conversation_id
-            )
+            conv = await harness.bot.get_conversation(harness.context.conversation_id)
             trace = conv.metadata.get("reasoning_trace")
             term = conv.metadata.get("reasoning_termination")
 
@@ -505,10 +470,7 @@ class TestCapability:
     def test_supports_callback_registry(self) -> None:
         strategy = ReActReasoning()
         assert strategy.supports(Capability.CALLBACK_REGISTRY)
-        assert (
-            Capability.CALLBACK_REGISTRY
-            in ReActReasoning.supported_capabilities()
-        )
+        assert Capability.CALLBACK_REGISTRY in ReActReasoning.supported_capabilities()
 
 
 # ---------------------------------------------------------------------------
@@ -533,14 +495,10 @@ class TestNoToolsFastPath:
             tools=[],
         ) as harness:
             await harness.chat("just answer directly")
-            conv = await harness.bot.get_conversation(
-                harness.context.conversation_id
-            )
+            conv = await harness.bot.get_conversation(harness.context.conversation_id)
         assert conv is not None
         term = conv.metadata.get("reasoning_termination")
-        assert term is not None, (
-            "no-tools turn wrote no termination reason (the gap)"
-        )
+        assert term is not None, "no-tools turn wrote no termination reason (the gap)"
         assert term["reason"] == ReActTerminationReason.COMPLETED.value
         assert term["iterations_used"] == 0
 
@@ -550,9 +508,7 @@ class TestNoToolsFastPath:
         result = await strategy.generate(manager, llm, tools=None)
         assert result is not None
         term = manager.metadata.get("reasoning_termination")
-        assert term is not None, (
-            "no-tools generate() wrote no termination reason (the gap)"
-        )
+        assert term is not None, "no-tools generate() wrote no termination reason (the gap)"
         assert term["reason"] == ReActTerminationReason.COMPLETED.value
         assert term["iterations_used"] == 0
 
@@ -571,9 +527,7 @@ class TestSinglePersist:
     ``storage.update_metadata`` is the sole persist point ReAct uses.
     """
 
-    async def _run_generate(
-        self, *, store_trace: bool
-    ) -> tuple[_CountingStorage, Any]:
+    async def _run_generate(self, *, store_trace: bool) -> tuple[_CountingStorage, Any]:
         db = AsyncMemoryDatabase()
         storage = _CountingStorage(db)
         llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
@@ -586,9 +540,7 @@ class TestSinglePersist:
         await manager.add_message(role="system", content="You are a tool user.")
         await manager.add_message(role="user", content="Do the task.")
         storage.persist_calls = 0  # ignore any setup writes
-        strategy = ReActReasoning.from_config(
-            {"max_iterations": 5, "store_trace": store_trace}
-        )
+        strategy = ReActReasoning.from_config({"max_iterations": 5, "store_trace": store_trace})
         await strategy.generate(manager, llm, tools=[_EchoTool()])
         return storage, manager
 
@@ -630,22 +582,18 @@ class TestNoLoopTraceStore:
     async def test_phased_no_tools_overwrites_stale_trace(self) -> None:
         manager, llm = await _make_manager([text_response("Direct answer")])
         manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
-        strategy = ReActReasoning.from_config(
-            {"max_iterations": 5, "store_trace": True}
-        )
+        strategy = ReActReasoning.from_config({"max_iterations": 5, "store_trace": True})
         handle = await strategy.begin_turn(manager, llm, tools=[])
         assert handle.early_response is not None
         trace = manager.metadata.get("reasoning_trace")
-        assert trace == [
-            {"status": ReActTerminationReason.COMPLETED.value}
-        ], "no-tools turn left a stale reasoning_trace (the gap)"
+        assert trace == [{"status": ReActTerminationReason.COMPLETED.value}], (
+            "no-tools turn left a stale reasoning_trace (the gap)"
+        )
 
     async def test_monolithic_no_tools_overwrites_stale_trace(self) -> None:
         manager, llm = await _make_manager([text_response("Direct answer")])
         manager.update_metadata({"reasoning_trace": list(_STALE_TRACE)})
-        strategy = ReActReasoning.from_config(
-            {"max_iterations": 5, "store_trace": True}
-        )
+        strategy = ReActReasoning.from_config({"max_iterations": 5, "store_trace": True})
         await strategy.generate(manager, llm, tools=None)
         trace = manager.metadata.get("reasoning_trace")
         assert trace == [{"status": ReActTerminationReason.COMPLETED.value}]
@@ -665,9 +613,7 @@ class TestNoLoopTraceStore:
         result = await strategy.process_input(handle)
         assert result.action == "tools_not_supported"
         trace = manager.metadata.get("reasoning_trace")
-        assert trace == [
-            {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
-        ]
+        assert trace == [{"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}]
 
     async def test_monolithic_tools_not_supported_overwrites_stale_trace(
         self,
@@ -682,6 +628,4 @@ class TestNoLoopTraceStore:
         strategy = ReActReasoning.from_config({"store_trace": True})
         await strategy.generate(manager, llm, tools=[_EchoTool()])
         trace = manager.metadata.get("reasoning_trace")
-        assert trace == [
-            {"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}
-        ]
+        assert trace == [{"status": ReActTerminationReason.TOOLS_NOT_SUPPORTED.value}]

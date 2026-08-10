@@ -4,11 +4,7 @@ import time
 from typing import Any, List
 import pytest
 
-from dataknobs_fsm.execution.stream import (
-    StreamExecutor,
-    StreamPipeline,
-    StreamProgress
-)
+from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import State
@@ -37,7 +33,7 @@ class SimpleStreamSource(IStreamSource):
         chunk = StreamChunk(
             data=chunk_data,
             chunk_id=self.current_index,
-            is_last=(self.current_index == len(self.data_chunks) - 1)
+            is_last=(self.current_index == len(self.data_chunks) - 1),
         )
         self.current_index += 1
         return chunk
@@ -79,9 +75,9 @@ class ProcessingFunction(BaseFunction):
     def execute(self, context: FunctionContext) -> Any:
         """Process the data."""
         data = context.data
-        if isinstance(data, dict) and 'value' in data:
-            data['processed_value'] = data['value'] * self.multiplier
-            data['processed'] = True
+        if isinstance(data, dict) and "value" in data:
+            data["processed_value"] = data["value"] * self.multiplier
+            data["processed"] = True
         return data
 
 
@@ -95,7 +91,7 @@ class ErrorFunction(BaseFunction):
     def execute(self, context: FunctionContext) -> Any:
         """Process data, raising error for specific values."""
         data = context.data
-        if isinstance(data, dict) and data.get('value') == self.error_on_value:
+        if isinstance(data, dict) and data.get("value") == self.error_on_value:
             raise ValueError(f"Test error on value {self.error_on_value}")
         return data
 
@@ -169,16 +165,10 @@ class TestStreamExecutorReal:
         """Test StreamExecutor initialization with real FSM."""
         fsm = self.create_test_fsm()
         stream_config = StreamConfig(
-            chunk_size=100,
-            memory_limit_mb=128,
-            backpressure_threshold=0.8
+            chunk_size=100, memory_limit_mb=128, backpressure_threshold=0.8
         )
 
-        executor = StreamExecutor(
-            fsm=fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
-        )
+        executor = StreamExecutor(fsm=fsm, stream_config=stream_config, enable_backpressure=True)
 
         assert executor.fsm == fsm
         assert executor.stream_config == stream_config
@@ -191,10 +181,12 @@ class TestStreamExecutorReal:
         executor = StreamExecutor(fsm=fsm)
 
         # Create real source and sink
-        source = SimpleStreamSource([
-            [{'id': 1, 'value': 10}, {'id': 2, 'value': 20}],
-            [{'id': 3, 'value': 30}, {'id': 4, 'value': 40}]
-        ])
+        source = SimpleStreamSource(
+            [
+                [{"id": 1, "value": 10}, {"id": 2, "value": 20}],
+                [{"id": 3, "value": 30}, {"id": 4, "value": 40}],
+            ]
+        )
         sink = SimpleStreamSink()
 
         pipeline = StreamPipeline(source=source, sink=sink)
@@ -203,10 +195,10 @@ class TestStreamExecutorReal:
         result = executor.execute_stream(pipeline)
 
         # Verify results
-        assert result['total_processed'] == 4
-        assert result['chunks_processed'] == 2
-        assert result['successful'] == 4
-        assert result['failed'] == 0
+        assert result["total_processed"] == 4
+        assert result["chunks_processed"] == 2
+        assert result["successful"] == 4
+        assert result["failed"] == 0
         assert len(sink.chunks_received) == 2
         assert source.closed is True
         assert sink.closed is True
@@ -217,70 +209,58 @@ class TestStreamExecutorReal:
         executor = StreamExecutor(fsm=fsm)
 
         # Create source with data
-        source = SimpleStreamSource([
-            [{'id': 1, 'value': 5}],
-            [{'id': 2, 'value': 10}]
-        ])
+        source = SimpleStreamSource([[{"id": 1, "value": 5}], [{"id": 2, "value": 10}]])
         sink = SimpleStreamSink()
 
         # Define transformations
         def add_timestamp(data):
-            data['timestamp'] = time.time()
+            data["timestamp"] = time.time()
             return data
 
         def double_value(data):
-            data['value'] = data['value'] * 2
+            data["value"] = data["value"] * 2
             return data
 
         pipeline = StreamPipeline(
-            source=source,
-            sink=sink,
-            transformations=[add_timestamp, double_value]
+            source=source, sink=sink, transformations=[add_timestamp, double_value]
         )
 
         # Execute
         result = executor.execute_stream(pipeline)
 
         # Verify transformations were applied
-        assert result['total_processed'] == 2
+        assert result["total_processed"] == 2
         assert len(sink.chunks_received) == 2
 
         # Check that transformations modified the data
         first_chunk_data = sink.chunks_received[0].data[0]
-        assert 'timestamp' in first_chunk_data
-        assert first_chunk_data['value'] == 10  # Original 5 * 2
+        assert "timestamp" in first_chunk_data
+        assert first_chunk_data["value"] == 10  # Original 5 * 2
 
     def test_execute_stream_with_chunk_processors(self):
         """Test stream execution with chunk processors."""
         fsm = self.create_test_fsm()
         executor = StreamExecutor(fsm=fsm)
 
-        source = SimpleStreamSource([
-            [{'id': 1}, {'id': 2}],
-            [{'id': 3}, {'id': 4}]
-        ])
+        source = SimpleStreamSource([[{"id": 1}, {"id": 2}], [{"id": 3}, {"id": 4}]])
         sink = SimpleStreamSink()
 
         # Chunk processor that adds metadata
         def add_chunk_metadata(chunk):
-            chunk.metadata['processed_at'] = time.time()
-            chunk.metadata['item_count'] = len(chunk.data)
+            chunk.metadata["processed_at"] = time.time()
+            chunk.metadata["item_count"] = len(chunk.data)
             return chunk
 
-        pipeline = StreamPipeline(
-            source=source,
-            sink=sink,
-            chunk_processors=[add_chunk_metadata]
-        )
+        pipeline = StreamPipeline(source=source, sink=sink, chunk_processors=[add_chunk_metadata])
 
         result = executor.execute_stream(pipeline)
 
         # Verify chunk processor was applied
-        assert result['chunks_processed'] == 2
+        assert result["chunks_processed"] == 2
         for chunk in sink.chunks_received:
-            assert 'processed_at' in chunk.metadata
-            assert 'item_count' in chunk.metadata
-            assert chunk.metadata['item_count'] == 2
+            assert "processed_at" in chunk.metadata
+            assert "item_count" in chunk.metadata
+            assert chunk.metadata["item_count"] == 2
 
     def test_execute_stream_with_errors(self):
         """Test stream execution with real error handling."""
@@ -292,11 +272,13 @@ class TestStreamExecutorReal:
 
         executor = StreamExecutor(fsm=fsm)
 
-        source = SimpleStreamSource([
-            [{'id': 1, 'value': 10}],  # OK
-            [{'id': 2, 'value': 20}],  # Will error
-            [{'id': 3, 'value': 30}]   # OK
-        ])
+        source = SimpleStreamSource(
+            [
+                [{"id": 1, "value": 10}],  # OK
+                [{"id": 2, "value": 20}],  # Will error
+                [{"id": 3, "value": 30}],  # OK
+            ]
+        )
         sink = SimpleStreamSink()
 
         pipeline = StreamPipeline(source=source, sink=sink)
@@ -305,8 +287,8 @@ class TestStreamExecutorReal:
         result = executor.execute_stream(pipeline)
 
         # Verify processing continued despite error
-        assert result['chunks_processed'] == 3
-        assert result['total_processed'] == 3
+        assert result["chunks_processed"] == 3
+        assert result["total_processed"] == 3
         # All items processed (errors are caught per-item in _process_chunk)
         assert len(sink.chunks_received) == 3
 
@@ -317,22 +299,17 @@ class TestStreamExecutorReal:
         progress_updates = []
 
         def track_progress(progress):
-            progress_updates.append({
-                'chunks': progress.chunks_processed,
-                'records': progress.records_processed,
-                'errors': len(progress.errors)
-            })
+            progress_updates.append(
+                {
+                    "chunks": progress.chunks_processed,
+                    "records": progress.records_processed,
+                    "errors": len(progress.errors),
+                }
+            )
 
-        executor = StreamExecutor(
-            fsm=fsm,
-            progress_callback=track_progress
-        )
+        executor = StreamExecutor(fsm=fsm, progress_callback=track_progress)
 
-        source = SimpleStreamSource([
-            [{'id': 1}, {'id': 2}],
-            [{'id': 3}, {'id': 4}],
-            [{'id': 5}]
-        ])
+        source = SimpleStreamSource([[{"id": 1}, {"id": 2}], [{"id": 3}, {"id": 4}], [{"id": 5}]])
         sink = SimpleStreamSink()
 
         pipeline = StreamPipeline(source=source, sink=sink)
@@ -340,52 +317,44 @@ class TestStreamExecutorReal:
 
         # Verify progress was tracked
         assert len(progress_updates) == 3  # One per chunk
-        assert progress_updates[-1]['chunks'] == 3
-        assert progress_updates[-1]['records'] == 5
-        assert result['total_processed'] == 5
+        assert progress_updates[-1]["chunks"] == 3
+        assert progress_updates[-1]["records"] == 5
+        assert result["total_processed"] == 5
 
     def test_execute_stream_with_custom_context(self):
         """Test stream execution with custom context."""
         fsm = self.create_test_fsm()
         executor = StreamExecutor(fsm=fsm)
 
-        source = SimpleStreamSource([[{'id': 1, 'value': 100}]])
+        source = SimpleStreamSource([[{"id": 1, "value": 100}]])
         sink = SimpleStreamSink()
 
         # Create custom context with specific settings
         context = ExecutionContext(
-            data_mode=ProcessingMode.STREAM,
-            transaction_mode=TransactionMode.NONE
+            data_mode=ProcessingMode.STREAM, transaction_mode=TransactionMode.NONE
         )
 
         pipeline = StreamPipeline(source=source, sink=sink)
 
-        result = executor.execute_stream(
-            pipeline=pipeline,
-            context_template=context
-        )
+        result = executor.execute_stream(pipeline=pipeline, context_template=context)
 
-        assert result['total_processed'] == 1
-        assert result['successful'] == 1
+        assert result["total_processed"] == 1
+        assert result["successful"] == 1
 
     def test_execute_stream_with_backpressure(self):
         """Test backpressure mechanism with real data."""
         stream_config = StreamConfig(
             memory_limit_mb=1,  # Very low limit
-            backpressure_threshold=0.5
+            backpressure_threshold=0.5,
         )
 
         fsm = self.create_test_fsm()
-        executor = StreamExecutor(
-            fsm=fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
-        )
+        executor = StreamExecutor(fsm=fsm, stream_config=stream_config, enable_backpressure=True)
 
         # Set high memory usage
         executor._memory_usage = 600 * 1024  # 600KB
 
-        source = SimpleStreamSource([[{'id': 1}], [{'id': 2}]])
+        source = SimpleStreamSource([[{"id": 1}], [{"id": 2}]])
         sink = SimpleStreamSink()
 
         pipeline = StreamPipeline(source=source, sink=sink)
@@ -393,22 +362,15 @@ class TestStreamExecutorReal:
         # Should still complete despite backpressure
         result = executor.execute_stream(pipeline)
 
-        assert result['total_processed'] == 2
-        assert result['chunks_processed'] == 2
+        assert result["total_processed"] == 2
+        assert result["chunks_processed"] == 2
 
     def test_should_apply_backpressure_logic(self):
         """Test backpressure decision logic."""
-        stream_config = StreamConfig(
-            memory_limit_mb=100,
-            backpressure_threshold=0.8
-        )
+        stream_config = StreamConfig(memory_limit_mb=100, backpressure_threshold=0.8)
 
         fsm = self.create_test_fsm()
-        executor = StreamExecutor(
-            fsm=fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
-        )
+        executor = StreamExecutor(fsm=fsm, stream_config=stream_config, enable_backpressure=True)
 
         # Test under threshold
         executor._memory_usage = 50 * 1024 * 1024  # 50MB
@@ -428,10 +390,7 @@ class TestStreamExecutorReal:
         sink = SimpleStreamSink()
 
         pipeline = StreamPipeline(
-            source=source,
-            sink=sink,
-            transformations=[lambda x: x],
-            chunk_processors=[lambda c: c]
+            source=source, sink=sink, transformations=[lambda x: x], chunk_processors=[lambda c: c]
         )
 
         assert pipeline.source == source
@@ -450,7 +409,7 @@ class TestStreamExecutorReal:
         pipeline = StreamPipeline(source=source, sink=sink)
         result = executor.execute_stream(pipeline)
 
-        assert result['total_processed'] == 0
-        assert result['chunks_processed'] == 0
-        assert result['successful'] == 0
-        assert result['failed'] == 0
+        assert result["total_processed"] == 0
+        assert result["chunks_processed"] == 0
+        assert result["successful"] == 0
+        assert result["failed"] == 0

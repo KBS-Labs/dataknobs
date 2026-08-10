@@ -13,6 +13,7 @@ from dataknobs_llm.prompts import (
 
 # Concrete implementations for testing
 
+
 class MockSyncAdapter(ResourceAdapter):
     """Mock synchronous adapter for testing."""
 
@@ -29,11 +30,7 @@ class MockSyncAdapter(ResourceAdapter):
         results = []
         for key, value in self._data.items():
             if query.lower() in str(value).lower():
-                results.append({
-                    "content": value,
-                    "key": key,
-                    "score": 1.0
-                })
+                results.append({"content": value, "key": key, "score": 1.0})
                 if len(results) >= k:
                     break
         return results
@@ -55,11 +52,7 @@ class MockAsyncAdapter(AsyncResourceAdapter):
         results = []
         for key, value in self._data.items():
             if query.lower() in str(value).lower():
-                results.append({
-                    "content": value,
-                    "key": key,
-                    "score": 1.0
-                })
+                results.append({"content": value, "key": key, "score": 1.0})
                 if len(results) >= k:
                     break
         return results
@@ -80,10 +73,7 @@ class TestResourceAdapterBase:
 
     def test_get_metadata(self):
         """Test get_metadata returns correct information."""
-        adapter = MockSyncAdapter(
-            {},
-            name="test"
-        )
+        adapter = MockSyncAdapter({}, name="test")
         metadata = adapter.get_metadata()
         assert metadata["name"] == "test"
         assert metadata["type"] == "sync"
@@ -124,31 +114,22 @@ class TestResourceAdapter:
 
     def test_search(self):
         """Test search functionality."""
-        adapter = MockSyncAdapter({
-            "user1": "Alice in NYC",
-            "user2": "Bob in LA",
-            "user3": "Alice in Paris"
-        })
+        adapter = MockSyncAdapter(
+            {"user1": "Alice in NYC", "user2": "Bob in LA", "user3": "Alice in Paris"}
+        )
         results = adapter.search("Alice")
         assert len(results) == 2
         assert all("Alice" in r["content"] for r in results)
 
     def test_search_with_k_limit(self):
         """Test search respects k parameter."""
-        adapter = MockSyncAdapter({
-            f"item{i}": f"test item {i}"
-            for i in range(10)
-        })
+        adapter = MockSyncAdapter({f"item{i}": f"test item {i}" for i in range(10)})
         results = adapter.search("test", k=3)
         assert len(results) == 3
 
     def test_batch_get_values(self):
         """Test batch getting multiple values."""
-        adapter = MockSyncAdapter({
-            "name": "Alice",
-            "age": 30,
-            "city": "NYC"
-        })
+        adapter = MockSyncAdapter({"name": "Alice", "age": 30, "city": "NYC"})
         results = adapter.batch_get_values(["name", "age", "country"], default="Unknown")
         assert results["name"] == "Alice"
         assert results["age"] == 30
@@ -185,11 +166,9 @@ class TestAsyncResourceAdapter:
     @pytest.mark.asyncio
     async def test_search(self):
         """Test async search functionality."""
-        adapter = MockAsyncAdapter({
-            "user1": "Alice in NYC",
-            "user2": "Bob in LA",
-            "user3": "Alice in Paris"
-        })
+        adapter = MockAsyncAdapter(
+            {"user1": "Alice in NYC", "user2": "Bob in LA", "user3": "Alice in Paris"}
+        )
         results = await adapter.search("Alice")
         assert len(results) == 2
         assert all("Alice" in r["content"] for r in results)
@@ -197,11 +176,7 @@ class TestAsyncResourceAdapter:
     @pytest.mark.asyncio
     async def test_batch_get_values(self):
         """Test async batch getting multiple values."""
-        adapter = MockAsyncAdapter({
-            "name": "Alice",
-            "age": 30,
-            "city": "NYC"
-        })
+        adapter = MockAsyncAdapter({"name": "Alice", "age": 30, "city": "NYC"})
         results = await adapter.batch_get_values(["name", "age", "country"], default="Unknown")
         assert results["name"] == "Alice"
         assert results["age"] == 30
@@ -213,18 +188,14 @@ class TestBaseSearchLogic:
 
     def test_format_search_result_from_string(self):
         """Test formatting a string result."""
-        result = BaseSearchLogic.format_search_result(
-            "Hello world",
-            score=0.95
-        )
+        result = BaseSearchLogic.format_search_result("Hello world", score=0.95)
         assert result["content"] == "Hello world"
         assert result["score"] == 0.95
 
     def test_format_search_result_from_dict(self):
         """Test formatting a dict result."""
         result = BaseSearchLogic.format_search_result(
-            {"content": "Hello", "author": "Alice"},
-            score=0.8
+            {"content": "Hello", "author": "Alice"}, score=0.8
         )
         assert result["content"] == "Hello"
         assert result["score"] == 0.8
@@ -232,9 +203,7 @@ class TestBaseSearchLogic:
 
     def test_format_search_result_dict_with_text_key(self):
         """Test formatting dict with 'text' key instead of 'content'."""
-        result = BaseSearchLogic.format_search_result(
-            {"text": "Hello world"}
-        )
+        result = BaseSearchLogic.format_search_result({"text": "Hello world"})
         assert result["content"] == "Hello world"
 
     def test_filter_results_by_score(self):
@@ -255,10 +224,7 @@ class TestBaseSearchLogic:
             {"content": "B", "type": "system"},
             {"content": "C", "type": "user"},
         ]
-        filtered = BaseSearchLogic.filter_results(
-            results,
-            filters={"type": "user"}
-        )
+        filtered = BaseSearchLogic.filter_results(results, filters={"type": "user"})
         assert len(filtered) == 2
         assert all(r["type"] == "user" for r in filtered)
 
@@ -269,10 +235,7 @@ class TestBaseSearchLogic:
             {"content": "B", "metadata": {"category": "sports"}},
             {"content": "C", "metadata": {"category": "tech"}},
         ]
-        filtered = BaseSearchLogic.filter_results(
-            results,
-            filters={"category": "tech"}
-        )
+        filtered = BaseSearchLogic.filter_results(results, filters={"category": "tech"})
         assert len(filtered) == 2
 
     def test_deduplicate_results(self):
@@ -314,10 +277,7 @@ class TestInMemoryAdapter:
 
     def test_initialization_with_search_results(self):
         """Test adapter initializes with search results."""
-        results = [
-            {"content": "Result 1", "score": 0.9},
-            {"content": "Result 2", "score": 0.8}
-        ]
+        results = [{"content": "Result 1", "score": 0.9}, {"content": "Result 2", "score": 0.8}]
         adapter = InMemoryAdapter(search_results=results, name="test")
         assert adapter.name == "test"
 
@@ -325,7 +285,7 @@ class TestInMemoryAdapter:
         """Test search returns the configured results."""
         results = [
             {"content": "Python is a programming language", "score": 0.9},
-            {"content": "Python was created by Guido", "score": 0.8}
+            {"content": "Python was created by Guido", "score": 0.8},
         ]
         adapter = InMemoryAdapter(search_results=results)
 
@@ -336,10 +296,7 @@ class TestInMemoryAdapter:
 
     def test_search_respects_k_parameter(self):
         """Test search respects k limit."""
-        results = [
-            {"content": f"Result {i}", "score": 1.0 - i*0.1}
-            for i in range(10)
-        ]
+        results = [{"content": f"Result {i}", "score": 1.0 - i * 0.1} for i in range(10)]
         adapter = InMemoryAdapter(search_results=results)
 
         search_results = adapter.search("test", k=3)
@@ -367,7 +324,7 @@ class TestInMemoryAdapter:
         results = [
             {"content": "High score", "score": 0.9},
             {"content": "Medium score", "score": 0.6},
-            {"content": "Low score", "score": 0.3}
+            {"content": "Low score", "score": 0.3},
         ]
         adapter = InMemoryAdapter(search_results=results)
 
@@ -381,7 +338,7 @@ class TestInMemoryAdapter:
             {
                 "content": "Result with metadata",
                 "score": 0.9,
-                "metadata": {"source": "doc1.md", "page": 1}
+                "metadata": {"source": "doc1.md", "page": 1},
             }
         ]
         adapter = InMemoryAdapter(search_results=results)
@@ -402,10 +359,7 @@ class TestInMemoryAsyncAdapter:
 
     def test_initialization_with_search_results(self):
         """Test async adapter initializes with search results."""
-        results = [
-            {"content": "Result 1", "score": 0.9},
-            {"content": "Result 2", "score": 0.8}
-        ]
+        results = [{"content": "Result 1", "score": 0.9}, {"content": "Result 2", "score": 0.8}]
         adapter = InMemoryAsyncAdapter(search_results=results, name="test")
         assert adapter.name == "test"
 
@@ -414,7 +368,7 @@ class TestInMemoryAsyncAdapter:
         """Test async search returns the configured results."""
         results = [
             {"content": "Python is a programming language", "score": 0.9},
-            {"content": "Python was created by Guido", "score": 0.8}
+            {"content": "Python was created by Guido", "score": 0.8},
         ]
         adapter = InMemoryAsyncAdapter(search_results=results)
 
@@ -426,10 +380,7 @@ class TestInMemoryAsyncAdapter:
     @pytest.mark.asyncio
     async def test_search_respects_k_parameter(self):
         """Test async search respects k limit."""
-        results = [
-            {"content": f"Result {i}", "score": 1.0 - i*0.1}
-            for i in range(10)
-        ]
+        results = [{"content": f"Result {i}", "score": 1.0 - i * 0.1} for i in range(10)]
         adapter = InMemoryAsyncAdapter(search_results=results)
 
         search_results = await adapter.search("test", k=3)
@@ -461,7 +412,7 @@ class TestInMemoryAsyncAdapter:
         results = [
             {"content": "High score", "score": 0.9},
             {"content": "Medium score", "score": 0.6},
-            {"content": "Low score", "score": 0.3}
+            {"content": "Low score", "score": 0.3},
         ]
         adapter = InMemoryAsyncAdapter(search_results=results)
 
@@ -476,7 +427,7 @@ class TestInMemoryAsyncAdapter:
             {
                 "content": "Result with metadata",
                 "score": 0.9,
-                "metadata": {"source": "doc1.md", "page": 1}
+                "metadata": {"source": "doc1.md", "page": 1},
             }
         ]
         adapter = InMemoryAsyncAdapter(search_results=results)

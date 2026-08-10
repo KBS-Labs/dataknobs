@@ -70,9 +70,7 @@ async def test_direct_ctor_strategy_leaves_its_fsm_open() -> None:
     assert _bridge_threads() == before
 
 
-async def test_direct_ctor_with_a_typed_config_still_leaves_the_fsm_open() -> (
-    None
-):
+async def test_direct_ctor_with_a_typed_config_still_leaves_the_fsm_open() -> None:
     """Ownership is an explicit flag, not an inference from the sentinel.
 
     A caller may pass the direct ctor a pre-built FSM *and* a real config,
@@ -83,9 +81,7 @@ async def test_direct_ctor_with_a_typed_config_still_leaves_the_fsm_open() -> (
     fsm = WizardConfigLoader().load_from_dict(_WIZARD_DICT)
     reasoning = WizardReasoning(
         wizard_fsm=fsm,
-        config=WizardReasoningConfig(
-            wizard_config=_WIZARD_DICT, strict_validation=False
-        ),
+        config=WizardReasoningConfig(wizard_config=_WIZARD_DICT, strict_validation=False),
     )
     assert reasoning.config.wizard_config == _WIZARD_DICT
     fsm.step({})

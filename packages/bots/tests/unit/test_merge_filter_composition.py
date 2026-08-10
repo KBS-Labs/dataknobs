@@ -90,34 +90,45 @@ class TestSchemaGroundingFilterReturnsDecision:
 
     def test_grounded_returns_accept(self) -> None:
         decision = self.f.filter(
-            "subject", "history", None,
+            "subject",
+            "history",
+            None,
             "I want to study history",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert decision.action == "accept"
         assert decision.reason is not None
 
     def test_ungrounded_overwrite_returns_reject(self) -> None:
         decision = self.f.filter(
-            "subject", "math", "history",
+            "subject",
+            "math",
+            "history",
             "completely unrelated message",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert decision.action == "reject"
         assert decision.reason is not None
 
     def test_ungrounded_no_existing_returns_accept(self) -> None:
         decision = self.f.filter(
-            "subject", "math", None,
+            "subject",
+            "math",
+            None,
             "completely unrelated message",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert decision.action == "accept"
         assert "no existing" in (decision.reason or "")
 
     def test_skip_grounding_returns_accept(self) -> None:
         decision = self.f.filter(
-            "tone", "formal", "casual",
+            "tone",
+            "formal",
+            "casual",
             "unrelated",
             {"type": "string", "x-extraction": {"grounding": "skip"}},
             {},
@@ -179,7 +190,8 @@ class _TransformFilter:
     ) -> MergeDecision:
         if isinstance(new_value, str):
             return MergeDecision.transform(
-                new_value.upper(), reason="uppercased",
+                new_value.upper(),
+                reason="uppercased",
             )
         return MergeDecision.accept()
 
@@ -246,9 +258,12 @@ class TestCompositeMergeFilter:
 
         # Ungrounded overwrite: grounding rejects, custom not called
         d = composite.filter(
-            "subject", "math", "history",
+            "subject",
+            "math",
+            "history",
             "completely unrelated",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert d.action == "reject"
         assert len(custom.calls) == 0
@@ -260,9 +275,12 @@ class TestCompositeMergeFilter:
         composite = CompositeMergeFilter([grounding, custom])
 
         d = composite.filter(
-            "subject", "math", "history",
+            "subject",
+            "math",
+            "history",
             "change the subject to math",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert d.action == "accept"
         assert len(custom.calls) == 1
@@ -274,9 +292,12 @@ class TestCompositeMergeFilter:
         composite = CompositeMergeFilter([grounding, transform])
 
         d = composite.filter(
-            "subject", "math", "history",
+            "subject",
+            "math",
+            "history",
             "change the subject to math",
-            {"type": "string"}, {},
+            {"type": "string"},
+            {},
         )
         assert d.action == "transform"
         assert d.value == "MATH"
@@ -312,7 +333,8 @@ def _build_reasoning(
     settings = config.get("settings", {})
     extraction_grounding = settings.get("extraction_grounding", True)
     grounding_overlap_threshold = settings.get(
-        "grounding_overlap_threshold", 0.5,
+        "grounding_overlap_threshold",
+        0.5,
     )
     return WizardReasoning(
         wizard_fsm=wizard_fsm,
@@ -351,7 +373,10 @@ BASIC_WIZARD_CONFIG: dict[str, Any] = {
                     },
                 },
                 "required": [
-                    "intent", "subject", "domain_id", "domain_name",
+                    "intent",
+                    "subject",
+                    "domain_id",
+                    "domain_name",
                 ],
             },
             "transitions": [
@@ -391,7 +416,8 @@ class TestCompositionInit:
         }
         custom = _AcceptFilter()
         reasoning = _build_reasoning(
-            config, ConfigurableExtractor(results=[]),
+            config,
+            ConfigurableExtractor(results=[]),
             merge_filter=custom,
         )
         assert reasoning._extraction._merge_filter is custom
@@ -430,7 +456,8 @@ class TestCompositionInit:
             "settings": {"extraction_grounding": False},
         }
         reasoning = _build_reasoning(
-            config, ConfigurableExtractor(results=[]),
+            config,
+            ConfigurableExtractor(results=[]),
         )
         assert reasoning._extraction._merge_filter is None
 
@@ -465,7 +492,8 @@ class TestBuildClarificationGroups:
         reasoning = self._make_reasoning()
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         groups = reasoning._build_clarification_groups(
-            {"intent", "subject"}, stage,
+            {"intent", "subject"},
+            stage,
         )
         assert len(groups) == 2
         questions = {g["question"] for g in groups}
@@ -484,16 +512,13 @@ class TestBuildClarificationGroups:
         )
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         groups = reasoning._build_clarification_groups(
-            {"domain_id", "domain_name", "intent"}, stage,
+            {"domain_id", "domain_name", "intent"},
+            stage,
         )
         # domain_id + domain_name grouped; intent individual
         assert len(groups) == 2
-        grouped_q = next(
-            g for g in groups if len(g["fields"]) == 2
-        )
-        assert grouped_q["question"] == (
-            "What would you like to call your bot?"
-        )
+        grouped_q = next(g for g in groups if len(g["fields"]) == 2)
+        assert grouped_q["question"] == ("What would you like to call your bot?")
         assert set(grouped_q["fields"]) == {"domain_id", "domain_name"}
 
     def test_partial_group_overlap(self) -> None:
@@ -509,7 +534,8 @@ class TestBuildClarificationGroups:
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         # Only domain_name is missing, not domain_id
         groups = reasoning._build_clarification_groups(
-            {"domain_name"}, stage,
+            {"domain_name"},
+            stage,
         )
         assert len(groups) == 1
         assert groups[0]["fields"] == ["domain_name"]
@@ -535,7 +561,9 @@ class TestBuildClarificationGroups:
             data={"domain_id": "my-bot"},
         )
         groups = reasoning._build_clarification_groups(
-            {"domain_name", "intent"}, stage, wizard_state=ws,
+            {"domain_name", "intent"},
+            stage,
+            wizard_state=ws,
         )
         # domain_name should be excluded (derivable from domain_id)
         all_fields = {f for g in groups for f in g["fields"]}
@@ -554,7 +582,8 @@ class TestBuildClarificationGroups:
         reasoning = self._make_reasoning()
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         groups = reasoning._build_clarification_groups(
-            {"domain_name"}, stage,
+            {"domain_name"},
+            stage,
         )
         assert len(groups) == 1
         # domain_name has description "Display name for the bot"
@@ -565,7 +594,8 @@ class TestBuildClarificationGroups:
         reasoning = self._make_reasoning()
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         groups = reasoning._build_clarification_groups(
-            {"domain_id"}, stage,
+            {"domain_id"},
+            stage,
         )
         assert len(groups) == 1
         # domain_id has no description → falls back to "domain id"
@@ -598,7 +628,9 @@ class TestBuildClarificationGroups:
             data={},
         )
         groups = reasoning._build_clarification_groups(
-            {"domain_id", "domain_name"}, stage, wizard_state=ws,
+            {"domain_id", "domain_name"},
+            stage,
+            wizard_state=ws,
         )
         all_fields = {f for g in groups for f in g["fields"]}
         # domain_id appears (user must provide it)
@@ -649,7 +681,8 @@ class TestClarificationTemplate:
         # The template rendering is tested through the helper
         stage = BASIC_WIZARD_CONFIG["stages"][0]
         groups = reasoning._build_clarification_groups(
-            {"domain_id", "domain_name"}, stage,
+            {"domain_id", "domain_name"},
+            stage,
         )
         # Verify groups are built correctly for template consumption
         assert len(groups) == 1
@@ -682,9 +715,7 @@ class TestFromConfigClarification:
         reasoning = WizardReasoning.from_config(config)
         assert len(reasoning._response._clarification_groups) == 1
         assert reasoning._response._clarification_exclude_derivable is True
-        assert reasoning._response._clarification_template == (
-            "Custom: {{ field_groups }}"
-        )
+        assert reasoning._response._clarification_template == ("Custom: {{ field_groups }}")
 
     def test_from_config_defaults(self) -> None:
         config: dict[str, Any] = {
@@ -734,13 +765,15 @@ async def _create_manager() -> tuple[ConversationManager, EchoProvider]:
         options={"echo_prefix": ""},
     )
     provider = EchoProvider(config)
-    library = ConfigPromptLibrary({
-        "system": {
-            "assistant": {
-                "template": "You are a helpful assistant.",
+    library = ConfigPromptLibrary(
+        {
+            "system": {
+                "assistant": {
+                    "template": "You are a helpful assistant.",
+                },
             },
-        },
-    })
+        }
+    )
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     manager = await ConversationManager.create(
@@ -765,7 +798,8 @@ class _UpperCaseFilter:
     ) -> MergeDecision:
         if isinstance(new_value, str) and new_value:
             return MergeDecision.transform(
-                new_value.upper(), reason="uppercased",
+                new_value.upper(),
+                reason="uppercased",
             )
         return MergeDecision.accept()
 

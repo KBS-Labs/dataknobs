@@ -229,9 +229,7 @@ class TestBufferMemoryHistoryRedaction:
         )
 
         context = await memory.get_context("test")
-        assert context[0]["content"] == (
-            "See [prior citation] and also [prior citation]."
-        )
+        assert context[0]["content"] == ("See [prior citation] and also [prior citation].")
 
 
 def _echo_embedding_provider() -> EchoProvider:
@@ -390,9 +388,7 @@ class TestSummaryMemoryHistoryRedaction:
 
         # First element is the system-role summary header — unredacted.
         assert context[0]["role"] == "system"
-        assert context[0]["content"] == (
-            "[Conversation summary]: Summary text mentioning bib:5"
-        )
+        assert context[0]["content"] == ("[Conversation summary]: Summary text mentioning bib:5")
         # The assistant entry in the recent buffer IS redacted.
         assert context[1]["role"] == "assistant"
         assert context[1]["content"] == "Assistant cites [prior citation]"
@@ -449,6 +445,7 @@ class TestSummaryMemoryHistoryRedaction:
         )
         last_call = provider.get_last_call()
         assert last_call is not None, "Summarizer LLM was not invoked"
+
         # Find the formatted-prompt message by role rather than by
         # positional index. The summarizer is called with a single
         # user-role message whose content IS the formatted prompt.
@@ -867,9 +864,7 @@ class TestVectorMemory:
         }
 
         memory = await VectorMemory.from_config(config)
-        assert memory.embedding_provider.config.api_base == (
-            "https://proxy.example/v1"
-        )
+        assert memory.embedding_provider.config.api_base == ("https://proxy.example/v1")
         assert memory.embedding_provider.config.api_key == "sk-test-key"
 
 
@@ -891,9 +886,7 @@ class TestSummaryMemory:
     async def test_add_and_get_messages_within_window(self):
         """Messages within the window are returned verbatim."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory.from_components(
-            {"recent_window": 5}, llm_provider=provider
-        )
+        memory = SummaryMemory.from_components({"recent_window": 5}, llm_provider=provider)
 
         await memory.add_message("Hello", "user")
         await memory.add_message("Hi there!", "assistant")
@@ -908,13 +901,9 @@ class TestSummaryMemory:
     @pytest.mark.asyncio
     async def test_summarization_triggers_at_threshold(self):
         """When messages exceed recent_window, oldest are summarized."""
-        provider = self._create_echo_provider(
-            responses=["Summary of the conversation so far."]
-        )
+        provider = self._create_echo_provider(responses=["Summary of the conversation so far."])
         await provider.initialize()
-        memory = SummaryMemory.from_components(
-            {"recent_window": 3}, llm_provider=provider
-        )
+        memory = SummaryMemory.from_components({"recent_window": 3}, llm_provider=provider)
 
         # Add 4 messages (exceeds window of 3)
         await memory.add_message("Message 1", "user")
@@ -936,9 +925,7 @@ class TestSummaryMemory:
     @pytest.mark.asyncio
     async def test_get_context_returns_summary_plus_recent(self):
         """get_context returns [summary] + [recent_messages]."""
-        provider = self._create_echo_provider(
-            responses=["First summary", "Updated summary"]
-        )
+        provider = self._create_echo_provider(responses=["First summary", "Updated summary"])
         await provider.initialize()
         memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
@@ -958,9 +945,7 @@ class TestSummaryMemory:
     @pytest.mark.asyncio
     async def test_clear_resets_summary_and_buffer(self):
         """Clear removes both the summary and buffered messages."""
-        provider = self._create_echo_provider(
-            responses=["A summary"]
-        )
+        provider = self._create_echo_provider(responses=["A summary"])
         await provider.initialize()
         memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
@@ -1018,9 +1003,7 @@ class TestSummaryMemory:
     @pytest.mark.asyncio
     async def test_custom_summary_prompt(self):
         """Custom summary_prompt is used for summarization."""
-        custom_prompt = (
-            "CUSTOM: Summarize.\n{existing_summary}\n{new_messages}"
-        )
+        custom_prompt = "CUSTOM: Summarize.\n{existing_summary}\n{new_messages}"
         provider = self._create_echo_provider(responses=["custom summary result"])
         await provider.initialize()
         memory = SummaryMemory.from_components(
@@ -1046,9 +1029,7 @@ class TestSummaryMemoryProviderVisibility:
     @pytest.mark.asyncio
     async def test_providers_returns_provider_when_owned(self):
         """Provider visible when built from a dedicated ``llm`` config section."""
-        memory = await SummaryMemory.from_config(
-            {"llm": {"provider": "echo", "model": "test"}}
-        )
+        memory = await SummaryMemory.from_config({"llm": {"provider": "echo", "model": "test"}})
 
         assert memory._owns_llm_provider is True
         result = memory.providers()
@@ -1087,9 +1068,7 @@ class TestSummaryMemoryProviderVisibility:
     @pytest.mark.asyncio
     async def test_close_closes_when_owned(self):
         """close() closes the provider built from a dedicated ``llm`` section."""
-        memory = await SummaryMemory.from_config(
-            {"llm": {"provider": "echo", "model": "test"}}
-        )
+        memory = await SummaryMemory.from_config({"llm": {"provider": "echo", "model": "test"}})
 
         assert memory._owns_llm_provider is True
         await memory.close()
@@ -1138,9 +1117,7 @@ class TestSummaryMemoryPopMessages:
     async def test_pop_within_window(self):
         """Pop messages that are still in the recent window."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory.from_components(
-            {"recent_window": 10}, llm_provider=provider
-        )
+        memory = SummaryMemory.from_components({"recent_window": 10}, llm_provider=provider)
 
         await memory.add_message("Hello", "user")
         await memory.add_message("Hi!", "assistant")

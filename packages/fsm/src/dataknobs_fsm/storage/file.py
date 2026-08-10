@@ -62,10 +62,10 @@ class FileStorage(UnifiedDatabaseStorage):
         params = dict(config.connection_params)
 
         # Set default file path if not provided
-        params.setdefault('path', './fsm_history')
+        params.setdefault("path", "./fsm_history")
 
         # Set file format (json or yaml)
-        params.setdefault('format', 'json')
+        params.setdefault("format", "json")
 
         # Forward FSM ``StorageConfig.compression`` to the data
         # backend's ``compression`` config key (the established
@@ -74,7 +74,7 @@ class FileStorage(UnifiedDatabaseStorage):
         # implementation injected ``'compress'`` here, which the data
         # backend silently ignored, so file storage was effectively
         # uncompressed regardless of ``StorageConfig.compression``.
-        params.setdefault('compression', 'gzip' if config.compression else None)
+        params.setdefault("compression", "gzip" if config.compression else None)
 
         config = replace(config, connection_params=params)
 

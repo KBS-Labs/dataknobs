@@ -69,9 +69,7 @@ class InvalidTransitionError(OperationError):
                 f"Allowed targets: {allowed_str}"
             )
         else:
-            message = (
-                f"{entity}: unknown current status '{current_status}'"
-            )
+            message = f"{entity}: unknown current status '{current_status}'"
 
         super().__init__(
             message,

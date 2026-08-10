@@ -54,9 +54,7 @@ def _no_consecutive_user_messages(manager: Any) -> bool:
     rejects with a 400 — the downstream symptom of the phantom leading message.
     """
     roles = [_role_of(m) for m in manager.messages]
-    return not any(
-        a == "user" and b == "user" for a, b in pairwise(roles)
-    )
+    return not any(a == "user" and b == "user" for a, b in pairwise(roles))
 
 
 # =====================================================================
@@ -262,11 +260,11 @@ class TestUndoToStartClearsTreePath:
         result = await bot.undo_last_turn(ctx)
 
         manager = bot._conversation_managers.get(ctx.conversation_id)
-        assert manager.messages == []          # tree path emptied
-        assert manager.state is None           # manager reset to pre-message
+        assert manager.messages == []  # tree path emptied
+        assert manager.state is None  # manager reset to pre-message
         assert len(await bot.memory.get_context("test")) == 0  # memory emptied
-        assert result.remaining_turns == 0     # no off-by-one
-        assert result.branching is False       # turn-0 branch discarded
+        assert result.remaining_turns == 0  # no off-by-one
+        assert result.branching is False  # turn-0 branch discarded
 
     @pytest.mark.asyncio
     async def test_no_phantom_on_next_chat_after_rewind_to_start(self):
@@ -282,9 +280,7 @@ class TestUndoToStartClearsTreePath:
         await bot.chat("Fresh", ctx)
 
         manager = bot._conversation_managers.get(ctx.conversation_id)
-        user_msgs = [
-            m["content"] for m in manager.messages if _role_of(m) == "user"
-        ]
+        user_msgs = [m["content"] for m in manager.messages if _role_of(m) == "user"]
         # Only the fresh turn's user message — no phantom "First", and no
         # consecutive-user shape a 400-strict provider would reject.
         assert user_msgs == ["Fresh"]
@@ -347,13 +343,11 @@ class TestLaterTurnUndoUnchanged:
 
         manager = bot._conversation_managers.get(ctx.conversation_id)
         # Back to after turn 0: "First" survives on the tree path.
-        user_msgs = [
-            m["content"] for m in manager.messages if _role_of(m) == "user"
-        ]
+        user_msgs = [m["content"] for m in manager.messages if _role_of(m) == "user"]
         assert user_msgs == ["First"]
-        assert manager.state is not None        # NOT reset — real node switch
+        assert manager.state is not None  # NOT reset — real node switch
         assert result.remaining_turns == 1
-        assert result.branching is True         # sibling branch preserved
+        assert result.branching is True  # sibling branch preserved
 
     @pytest.mark.asyncio
     async def test_bounded_undo_still_functions(self):

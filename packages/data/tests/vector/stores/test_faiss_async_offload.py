@@ -32,9 +32,7 @@ from dataknobs_common.testing import (
 if is_faiss_available():
     from dataknobs_data.vector.stores.faiss import FaissVectorStore
 
-requires_faiss = pytest.mark.skipif(
-    not is_faiss_available(), reason="faiss not installed"
-)
+requires_faiss = pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed")
 
 # ``requires_blockbuster`` is scoped to the two assert_no_blocking tests
 # below — the concurrency guard needs faiss + asyncio, not blockbuster.
@@ -91,7 +89,7 @@ async def test_load_does_not_block_and_round_trips(tmp_path) -> None:
 
     assert dst.index.ntotal == 5
     assert len(dst.id_map) == 5
-    (vec, meta), = await dst.get_vectors(["3"])
+    ((vec, meta),) = await dst.get_vectors(["3"])
     assert vec is not None
     assert meta == {"i": 3}
 
@@ -147,9 +145,7 @@ async def test_save_is_race_free_under_concurrent_mutation(tmp_path) -> None:
     save_task = asyncio.create_task(store.save())
     await asyncio.sleep(0)
     for i in range(400):
-        await store.add_vectors(
-            _vecs(1), ids=[f"x{i}"], metadata=[{"i": -1}]
-        )
+        await store.add_vectors(_vecs(1), ids=[f"x{i}"], metadata=[{"i": -1}])
 
     await save_task  # pre-fix: races (RuntimeError / inconsistent index)
 

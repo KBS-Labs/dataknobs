@@ -18,6 +18,7 @@ from dataknobs_common.scope import (
 
 # --- IdentityProjector ------------------------------------------------ #
 
+
 def test_identity_returns_mapping_as_is() -> None:
     proj = IdentityProjector()
     source = {"a": 1, "b": 2}
@@ -42,6 +43,7 @@ def test_identity_preserves_source_identity() -> None:
 
 
 # --- ReadOnlyProjector ------------------------------------------------ #
+
 
 def test_readonly_returns_proxy() -> None:
     source = {"a": 1, "b": 2}
@@ -83,6 +85,7 @@ def test_readonly_constructor_captures_source() -> None:
 
 # --- WhitelistProjector ----------------------------------------------- #
 
+
 def test_whitelist_returns_only_declared_keys() -> None:
     source = {"a": 1, "b": 2, "c": 3}
     proj = WhitelistProjector(source, frozenset({"a", "b"}))
@@ -111,6 +114,7 @@ def test_whitelist_empty_allowed_keys_returns_empty() -> None:
 
 
 # --- ChainedProjector ------------------------------------------------- #
+
 
 def test_chained_requires_at_least_one_inner() -> None:
     with pytest.raises(ValueError, match="at least one"):
@@ -158,6 +162,7 @@ def test_chained_returns_fresh_dict() -> None:
 
 # --- CallableProjector ------------------------------------------------ #
 
+
 def test_callable_invokes_wrapped_fn() -> None:
     proj = CallableProjector(lambda s: {"derived": s * 2})
     assert proj.project(3) == {"derived": 6}
@@ -175,6 +180,7 @@ def test_callable_raises_on_non_mapping_return() -> None:
 
 
 # --- CachedProjector -------------------------------------------------- #
+
 
 def test_cached_returns_inner_result() -> None:
     proj = CachedProjector(CallableProjector(lambda s: {"doubled": s * 2}))

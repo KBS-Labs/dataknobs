@@ -26,6 +26,7 @@ from .stage_synthesizers import (
     unregister_stage_synthesizer,
     validate_no_conflicting_fields,
 )
+
 # Importing wizard_intent_confirm auto-registers
 # IntentConfirmSynthesizer at module load (side-effect import). Done
 # here at module level so `iter_stage_synthesizers()` reflects the
@@ -61,6 +62,7 @@ def _default_transform_context_factory(fn_ctx: Any) -> Any:
 
     return TransformContext(fsm_context=fn_ctx)
 
+
 # ── Stage field registry ─────────────────────────────────────────────
 #
 # Single source of truth for all recognized stage-level config fields.
@@ -85,6 +87,7 @@ def _default_transform_context_factory(fn_ctx: Any) -> Any:
 #
 #   3. Run tests — TestStageFieldRegistrySync will fail if StageConfig
 #      is missing the new field.
+
 
 class _StageField:
     """Descriptor for a single wizard stage config field."""
@@ -173,9 +176,10 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
 
 # Derived: set of all recognized stage field names (includes fields
 # handled specially by _extract_metadata: transitions, tasks).
-KNOWN_STAGE_FIELDS: frozenset[str] = (
-    frozenset(f.name for f in _STAGE_FIELDS) | {"transitions", "tasks"}
-)
+KNOWN_STAGE_FIELDS: frozenset[str] = frozenset(f.name for f in _STAGE_FIELDS) | {
+    "transitions",
+    "tasks",
+}
 
 # Patterns that suggest a condition is natural language rather than Python
 _ENGLISH_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -187,9 +191,7 @@ _ENGLISH_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # Pattern for Python str.format()-style placeholders (e.g. {name})
 # that should be Jinja2 ({{ name }})
-_PYTHON_FORMAT_PATTERN: re.Pattern[str] = re.compile(
-    r"(?<!\{)\{(\w+)\}(?!\})"
-)
+_PYTHON_FORMAT_PATTERN: re.Pattern[str] = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
 
 
 def _null_bank(name: str) -> Any:
@@ -432,8 +434,7 @@ class WizardConfigLoader:
             for key in stage:
                 if key not in KNOWN_STAGE_FIELDS:
                     logger.warning(
-                        "Stage '%s': unrecognized field '%s' "
-                        "(will be ignored). Known fields: %s",
+                        "Stage '%s': unrecognized field '%s' (will be ignored). Known fields: %s",
                         stage_name,
                         key,
                         ", ".join(sorted(KNOWN_STAGE_FIELDS)),
@@ -476,8 +477,10 @@ class WizardConfigLoader:
 
             # 4. Invalid re_extract_on_entry values
             re_extract = stage.get("re_extract_on_entry")
-            if re_extract is not None and re_extract is not True and (
-                re_extract is not False and re_extract != "capture_only"
+            if (
+                re_extract is not None
+                and re_extract is not True
+                and (re_extract is not False and re_extract != "capture_only")
             ):
                 logger.warning(
                     "Stage '%s': re_extract_on_entry=%r is not a "
@@ -594,9 +597,7 @@ class WizardConfigLoader:
 
         return state_config
 
-    def _translate_transition(
-        self, source_stage: str, transition: dict[str, Any], idx: int
-    ) -> Any:
+    def _translate_transition(self, source_stage: str, transition: dict[str, Any], idx: int) -> Any:
         """Translate wizard transition to FSM arc.
 
         Handles both regular transitions and subflow transitions.
@@ -616,9 +617,7 @@ class WizardConfigLoader:
 
         target = transition.get("target")
         if not target:
-            raise ValueError(
-                f"Transition in stage '{source_stage}' missing 'target'"
-            )
+            raise ValueError(f"Transition in stage '{source_stage}' missing 'target'")
 
         # Handle subflow transitions specially
         # For subflow transitions, the FSM stays at the current stage
@@ -661,15 +660,15 @@ class WizardConfigLoader:
                         item_config = item.get("config")
                         if item_config:
                             params["config"] = item_config
-                        transform.append(FunctionReference(
-                            type="registered",
-                            name=item["name"],
-                            params=params,
-                        ))
-                    else:
                         transform.append(
-                            FunctionReference(type="registered", name=item)
+                            FunctionReference(
+                                type="registered",
+                                name=item["name"],
+                                params=params,
+                            )
                         )
+                    else:
+                        transform.append(FunctionReference(type="registered", name=item))
             elif isinstance(raw_transform, dict):
                 params = {}
                 raw_config = raw_transform.get("config")
@@ -708,9 +707,7 @@ class WizardConfigLoader:
 
         return arc
 
-    def _extract_metadata(
-        self, wizard_config: dict[str, Any]
-    ) -> dict[str, dict[str, Any]]:
+    def _extract_metadata(self, wizard_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Extract stage metadata from wizard config.
 
         Args:
@@ -740,10 +737,7 @@ class WizardConfigLoader:
                 if raw_tf is None:
                     tf_names: list[str] = []
                 elif isinstance(raw_tf, list):
-                    tf_names = [
-                        item["name"] if isinstance(item, dict) else item
-                        for item in raw_tf
-                    ]
+                    tf_names = [item["name"] if isinstance(item, dict) else item for item in raw_tf]
                 elif isinstance(raw_tf, dict):
                     tf_names = [raw_tf["name"]]
                 elif isinstance(raw_tf, str):
@@ -794,20 +788,20 @@ class WizardConfigLoader:
         """
         tasks = []
         for task_def in stage.get("tasks", []):
-            tasks.append({
-                "id": task_def.get("id"),
-                "description": task_def.get("description", task_def.get("id", "")),
-                "required": task_def.get("required", True),
-                "depends_on": task_def.get("depends_on", []),
-                "completed_by": task_def.get("completed_by"),
-                "field_name": task_def.get("field_name"),
-                "tool_name": task_def.get("tool_name"),
-            })
+            tasks.append(
+                {
+                    "id": task_def.get("id"),
+                    "description": task_def.get("description", task_def.get("id", "")),
+                    "required": task_def.get("required", True),
+                    "depends_on": task_def.get("depends_on", []),
+                    "completed_by": task_def.get("completed_by"),
+                    "field_name": task_def.get("field_name"),
+                    "tool_name": task_def.get("tool_name"),
+                }
+            )
         return tasks
 
-    def _extract_global_tasks(
-        self, wizard_config: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    def _extract_global_tasks(self, wizard_config: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract global task definitions from wizard config.
 
         Global tasks are defined at the wizard level (not per-stage) and
@@ -822,16 +816,18 @@ class WizardConfigLoader:
         """
         tasks = []
         for task_def in wizard_config.get("global_tasks", []):
-            tasks.append({
-                "id": task_def.get("id"),
-                "description": task_def.get("description", task_def.get("id", "")),
-                "required": task_def.get("required", True),
-                "depends_on": task_def.get("depends_on", []),
-                "completed_by": task_def.get("completed_by"),
-                "field_name": task_def.get("field_name"),
-                "tool_name": task_def.get("tool_name"),
-                "stage": None,  # Mark as global
-            })
+            tasks.append(
+                {
+                    "id": task_def.get("id"),
+                    "description": task_def.get("description", task_def.get("id", "")),
+                    "required": task_def.get("required", True),
+                    "depends_on": task_def.get("depends_on", []),
+                    "completed_by": task_def.get("completed_by"),
+                    "field_name": task_def.get("field_name"),
+                    "tool_name": task_def.get("tool_name"),
+                    "stage": None,  # Mark as global
+                }
+            )
         return tasks
 
     def _register_inline_conditions(
@@ -871,30 +867,21 @@ class WizardConfigLoader:
                 try:
                     # Create a function that evaluates the condition
                     # using the shared safe expression engine.
-                    def make_condition(
-                        code: str, name: str
-                    ) -> Callable[[Any, Any], bool]:
-                        def condition_func(
-                            data: dict[str, Any], context: Any = None
-                        ) -> bool:
+                    def make_condition(code: str, name: str) -> Callable[[Any, Any], bool]:
+                        def condition_func(data: dict[str, Any], context: Any = None) -> bool:
                             result = safe_eval(
                                 code,
                                 scope={
                                     "data": data,
-                                    "has": lambda key: (
-                                        data.get(key) is not None
-                                    ),
-                                    "bank": data.get(
-                                        "_bank_fn", _null_bank
-                                    ),
+                                    "has": lambda key: data.get(key) is not None,
+                                    "bank": data.get("_bank_fn", _null_bank),
                                 },
                                 coerce_bool=True,
                                 default=False,
                             )
                             if not result.success:
                                 logger.warning(
-                                    "Condition '%s' evaluation failed: "
-                                    "%s (code=%r, data_keys=%s)",
+                                    "Condition '%s' evaluation failed: %s (code=%r, data_keys=%s)",
                                     name,
                                     result.error,
                                     code,
@@ -902,8 +889,7 @@ class WizardConfigLoader:
                                 )
                             else:
                                 logger.debug(
-                                    "Condition '%s': code=%r, "
-                                    "result=%s, data_keys=%s",
+                                    "Condition '%s': code=%r, result=%s, data_keys=%s",
                                     name,
                                     code,
                                     result.value,
@@ -913,13 +899,9 @@ class WizardConfigLoader:
 
                         return condition_func
 
-                    builder.register_function(
-                        func_name, make_condition(condition_code, func_name)
-                    )
+                    builder.register_function(func_name, make_condition(condition_code, func_name))
                 except Exception as e:
-                    logger.warning(
-                        "Failed to register condition '%s': %s", func_name, e
-                    )
+                    logger.warning("Failed to register condition '%s': %s", func_name, e)
 
     def _load_subflow_networks(
         self,
@@ -1005,9 +987,7 @@ class WizardConfigLoader:
         explicit_subflows = wizard_config.get("subflows", {})
         if subflow_name in explicit_subflows:
             subflow_config = explicit_subflows[subflow_name]
-            return self.load_from_dict(
-                subflow_config, custom_functions, config_base_path
-            )
+            return self.load_from_dict(subflow_config, custom_functions, config_base_path)
 
         # Try to load from file
         if config_base_path is None:
@@ -1054,6 +1034,4 @@ def load_wizard_config(
         Configured WizardFSM instance
     """
     loader = WizardConfigLoader()
-    return loader.load(
-        config_path, custom_functions, transform_context_factory
-    )
+    return loader.load(config_path, custom_functions, transform_context_factory)

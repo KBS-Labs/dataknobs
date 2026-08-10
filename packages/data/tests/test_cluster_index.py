@@ -48,6 +48,7 @@ def _unit_vector(dim: int, index: int) -> list[float]:
 def _make_similar(base: list[float], noise: float = 0.05) -> list[float]:
     """Create a vector similar to base by adding small perturbation."""
     import random
+
     random.seed(42)
     result = [v + random.uniform(-noise, noise) for v in base]
     # Normalize
@@ -112,6 +113,7 @@ def _make_vector_fn(
     embeddings: dict[str, list[float]],
 ) -> ...:
     """Create a vector query fn that returns chunks matching query words."""
+
     async def vector_fn(
         query: str,
         top_k: int,
@@ -124,6 +126,7 @@ def _make_vector_fn(
             if any(w in c.content.lower() for w in query_lower.split()):
                 matches.append(c)
         return matches[:top_k]
+
     return vector_fn
 
 
@@ -151,27 +154,33 @@ class TestClusterTopicConfig:
         assert config.scope_profiles == {}
 
     def test_from_dict_basic(self) -> None:
-        config = ClusterTopicConfig.from_dict({
-            "cluster_threshold": 0.5,
-            "top_clusters": 5,
-            "unknown_key": "ignored",
-        })
+        config = ClusterTopicConfig.from_dict(
+            {
+                "cluster_threshold": 0.5,
+                "top_clusters": 5,
+                "unknown_key": "ignored",
+            }
+        )
         assert config.cluster_threshold == 0.5
         assert config.top_clusters == 5
 
     def test_from_dict_stopwords_list(self) -> None:
-        config = ClusterTopicConfig.from_dict({
-            "label_stopwords": ["custom", "words"],
-        })
+        config = ClusterTopicConfig.from_dict(
+            {
+                "label_stopwords": ["custom", "words"],
+            }
+        )
         assert config.label_stopwords == frozenset({"custom", "words"})
 
     def test_from_dict_scope_profiles(self) -> None:
-        config = ClusterTopicConfig.from_dict({
-            "scope_profiles": {
-                "focused": {"top_clusters": 1},
-                "broad": {"top_clusters": 5},
-            },
-        })
+        config = ClusterTopicConfig.from_dict(
+            {
+                "scope_profiles": {
+                    "focused": {"top_clusters": 1},
+                    "broad": {"top_clusters": 5},
+                },
+            }
+        )
         assert config.scope_profiles["focused"]["top_clusters"] == 1
 
     def test_frozen(self) -> None:
@@ -198,7 +207,8 @@ class TestEagerConstruction:
 
     def test_two_clusters_formed(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         assert len(idx.cluster_info) == 2
@@ -207,7 +217,8 @@ class TestEagerConstruction:
 
     def test_topics_returns_labels(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         topics = idx.topics()
@@ -218,7 +229,8 @@ class TestEagerConstruction:
 
     def test_custom_labels(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
             labels={0: "Auth Cluster", 1: "DB Cluster"},
         )
@@ -229,7 +241,8 @@ class TestEagerConstruction:
     def test_chunks_without_embeddings_skipped(self) -> None:
         partial = {k: v for k, v in _EMBEDDINGS.items() if k.startswith("a")}
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, partial,
+            _CHUNKS,
+            partial,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         assert len(idx.cluster_info) == 1
@@ -237,14 +250,16 @@ class TestEagerConstruction:
 
     def test_min_cluster_size(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5, min_cluster_size=4),
         )
         assert idx.topics() == []
 
     def test_auto_label_uses_config(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5, label_top_terms=1),
         )
         for topic in idx.topics():
@@ -302,7 +317,8 @@ class TestBuildClassMethod:
     @pytest.mark.asyncio
     async def test_build_from_embed_fn(self) -> None:
         idx = await ClusterTopicIndex.build(
-            _CHUNKS, _embed_batch,
+            _CHUNKS,
+            _embed_batch,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -311,7 +327,8 @@ class TestBuildClassMethod:
     @pytest.mark.asyncio
     async def test_build_empty_chunks(self) -> None:
         idx = await ClusterTopicIndex.build(
-            [], _embed_batch,
+            [],
+            _embed_batch,
             embed_fn=_embed_query_auth,
         )
         assert idx.topics() == []
@@ -328,7 +345,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_matches_auth_cluster(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -340,7 +358,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_matches_db_cluster(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_db,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -352,7 +371,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_no_match_returns_empty(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_neither,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
@@ -365,7 +385,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_no_embed_fn_returns_empty(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         results = await idx.resolve("test query")
@@ -374,7 +395,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_top_k_caps_results(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -384,7 +406,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_max_results_per_cluster(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
@@ -397,7 +420,8 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_deduplication(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
@@ -414,7 +438,8 @@ class TestResolve:
             raise RuntimeError("embed failed")
 
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=failing_embed,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -438,7 +463,8 @@ class TestScopeProfiles:
             scope_profiles={"focused": {"top_clusters": 1}},
         )
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=config,
         )
@@ -487,7 +513,8 @@ class TestClusterInfo:
 
     def test_cluster_info_structure(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         for info in idx.cluster_info:
@@ -510,7 +537,8 @@ class TestIntegrationPipeline:
     @pytest.mark.asyncio
     async def test_build_and_resolve_roundtrip(self) -> None:
         idx = await ClusterTopicIndex.build(
-            _CHUNKS, _embed_batch,
+            _CHUNKS,
+            _embed_batch,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -522,7 +550,8 @@ class TestIntegrationPipeline:
     @pytest.mark.asyncio
     async def test_results_ranked_by_similarity(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
-            _CHUNKS, _EMBEDDINGS,
+            _CHUNKS,
+            _EMBEDDINGS,
             embed_fn=_embed_query_auth,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,

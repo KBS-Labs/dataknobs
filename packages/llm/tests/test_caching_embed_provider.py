@@ -585,9 +585,7 @@ class TestCreateCachingProvider:
     @pytest.mark.asyncio
     async def test_memory_backend(self):
         inner = _create_echo_provider()
-        provider = await create_caching_provider(
-            inner, cache_backend="memory"
-        )
+        provider = await create_caching_provider(inner, cache_backend="memory")
         try:
             assert provider.is_initialized
             result = await provider.embed("test")

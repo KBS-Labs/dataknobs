@@ -96,9 +96,7 @@ class _StubSession:
         return self._client
 
 
-def _stub_provider(
-    config: LLMConfig, client: _StubBedrockClient
-) -> BedrockProvider:
+def _stub_provider(config: LLMConfig, client: _StubBedrockClient) -> BedrockProvider:
     """Build a provider with its session pre-wired to a stub (no AWS).
 
     ``_session_config`` is built from ``config.options`` in ``__init__``,

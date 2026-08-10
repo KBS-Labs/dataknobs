@@ -147,11 +147,7 @@ class MultiFieldDiscriminator:
 
     def classify(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return {
-            field_name: (
-                discriminator.classify(value[field_name])
-                if field_name in value
-                else None
-            )
+            field_name: (discriminator.classify(value[field_name]) if field_name in value else None)
             for field_name, discriminator in self.field_discriminators.items()
         }
 

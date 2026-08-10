@@ -167,9 +167,7 @@ def is_ollama_model_usable(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.load(response)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        logger.debug(
-            "Ollama usability canary for model %r failed: %s", model_name, exc
-        )
+        logger.debug("Ollama usability canary for model %r failed: %s", model_name, exc)
         return False
     content = (body.get("message") or {}).get("content") or ""
     return bool(str(content).strip())
@@ -285,9 +283,7 @@ def is_redis_available(host: str | None = None, port: int | None = None) -> bool
     )
 
 
-def is_postgres_available(
-    host: str | None = None, port: int | None = None
-) -> bool:
+def is_postgres_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if PostgreSQL service is available.
 
     Resolves the host as ``host`` arg → ``$POSTGRES_HOST`` → Docker-aware
@@ -312,9 +308,7 @@ def is_postgres_available(
     )
 
 
-def is_elasticsearch_available(
-    host: str | None = None, port: int | None = None
-) -> bool:
+def is_elasticsearch_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if the Elasticsearch service is available.
 
     Resolves the host as ``host`` arg → ``$ELASTICSEARCH_HOST`` → Docker-aware
@@ -339,9 +333,7 @@ def is_elasticsearch_available(
     )
 
 
-def get_localstack_endpoint(
-    host: str | None = None, port: int | None = None
-) -> str:
+def get_localstack_endpoint(host: str | None = None, port: int | None = None) -> str:
     """Resolve the LocalStack edge endpoint URL.
 
     Returns the URL form (e.g. ``"http://localhost:4566"``) suitable
@@ -383,9 +375,7 @@ def get_localstack_endpoint(
     scheme = "http"
 
     if host is None or port is None:
-        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
-            "AWS_ENDPOINT_URL"
-        )
+        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
         if endpoint:
             parsed = urlparse(endpoint)
             # Only honor the env-supplied scheme when the URL parses as
@@ -405,9 +395,7 @@ def get_localstack_endpoint(
             env_host = os.environ.get("LOCALSTACK_HOST")
             if env_host:
                 host = env_host
-            elif os.path.exists("/.dockerenv") or os.environ.get(
-                "DOCKER_CONTAINER"
-            ):
+            elif os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
                 host = "localstack"
             else:
                 host = "localhost"

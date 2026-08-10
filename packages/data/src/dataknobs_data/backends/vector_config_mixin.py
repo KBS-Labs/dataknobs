@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 class VectorConfigMixin:
     """Mixin to provide consistent vector configuration across all backends.
-    
+
     This mixin ensures that all backends handle vector-related configuration
     parameters in a consistent way, including:
     - vector_enabled: Whether vector support is enabled
     - vector_metric: The distance metric to use for vector operations
-    
+
     Usage:
         Include this mixin in your backend class and call _parse_vector_config()
         during initialization to extract vector configuration parameters.
@@ -32,7 +32,7 @@ class VectorConfigMixin:
             config: Configuration dictionary (uses self.config if not provided)
         """
         # Use provided config or fall back to self.config
-        config = config if config is not None else getattr(self, 'config', {})
+        config = config if config is not None else getattr(self, "config", {})
         self._apply_vector_config(
             config.get("vector_enabled", False),
             config.get("vector_metric", "cosine"),
@@ -62,22 +62,18 @@ class VectorConfigMixin:
             try:
                 self.vector_metric = DistanceMetric(vector_metric.lower())
             except ValueError:
-                logger.warning(
-                    f"Invalid vector metric '{vector_metric}', using cosine"
-                )
+                logger.warning(f"Invalid vector metric '{vector_metric}', using cosine")
                 self.vector_metric = DistanceMetric.COSINE
         else:
             self.vector_metric = DistanceMetric.COSINE
 
         # Log vector configuration
         if self.vector_enabled:
-            logger.debug(
-                f"Vector support enabled with metric: {self.vector_metric.value}"
-            )
+            logger.debug(f"Vector support enabled with metric: {self.vector_metric.value}")
 
     def _init_vector_state(self) -> None:
         """Initialize vector-related state variables.
-        
+
         This method should be called after _parse_vector_config() to set up
         any additional state needed for vector operations.
         """
@@ -91,16 +87,16 @@ class VectorConfigMixin:
     @property
     def vector_enabled(self) -> bool:
         """Check if vector support is enabled.
-        
+
         Returns:
             True if vector operations are enabled for this backend
         """
-        return getattr(self, '_vector_enabled', False)
+        return getattr(self, "_vector_enabled", False)
 
     @vector_enabled.setter
     def vector_enabled(self, value: bool) -> None:
         """Set vector support enabled state.
-        
+
         Args:
             value: Whether to enable vector support
         """

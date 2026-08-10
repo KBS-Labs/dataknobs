@@ -182,9 +182,7 @@ class ArtifactCorpus:
             from dataknobs_data.dedup import DedupChecker, DedupConfig
 
             dedup_cfg = DedupConfig(**dedup_config_dict)
-            dedup_checker = DedupChecker(
-                db=AsyncMemoryDatabase(), config=dedup_cfg
-            )
+            dedup_checker = DedupChecker(db=AsyncMemoryDatabase(), config=dedup_cfg)
 
         instance = cls(
             registry=registry,
@@ -198,11 +196,7 @@ class ArtifactCorpus:
             items = await instance.get_items()
             for item in items:
                 # Strip corpus_id added by add_item() to match original content
-                original_content = {
-                    k: v
-                    for k, v in item.content.items()
-                    if k != "corpus_id"
-                }
+                original_content = {k: v for k, v in item.content.items() if k != "corpus_id"}
                 await dedup_checker.register(original_content, item.id)
             if items:
                 logger.info(
@@ -399,9 +393,7 @@ class ArtifactCorpus:
         if refreshed:
             self._corpus_artifact = refreshed
 
-        logger.info(
-            "Finalized corpus '%s' with %d items", self.id, len(item_ids)
-        )
+        logger.info("Finalized corpus '%s' with %d items", self.id, len(item_ids))
         return self._corpus_artifact
 
     async def get_summary(self) -> dict[str, Any]:

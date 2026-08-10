@@ -172,11 +172,7 @@ class WhitelistProjector:
     def project(self, source: Any) -> Mapping[str, Any]:
         # The `source` argument is accepted for Protocol conformance;
         # this projector reads from the source captured at construction.
-        return {
-            k: self._source[k]
-            for k in self._allowed_keys
-            if k in self._source
-        }
+        return {k: self._source[k] for k in self._allowed_keys if k in self._source}
 
 
 class ChainedProjector:

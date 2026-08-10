@@ -33,9 +33,7 @@ def _region() -> str:
 @pytest.mark.asyncio
 async def test_bedrock_converse_live() -> None:
     """A real Converse call returns content and usage."""
-    model = os.environ.get(
-        "DK_BEDROCK_CHAT_MODEL", "anthropic.claude-3-haiku-20240307-v1:0"
-    )
+    model = os.environ.get("DK_BEDROCK_CHAT_MODEL", "anthropic.claude-3-haiku-20240307-v1:0")
     config = LLMConfig(
         provider="bedrock",
         model=model,
@@ -44,9 +42,7 @@ async def test_bedrock_converse_live() -> None:
         options={"region_name": _region()},
     )
     async with BedrockProvider(config) as provider:
-        response = await provider.complete(
-            "Reply with exactly the word: pong"
-        )
+        response = await provider.complete("Reply with exactly the word: pong")
 
     assert response.content.strip()
     assert response.usage is not None
@@ -56,9 +52,7 @@ async def test_bedrock_converse_live() -> None:
 @pytest.mark.asyncio
 async def test_bedrock_embed_live() -> None:
     """A real embedding call returns a vector of the expected dimension."""
-    model = os.environ.get(
-        "DK_BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"
-    )
+    model = os.environ.get("DK_BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0")
     config = LLMConfig(
         provider="bedrock",
         model=model,

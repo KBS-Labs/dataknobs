@@ -330,7 +330,7 @@ class TestExecutionTracker:
             tracker.record(
                 ExecutionRecord(
                     from_state=f"s{i}",
-                    to_state=f"s{i+1}",
+                    to_state=f"s{i + 1}",
                     timestamp=float(i),
                     trigger="step",
                     success=True,
@@ -452,7 +452,7 @@ class TestExecutionTracker:
             tracker.record(
                 ExecutionRecord(
                     from_state=f"s{i}",
-                    to_state=f"s{i+1}",
+                    to_state=f"s{i + 1}",
                     timestamp=float(i * 100),
                     trigger="step",
                     success=True,
@@ -524,7 +524,7 @@ class TestExecutionTracker:
             tracker.record(
                 ExecutionRecord(
                     from_state=f"s{i}",
-                    to_state=f"s{i+1}",
+                    to_state=f"s{i + 1}",
                     timestamp=float(i),
                     trigger="step",
                     success=True,

@@ -44,10 +44,7 @@ from dataknobs_fsm.functions.base import (
 )
 from dataknobs_fsm.resources.base import IResourceProvider
 from dataknobs_fsm.resources.manager import ResourceManager
-from dataknobs_fsm.functions.manager import (
-    FunctionManager,
-    FunctionSource
-)
+from dataknobs_fsm.functions.manager import FunctionManager, FunctionSource
 
 
 # Interface -> the method the engine ultimately invokes on a function instance.
@@ -211,22 +208,22 @@ class FSMBuilder:
 
     def build(self, config: FSMConfig) -> CoreFSMClass:
         """Build an FSM instance from configuration.
-        
+
         Args:
             config: FSM configuration.
-            
+
         Returns:
             Executable FSM instance.
-            
+
         Raises:
             ValueError: If configuration is invalid or incomplete.
         """
         # Clear previous build state
         self._networks.clear()
-        
+
         # 1. Register resources
         self._register_resources(config.resources)
-        
+
         # 2. Initialize data handlers
         self._init_data_handlers(config.data_mode)
 
@@ -241,11 +238,11 @@ class FSMBuilder:
         # 5. Create core FSM instance
         from dataknobs_fsm.core.modes import ProcessingMode as CoreDataMode
         from dataknobs_fsm.core.modes import TransactionMode as CoreTransactionMode
-        
+
         # Map config modes to core modes
         data_mode = CoreDataMode.SINGLE  # Default to SINGLE for now
         transaction_mode = CoreTransactionMode.NONE  # Default to NONE
-        
+
         fsm = CoreFSMClass(
             name=config.name,
             data_mode=data_mode,
@@ -253,31 +250,31 @@ class FSMBuilder:
             description=config.description,
             resource_manager=self._resource_manager,
         )
-        
+
         # Store config in FSM for reference
         fsm.config = config
-        
+
         # Register all functions from builder into core FSM's function registry
         for func_name in self._function_manager.list_functions():
             wrapper = self._function_manager.get_function(func_name)
             if wrapper:
                 # The FSM's function registry expects callable functions
                 # If it's a FunctionWrapper, get the actual function
-                if hasattr(wrapper, 'func'):
+                if hasattr(wrapper, "func"):
                     fsm.function_registry.register(func_name, wrapper.func)
                 else:
                     fsm.function_registry.register(func_name, wrapper)
-        
+
         # Add networks to FSM
         for network_name, network in self._networks.items():
             fsm.add_network(network, is_main=(network_name == config.main_network))
-        
+
         # Return the core FSM directly
         return fsm
 
     def register_function(self, name: str, func: Callable) -> None:
         """Register a custom function.
-        
+
         Args:
             name: Function name for reference in configuration.
             func: Function implementation.
@@ -289,7 +286,7 @@ class FSMBuilder:
         # Import built-in function modules
         try:
             from dataknobs_fsm.functions.library import validators, transformers
-            
+
             # Register validators
             for name in dir(validators):
                 if not name.startswith("_"):
@@ -298,7 +295,7 @@ class FSMBuilder:
                         self._function_manager.register_function(
                             f"validators.{name}", obj, FunctionSource.BUILTIN
                         )
-            
+
             # Register transformers
             for name in dir(transformers):
                 if not name.startswith("_"):
@@ -307,14 +304,14 @@ class FSMBuilder:
                         self._function_manager.register_function(
                             f"transformers.{name}", obj, FunctionSource.BUILTIN
                         )
-        
+
         except ImportError:
             # Built-in functions not yet implemented
             pass
 
     def _register_resources(self, resources: List[ResourceConfig]) -> None:
         """Register resources with the resource manager.
-        
+
         Args:
             resources: Resource configurations.
         """
@@ -400,29 +397,30 @@ class FSMBuilder:
 
     def _init_data_handlers(self, config: Any) -> None:
         """Initialize data handlers for each mode.
-        
+
         Args:
             config: Data mode configuration.
         """
         for mode in DataHandlingMode:
             self._data_handlers[mode] = get_data_handler(mode)
 
-
     def _build_network(self, network_config: NetworkConfig, fsm_config: FSMConfig) -> StateNetwork:
         """Build a state network from configuration.
-        
+
         Args:
             network_config: Network configuration.
             fsm_config: Parent FSM configuration.
-            
+
         Returns:
             StateNetwork instance.
         """
         network = StateNetwork(
             name=network_config.name,
-            description=network_config.metadata.get("description", "") if network_config.metadata else None,
+            description=network_config.metadata.get("description", "")
+            if network_config.metadata
+            else None,
         )
-        
+
         # Create states
         state_defs = {}
         for state_config in network_config.states:
@@ -430,18 +428,21 @@ class FSMBuilder:
             state_defs[state_def.name] = state_def
             # Pass initial and final flags based on state type
             from dataknobs_fsm.core.state import StateType
+
             network.add_state(
                 state_def,
                 initial=(state_def.type in [StateType.START, StateType.START_END]),
-                final=(state_def.type in [StateType.END, StateType.START_END])
+                final=(state_def.type in [StateType.END, StateType.START_END]),
             )
-        
+
         # Create arcs with definition order tracking
         arc_definition_order = 0
         for state_config in network_config.states:
             state_def = state_defs[state_config.name]
             for arc_config in state_config.arcs:
-                arc = self._build_arc(arc_config, state_def, network, fsm_config, arc_definition_order)
+                arc = self._build_arc(
+                    arc_config, state_def, network, fsm_config, arc_definition_order
+                )
                 arc_definition_order += 1
                 # Add arc to both the state definition and the network
                 state_def.outgoing_arcs.append(arc)
@@ -450,30 +451,30 @@ class FSMBuilder:
                 pre_test_name = None
                 transform_name = None
                 if arc.pre_test:
-                    pre_test_name = getattr(arc.pre_test, '__name__', str(arc.pre_test))
+                    pre_test_name = getattr(arc.pre_test, "__name__", str(arc.pre_test))
                 if arc.transform:
                     if isinstance(arc.transform, list):
                         transform_name = arc.transform
                     else:
-                        transform_name = getattr(arc.transform, '__name__', str(arc.transform))
-                
+                        transform_name = getattr(arc.transform, "__name__", str(arc.transform))
+
                 network.add_arc(
                     source_state=state_config.name,
                     target_state=arc_config.target,
                     pre_test=pre_test_name,
                     transform=transform_name,
-                    metadata=arc_config.metadata
+                    metadata=arc_config.metadata,
                 )
-        
+
         return network
 
     def _build_state(self, state_config: StateConfig, fsm_config: FSMConfig) -> StateDefinition:
         """Build a state definition from configuration.
-        
+
         Args:
             state_config: State configuration.
             fsm_config: Parent FSM configuration.
-            
+
         Returns:
             StateDefinition instance.
         """
@@ -481,7 +482,7 @@ class FSMBuilder:
         schema = None
         if state_config.data_schema:
             schema = self._build_schema(state_config.data_schema)
-        
+
         # Resolve pre-validators
         pre_validators = []
         for func_ref in state_config.pre_validators:
@@ -493,7 +494,7 @@ class FSMBuilder:
         for func_ref in state_config.validators:
             validator = self._resolve_function(func_ref, IValidationFunction)
             validators.append(validator)
-        
+
         # Resolve transforms
         transforms = []
         for func_ref in state_config.transforms:
@@ -501,10 +502,10 @@ class FSMBuilder:
             transforms.append(transform)
             # Don't re-register wrapped functions - they're already in the manager
             # The transform is already an InterfaceWrapper with proper async handling
-        
+
         # Determine data mode
         data_mode = state_config.data_mode or fsm_config.data_mode.default
-        
+
         # Create state definition with correct field names
         state_def = StateDefinition(name=state_config.name)
         state_def.schema = schema
@@ -514,7 +515,9 @@ class FSMBuilder:
         # Look up actual resource configs from the FSM config
         resource_map = {res.name: res for res in fsm_config.resources}
         state_def.resource_requirements = [
-            resource_map[r] if r in resource_map else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            resource_map[r]
+            if r in resource_map
+            else ResourceConfig(name=r, type=ResourceType.CUSTOM)
             for r in state_config.resources
         ]
         state_def.data_mode = data_mode
@@ -556,14 +559,14 @@ class FSMBuilder:
             return None
 
         # Check for various name attributes
-        if hasattr(func, 'name'):
+        if hasattr(func, "name"):
             return func.name
-        elif hasattr(func, '__name__'):
+        elif hasattr(func, "__name__"):
             # Skip generic names that would cause collisions
             name = func.__name__
-            if name not in ['<lambda>', 'inline_func']:
+            if name not in ["<lambda>", "inline_func"]:
                 return name
-        elif hasattr(func, 'wrapper') and hasattr(func.wrapper, 'name'):
+        elif hasattr(func, "wrapper") and hasattr(func.wrapper, "name"):
             # InterfaceWrapper case
             return func.wrapper.name
         else:
@@ -624,17 +627,23 @@ class FSMBuilder:
                     # Use hash of code for uniqueness
                     condition_name = f"condition_{source_state.name}_{arc_config.target}_{abs(hash(arc_config.condition.code))}"
                 else:
-                    condition_name = f"condition_{source_state.name}_{arc_config.target}_{id(condition)}"
+                    condition_name = (
+                        f"condition_{source_state.name}_{arc_config.target}_{id(condition)}"
+                    )
             # Register the function with the function manager so it gets transferred to FSM later
             if condition_name and not self._function_manager.has_function(condition_name):
                 # Register the resolved function - if it's an InterfaceWrapper, register it as-is
                 # since InterfaceWrapper is callable and handles the interface correctly
-                if hasattr(condition, 'test'):
+                if hasattr(condition, "test"):
                     # It's an IStateTestFunction interface, register the test method
-                    self._function_manager.register_function(condition_name, condition.test, FunctionSource.INLINE)
+                    self._function_manager.register_function(
+                        condition_name, condition.test, FunctionSource.INLINE
+                    )
                 else:
                     # Register as-is
-                    self._function_manager.register_function(condition_name, condition, FunctionSource.INLINE)
+                    self._function_manager.register_function(
+                        condition_name, condition, FunctionSource.INLINE
+                    )
 
         # Resolve transform function(s)
         # ArcConfig.transform can be a single FunctionReference or a list
@@ -655,7 +664,9 @@ class FSMBuilder:
                     else:
                         t_name = f"transform_{source_state.name}_{arc_config.target}_{t_idx}_{id(transform)}"
                 if t_name and not self._function_manager.has_function(t_name):
-                    self._function_manager.register_function(t_name, transform, FunctionSource.INLINE)
+                    self._function_manager.register_function(
+                        t_name, transform, FunctionSource.INLINE
+                    )
                 # Preserve params from FunctionReference as a TransformSpec so the
                 # engine re-passes them as kwargs at execution — but NOT for a
                 # materialized library adapter, whose params are already baked
@@ -704,16 +715,16 @@ class FSMBuilder:
 
     def _build_schema(self, schema_config: Dict[str, Any]) -> Any:
         """Build a schema from configuration.
-        
+
         Args:
             schema_config: Schema configuration (JSON Schema format).
-            
+
         Returns:
             Schema object for validation.
         """
         # Handle JSON Schema format - create a simple validation schema
         # that can be used by the FSM's validation system
-        
+
         # For JSON Schema format, create a simple validator wrapper
         class JSONSchemaValidator:
             """Simple JSON Schema validator for FSM data validation.
@@ -724,64 +735,65 @@ class FSMBuilder:
 
             def __init__(self, schema_def):
                 self.schema_def = schema_def
-            
+
             def validate(self, data):
                 """Validate data against JSON schema."""
                 from dataknobs_data import Record
-                
+
                 # Convert Record to dict if needed
                 if isinstance(data, Record):
                     data_dict = data.to_dict()
                 elif isinstance(data, dict):
                     data_dict = data
                 else:
-                    return type('Result', (), {
-                        'valid': False,
-                        'errors': [f'Expected object or Record, got {type(data).__name__}']
-                    })()
-                
+                    return type(
+                        "Result",
+                        (),
+                        {
+                            "valid": False,
+                            "errors": [f"Expected object or Record, got {type(data).__name__}"],
+                        },
+                    )()
+
                 # Simple validation for basic JSON schema
-                if self.schema_def.get('type') == 'object':
+                if self.schema_def.get("type") == "object":
                     errors = []
-                    properties = self.schema_def.get('properties', {})
-                    required = self.schema_def.get('required', [])
-                    
+                    properties = self.schema_def.get("properties", {})
+                    required = self.schema_def.get("required", [])
+
                     # Check required fields
                     for field in required:
                         if field not in data_dict:
                             errors.append(f"Required field '{field}' is missing")
-                    
+
                     # Check field types
                     for field, value in data_dict.items():
                         if field in properties:
                             field_schema = properties[field]
-                            field_type = field_schema.get('type')
+                            field_type = field_schema.get("type")
                             if field_type and not self._validate_type(value, field_type):
                                 errors.append(f"Field '{field}' has wrong type")
-                    
-                    return type('Result', (), {
-                        'valid': len(errors) == 0,
-                        'errors': errors
-                    })()
+
+                    return type("Result", (), {"valid": len(errors) == 0, "errors": errors})()
                 else:
                     # Simple pass-through for non-object schemas
-                    return type('Result', (), {'valid': True, 'errors': []})()
-            
+                    return type("Result", (), {"valid": True, "errors": []})()
+
             def _validate_type(self, value, expected_type):
                 """Validate value type."""
                 type_map = {
-                    'string': str,
-                    'integer': int,
-                    'number': (int, float),
-                    'boolean': bool,
-                    'array': list,
-                    'object': dict
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                    "array": list,
+                    "object": dict,
                 }
                 expected_python_type = type_map.get(expected_type)
                 if expected_python_type:
                     return isinstance(value, expected_python_type)
                 return True
-        
+
         return JSONSchemaValidator(schema_config)
 
     def _materialize_library_function(
@@ -845,14 +857,14 @@ class FSMBuilder:
         expected_type: Type | None = None,
     ) -> Callable:
         """Resolve a function reference to a callable.
-        
+
         Args:
             func_ref: Function reference.
             expected_type: Expected function interface type.
-            
+
         Returns:
             Resolved function callable.
-            
+
         Raises:
             ValueError: If function cannot be resolved.
         """
@@ -879,7 +891,7 @@ class FSMBuilder:
             if not wrapper:
                 raise ValueError(f"Registered function not found: {func_ref.name}")
             func = wrapper
-        
+
         elif func_ref.type == "custom":
             # Check manager first
             wrapper = self._function_manager.get_function(func_ref.name)
@@ -912,7 +924,9 @@ class FSMBuilder:
                         f"Custom function not found: {func_ref.module}.{func_ref.name}"
                     ) from exc
                 # Register it for future use
-                self._function_manager.register_function(func_ref.name, raw, FunctionSource.REGISTERED)
+                self._function_manager.register_function(
+                    func_ref.name, raw, FunctionSource.REGISTERED
+                )
                 # A custom *class* implementing an FSM function interface is
                 # configured by ``params`` (constructor args) the same way a
                 # built-in class is; materialize + adapt it. A plain custom
@@ -937,33 +951,38 @@ class FSMBuilder:
             func = wrapper
             # Mark as already wrapped to avoid double wrapping
             func._is_wrapped = True
-        
+
         else:
             raise ValueError(f"Unknown function type: {func_ref.type}")
-        
+
         # Apply parameters if provided
         if func_ref.params:
             # Create a partial function with parameters
             import functools
+
             func = functools.partial(func, **func_ref.params)
-        
+
         # Validate type if specified
         # Skip wrapping if already wrapped by function manager
-        if expected_type and not isinstance(func, expected_type) and not getattr(func, '_is_wrapped', False):
+        if (
+            expected_type
+            and not isinstance(func, expected_type)
+            and not getattr(func, "_is_wrapped", False)
+        ):
             # Wrap function to match expected interface
             wrapped = self._wrap_function(func, expected_type)
             # Preserve the original function name if it exists
-            if hasattr(func, 'name'):
+            if hasattr(func, "name"):
                 wrapped.name = func.name
             elif func_ref.type == "registered" and func_ref.name:
                 wrapped.name = func_ref.name
             func = wrapped
-        
+
         # For inline functions, ensure they have a name
-        if func_ref.type == "inline" and hasattr(func, 'name'):
+        if func_ref.type == "inline" and hasattr(func, "name"):
             # Name already set by function manager
             pass
-        
+
         return func
 
     def _wrap_function(self, func: Callable, interface: Type) -> Any:
@@ -982,17 +1001,17 @@ class FSMBuilder:
 
     def _validate_completeness(self, config: FSMConfig) -> None:
         """Validate that the FSM configuration is complete and consistent.
-        
+
         Args:
             config: FSM configuration.
-            
+
         Raises:
             ValueError: If configuration is incomplete or inconsistent.
         """
         # Check main network exists
         if config.main_network not in self._networks:
             raise ValueError(f"Main network '{config.main_network}' not found")
-        
+
         # Check all arc targets exist
         for network in self._networks.values():
             state_names = {state.name for state in network.states.values()}
@@ -1008,8 +1027,10 @@ class FSMBuilder:
                     else:
                         # Check target state exists
                         if arc.target_state not in state_names:
-                            raise ValueError(f"Arc target '{arc.target_state}' not found in network")
-        
+                            raise ValueError(
+                                f"Arc target '{arc.target_state}' not found in network"
+                            )
+
         # Check resource references
         resource_names = {res.name for res in config.resources}
         for network in self._networks.values():
@@ -1020,21 +1041,21 @@ class FSMBuilder:
 
     def _create_execution_context(self, config: FSMConfig) -> ExecutionContext:
         """Create execution context from configuration.
-        
+
         Args:
             config: FSM configuration.
-            
+
         Returns:
             ExecutionContext instance.
         """
         # Map our DataHandlingMode to the execution context's ProcessingMode
         from dataknobs_fsm.core.modes import ProcessingMode as CoreDataMode
-        
+
         # Simple mapping - we'll use SINGLE mode for now
         # This could be enhanced to support batch and stream modes
         return ExecutionContext(
             data_mode=CoreDataMode.SINGLE,
-            resources={}  # Resources will be populated during execution
+            resources={},  # Resources will be populated during execution
         )
 
 

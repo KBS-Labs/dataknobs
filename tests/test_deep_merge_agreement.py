@@ -68,9 +68,7 @@ def _via_deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str,
     return deep_merge(base, override)
 
 
-def _via_inheritable_loader(
-    base: dict[str, Any], override: dict[str, Any]
-) -> dict[str, Any]:
+def _via_inheritable_loader(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """A child config resolving its ``extends:`` parent."""
     import json
     import tempfile
@@ -100,23 +98,17 @@ _MINIMAL_BOT: dict[str, Any] = {
 }
 
 
-def _via_bot_config_builder(
-    base: dict[str, Any], override: dict[str, Any]
-) -> dict[str, Any]:
+def _via_bot_config_builder(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """``DynaBotConfigBuilder.merge_overrides``, via `from_config` / `build`."""
     from dataknobs_bots.config.builder import DynaBotConfigBuilder
 
     built = (
-        DynaBotConfigBuilder.from_config({**base, **_MINIMAL_BOT})
-        .merge_overrides(override)
-        .build()
+        DynaBotConfigBuilder.from_config({**base, **_MINIMAL_BOT}).merge_overrides(override).build()
     )
     return {key: value for key, value in built.items() if key not in _MINIMAL_BOT}
 
 
-def _via_apply_template(
-    base: dict[str, Any], override: dict[str, Any]
-) -> dict[str, Any]:
+def _via_apply_template(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """``apply_template`` with a template registered for the test."""
     from dataknobs_fsm.config.schema import TEMPLATES, UseCaseTemplate, apply_template
 
@@ -129,9 +121,7 @@ def _via_apply_template(
         TEMPLATES[template] = original
 
 
-def _via_conversion_options(
-    base: dict[str, Any], override: dict[str, Any]
-) -> dict[str, Any]:
+def _via_conversion_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """``ConversionOptions.merge_metadata``, merging two records' metadata."""
     from dataknobs_data.pandas import ConversionOptions
 
@@ -193,9 +183,7 @@ def test_merge_configs_agrees_on_a_schema_shaped_fixture() -> None:
     )
     from dataknobs_fsm.core.data_modes import DataHandlingMode
 
-    def one_network(
-        name: str, state: str, data_mode: dict[str, Any]
-    ) -> FSMConfig:
+    def one_network(name: str, state: str, data_mode: dict[str, Any]) -> FSMConfig:
         return FSMConfig(
             name=name,
             networks=[

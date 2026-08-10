@@ -1,6 +1,5 @@
 """Simple test for database ETL example imports and basic functionality."""
 
-
 import pytest
 
 from dataknobs_fsm.api.simple import SimpleFSM
@@ -21,23 +20,20 @@ class TestBasicETLExample:
     def test_etl_config_creation(self):
         """Test ETL configuration creation."""
         config = ETLConfig(
-            source_db={'type': 'memory'},
-            target_db={'type': 'memory'},
+            source_db={"type": "memory"},
+            target_db={"type": "memory"},
             mode=ETLMode.INCREMENTAL,
-            batch_size=100
+            batch_size=100,
         )
 
-        assert config.source_db == {'type': 'memory'}
-        assert config.target_db == {'type': 'memory'}
+        assert config.source_db == {"type": "memory"}
+        assert config.target_db == {"type": "memory"}
         assert config.mode == ETLMode.INCREMENTAL
         assert config.batch_size == 100
 
     def test_database_etl_creation(self):
         """Test DatabaseETL creation."""
-        config = ETLConfig(
-            source_db={'type': 'memory'},
-            target_db={'type': 'memory'}
-        )
+        config = ETLConfig(source_db={"type": "memory"}, target_db={"type": "memory"})
 
         etl = DatabaseETL(config)
         assert etl.config == config
@@ -47,47 +43,48 @@ class TestBasicETLExample:
         """Test individual transformation functions."""
 
         def clean_data(row):
-            return {**row, 'cleaned': True}
+            return {**row, "cleaned": True}
 
         def validate_data(row):
-            if 'id' not in row:
+            if "id" not in row:
                 raise ValueError("Missing id")
-            return {**row, 'validated': True}
+            return {**row, "validated": True}
 
         # Test transformations
-        test_row = {'id': 1, 'name': '  test  '}
+        test_row = {"id": 1, "name": "  test  "}
 
         cleaned = clean_data(test_row)
-        assert cleaned['cleaned'] is True
+        assert cleaned["cleaned"] is True
 
         validated = validate_data(cleaned)
-        assert validated['validated'] is True
+        assert validated["validated"] is True
 
         # Test validation failure
         with pytest.raises(ValueError):
-            validate_data({'name': 'test'})
+            validate_data({"name": "test"})
 
     def test_simple_fsm_creation(self):
         """Test simple FSM creation."""
         config = {
-            'name': 'test_etl',
-            'main_network': 'main',
-            'networks': [{
-                'name': 'main',
-                'states': [
-                    {'name': 'start', 'is_start': True},
-                    {'name': 'process'},
-                    {'name': 'complete', 'is_end': True}
-                ],
-                'arcs': [
-                    {'from': 'start', 'to': 'process'},
-                    {'from': 'process', 'to': 'complete'}
-                ]
-            }]
+            "name": "test_etl",
+            "main_network": "main",
+            "networks": [
+                {
+                    "name": "main",
+                    "states": [
+                        {"name": "start", "is_start": True},
+                        {"name": "process"},
+                        {"name": "complete", "is_end": True},
+                    ],
+                    "arcs": [
+                        {"from": "start", "to": "process"},
+                        {"from": "process", "to": "complete"},
+                    ],
+                }
+            ],
         }
 
         with SimpleFSM(config) as fsm:
-
             # Should be able to create without errors
             assert fsm is not None
 
@@ -95,39 +92,41 @@ class TestBasicETLExample:
     async def test_simple_fsm_execution(self):
         """Test simple FSM execution."""
         config = {
-            'name': 'test_etl_execution',
-            'main_network': 'main',
-            'networks': [{
-                'name': 'main',
-                'states': [
-                    {
-                        'name': 'start',
-                        'is_start': True,
-                        'schema': {
-                            'type': 'object',
-                            'properties': {'input': {'type': 'string'}},
-                            'required': ['input']
-                        }
-                    },
-                    {
-                        'name': 'process',
-                        'functions': {
-                            'transform': 'lambda state: {"input": state.data["input"], "processed": True}'
-                        }
-                    },
-                    {'name': 'complete', 'is_end': True}
-                ],
-                'arcs': [
-                    {'from': 'start', 'to': 'process'},
-                    {'from': 'process', 'to': 'complete'}
-                ]
-            }]
+            "name": "test_etl_execution",
+            "main_network": "main",
+            "networks": [
+                {
+                    "name": "main",
+                    "states": [
+                        {
+                            "name": "start",
+                            "is_start": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {"input": {"type": "string"}},
+                                "required": ["input"],
+                            },
+                        },
+                        {
+                            "name": "process",
+                            "functions": {
+                                "transform": 'lambda state: {"input": state.data["input"], "processed": True}'
+                            },
+                        },
+                        {"name": "complete", "is_end": True},
+                    ],
+                    "arcs": [
+                        {"from": "start", "to": "process"},
+                        {"from": "process", "to": "complete"},
+                    ],
+                }
+            ],
         }
 
         async with SimpleFSM(config) as fsm:
             result = fsm.process({"input": "test_data"})
 
-            assert result['success'] is True
-            assert result['final_state'] == 'complete'
-            assert result['data']['processed'] is True
-            assert result['data']['input'] == 'test_data'
+            assert result["success"] is True
+            assert result["final_state"] == "complete"
+            assert result["data"]["processed"] is True
+            assert result["data"]["input"] == "test_data"

@@ -33,22 +33,16 @@ class TestCanAutoAdvance:
                         },
                         "required": ["domain_id", "domain_name"],
                     },
-                    "transitions": [
-                        {"target": "done", "condition": "data.get('domain_id')"}
-                    ],
+                    "transitions": [{"target": "done", "condition": "data.get('domain_id')"}],
                 },
                 {"name": "done", "is_end": True, "prompt": "Complete!"},
             ],
         }
         return wizard_loader.load_from_dict(config)
 
-    def test_can_auto_advance_with_all_required_fields(
-        self, simple_fsm: WizardFSM
-    ) -> None:
+    def test_can_auto_advance_with_all_required_fields(self, simple_fsm: WizardFSM) -> None:
         """Stage with all required fields filled can auto-advance."""
-        reasoning = WizardReasoning(
-            wizard_fsm=simple_fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=simple_fsm, auto_advance_filled_stages=True)
 
         state = WizardState(
             current_stage="identity",
@@ -58,13 +52,9 @@ class TestCanAutoAdvance:
         stage = simple_fsm.current_metadata
         assert reasoning._can_auto_advance(state, stage) is True
 
-    def test_cannot_auto_advance_missing_required_field(
-        self, simple_fsm: WizardFSM
-    ) -> None:
+    def test_cannot_auto_advance_missing_required_field(self, simple_fsm: WizardFSM) -> None:
         """Stage missing required field cannot auto-advance."""
-        reasoning = WizardReasoning(
-            wizard_fsm=simple_fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=simple_fsm, auto_advance_filled_stages=True)
 
         state = WizardState(
             current_stage="identity",
@@ -103,7 +93,8 @@ class TestCanAutoAdvance:
     def test_cannot_auto_advance_when_disabled(self, simple_fsm: WizardFSM) -> None:
         """Auto-advance doesn't happen when disabled."""
         reasoning = WizardReasoning(
-            wizard_fsm=simple_fsm, auto_advance_filled_stages=False  # Disabled globally
+            wizard_fsm=simple_fsm,
+            auto_advance_filled_stages=False,  # Disabled globally
         )
 
         state = WizardState(
@@ -116,9 +107,7 @@ class TestCanAutoAdvance:
 
     def test_auto_advance_with_empty_string_value(self, simple_fsm: WizardFSM) -> None:
         """Empty string values don't count as filled."""
-        reasoning = WizardReasoning(
-            wizard_fsm=simple_fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=simple_fsm, auto_advance_filled_stages=True)
 
         state = WizardState(
             current_stage="identity",
@@ -130,9 +119,7 @@ class TestCanAutoAdvance:
 
     def test_auto_advance_with_none_value(self, simple_fsm: WizardFSM) -> None:
         """None values don't count as filled."""
-        reasoning = WizardReasoning(
-            wizard_fsm=simple_fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=simple_fsm, auto_advance_filled_stages=True)
 
         state = WizardState(
             current_stage="identity",
@@ -142,7 +129,9 @@ class TestCanAutoAdvance:
         stage = simple_fsm.current_metadata
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_auto_advance_treats_all_properties_as_required(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_auto_advance_treats_all_properties_as_required(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """When no 'required' list, all properties are treated as required."""
         config = {
             "name": "test-wizard",
@@ -200,7 +189,9 @@ class TestCanAutoAdvance:
         stage = fsm.current_metadata
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_stage_auto_advance_false_overrides_global_true(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_stage_auto_advance_false_overrides_global_true(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Stage auto_advance: false must prevent auto-advance when global is true."""
         config = {
             "name": "test-wizard",
@@ -233,7 +224,9 @@ class TestCanAutoAdvance:
         assert stage.get("auto_advance") is False
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_global_true_advances_when_stage_not_set(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_global_true_advances_when_stage_not_set(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Global auto_advance_filled_stages: true works for stages without explicit setting."""
         config = {
             "name": "test-wizard",
@@ -316,22 +309,14 @@ class TestEvaluateCondition:
         assert reasoning._evaluate_condition("data.get('name')", {"name": "Test"})
         assert not reasoning._evaluate_condition("data.get('name')", {})
 
-    def test_evaluate_condition_with_comparison(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    def test_evaluate_condition_with_comparison(self, reasoning: WizardReasoning) -> None:
         """Test evaluating condition with comparison."""
-        assert reasoning._evaluate_condition(
-            "data.get('count', 0) > 5", {"count": 10}
-        )
-        assert not reasoning._evaluate_condition(
-            "data.get('count', 0) > 5", {"count": 3}
-        )
+        assert reasoning._evaluate_condition("data.get('count', 0) > 5", {"count": 10})
+        assert not reasoning._evaluate_condition("data.get('count', 0) > 5", {"count": 3})
 
     def test_evaluate_condition_with_return(self, reasoning: WizardReasoning) -> None:
         """Test condition that already has 'return'."""
-        assert reasoning._evaluate_condition(
-            "return data.get('name')", {"name": "Test"}
-        )
+        assert reasoning._evaluate_condition("return data.get('name')", {"name": "Test"})
 
     def test_evaluate_invalid_condition(self, reasoning: WizardReasoning) -> None:
         """Invalid conditions return False without raising."""
@@ -341,9 +326,7 @@ class TestEvaluateCondition:
             {"name": "Test"},
         )
 
-    def test_evaluate_condition_falsy_values(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    def test_evaluate_condition_falsy_values(self, reasoning: WizardReasoning) -> None:
         """Falsy values correctly evaluate to False."""
         assert not reasoning._evaluate_condition("data.get('flag')", {"flag": False})
         assert not reasoning._evaluate_condition("data.get('flag')", {"flag": 0})
@@ -373,9 +356,7 @@ class TestAutoAdvanceIntegration:
                         },
                         "required": ["domain_id", "domain_name"],
                     },
-                    "transitions": [
-                        {"target": "llm", "condition": "data.get('domain_id')"}
-                    ],
+                    "transitions": [{"target": "llm", "condition": "data.get('domain_id')"}],
                 },
                 {
                     "name": "llm",
@@ -385,16 +366,15 @@ class TestAutoAdvanceIntegration:
                         "properties": {"llm_provider": {"type": "string"}},
                         "required": ["llm_provider"],
                     },
-                    "transitions": [
-                        {"target": "done", "condition": "data.get('llm_provider')"}
-                    ],
+                    "transitions": [{"target": "done", "condition": "data.get('llm_provider')"}],
                 },
                 {"name": "done", "is_end": True, "prompt": "Complete!"},
             ],
         }
 
     def test_auto_advance_skips_multiple_stages(
-        self, multi_stage_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, multi_stage_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Wizard auto-advances through multiple stages with pre-filled data."""
         fsm = wizard_loader.load_from_dict(multi_stage_config)
 
@@ -434,9 +414,7 @@ stages:
   - name: done
     is_end: true
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(config_content)
             config_path = Path(f.name)
 
@@ -485,7 +463,9 @@ class TestSkipExtraction:
         assert state.skip_extraction is False
 
     @pytest.mark.asyncio
-    async def test_auto_advance_sets_skip_extraction(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_auto_advance_sets_skip_extraction(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Auto-advance loop sets skip_extraction on the landing stage."""
         config = {
             "name": "test-wizard",
@@ -519,9 +499,7 @@ class TestSkipExtraction:
         }
         fsm = wizard_loader.load_from_dict(config)
 
-        reasoning = WizardReasoning(
-            wizard_fsm=fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=fsm, auto_advance_filled_stages=True)
 
         state = WizardState(
             current_stage="gather",
@@ -537,7 +515,9 @@ class TestSkipExtraction:
         assert state.skip_extraction is True
 
     @pytest.mark.asyncio
-    async def test_no_skip_extraction_when_no_advance(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_no_skip_extraction_when_no_advance(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """skip_extraction stays False when auto-advance doesn't fire."""
         config = {
             "name": "test-wizard",
@@ -559,9 +539,7 @@ class TestSkipExtraction:
         }
         fsm = wizard_loader.load_from_dict(config)
 
-        reasoning = WizardReasoning(
-            wizard_fsm=fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=fsm, auto_advance_filled_stages=True)
 
         # Missing required field — auto-advance won't fire
         state = WizardState(current_stage="gather", data={})
@@ -577,7 +555,9 @@ class TestSkipExtractionLifecycle:
     """Tests for skip_extraction flag lifecycle across navigation paths."""
 
     @pytest.mark.asyncio
-    async def test_navigate_back_clears_skip_extraction(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_navigate_back_clears_skip_extraction(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Back navigation clears skip_extraction flag."""
         config = {
             "name": "test-wizard",
@@ -649,7 +629,9 @@ class TestSkipExtractionLifecycle:
         assert state.skip_extraction is False
 
     @pytest.mark.asyncio
-    async def test_greet_auto_advance_clears_skip_extraction(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_greet_auto_advance_clears_skip_extraction(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """After greet() auto-advances, skip_extraction should be False.
 
         The user's first message after greet IS directed at the landing
@@ -691,13 +673,13 @@ class TestSkipExtractionLifecycle:
         fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm)
 
-        llm_config = LLMConfig(
-            provider="echo", model="echo-test", options={"echo_prefix": ""}
-        )
+        llm_config = LLMConfig(provider="echo", model="echo-test", options={"echo_prefix": ""})
         provider = EchoProvider(llm_config)
-        library = ConfigPromptLibrary({
-            "system": {"assistant": {"template": "You are a helper."}},
-        })
+        library = ConfigPromptLibrary(
+            {
+                "system": {"assistant": {"template": "You are a helper."}},
+            }
+        )
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         manager = await ConversationManager.create(
@@ -725,7 +707,9 @@ class TestSkipExtractionLifecycle:
         await provider.close()
 
     @pytest.mark.asyncio
-    async def test_navigate_skip_clears_skip_extraction(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_navigate_skip_clears_skip_extraction(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Skip navigation clears skip_extraction flag.
 
         Bug: if a user says "skip" right after being auto-advanced to an
@@ -771,7 +755,9 @@ class TestSkipExtractionLifecycle:
         assert state.skip_extraction is False
 
     @pytest.mark.asyncio
-    async def test_skip_extraction_does_not_inject_stale_message(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_skip_extraction_does_not_inject_stale_message(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """When skip_extraction is active, the prior stage's message must not
         be injected as _message for FSM condition evaluation.
 
@@ -816,13 +802,13 @@ class TestSkipExtractionLifecycle:
         fsm = wizard_loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm)
 
-        llm_config = LLMConfig(
-            provider="echo", model="echo-test", options={"echo_prefix": ""}
-        )
+        llm_config = LLMConfig(provider="echo", model="echo-test", options={"echo_prefix": ""})
         provider = EchoProvider(llm_config)
-        library = ConfigPromptLibrary({
-            "system": {"assistant": {"template": "You are a helper."}},
-        })
+        library = ConfigPromptLibrary(
+            {
+                "system": {"assistant": {"template": "You are a helper."}},
+            }
+        )
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         manager = await ConversationManager.create(

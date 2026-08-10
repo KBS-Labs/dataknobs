@@ -277,9 +277,7 @@ class BotRegistry:
                 logger.warning("Bot %s: %s", bot_id, warning)
 
         # Store in backend
-        registration = await self._backend.register(
-            bot_id, config, status, metadata=metadata
-        )
+        registration = await self._backend.register(bot_id, config, status, metadata=metadata)
 
         # Invalidate cache for this bot
         async with self._lock:
@@ -598,9 +596,7 @@ class BotRegistry:
 
     # Legacy compatibility methods
 
-    async def register_client(
-        self, client_id: str, bot_config: dict[str, Any]
-    ) -> None:
+    async def register_client(self, client_id: str, bot_config: dict[str, Any]) -> None:
         """Register or update a client's bot configuration.
 
         .. deprecated::
@@ -637,10 +633,7 @@ class BotRegistry:
     def __repr__(self) -> str:
         """String representation."""
         env = f", environment={self._environment.name!r}" if self._environment else ""
-        return (
-            f"BotRegistry(backend={self._backend!r}, "
-            f"cached={len(self._cache)}{env})"
-        )
+        return f"BotRegistry(backend={self._backend!r}, cached={len(self._cache)}{env})"
 
 
 class InMemoryBotRegistry(BotRegistry):

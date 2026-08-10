@@ -30,19 +30,14 @@ logger = logging.getLogger(__name__)
 
 class DatabaseResourceAdapter(BaseResourceProvider):
     """Adapter to use dataknobs_data databases as FSM resources.
-    
+
     This adapter wraps dataknobs_data database backends to provide
     resource management capabilities for FSM states.
     """
-    
-    def __init__(
-        self,
-        name: str,
-        backend: str = "memory",
-        **backend_config
-    ):
+
+    def __init__(self, name: str, backend: str = "memory", **backend_config):
         """Initialize database resource adapter.
-        
+
         Args:
             name: Resource name.
             backend: Database backend type (memory, file, postgres, sqlite, etc).
@@ -50,12 +45,12 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         """
         config = {"backend": backend, **backend_config}
         super().__init__(name, config)
-        
+
         self.backend = backend
         self.factory = DatabaseFactory()
         self._database: SyncDatabase | None = None
         self._initialize_database()
-    
+
     def _initialize_database(self) -> None:
         """Initialize the database backend."""
         try:
@@ -69,35 +64,32 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             # DSN. The backend key is from the config and the type name is a
             # class name; __cause__ carries the rest to the logs.
             raise ResourceError(
-                f"Failed to initialize database backend "
-                f"'{self.backend}' ({type(e).__name__})",
+                f"Failed to initialize database backend '{self.backend}' ({type(e).__name__})",
                 resource_name=self.name,
-                operation="initialize"
+                operation="initialize",
             ) from e
-    
+
     def acquire(self, **kwargs) -> SyncDatabase:
         """Acquire database connection/instance.
-        
+
         The returned database object can be used for all database operations.
         For backends that support connection pooling (postgres, etc), this
         manages the underlying connections transparently.
-        
+
         Args:
             **kwargs: Additional parameters (unused, for interface compatibility).
-            
+
         Returns:
             Database instance for operations.
-            
+
         Raises:
             ResourceError: If acquisition fails.
         """
         if self._database is None:
             raise ResourceError(
-                "Database not initialized",
-                resource_name=self.name,
-                operation="acquire"
+                "Database not initialized", resource_name=self.name, operation="acquire"
             )
-        
+
         try:
             # For most backends, we return the same instance
             # Connection pooling is handled internally by the backend
@@ -109,63 +101,63 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             raise ResourceError(
                 f"Failed to acquire database resource ({type(e).__name__})",
                 resource_name=self.name,
-                operation="acquire"
+                operation="acquire",
             ) from e
-    
+
     def release(self, resource: Any) -> None:
         """Release database resource.
-        
+
         For pooled backends, this returns connections to the pool.
         For non-pooled backends, this is a no-op.
-        
+
         Args:
             resource: The database resource to release.
         """
         if resource in self._resources:
             self._resources.remove(resource)
-        
+
         if not self._resources:
             self.status = ResourceStatus.IDLE
-        
+
         # Most backends handle connection cleanup internally
         # We don't need to do anything special here
-    
+
     def validate(self, resource: Any) -> bool:
         """Validate database resource is still usable.
-        
+
         Args:
             resource: The database resource to validate.
-            
+
         Returns:
             True if the resource is valid and usable.
         """
         if resource is None or not isinstance(resource, (SyncDatabase, AsyncDatabase)):
             return False
-        
+
         try:
             # Try a simple operation to validate the connection
             # This will vary by backend but should be lightweight
-            if hasattr(resource, 'count'):
+            if hasattr(resource, "count"):
                 # Try to count records (should return quickly even if 0)
                 _ = resource.count()
             return True
         except Exception:
             return False
-    
+
     def health_check(self) -> ResourceHealth:
         """Check database health.
-        
+
         Returns:
             Health status of the database backend.
         """
         if self._database is None:
             self.metrics.record_health_check(False)
             return ResourceHealth.UNKNOWN
-        
+
         try:
             # Perform a simple health check operation
             valid = self.validate(self._database)
-            
+
             if valid:
                 self.metrics.record_health_check(True)
                 return ResourceHealth.HEALTHY
@@ -175,17 +167,17 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         except Exception:
             self.metrics.record_health_check(False)
             return ResourceHealth.UNHEALTHY
-    
+
     @contextmanager
     def transaction_context(self, database: SyncDatabase | None = None):
         """Context manager for database transactions.
-        
+
         Note: Transaction support depends on the backend.
         Some backends (memory, file) may not support true transactions.
-        
+
         Args:
             database: Optional database instance to use.
-            
+
         Yields:
             Database instance for operations within transaction.
         """
@@ -194,7 +186,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             should_release = True
         else:
             should_release = False
-        
+
         try:
             # For backends that support transactions, we could add
             # transaction begin/commit/rollback logic here
@@ -203,19 +195,19 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         finally:
             if should_release:
                 self.release(database)
-    
+
     def close(self) -> None:
         """Close the database resource and clean up."""
         # Release all tracked resources first
         super().close()
-        
+
         # Close the database backend if it has a close method
-        if self._database and hasattr(self._database, 'close'):
+        if self._database and hasattr(self._database, "close"):
             try:
                 # Attempt to flush any pending operations
-                if hasattr(self._database, 'flush'):
+                if hasattr(self._database, "flush"):
                     self._database.flush()
-                
+
                 # Close the connection
                 self._database.close()
                 logger.debug(f"Successfully closed database connection for {self.name}")
@@ -224,105 +216,113 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             except Exception as e:
                 logger.error(f"Error closing database {self.name}: {e}")
                 # Store error for debugging but don't re-raise
-                if not hasattr(self, '_cleanup_errors'):
+                if not hasattr(self, "_cleanup_errors"):
                     self._cleanup_errors = []
                 self._cleanup_errors.append(f"Database close error: {e}")
-        
+
         self._database = None
-    
+
     # Convenience methods that delegate to the database
-    
+
     def create(self, record: Record, database: SyncDatabase | None = None) -> str:
         """Create a record in the database.
-        
+
         Args:
             record: Record to create.
             database: Optional database instance.
-            
+
         Returns:
             ID of the created record.
         """
         if database is None:
             database = self._database
-        
+
         if database is None:
-            raise ResourceError("No database available", resource_name=self.name, operation="create")
-        
+            raise ResourceError(
+                "No database available", resource_name=self.name, operation="create"
+            )
+
         return database.create(record)
-    
+
     def read(self, record_id: str, database: SyncDatabase | None = None) -> Record | None:
         """Read a record from the database.
-        
+
         Args:
             record_id: ID of the record to read.
             database: Optional database instance.
-            
+
         Returns:
             The record if found, None otherwise.
         """
         if database is None:
             database = self._database
-        
+
         if database is None:
             raise ResourceError("No database available", resource_name=self.name, operation="read")
-        
+
         return database.read(record_id)
-    
+
     def update(self, record_id: str, record: Record, database: SyncDatabase | None = None) -> bool:
         """Update a record in the database.
-        
+
         Args:
             record_id: ID of the record to update.
             record: Record with updates.
             database: Optional database instance.
-            
+
         Returns:
             True if update was successful.
         """
         if database is None:
             database = self._database
-        
+
         if database is None:
-            raise ResourceError("No database available", resource_name=self.name, operation="update")
-        
+            raise ResourceError(
+                "No database available", resource_name=self.name, operation="update"
+            )
+
         return database.update(record_id, record)
-    
+
     def delete(self, record_id: str, database: SyncDatabase | None = None) -> bool:
         """Delete a record from the database.
-        
+
         Args:
             record_id: ID of the record to delete.
             database: Optional database instance.
-            
+
         Returns:
             True if deletion was successful.
         """
         if database is None:
             database = self._database
-        
+
         if database is None:
-            raise ResourceError("No database available", resource_name=self.name, operation="delete")
-        
+            raise ResourceError(
+                "No database available", resource_name=self.name, operation="delete"
+            )
+
         return database.delete(record_id)
-    
+
     def search(self, query: Query, database: SyncDatabase | None = None) -> list[Record]:
         """Search for records in the database.
-        
+
         Args:
             query: Search query.
             database: Optional database instance.
-            
+
         Returns:
             List of matching records.
         """
         if database is None:
             database = self._database
-        
+
         if database is None:
-            raise ResourceError("No database available", resource_name=self.name, operation="search")
-        
+            raise ResourceError(
+                "No database available", resource_name=self.name, operation="search"
+            )
+
         return database.search(query)
-    
+
     def get_backend_info(self) -> Dict[str, Any]:
         """Get information about the database backend.
 
@@ -375,9 +375,12 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         # the backend is keyed on ``type`` (mirroring ``run()``'s direct
         # ``AsyncDatabase.from_backend(cfg['type'], cfg)`` usage). Accept both
         # ``type`` and ``backend`` so either spelling works.
-        resolved = backend or backend_config.pop("type", None) or backend_config.pop(
-            "backend", None
-        ) or "memory"
+        resolved = (
+            backend
+            or backend_config.pop("type", None)
+            or backend_config.pop("backend", None)
+            or "memory"
+        )
         config = {"backend": resolved, **backend_config}
         super().__init__(name, config)
 
@@ -435,9 +438,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         """Validate the acquired resource is this adapter."""
         return resource is self
 
-    async def begin_transaction(
-        self, *, on_unsupported: str = "strict"
-    ) -> BufferedTransaction:
+    async def begin_transaction(self, *, on_unsupported: str = "strict") -> BufferedTransaction:
         """Open a buffered transaction on the backing async database.
 
         Delegates to :meth:`dataknobs_data.AsyncDatabase.begin_transaction`.
@@ -598,9 +599,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         db = await self._ensure_db()
         affected = 0
         for row in records:
-            payload = (
-                {col: row.get(col) for col in columns} if columns else dict(row)
-            )
+            payload = {col: row.get(col) for col in columns} if columns else dict(row)
             record_id = identity.derive(row) if identity is not None else None
 
             if record_id is not None:
@@ -658,8 +657,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         """
         if atomicity not in ("best_effort", "require"):
             raise ConfigurationError(
-                f"Unknown atomicity policy '{atomicity}' "
-                "(expected 'best_effort' or 'require')"
+                f"Unknown atomicity policy '{atomicity}' (expected 'best_effort' or 'require')"
             )
         db = await self._ensure_db()
         if not records:
@@ -684,9 +682,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             # storage key (create_batch honors record.id), matching the
             # single-row bulk_insert path and keeping this contract uniform
             # across every backend.
-            ids = await db.create_batch(
-                [self._minted_record(dict(row)) for row in records]
-            )
+            ids = await db.create_batch([self._minted_record(dict(row)) for row in records])
             return {"affected_rows": len(ids)}
 
         # Idempotent batch upsert under the derived ids, via the ``upsert_batch``
@@ -763,9 +759,7 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
                         await result
                 await self._database.close()
             except Exception as exc:  # pragma: no cover - defensive teardown
-                logger.error(
-                    "Error closing async database resource %s: %s", self.name, exc
-                )
+                logger.error("Error closing async database resource %s: %s", self.name, exc)
             finally:
                 self._database = None
         self.status = ResourceStatus.CLOSED

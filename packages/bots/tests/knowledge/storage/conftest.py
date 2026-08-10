@@ -47,9 +47,7 @@ async def _enable_bucket_versioning(cfg: dict[str, Any]) -> None:
         aws_access_key_id=cfg["aws_access_key_id"],
         aws_secret_access_key=cfg["aws_secret_access_key"],
     )
-    async with session.client(
-        "s3", endpoint_url=cfg["endpoint_url"], use_ssl=False
-    ) as s3:
+    async with session.client("s3", endpoint_url=cfg["endpoint_url"], use_ssl=False) as s3:
         await s3.put_bucket_versioning(
             Bucket=cfg["bucket"],
             VersioningConfiguration={"Status": "Enabled"},

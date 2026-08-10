@@ -14,6 +14,7 @@ from dataknobs_common.registry import AsyncRegistry, CachedRegistry, Registry
 @dataclass
 class Tool:
     """Test tool class."""
+
     name: str
     description: str
 
@@ -658,22 +659,16 @@ class TestCustomRegistry:
 
     def test_custom_registry_extension(self):
         """Test extending Registry for specific use cases."""
+
         class ToolRegistry(Registry[Tool]):
             def __init__(self):
                 super().__init__("tools", enable_metrics=True)
 
             def register_tool(self, tool: Tool):
-                self.register(
-                    tool.name,
-                    tool,
-                    metadata={"description": tool.description}
-                )
+                self.register(tool.name, tool, metadata={"description": tool.description})
 
             def get_by_prefix(self, prefix: str):
-                return [
-                    tool for key, tool in self.items()
-                    if key.startswith(prefix)
-                ]
+                return [tool for key, tool in self.items() if key.startswith(prefix)]
 
         registry = ToolRegistry()
         tool1 = Tool("calc_add", "Addition")

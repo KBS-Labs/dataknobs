@@ -68,9 +68,9 @@ def is_s3_conditional_conflict(error: BaseException) -> bool:
         return False
     code = response.get("Error", {}).get("Code")
     status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-    return (
-        code in ("PreconditionFailed", "ConditionalRequestConflict", "412", "409")
-        or status in (412, 409)
+    return code in ("PreconditionFailed", "ConditionalRequestConflict", "412", "409") or status in (
+        412,
+        409,
     )
 
 
@@ -87,11 +87,7 @@ def create_boto3_s3_client(
     import boto3
     from botocore.config import Config as BotoConfig
 
-    cfg = (
-        config
-        if isinstance(config, AwsSessionConfig)
-        else AwsSessionConfig.from_dict(config)
-    )
+    cfg = config if isinstance(config, AwsSessionConfig) else AwsSessionConfig.from_dict(config)
     boto_config = BotoConfig(**cfg.to_boto_config_kwargs())
     return boto3.client("s3", config=boto_config, **cfg.to_client_kwargs())
 
@@ -99,6 +95,7 @@ def create_boto3_s3_client(
 @dataclass
 class S3PoolConfig(BasePoolConfig):
     """Configuration for S3 connection pools."""
+
     bucket: str
     prefix: str = ""
     region_name: str | None = None

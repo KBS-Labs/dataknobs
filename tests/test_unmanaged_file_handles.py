@@ -112,11 +112,7 @@ def test_the_guard_examines_the_files_it_claims_to():
         f"{list(workspace_targets())}"
     )
 
-    parsed = sum(
-        1
-        for path in scanned
-        if "open(" in path.read_text(encoding="utf-8")
-    )
+    parsed = sum(1 for path in scanned if "open(" in path.read_text(encoding="utf-8"))
     assert parsed, (
         "no scanned file contains an `open(` call at all, so the AST walk has "
         "nothing to reject and would pass against any implementation of it"

@@ -35,9 +35,7 @@ from _aiohttp_error_stub import (
 
 
 def _provider(session: Any, **config_kwargs: Any) -> HuggingFaceProvider:
-    provider = HuggingFaceProvider(
-        LLMConfig(provider="huggingface", model="gpt2", **config_kwargs)
-    )
+    provider = HuggingFaceProvider(LLMConfig(provider="huggingface", model="gpt2", **config_kwargs))
     provider._session = session
     provider._is_initialized = True
     return provider
@@ -48,21 +46,15 @@ class TestVendorErrorTranslation:
 
     async def test_400_becomes_validation_error(self) -> None:
         err = make_client_response_error(400, "malformed request")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(400, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(400, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(ValidationError) as excinfo:
             await provider.complete("hi")
         assert excinfo.value.__cause__ is err
 
     async def test_429_becomes_rate_limit_error_with_retry_after(self) -> None:
-        err = make_client_response_error(
-            429, "slow down", headers={"retry-after": "7"}
-        )
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
-        )
+        err = make_client_response_error(429, "slow down", headers={"retry-after": "7"})
+        session = FakeSession([FakeSession.responding(FakeResponse(429, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(RateLimitError) as excinfo:
             await provider.complete("hi")
@@ -71,9 +63,7 @@ class TestVendorErrorTranslation:
 
     async def test_403_becomes_operation_error(self) -> None:
         err = make_client_response_error(403, "forbidden")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(403, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(403, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(OperationError):
             await provider.complete("hi")
@@ -97,9 +87,7 @@ class TestVendorErrorTranslation:
 
     async def test_embed_error_is_translated(self) -> None:
         err = make_client_response_error(429, "slow down")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(429, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(RateLimitError):
             await provider.embed("some text")

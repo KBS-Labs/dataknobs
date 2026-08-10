@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class BulkEmbedMixin:
     """Mixin providing default implementation of bulk_embed_and_store.
-    
+
     This mixin can be used by any database backend to provide a standard
     implementation of bulk embedding and storage without circular dependencies.
     """
@@ -30,7 +30,7 @@ class BulkEmbedMixin:
         model_version: str | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
-        
+
         Args:
             records: Records to process
             text_field: Field name(s) containing text to embed
@@ -39,10 +39,10 @@ class BulkEmbedMixin:
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             List of record IDs that were processed
-            
+
         Raises:
             ValueError: If embedding_fn is not provided
         """
@@ -59,7 +59,7 @@ class BulkEmbedMixin:
 
         # Process in batches
         for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+            batch = records[i : i + batch_size]
 
             # Extract text from records
             texts = []
@@ -79,9 +79,9 @@ class BulkEmbedMixin:
 
                 # Add vectors to records
                 for j, record in enumerate(batch):
-                    if j < len(embeddings) if hasattr(embeddings, '__len__') else j == 0:
+                    if j < len(embeddings) if hasattr(embeddings, "__len__") else j == 0:
                         # Get the embedding for this record
-                        if hasattr(embeddings, '__getitem__'):
+                        if hasattr(embeddings, "__getitem__"):
                             vector = embeddings[j]
                         else:
                             # Single embedding returned for single text
@@ -89,7 +89,9 @@ class BulkEmbedMixin:
 
                         # Add or update vector field
                         # Join multiple source fields with comma for metadata
-                        source_field_str = text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
+                        source_field_str = (
+                            text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
+                        )
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
@@ -99,7 +101,9 @@ class BulkEmbedMixin:
                         )
 
                         # Update vector dimensions tracking if available
-                        if hasattr(self, '_has_vector_fields') and hasattr(self, '_update_vector_dimensions'):
+                        if hasattr(self, "_has_vector_fields") and hasattr(
+                            self, "_update_vector_dimensions"
+                        ):
                             if self._has_vector_fields(record):
                                 self._update_vector_dimensions(record)
 
@@ -117,7 +121,7 @@ class BulkEmbedMixin:
 
 class AsyncBulkEmbedMixin:
     """Async mixin providing default implementation of bulk_embed_and_store.
-    
+
     This mixin can be used by any async database backend to provide a standard
     implementation of bulk embedding and storage without circular dependencies.
     """
@@ -133,7 +137,7 @@ class AsyncBulkEmbedMixin:
         model_version: str | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
-        
+
         Args:
             records: Records to process
             text_field: Field name(s) containing text to embed
@@ -142,10 +146,10 @@ class AsyncBulkEmbedMixin:
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             List of record IDs that were processed
-            
+
         Raises:
             ValueError: If embedding_fn is not provided
         """
@@ -167,7 +171,7 @@ class AsyncBulkEmbedMixin:
 
         # Process in batches
         for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+            batch = records[i : i + batch_size]
 
             # Extract text from records
             texts = []
@@ -190,9 +194,9 @@ class AsyncBulkEmbedMixin:
 
                 # Add vectors to records
                 for j, record in enumerate(batch):
-                    if j < len(embeddings) if hasattr(embeddings, '__len__') else j == 0:
+                    if j < len(embeddings) if hasattr(embeddings, "__len__") else j == 0:
                         # Get the embedding for this record
-                        if hasattr(embeddings, '__getitem__'):
+                        if hasattr(embeddings, "__getitem__"):
                             vector = embeddings[j]
                         else:
                             # Single embedding returned for single text
@@ -200,7 +204,9 @@ class AsyncBulkEmbedMixin:
 
                         # Add or update vector field
                         # Join multiple source fields with comma for metadata
-                        source_field_str = text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
+                        source_field_str = (
+                            text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
+                        )
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
@@ -210,7 +216,9 @@ class AsyncBulkEmbedMixin:
                         )
 
                         # Update vector dimensions tracking if available
-                        if hasattr(self, '_has_vector_fields') and hasattr(self, '_update_vector_dimensions'):
+                        if hasattr(self, "_has_vector_fields") and hasattr(
+                            self, "_update_vector_dimensions"
+                        ):
                             if self._has_vector_fields(record):
                                 self._update_vector_dimensions(record)
 

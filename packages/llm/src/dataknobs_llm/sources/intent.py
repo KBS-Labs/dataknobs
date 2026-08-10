@@ -90,9 +90,7 @@ def compose_intent_schema(
     properties = copy.deepcopy(_BASE_PROPERTIES)
 
     if domain_context:
-        properties["text_queries"]["description"] += (
-            f" Domain context: {domain_context}"
-        )
+        properties["text_queries"]["description"] += f" Domain context: {domain_context}"
 
     source_descriptions: list[str] = []
 
@@ -108,9 +106,7 @@ def compose_intent_schema(
         }
         if source_schema.description:
             source_prop["description"] = source_schema.description
-            source_descriptions.append(
-                f"{source_schema.source_name}: {source_schema.description}"
-            )
+            source_descriptions.append(f"{source_schema.source_name}: {source_schema.description}")
         if source_schema.required_fields:
             source_prop["required"] = list(source_schema.required_fields)
 

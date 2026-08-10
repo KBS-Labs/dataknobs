@@ -147,9 +147,7 @@ class LookupMergeEnricher(ITransformFunction):
         self.overwrite = overwrite
         self.on_missing = on_missing
 
-    async def transform(
-        self, data: dict, context: Any = None
-    ) -> dict:
+    async def transform(self, data: dict, context: Any = None) -> dict:
         resource = _require_resource(self.resource_name, context)
         query = Query(
             filters=[
@@ -158,13 +156,9 @@ class LookupMergeEnricher(ITransformFunction):
             ]
         )
         try:
-            row = await resource.execute_query(
-                query, fetch_one=True, as_dict=True
-            )
+            row = await resource.execute_query(query, fetch_one=True, as_dict=True)
         except Exception as e:
-            raise TransformError(
-                f"Enrichment lookup failed ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Enrichment lookup failed ({type(e).__name__})") from e
 
         result = dict(data)
         if not row:
@@ -177,9 +171,7 @@ class LookupMergeEnricher(ITransformFunction):
             merge_fields = [k for k in row if k not in ref_columns]
         for field in merge_fields:
             if field in row:
-                merge_enrichment_field(
-                    result, field, row[field], overwrite=self.overwrite
-                )
+                merge_enrichment_field(result, field, row[field], overwrite=self.overwrite)
         return result
 
     def _apply_on_missing(self, result: dict) -> dict:
@@ -190,9 +182,7 @@ class LookupMergeEnricher(ITransformFunction):
             )
         if self.on_missing == "null":
             for field in self.fields or ():
-                merge_enrichment_field(
-                    result, field, None, overwrite=self.overwrite
-                )
+                merge_enrichment_field(result, field, None, overwrite=self.overwrite)
         # "ignore": pass the record through unchanged.
         return result
 

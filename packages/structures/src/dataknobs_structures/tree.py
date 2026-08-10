@@ -879,8 +879,10 @@ class Tree:
             Requires the graphviz package and Graphviz system installation.
         """
         if node_name_fn is None:
+
             def node_name_fn(n):
                 return str(n.data)
+
         dot = graphviz.Digraph(**kwargs)
         ids = {}  # ids[node] -> id
         for idx, node in enumerate(self.root.find_nodes(lambda _n: True, traversal="bfs")):

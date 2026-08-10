@@ -25,12 +25,12 @@ class StreamingFileReader:
         self,
         file_path: Union[str, Path],
         chunk_size: int = 1000,
-        input_format: str = 'auto',
-        text_field_name: str = 'text',
-        csv_delimiter: str = ',',
+        input_format: str = "auto",
+        text_field_name: str = "text",
+        csv_delimiter: str = ",",
         csv_has_header: bool = True,
         skip_empty_lines: bool = True,
-        max_memory_mb: int = 100
+        max_memory_mb: int = 100,
     ):
         """Initialize streaming file reader.
 
@@ -53,10 +53,10 @@ class StreamingFileReader:
         self.max_memory_mb = max_memory_mb
 
         # Auto-detect format if needed
-        if input_format == 'auto':
+        if input_format == "auto":
             self.format = detect_format(self.file_path)
-            if self.format == 'csv' and self.file_path.suffix.lower() == '.tsv':
-                self.csv_delimiter = '\t'
+            if self.format == "csv" and self.file_path.suffix.lower() == ".tsv":
+                self.csv_delimiter = "\t"
         else:
             self.format = input_format
 
@@ -72,16 +72,16 @@ class StreamingFileReader:
         self.metrics.start_time = asyncio.get_event_loop().time()
 
         try:
-            if self.format == 'jsonl':
+            if self.format == "jsonl":
                 async for chunk in self._read_jsonl_chunks():
                     yield chunk
-            elif self.format == 'json':
+            elif self.format == "json":
                 async for chunk in self._read_json_chunks():
                     yield chunk
-            elif self.format == 'csv':
+            elif self.format == "csv":
                 async for chunk in self._read_csv_chunks():
                     yield chunk
-            elif self.format == 'text':
+            elif self.format == "text":
                 async for chunk in self._read_text_chunks():
                     yield chunk
             else:
@@ -139,10 +139,10 @@ class StreamingFileReader:
         """Synchronous JSON chunk reader — driven on a worker thread."""
         import ijson
 
-        with open(self.file_path, 'rb') as f:
+        with open(self.file_path, "rb") as f:
             # First try to parse as an array with streaming
             try:
-                parser = ijson.items(f, 'item')
+                parser = ijson.items(f, "item")
                 chunk_data: List[Dict[str, Any]] = []
                 item_count = 0
 
@@ -170,7 +170,7 @@ class StreamingFileReader:
                 if isinstance(data, list):
                     # It's an array, process in chunks
                     for i in range(0, len(data), self.chunk_size):
-                        chunk = data[i:i + self.chunk_size]
+                        chunk = data[i : i + self.chunk_size]
                         is_last = (i + self.chunk_size) >= len(data)
                         self.metrics.items_processed += len(chunk)
                         yield self._create_chunk(chunk, is_last=is_last)
@@ -194,7 +194,7 @@ class StreamingFileReader:
         chunk_data: List[Dict[str, Any]] = []
         total_rows = 0
 
-        with open(self.file_path, newline='') as f:
+        with open(self.file_path, newline="") as f:
             if self.csv_has_header:
                 reader = csv.DictReader(f, delimiter=self.csv_delimiter)
             else:
@@ -202,7 +202,7 @@ class StreamingFileReader:
                 first_line = f.readline()
                 f.seek(0)
                 num_fields = len(first_line.split(self.csv_delimiter))
-                fieldnames = [f'col_{i}' for i in range(num_fields)]
+                fieldnames = [f"col_{i}" for i in range(num_fields)]
                 reader = csv.DictReader(f, fieldnames=fieldnames, delimiter=self.csv_delimiter)
 
             # Count total rows for determining last chunk
@@ -238,7 +238,7 @@ class StreamingFileReader:
 
         with open(self.file_path) as f:
             for line in f:
-                sline = line.rstrip('\n\r')
+                sline = line.rstrip("\n\r")
                 if sline or not self.skip_empty_lines:
                     chunk_data.append({self.text_field_name: sline})
                     self.metrics.items_processed += 1
@@ -255,12 +255,8 @@ class StreamingFileReader:
         chunk = StreamChunk(
             data=data,
             sequence_number=self._chunk_count,
-            metadata={
-                'file': str(self.file_path),
-                'format': self.format,
-                'chunk_size': len(data)
-            },
-            is_last=is_last
+            metadata={"file": str(self.file_path), "format": self.format, "chunk_size": len(data)},
+            is_last=is_last,
         )
         self._chunk_count += 1
         self.metrics.chunks_processed += 1
@@ -284,7 +280,7 @@ class StreamingFileWriter:
         file_path: Union[str, Path],
         output_format: str | None = None,
         buffer_size: int = 1000,
-        flush_interval: float = 1.0
+        flush_interval: float = 1.0,
     ):
         """Initialize streaming file writer.
 
@@ -324,17 +320,17 @@ class StreamingFileWriter:
         bracket), so async callers invoke it via :func:`asyncio.to_thread`
         rather than directly on the event loop.
         """
-        if self.format == 'jsonl':
-            self._file_handle = open(self.file_path, 'w')
-        elif self.format == 'csv':
-            self._file_handle = open(self.file_path, 'w', newline='')
-        elif self.format == 'json':
-            self._file_handle = open(self.file_path, 'w')
-            self._file_handle.write('[')  # Start JSON array
-        elif self.format == 'text':
-            self._file_handle = open(self.file_path, 'w')
+        if self.format == "jsonl":
+            self._file_handle = open(self.file_path, "w")
+        elif self.format == "csv":
+            self._file_handle = open(self.file_path, "w", newline="")
+        elif self.format == "json":
+            self._file_handle = open(self.file_path, "w")
+            self._file_handle.write("[")  # Start JSON array
+        elif self.format == "text":
+            self._file_handle = open(self.file_path, "w")
         else:
-            self._file_handle = open(self.file_path, 'w')
+            self._file_handle = open(self.file_path, "w")
 
         # ``time.time()`` (not the event loop's clock) so ``open`` is safe to
         # run on the ``to_thread`` worker, and consistent with the
@@ -359,9 +355,9 @@ class StreamingFileWriter:
         # Check if we should flush
         current_time = asyncio.get_event_loop().time()
         should_flush = (
-            len(self._buffer) >= self.buffer_size or
-            chunk.is_last or
-            (current_time - self._last_flush_time) > self.flush_interval
+            len(self._buffer) >= self.buffer_size
+            or chunk.is_last
+            or (current_time - self._last_flush_time) > self.flush_interval
         )
 
         if should_flush:
@@ -384,24 +380,22 @@ class StreamingFileWriter:
 
     def _flush_buffer_to_disk(self) -> None:
         """Synchronous buffer drain + write — run via ``to_thread``."""
-        if self.format == 'jsonl':
+        if self.format == "jsonl":
             # Write each record as a JSON line
             while self._buffer:
                 record = self._buffer.popleft()
                 json.dump(record, self._file_handle)
-                self._file_handle.write('\n')
+                self._file_handle.write("\n")
                 self.metrics.items_processed += 1
 
-        elif self.format == 'csv':
+        elif self.format == "csv":
             # Initialize CSV writer if needed
             if self._csv_writer is None and self._buffer:
                 first_record = self._buffer[0]
                 fieldnames = list(first_record.keys())
                 delimiter = get_csv_delimiter(self.file_path)
                 self._csv_writer = csv.DictWriter(
-                    self._file_handle,
-                    fieldnames=fieldnames,
-                    delimiter=delimiter
+                    self._file_handle, fieldnames=fieldnames, delimiter=delimiter
                 )
                 self._csv_writer.writeheader()
 
@@ -411,26 +405,26 @@ class StreamingFileWriter:
                 self._csv_writer.writerow(record)
                 self.metrics.items_processed += 1
 
-        elif self.format == 'json':
+        elif self.format == "json":
             # Write as JSON array elements
             while self._buffer:
                 record = self._buffer.popleft()
                 if not self._is_first_write:
-                    self._file_handle.write(',')
+                    self._file_handle.write(",")
                 json.dump(record, self._file_handle)
                 self._is_first_write = False
                 self.metrics.items_processed += 1
 
-        elif self.format == 'text':
+        elif self.format == "text":
             # Write text lines
             while self._buffer:
                 record = self._buffer.popleft()
                 # Extract text from dict if needed
                 if isinstance(record, dict):
-                    text = record.get('text', str(record))
+                    text = record.get("text", str(record))
                 else:
                     text = str(record)
-                self._file_handle.write(text + '\n')
+                self._file_handle.write(text + "\n")
                 self.metrics.items_processed += 1
 
         # Flush to disk
@@ -448,8 +442,8 @@ class StreamingFileWriter:
 
     def _close_file(self) -> None:
         """Synchronous close (writes the JSON terminator) — run via ``to_thread``."""
-        if self.format == 'json':
-            self._file_handle.write(']')  # Close JSON array
+        if self.format == "json":
+            self._file_handle.write("]")  # Close JSON array
 
         self._file_handle.close()
         self._file_handle = None
@@ -464,8 +458,8 @@ class StreamingFileProcessor:
         output_path: Union[str, Path],
         transform_fn: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
         chunk_size: int = 1000,
-        input_format: str = 'auto',
-        output_format: str | None = None
+        input_format: str = "auto",
+        output_format: str | None = None,
     ):
         """Initialize streaming file processor.
 
@@ -478,18 +472,16 @@ class StreamingFileProcessor:
             output_format: Output file format (auto-detected if None)
         """
         self.reader = StreamingFileReader(
-            input_path,
-            chunk_size=chunk_size,
-            input_format=input_format
+            input_path, chunk_size=chunk_size, input_format=input_format
         )
         self.writer = StreamingFileWriter(
-            output_path,
-            output_format=output_format,
-            buffer_size=chunk_size
+            output_path, output_format=output_format, buffer_size=chunk_size
         )
         self.transform_fn = transform_fn or (lambda x: x)
 
-    async def process(self, progress_callback: Callable[[int, int], None] | None = None) -> StreamMetrics:
+    async def process(
+        self, progress_callback: Callable[[int, int], None] | None = None
+    ) -> StreamMetrics:
         """Process the file with streaming.
 
         Args:
@@ -519,7 +511,7 @@ class StreamingFileProcessor:
                         data=transformed_data,
                         sequence_number=chunk.sequence_number,
                         metadata=chunk.metadata,
-                        is_last=chunk.is_last
+                        is_last=chunk.is_last,
                     )
                     await self.writer.write_chunk(transformed_chunk)
 
@@ -535,7 +527,7 @@ class StreamingFileProcessor:
             items_processed=self.reader.metrics.items_processed,
             errors_count=self.reader.metrics.errors_count,
             start_time=self.reader.metrics.start_time,
-            end_time=self.writer.metrics.end_time
+            end_time=self.writer.metrics.end_time,
         )
 
         return combined_metrics
@@ -543,10 +535,9 @@ class StreamingFileProcessor:
 
 # Convenience functions for SimpleFSM integration
 
+
 async def create_streaming_file_reader(
-    file_path: Union[str, Path],
-    config: StreamConfig,
-    **kwargs
+    file_path: Union[str, Path], config: StreamConfig, **kwargs
 ) -> AsyncIterator[List[Dict[str, Any]]]:
     """Create a streaming file reader compatible with SimpleFSM.
 
@@ -558,20 +549,14 @@ async def create_streaming_file_reader(
     Yields:
         Lists of records (chunks)
     """
-    reader = StreamingFileReader(
-        file_path,
-        chunk_size=config.chunk_size,
-        **kwargs
-    )
+    reader = StreamingFileReader(file_path, chunk_size=config.chunk_size, **kwargs)
 
     async for chunk in reader.read_chunks():
         yield chunk.data
 
 
 async def create_streaming_file_writer(
-    file_path: Union[str, Path],
-    config: StreamConfig,
-    **kwargs
+    file_path: Union[str, Path], config: StreamConfig, **kwargs
 ) -> Tuple[Callable, Callable]:
     """Create a streaming file writer compatible with SimpleFSM.
 
@@ -583,11 +568,7 @@ async def create_streaming_file_writer(
     Returns:
         Tuple of (write_fn, cleanup_fn)
     """
-    writer = StreamingFileWriter(
-        file_path,
-        buffer_size=config.buffer_size,
-        **kwargs
-    )
+    writer = StreamingFileWriter(file_path, buffer_size=config.buffer_size, **kwargs)
 
     await asyncio.to_thread(writer.open)
 

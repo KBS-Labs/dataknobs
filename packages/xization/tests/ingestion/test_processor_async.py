@@ -127,9 +127,7 @@ async def test_process_async_dispatches_yaml_via_transformer(
 ) -> None:
     """YAML is transformed to markdown via ``ContentTransformer``."""
     pytest.importorskip("yaml")
-    (tmp_path / "settings.yaml").write_text(
-        "name: demo\nvalues:\n  - a\n  - b\n"
-    )
+    (tmp_path / "settings.yaml").write_text("name: demo\nvalues:\n  - a\n  - b\n")
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), tmp_path)
     docs = [d async for d in processor.process_async()]
     assert len(docs) == 1
@@ -157,9 +155,7 @@ async def test_process_async_dispatches_csv_via_transformer(
     tmp_path: Path,
 ) -> None:
     """CSV rows become markdown sections via ``ContentTransformer``."""
-    (tmp_path / "people.csv").write_text(
-        "name,role\nAlice,Engineer\nBob,Designer\n"
-    )
+    (tmp_path / "people.csv").write_text("name,role\nAlice,Engineer\nBob,Designer\n")
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), tmp_path)
     docs = [d async for d in processor.process_async()]
     assert len(docs) == 1
@@ -259,9 +255,7 @@ class _RemoteJSONLSource:
         self._files = files
         self._piece_size = piece_size
 
-    async def iter_files(
-        self, patterns: Any
-    ) -> _AsyncIterator[DocumentFileRef]:
+    async def iter_files(self, patterns: Any) -> _AsyncIterator[DocumentFileRef]:
         for path, data in self._files.items():
             yield DocumentFileRef(
                 path=path,
@@ -319,25 +313,18 @@ async def test_remote_jsonl_streaming_skips_malformed_lines(
     """Malformed lines are logged and skipped — a single bad line must
     not abort the batch.
     """
-    content = (
-        b'{"title": "good_1"}\n'
-        b"this is not json\n"
-        b'{"title": "good_2"}\n'
-    )
+    content = b'{"title": "good_1"}\nthis is not json\n{"title": "good_2"}\n'
     source = _RemoteJSONLSource({"data.jsonl": content}, piece_size=5)
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), source)
-    with caplog.at_level(
-        "WARNING", logger="dataknobs_xization.ingestion.processor"
-    ):
+    with caplog.at_level("WARNING", logger="dataknobs_xization.ingestion.processor"):
         docs = [d async for d in processor.process_async()]
     assert len(docs) == 1
     # Two good lines emitted, malformed one skipped.
     assert docs[0].chunk_count == 2
     assert not docs[0].has_errors  # file-level errors distinct from line skips
-    assert any(
-        "Skipping malformed JSONL line" in record.message
-        for record in caplog.records
-    ), f"Expected malformed-line warning; got {caplog.records}"
+    assert any("Skipping malformed JSONL line" in record.message for record in caplog.records), (
+        f"Expected malformed-line warning; got {caplog.records}"
+    )
 
 
 @pytest.mark.asyncio
@@ -365,9 +352,7 @@ async def test_files_skipped_counts_excluded_paths(tmp_path: Path) -> None:
     (tmp_path / "drop.md").write_text("# Drop\n")
     (tmp_path / "also_drop.md").write_text("# Also drop\n")
 
-    config = KnowledgeBaseConfig(
-        name="t", exclude_patterns=["drop.md", "also_drop.md"]
-    )
+    config = KnowledgeBaseConfig(name="t", exclude_patterns=["drop.md", "also_drop.md"])
     processor = DirectoryProcessor(config, tmp_path)
     docs = [d async for d in processor.process_async()]
     assert len(docs) == 1
@@ -393,12 +378,7 @@ async def test_files_skipped_resets_between_runs(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_remote_jsonl_streaming_ignores_blank_lines() -> None:
     """Blank / whitespace-only lines are skipped silently."""
-    content = (
-        b'{"title": "A"}\n'
-        b"\n"
-        b"   \n"
-        b'{"title": "B"}\n'
-    )
+    content = b'{"title": "A"}\n\n   \n{"title": "B"}\n'
     source = _RemoteJSONLSource({"data.jsonl": content}, piece_size=2)
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), source)
     docs = [d async for d in processor.process_async()]

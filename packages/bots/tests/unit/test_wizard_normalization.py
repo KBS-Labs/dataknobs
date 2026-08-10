@@ -16,9 +16,7 @@ class TestNormalizeExtractedData:
         "input_val",
         ["yes", "true", "1", "y", "on", "enable", "enabled", "YES", "True", " yes "],
     )
-    def test_boolean_coercion_true(
-        self, wizard_reasoning: WizardReasoning, input_val: str
-    ) -> None:
+    def test_boolean_coercion_true(self, wizard_reasoning: WizardReasoning, input_val: str) -> None:
         """String truthy values are coerced to True."""
         schema: dict[str, Any] = {
             "properties": {"flag": {"type": "boolean"}},
@@ -44,9 +42,7 @@ class TestNormalizeExtractedData:
         )
         assert result["flag"] is False
 
-    def test_boolean_already_bool_unchanged(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_boolean_already_bool_unchanged(self, wizard_reasoning: WizardReasoning) -> None:
         """Actual bools pass through unchanged."""
         schema: dict[str, Any] = {
             "properties": {"flag": {"type": "boolean"}},
@@ -59,9 +55,7 @@ class TestNormalizeExtractedData:
 
     # --- Array handling ---
 
-    def test_array_wrapping_bare_string(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_array_wrapping_bare_string(self, wizard_reasoning: WizardReasoning) -> None:
         """Bare string for array field is wrapped in list."""
         schema: dict[str, Any] = {
             "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
@@ -71,9 +65,7 @@ class TestNormalizeExtractedData:
         )
         assert result["tags"] == ["python"]
 
-    def test_array_all_shortcut(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_array_all_shortcut(self, wizard_reasoning: WizardReasoning) -> None:
         """["all"] expands to full enum list."""
         schema: dict[str, Any] = {
             "properties": {
@@ -88,9 +80,7 @@ class TestNormalizeExtractedData:
         )
         assert result["tools"] == ["hammer", "saw", "drill"]
 
-    def test_array_none_shortcut(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_array_none_shortcut(self, wizard_reasoning: WizardReasoning) -> None:
         """["none"] normalizes to []."""
         schema: dict[str, Any] = {
             "properties": {
@@ -107,9 +97,7 @@ class TestNormalizeExtractedData:
 
     # --- Number coercion ---
 
-    def test_integer_coercion(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_integer_coercion(self, wizard_reasoning: WizardReasoning) -> None:
         """String "42" is coerced to int 42 for integer fields."""
         schema: dict[str, Any] = {
             "properties": {"count": {"type": "integer"}},
@@ -120,9 +108,7 @@ class TestNormalizeExtractedData:
         assert result["count"] == 42
         assert isinstance(result["count"], int)
 
-    def test_integer_negative(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_integer_negative(self, wizard_reasoning: WizardReasoning) -> None:
         """Negative integer string is coerced correctly."""
         schema: dict[str, Any] = {
             "properties": {"offset": {"type": "integer"}},
@@ -132,9 +118,7 @@ class TestNormalizeExtractedData:
         )
         assert result["offset"] == -5
 
-    def test_number_coercion(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_number_coercion(self, wizard_reasoning: WizardReasoning) -> None:
         """String "3.14" is coerced to float for number fields."""
         schema: dict[str, Any] = {
             "properties": {"price": {"type": "number"}},
@@ -145,9 +129,7 @@ class TestNormalizeExtractedData:
         assert result["price"] == pytest.approx(3.14)
         assert isinstance(result["price"], float)
 
-    def test_number_invalid_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_number_invalid_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """Non-numeric string for number field is rejected (type mismatch)."""
         schema: dict[str, Any] = {
             "properties": {"price": {"type": "number"}},
@@ -159,9 +141,7 @@ class TestNormalizeExtractedData:
 
     # --- Type mismatch rejection ---
 
-    def test_bool_for_integer_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_bool_for_integer_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """Bool True for integer field is rejected (bool is subclass of int)."""
         schema: dict[str, Any] = {
             "properties": {"count": {"type": "integer"}},
@@ -171,9 +151,7 @@ class TestNormalizeExtractedData:
         )
         assert result["count"] is None
 
-    def test_bool_for_number_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_bool_for_number_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """Bool False for number field is rejected."""
         schema: dict[str, Any] = {
             "properties": {"price": {"type": "number"}},
@@ -183,9 +161,7 @@ class TestNormalizeExtractedData:
         )
         assert result["price"] is None
 
-    def test_bool_for_string_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_bool_for_string_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """Bool for string field is rejected, not coerced."""
         schema: dict[str, Any] = {
             "properties": {"tone": {"type": "string"}},
@@ -195,9 +171,7 @@ class TestNormalizeExtractedData:
         )
         assert result["tone"] is None
 
-    def test_int_for_string_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_int_for_string_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """Int for string field is rejected, not coerced."""
         schema: dict[str, Any] = {
             "properties": {"name": {"type": "string"}},
@@ -207,9 +181,7 @@ class TestNormalizeExtractedData:
         )
         assert result["name"] is None
 
-    def test_list_for_string_rejected(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_list_for_string_rejected(self, wizard_reasoning: WizardReasoning) -> None:
         """List for string field is rejected."""
         schema: dict[str, Any] = {
             "properties": {"name": {"type": "string"}},
@@ -221,9 +193,7 @@ class TestNormalizeExtractedData:
 
     # --- Coercion + type-mismatch interaction ---
 
-    def test_coercion_then_type_check_passes(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_coercion_then_type_check_passes(self, wizard_reasoning: WizardReasoning) -> None:
         """String 'yes' for boolean field is coerced to True before type check."""
         schema: dict[str, Any] = {
             "properties": {"enabled": {"type": "boolean"}},
@@ -247,9 +217,7 @@ class TestNormalizeExtractedData:
 
     # --- Skip behavior ---
 
-    def test_internal_keys_skipped(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_internal_keys_skipped(self, wizard_reasoning: WizardReasoning) -> None:
         """Keys starting with _ are not normalized."""
         schema: dict[str, Any] = {
             "properties": {"_internal": {"type": "boolean"}},
@@ -260,9 +228,7 @@ class TestNormalizeExtractedData:
         # Should remain as string, not coerced to True
         assert result["_internal"] == "yes"
 
-    def test_unknown_fields_skipped(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_unknown_fields_skipped(self, wizard_reasoning: WizardReasoning) -> None:
         """Fields not in schema properties are left unchanged."""
         schema: dict[str, Any] = {
             "properties": {"known": {"type": "boolean"}},
@@ -273,11 +239,11 @@ class TestNormalizeExtractedData:
         assert result["known"] is True
         assert result["unknown"] == "yes"
 
-    def test_schema_without_properties(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_schema_without_properties(self, wizard_reasoning: WizardReasoning) -> None:
         """Schema without 'properties' returns data unchanged."""
         schema: dict[str, Any] = {"type": "object"}
         data = {"flag": "yes", "count": "42"}
-        result = wizard_reasoning._extraction._normalize_extracted_data(data, StageSchema.from_dict(schema))
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            data, StageSchema.from_dict(schema)
+        )
         assert result == data

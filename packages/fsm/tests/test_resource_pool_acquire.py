@@ -52,9 +52,7 @@ def test_empty_pool_under_capacity_creates_instead_of_waiting(
     branch that creates it — a resource the pool could have produced at once,
     delivered 3 seconds late.
     """
-    pool = ResourcePool(
-        provider, PoolConfig(min_size=0, max_size=2, acquire_timeout=_TIMEOUT)
-    )
+    pool = ResourcePool(provider, PoolConfig(min_size=0, max_size=2, acquire_timeout=_TIMEOUT))
     try:
         started = time.monotonic()
         resource = pool.acquire()
@@ -80,9 +78,7 @@ def test_pool_drained_below_capacity_still_creates_promptly(
     ``max_size``. It is the shape a real workload hits — a burst that drains
     the initial resources — and it must not stall either.
     """
-    pool = ResourcePool(
-        provider, PoolConfig(min_size=1, max_size=3, acquire_timeout=_TIMEOUT)
-    )
+    pool = ResourcePool(provider, PoolConfig(min_size=1, max_size=3, acquire_timeout=_TIMEOUT))
     try:
         first = pool.acquire()  # drains the one pre-created resource
 
@@ -119,8 +115,7 @@ def test_acquire_at_capacity_waits_and_then_times_out(
         elapsed = time.monotonic() - started
 
         assert elapsed >= 0.4, (
-            f"acquire() at capacity gave up after {elapsed:.2f}s without waiting "
-            "out its timeout"
+            f"acquire() at capacity gave up after {elapsed:.2f}s without waiting out its timeout"
         )
     finally:
         pool.close()
@@ -130,9 +125,7 @@ def test_release_during_the_wait_satisfies_a_waiting_acquire(
     provider: PropertiesResource,
 ) -> None:
     """A blocked caller is woken by a release, not left until the timeout."""
-    pool = ResourcePool(
-        provider, PoolConfig(min_size=1, max_size=1, acquire_timeout=_TIMEOUT)
-    )
+    pool = ResourcePool(provider, PoolConfig(min_size=1, max_size=1, acquire_timeout=_TIMEOUT))
     try:
         held = pool.acquire()
 
@@ -167,9 +160,7 @@ def test_zero_timeout_does_not_fall_back_to_the_configured_default(
     only if one is free right now would instead block for the full
     ``acquire_timeout``, which is the opposite of what they asked for.
     """
-    pool = ResourcePool(
-        provider, PoolConfig(min_size=1, max_size=1, acquire_timeout=_TIMEOUT)
-    )
+    pool = ResourcePool(provider, PoolConfig(min_size=1, max_size=1, acquire_timeout=_TIMEOUT))
     try:
         pool.acquire()  # at capacity, so a zero-wait acquire cannot succeed
 
@@ -204,9 +195,7 @@ def test_capacity_freed_while_waiting_is_used_rather_than_timing_out(
     """
     pool = ResourcePool(
         provider,
-        PoolConfig(
-            min_size=1, max_size=1, max_lifetime=0.05, acquire_timeout=_TIMEOUT
-        ),
+        PoolConfig(min_size=1, max_size=1, max_lifetime=0.05, acquire_timeout=_TIMEOUT),
     )
     try:
         held = pool.acquire()

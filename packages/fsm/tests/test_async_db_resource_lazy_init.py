@@ -47,9 +47,7 @@ async def test_concurrent_first_use_opens_one_backend(
 
     monkeypatch.setattr(AsyncDatabase, "from_backend", counting_from_backend)
 
-    adapter = AsyncDatabaseResourceAdapter(
-        "target_db", type="file", path=str(tmp_path / "t.json")
-    )
+    adapter = AsyncDatabaseResourceAdapter("target_db", type="file", path=str(tmp_path / "t.json"))
     try:
         dbs = await asyncio.gather(*(adapter._ensure_db() for _ in range(8)))
     finally:

@@ -49,30 +49,21 @@ def test_adapter_classifies_content_key(
     file_backend: FileKnowledgeBackend,
 ) -> None:
     discriminator = BackendKeyDiscriminator(file_backend)
-    assert (
-        discriminator.classify("kb1/content/doc1.pdf")
-        is KnowledgeKeyKind.CONTENT
-    )
+    assert discriminator.classify("kb1/content/doc1.pdf") is KnowledgeKeyKind.CONTENT
 
 
 def test_adapter_classifies_metadata_key(
     file_backend: FileKnowledgeBackend,
 ) -> None:
     discriminator = BackendKeyDiscriminator(file_backend)
-    assert (
-        discriminator.classify("kb1/_metadata.json")
-        is KnowledgeKeyKind.METADATA
-    )
+    assert discriminator.classify("kb1/_metadata.json") is KnowledgeKeyKind.METADATA
 
 
 def test_adapter_classifies_snapshot_key(
     file_backend: FileKnowledgeBackend,
 ) -> None:
     discriminator = BackendKeyDiscriminator(file_backend)
-    assert (
-        discriminator.classify("kb1/_snapshots/v1.json")
-        is KnowledgeKeyKind.SNAPSHOT
-    )
+    assert discriminator.classify("kb1/_snapshots/v1.json") is KnowledgeKeyKind.SNAPSHOT
 
 
 def test_adapter_classifies_unknown_key(
@@ -116,18 +107,9 @@ def test_adapter_works_for_all_in_tree_backends(
         "s3": s3_backend,
     }[backend_name]
     discriminator = BackendKeyDiscriminator(backend)
-    assert (
-        discriminator.classify("kb1/content/x")
-        is KnowledgeKeyKind.CONTENT
-    )
-    assert (
-        discriminator.classify("kb1/_metadata.json")
-        is KnowledgeKeyKind.METADATA
-    )
-    assert (
-        discriminator.classify("kb1/_snapshots/v1.json")
-        is KnowledgeKeyKind.SNAPSHOT
-    )
+    assert discriminator.classify("kb1/content/x") is KnowledgeKeyKind.CONTENT
+    assert discriminator.classify("kb1/_metadata.json") is KnowledgeKeyKind.METADATA
+    assert discriminator.classify("kb1/_snapshots/v1.json") is KnowledgeKeyKind.SNAPSHOT
 
 
 def test_adapter_equality_on_same_backend(

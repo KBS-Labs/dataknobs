@@ -180,11 +180,7 @@ class SynthesisPlan:
             )
 
         if self.effective_style == "hybrid" and self.template_text:
-            combined = (
-                (getattr(response, "content", "") or "")
-                + "\n\n"
-                + self.template_text
-            )
+            combined = (getattr(response, "content", "") or "") + "\n\n" + self.template_text
             return _LLMResponse(
                 content=combined,
                 model=getattr(response, "model", "unknown"),
@@ -195,9 +191,7 @@ class SynthesisPlan:
         return response
 
 
-class GroundedReasoning(
-    StructuredConfigConsumer[GroundedReasoningConfig], ReasoningStrategy
-):
+class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], ReasoningStrategy):
     """Reasoning strategy with deterministic multi-source retrieval.
 
     Every turn executes the full retrieval pipeline regardless of whether
@@ -264,9 +258,7 @@ class GroundedReasoning(
         """
         config = self.config
         self._greeting_template = config.greeting_template
-        prompt_resolver: PromptResolver | None = self.components.get(
-            "prompt_resolver"
-        )
+        prompt_resolver: PromptResolver | None = self.components.get("prompt_resolver")
         self._prompt_resolver = prompt_resolver
         # Prompt envelope collaborator — wraps the KB block in the
         # synthesis system prompt in a style chosen bot-wide. Default to
@@ -277,20 +269,14 @@ class GroundedReasoning(
             PromptEnvelopeStyle,
         )
 
-        injected_envelope: PromptEnvelope | None = self.components.get(
-            "prompt_envelope"
-        )
+        injected_envelope: PromptEnvelope | None = self.components.get("prompt_envelope")
         self._prompt_envelope: PromptEnvelope = (
             injected_envelope
             if injected_envelope is not None
             else PromptEnvelope(PromptEnvelopeStyle.MARKDOWN)
         )
-        injected_sources: list[GroundedSource] | None = self.components.get(
-            "sources"
-        )
-        self._sources: list[GroundedSource] = (
-            list(injected_sources) if injected_sources else []
-        )
+        injected_sources: list[GroundedSource] | None = self.components.get("sources")
+        self._sources: list[GroundedSource] = list(injected_sources) if injected_sources else []
         # Per-source lifetime ownership, keyed by source object identity
         # (``GroundedSource`` is a plain ABC — identity-hashable, no value
         # ``__eq__``). The set holds strong references to the owned sources,
@@ -302,25 +288,21 @@ class GroundedReasoning(
         # :meth:`add_source` are owned by default (the config-driven build
         # path). See :meth:`close`.
         self._owns_sources: set[GroundedSource] = set()
-        self._source_weights: dict[str, int] = {
-            sc.name: sc.weight for sc in config.sources
-        }
+        self._source_weights: dict[str, int] = {sc.name: sc.weight for sc in config.sources}
         query_provider: Any | None = self.components.get("query_provider")
         self._query_provider = query_provider
         # The query provider is only ever injected (component / set_provider)
         # or falls back to the bot's main LLM — this strategy never builds
         # one, so it never owns its lifecycle and close() leaves it open.
         self._owns_query_provider = False
-        self._merger = (
-            ChunkMerger(MergerConfig())
-            if config.retrieval.merge_adjacent
-            else None
+        self._merger = ChunkMerger(MergerConfig()) if config.retrieval.merge_adjacent else None
+        self._formatter = ContextFormatter(
+            FormatterConfig(
+                include_scores=False,
+                include_source=True,
+                group_by_source=True,
+            )
         )
-        self._formatter = ContextFormatter(FormatterConfig(
-            include_scores=False,
-            include_source=True,
-            group_by_source=True,
-        ))
 
         # Query generation components (extract mode only).
         # Two paths: SchemaExtractor (preferred, when extraction_config
@@ -358,9 +340,7 @@ class GroundedReasoning(
         # recreating per render call)
         self._jinja_env = create_template_env()
         self._intent_template = (
-            self._jinja_env.from_string(config.intent.template)
-            if config.intent.template
-            else None
+            self._jinja_env.from_string(config.intent.template) if config.intent.template else None
         )
         self._synthesis_template = (
             self._jinja_env.from_string(config.synthesis.template)
@@ -368,8 +348,7 @@ class GroundedReasoning(
             else None
         )
         self._provenance_template = self._jinja_env.from_string(
-            config.synthesis.provenance_template
-            or DEFAULT_PROVENANCE_TEMPLATE,
+            config.synthesis.provenance_template or DEFAULT_PROVENANCE_TEMPLATE,
         )
 
         # Result processing pipeline (Phase 2: post-retrieval processing)
@@ -383,9 +362,7 @@ class GroundedReasoning(
         # source.  Otherwise the same KB gets wrapped twice: once here, and
         # once by the source construction loop in DynaBot (bot/base.py).
         knowledge_base = self.components.get("knowledge_base")
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb" for s in config.sources
-        )
+        has_vector_kb_source = any(s.source_type == "vector_kb" for s in config.sources)
         if knowledge_base is not None and not has_vector_kb_source:
             self.set_knowledge_base(knowledge_base)
 
@@ -436,10 +413,7 @@ class GroundedReasoning(
         removed = [s for s in self._sources if s.source_type == "vector_kb"]
         for s in removed:
             self._owns_sources.discard(s)
-        self._sources = [
-            s for s in self._sources
-            if s.source_type != "vector_kb"
-        ]
+        self._sources = [s for s in self._sources if s.source_type != "vector_kb"]
 
         # Check if any source config declares a topic_index
         topic_index_config = self._find_topic_index_config()
@@ -454,7 +428,9 @@ class GroundedReasoning(
                 break
 
         topic_index = build_topic_index(
-            topic_index_config, kb, source_name=source_name,
+            topic_index_config,
+            kb,
+            source_name=source_name,
         )
 
         # The wrapper is built here (owned); the inner KB it wraps is the
@@ -462,7 +438,9 @@ class GroundedReasoning(
         # own ``owns_kb`` gate (default False), so closing this wrapper
         # never tears down the shared KB.
         wrapper = VectorKnowledgeSource(
-            kb, name=source_name, topic_index=topic_index,
+            kb,
+            name=source_name,
+            topic_index=topic_index,
         )
         self._sources.insert(0, wrapper)
         self._owns_sources.add(wrapper)
@@ -675,7 +653,10 @@ class GroundedReasoning(
         if intent is None:
             t0 = time.monotonic()
             intent = await self._resolve_intent(
-                user_message, messages, llm, manager.metadata,
+                user_message,
+                messages,
+                llm,
+                manager.metadata,
             )
             intent_ms = (time.monotonic() - t0) * 1000
         else:
@@ -684,7 +665,9 @@ class GroundedReasoning(
         # Phase 2: Deterministic retrieval across all sources
         t0 = time.monotonic()
         results_by_source = await self._retrieve_from_sources(
-            intent, user_message=user_message, llm=llm,
+            intent,
+            user_message=user_message,
+            llm=llm,
         )
         retrieval_ms = (time.monotonic() - t0) * 1000
 
@@ -694,7 +677,9 @@ class GroundedReasoning(
         # Result processing pipeline (normalization, filtering, re-ranking)
         if self._result_pipeline is not None:
             all_results = await self._result_pipeline.process(
-                all_results, intent, user_message,
+                all_results,
+                intent,
+                user_message,
             )
 
         # Format for synthesis
@@ -792,7 +777,9 @@ class GroundedReasoning(
 
         cfg = self.config.intent
         if not cfg.template:
-            logger.warning("Intent mode is 'template' but no template configured; falling back to message")
+            logger.warning(
+                "Intent mode is 'template' but no template configured; falling back to message"
+            )
             return RetrievalIntent(text_queries=[user_message])
 
         template = self._intent_template
@@ -845,15 +832,15 @@ class GroundedReasoning(
             enriched = self._expander.expand(user_message, messages)
             logger.debug(
                 "Expanded ambiguous query: %r → %r",
-                user_message, enriched,
+                user_message,
+                enriched,
             )
 
         # Build extraction input — include conversation context if enabled
         conversation_context = self._build_conversation_context(messages, cfg)
         if conversation_context:
             extraction_input = (
-                f"Conversation context:\n{conversation_context}\n\n"
-                f"Current user message: {enriched}"
+                f"Conversation context:\n{conversation_context}\n\nCurrent user message: {enriched}"
             )
         else:
             extraction_input = enriched
@@ -863,9 +850,7 @@ class GroundedReasoning(
         schema = copy.deepcopy(INTENT_EXTRACTION_SCHEMA)
         schema["properties"]["text_queries"]["maxItems"] = cfg.num_queries
         if cfg.output_style_hint:
-            schema["properties"]["output_style"]["description"] = (
-                cfg.output_style_hint
-            )
+            schema["properties"]["output_style"]["description"] = cfg.output_style_hint
 
         context = {}
         if cfg.domain_context:
@@ -884,14 +869,17 @@ class GroundedReasoning(
             # the resolution cascade falls through to config/session
             # defaults.
             grounding_results = ground_extraction(
-                result.data, user_message, schema,
+                result.data,
+                user_message,
+                schema,
             )
             required_fields = set(schema.get("required", []))
             for fname, gresult in grounding_results.items():
                 if not gresult.grounded and fname not in required_fields:
                     logger.debug(
                         "Dropping ungrounded optional field %r: %s",
-                        fname, gresult.reason,
+                        fname,
+                        gresult.reason,
                     )
                     result.data.pop(fname, None)
 
@@ -912,10 +900,13 @@ class GroundedReasoning(
 
             logger.debug(
                 "Extracted %d queries (confidence=%.2f, scope=%s): %s",
-                len(queries), result.confidence, scope, queries,
+                len(queries),
+                result.confidence,
+                scope,
+                queries,
             )
             return RetrievalIntent(
-                text_queries=queries[:cfg.num_queries],
+                text_queries=queries[: cfg.num_queries],
                 scope=scope,
                 raw_data=result.data,
             )
@@ -958,7 +949,8 @@ class GroundedReasoning(
             enriched = self._expander.expand(user_message, messages)
             logger.debug(
                 "Expanded ambiguous query: %r → %r",
-                user_message, enriched,
+                user_message,
+                enriched,
             )
 
         try:
@@ -966,14 +958,16 @@ class GroundedReasoning(
             conversation_context = self._build_conversation_context(messages, cfg)
             if conversation_context:
                 queries = await self._transformer.transform_with_context(
-                    enriched, conversation_context,
+                    enriched,
+                    conversation_context,
                 )
             else:
                 queries = await self._transformer.transform(enriched)
 
             logger.debug(
                 "Generated %d queries for grounded retrieval: %s",
-                len(queries), queries,
+                len(queries),
+                queries,
             )
             return queries
         except Exception:
@@ -1008,16 +1002,13 @@ class GroundedReasoning(
         # roughly 2 messages (user + assistant), so double it for the
         # message window.  Exclude the current (last) message.
         window = cfg.max_context_turns * 2
-        recent = messages[-window - 1:-1] if len(messages) > window + 1 else messages[:-1]
+        recent = messages[-window - 1 : -1] if len(messages) > window + 1 else messages[:-1]
         parts: list[str] = []
         for m in recent:
             # Prefer raw_content (unaugmented by KB/memory injection)
             # so query generation sees the user's actual words, not
             # middleware-prepended context chunks.
-            content = (
-                m.get("metadata", {}).get("raw_content")
-                or m.get("content", "")
-            )
+            content = m.get("metadata", {}).get("raw_content") or m.get("content", "")
             if content:
                 parts.append(f"{m.get('role', 'user')}: {content}")
         return "\n".join(parts)
@@ -1084,7 +1075,8 @@ class GroundedReasoning(
             except Exception:
                 logger.warning(
                     "Source '%s' query failed, skipping",
-                    source.name, exc_info=True,
+                    source.name,
+                    exc_info=True,
                 )
 
         return results_by_source
@@ -1152,9 +1144,7 @@ class GroundedReasoning(
             return ""
 
         # Check if results have cluster annotations
-        has_clusters = any(
-            r.metadata.get("cluster_id", -1) >= 0 for r in results
-        )
+        has_clusters = any(r.metadata.get("cluster_id", -1) >= 0 for r in results)
         if has_clusters:
             return self._format_clustered_results(results)
 
@@ -1295,12 +1285,14 @@ class GroundedReasoning(
             user_message = self._extract_user_message(messages)
             try:
                 template_text = self._render_provenance_output(
-                    context, provenance, user_message, manager.metadata,
+                    context,
+                    provenance,
+                    user_message,
+                    manager.metadata,
                 )
             except Exception:
                 logger.warning(
-                    "Provenance template render failed, falling back "
-                    "to conversational style",
+                    "Provenance template render failed, falling back to conversational style",
                     exc_info=True,
                 )
                 style = "conversational"
@@ -1309,7 +1301,8 @@ class GroundedReasoning(
         if style in ("conversational", "hybrid"):
             if system_prompt is None:
                 system_prompt = self.build_synthesis_system_prompt(
-                    context, manager.system_prompt,
+                    context,
+                    manager.system_prompt,
                     synthesis_config=synthesis_config,
                 )
 
@@ -1348,7 +1341,8 @@ class GroundedReasoning(
         session_style = manager.metadata.get("synthesis_style")
         if session_style in _VALID_STYLES:
             logger.debug(
-                "Using session-level synthesis style: %s", session_style,
+                "Using session-level synthesis style: %s",
+                session_style,
             )
             return session_style
 
@@ -1427,9 +1421,7 @@ class GroundedReasoning(
         # Empty ``kb_context`` collapses to ``""`` so neither branch
         # below has to re-check.
         if kb_context:
-            kb_block = (
-                "\n\n" + self._prompt_envelope.knowledge_base_section(kb_context)
-            )
+            kb_block = "\n\n" + self._prompt_envelope.knowledge_base_section(kb_context)
         else:
             kb_block = ""
 

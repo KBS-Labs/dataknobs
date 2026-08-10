@@ -37,9 +37,7 @@ GUARD = load_bin_module("check-internal-labels")
 
 def _scanned() -> set[str]:
     """The default scope, as repo-relative posix names."""
-    return {
-        path.relative_to(ROOT).as_posix() for path in GUARD.iter_target_files([])
-    }
+    return {path.relative_to(ROOT).as_posix() for path in GUARD.iter_target_files([])}
 
 
 def test_the_scope_covers_the_code_that_runs_the_gate():
@@ -54,9 +52,7 @@ def test_the_scope_covers_the_code_that_runs_the_gate():
 
     expected_roots = [t for t in workspace_targets() if (ROOT / t).is_dir()]
     missing_roots = [
-        root
-        for root in expected_roots
-        if not any(name.startswith(f"{root}/") for name in scanned)
+        root for root in expected_roots if not any(name.startswith(f"{root}/") for name in scanned)
     ]
     assert not missing_roots, (
         f"declared workspace targets contribute no scanned file: {missing_roots}. "
@@ -77,9 +73,8 @@ def test_the_scope_covers_every_shell_script_the_shell_lint_checks():
     """
     scanned = _scanned()
     missing = sorted(set(tracked_shell_files()) - scanned)
-    assert not missing, (
-        "tracked shell scripts outside the label scan:\n"
-        + "\n".join(f"  - {name}" for name in missing)
+    assert not missing, "tracked shell scripts outside the label scan:\n" + "\n".join(
+        f"  - {name}" for name in missing
     )
 
 
@@ -133,9 +128,7 @@ def test_the_exemption_is_what_keeps_the_scan_green():
     from a passing run.
     """
     guard_source = (ROOT / "bin" / "check-internal-labels.py").read_text(encoding="utf-8")
-    hits = [
-        line for line in guard_source.splitlines() if GUARD.LABEL_PATTERN.search(line)
-    ]
+    hits = [line for line in guard_source.splitlines() if GUARD.LABEL_PATTERN.search(line)]
     assert len(hits) >= 5, (
         f"only {len(hits)} label-shaped lines in the guard's own source — the "
         "exemption is close to unnecessary, so check whether it can go"

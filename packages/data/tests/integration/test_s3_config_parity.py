@@ -32,9 +32,7 @@ def _isolate_aws_env(isolate_aws_env: None) -> None:
     # being applied.
 
 
-@pytest.mark.parametrize(
-    "region_key", ["region", "region_name"], ids=["legacy", "boto-native"]
-)
+@pytest.mark.parametrize("region_key", ["region", "region_name"], ids=["legacy", "boto-native"])
 def test_sync_and_async_accept_same_region_key(region_key: str) -> None:
     """Same config dict — using either region key — wires both constructs.
 

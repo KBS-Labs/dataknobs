@@ -296,20 +296,20 @@ class TaskInjector:
     """
 
     # Supported event types
-    EVENTS = frozenset({
-        "artifact_created",
-        "artifact_reviewed",
-        "review_failed",
-        "stage_entered",
-        "stage_exited",
-        "wizard_completed",
-    })
+    EVENTS = frozenset(
+        {
+            "artifact_created",
+            "artifact_reviewed",
+            "review_failed",
+            "stage_entered",
+            "stage_exited",
+            "wizard_completed",
+        }
+    )
 
     def __init__(self) -> None:
         """Initialize TaskInjector with empty hook registry."""
-        self._hooks: dict[str, list[InjectionHook]] = {
-            event: [] for event in self.EVENTS
-        }
+        self._hooks: dict[str, list[InjectionHook]] = {event: [] for event in self.EVENTS}
 
     def on(self, event: str) -> Callable[[InjectionHook], InjectionHook]:
         """Decorator for registering a hook for an event.
@@ -331,9 +331,7 @@ class TaskInjector:
             ```
         """
         if event not in self.EVENTS:
-            raise ValueError(
-                f"Unknown event '{event}'. Supported: {sorted(self.EVENTS)}"
-            )
+            raise ValueError(f"Unknown event '{event}'. Supported: {sorted(self.EVENTS)}")
 
         def decorator(func: InjectionHook) -> InjectionHook:
             self._hooks[event].append(func)
@@ -353,9 +351,7 @@ class TaskInjector:
             ValueError: If event is not a supported event type
         """
         if event not in self.EVENTS:
-            raise ValueError(
-                f"Unknown event '{event}'. Supported: {sorted(self.EVENTS)}"
-            )
+            raise ValueError(f"Unknown event '{event}'. Supported: {sorted(self.EVENTS)}")
         self._hooks[event].append(hook)
         logger.debug("Registered hook %s for event %s", hook.__name__, event)
 
@@ -499,17 +495,11 @@ class TaskInjector:
         hooks_config = config.get("hooks", {})
         for event, hook_list in hooks_config.items():
             if event not in cls.EVENTS:
-                faults.append(
-                    f"unknown event {event!r} (known: {', '.join(sorted(cls.EVENTS))})"
-                )
+                faults.append(f"unknown event {event!r} (known: {', '.join(sorted(cls.EVENTS))})")
                 continue
 
             for hook_def in hook_list:
-                func_ref = (
-                    hook_def.get("function")
-                    if isinstance(hook_def, dict)
-                    else hook_def
-                )
+                func_ref = hook_def.get("function") if isinstance(hook_def, dict) else hook_def
 
                 if not func_ref:
                     faults.append(f"event {event!r}: hook entry names no function")

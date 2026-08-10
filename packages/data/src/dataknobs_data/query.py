@@ -133,7 +133,7 @@ class Filter:
 
     def matches(self, record_value: Any) -> bool:
         """Check if a record value matches this filter.
-        
+
         Supports type-aware comparisons for ranges and special handling
         for datetime/date objects.
         """
@@ -164,14 +164,17 @@ class Filter:
             if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
                 return False
             lower, upper = self.value
-            return self._compare_values(record_value, lower, lambda a, b: a >= b) and \
-                   self._compare_values(record_value, upper, lambda a, b: a <= b)
+            return self._compare_values(
+                record_value, lower, lambda a, b: a >= b
+            ) and self._compare_values(record_value, upper, lambda a, b: a <= b)
         elif self.operator == Operator.NOT_BETWEEN:
             if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
                 return True
             lower, upper = self.value
-            return not (self._compare_values(record_value, lower, lambda a, b: a >= b) and \
-                       self._compare_values(record_value, upper, lambda a, b: a <= b))
+            return not (
+                self._compare_values(record_value, lower, lambda a, b: a >= b)
+                and self._compare_values(record_value, upper, lambda a, b: a <= b)
+            )
         elif self.operator == Operator.LIKE:
             if not isinstance(record_value, str):
                 return False
@@ -206,7 +209,7 @@ class Filter:
 
     def _compare_values(self, a: Any, b: Any, comparator) -> bool:
         """Compare two values with type awareness.
-        
+
         Handles special cases:
         - Datetime strings are parsed for comparison
         - Mixed numeric types are converted appropriately
@@ -277,7 +280,7 @@ class SortSpec:
 @dataclass
 class VectorQuery:
     """Represents a vector similarity search query.
-    
+
     This dataclass encapsulates all parameters needed for vector similarity search,
     including the query vector, distance metric, and various search options.
     """
@@ -303,7 +306,7 @@ class VectorQuery:
 
         # Handle metric serialization
         metric_value = self.metric
-        if hasattr(metric_value, 'value'):  # DistanceMetric enum
+        if hasattr(metric_value, "value"):  # DistanceMetric enum
             metric_value = metric_value.value
 
         result = {
@@ -556,10 +559,10 @@ class Query:
         score_threshold: float | None = None,
     ) -> Query:
         """Add vector similarity search to the query.
-        
+
         This method sets up a vector similarity search that will find the k most
         similar vectors to the provided query vector.
-        
+
         Args:
             vector: Query vector to search for similar vectors
             field: Vector field name to search (default: "embedding")
@@ -567,7 +570,7 @@ class Query:
             metric: Distance metric to use (default: "cosine")
             include_source: Whether to include source text in results (default: True)
             score_threshold: Minimum similarity score threshold (optional)
-            
+
         Returns:
             Self for method chaining
         """
@@ -594,10 +597,10 @@ class Query:
         score_threshold: float | None = None,
     ) -> Query:
         """Add text-based vector similarity search to the query.
-        
+
         This is a convenience method that converts text to a vector using the
         provided embedding function, then performs vector similarity search.
-        
+
         Args:
             text: Text to convert to vector for similarity search
             embedding_fn: Function to convert text to vector
@@ -606,7 +609,7 @@ class Query:
             metric: Distance metric to use (default: "cosine")
             include_source: Whether to include source text in results (default: True)
             score_threshold: Minimum similarity score threshold (optional)
-            
+
         Returns:
             Self for method chaining
         """
@@ -632,11 +635,11 @@ class Query:
         metric: DistanceMetric | str = "cosine",
     ) -> Query:
         """Create a hybrid query combining text and vector search.
-        
+
         This method combines traditional text search with vector similarity search,
         allowing for more nuanced queries that leverage both exact text matching
         and semantic similarity.
-        
+
         Args:
             text_query: Text to search for (optional)
             vector: Vector for similarity search (optional)
@@ -645,10 +648,10 @@ class Query:
             alpha: Weight balance between text (0.0) and vector (1.0) search (default: 0.5)
             k: Number of results to return (default: 10)
             metric: Distance metric for vector search (default: "cosine")
-            
+
         Returns:
             Self for method chaining
-        
+
         Note:
             - alpha=0.0 gives full weight to text search
             - alpha=1.0 gives full weight to vector search
@@ -678,10 +681,10 @@ class Query:
 
     def with_reranking(self, rerank_k: int | None = None) -> Query:
         """Enable result reranking for vector queries.
-        
+
         Args:
             rerank_k: Number of results to rerank (default: 2*k from vector query)
-            
+
         Returns:
             Self for method chaining
         """
@@ -746,13 +749,13 @@ class Query:
 
     def or_(self, *filters: Filter | Query) -> ComplexQuery:
         """Create a ComplexQuery with OR logic.
-        
+
         The current query's filters become an AND group, combined with OR conditions.
         Example: Query with filters [A, B] calling or_(C, D) creates: (A AND B) AND (C OR D)
-        
+
         Args:
             filters: Filter objects or Query objects to OR together
-            
+
         Returns:
             ComplexQuery with OR logic
         """
@@ -784,10 +787,7 @@ class Query:
             if len(or_conditions) == 1:
                 or_group = or_conditions[0]
             else:
-                or_group = LogicCondition(
-                    operator=LogicOperator.OR,
-                    conditions=or_conditions
-                )
+                or_group = LogicCondition(operator=LogicOperator.OR, conditions=or_conditions)
 
         # Combine with existing filters (if any) using AND
         if self.filters:
@@ -802,8 +802,7 @@ class Query:
             # Combine existing AND new OR group with AND
             if or_group:
                 root_condition = LogicCondition(
-                    operator=LogicOperator.AND,
-                    conditions=[existing, or_group]
+                    operator=LogicOperator.AND, conditions=[existing, or_group]
                 )
             else:
                 root_condition = existing
@@ -816,15 +815,15 @@ class Query:
             sort_specs=self.sort_specs.copy(),
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields.copy() if self.fields else None
+            fields=self.fields.copy() if self.fields else None,
         )
 
     def and_(self, *filters: Filter | Query) -> Query:
         """Add more filters with AND logic (convenience method).
-        
+
         Args:
             filters: Filter objects or Query objects to AND together
-            
+
         Returns:
             Self for chaining
         """
@@ -837,10 +836,10 @@ class Query:
 
     def not_(self, filter: Filter) -> ComplexQuery:
         """Create a ComplexQuery with NOT logic.
-        
+
         Args:
             filter: Filter to negate
-            
+
         Returns:
             ComplexQuery with NOT logic
         """
@@ -864,25 +863,19 @@ class Query:
                 conditions.append(and_cond)
 
         # Add NOT condition
-        not_cond = LogicCondition(
-            operator=LogicOperator.NOT,
-            conditions=[FilterCondition(filter)]
-        )
+        not_cond = LogicCondition(operator=LogicOperator.NOT, conditions=[FilterCondition(filter)])
         conditions.append(not_cond)
 
         # Create root condition
         if len(conditions) == 1:
             root_condition = conditions[0]
         else:
-            root_condition = LogicCondition(
-                operator=LogicOperator.AND,
-                conditions=conditions
-            )
+            root_condition = LogicCondition(operator=LogicOperator.AND, conditions=conditions)
 
         return ComplexQuery(
             condition=root_condition,
             sort_specs=self.sort_specs.copy(),
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields.copy() if self.fields else None
+            fields=self.fields.copy() if self.fields else None,
         )

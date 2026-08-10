@@ -71,7 +71,7 @@ function test() {
         code_nodes = tree.find_nodes(lambda n: n.data.is_code())
 
         assert len(code_nodes) == 1
-        assert code_nodes[0].data.text.count('\n') >= 4
+        assert code_nodes[0].data.text.count("\n") >= 4
         assert "function test()" in code_nodes[0].data.text
 
     def test_code_block_not_split_in_chunks(self):

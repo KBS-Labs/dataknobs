@@ -312,6 +312,7 @@ class TestTaskInjector:
 
     def test_from_config_with_custom_functions(self) -> None:
         """Test creating injector from config with custom functions."""
+
         def custom_hook(ctx: TaskInjectionContext) -> TaskInjectionResult:
             return TaskInjectionResult(messages=["custom"])
 

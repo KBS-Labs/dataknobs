@@ -18,9 +18,7 @@ from dataknobs_xization.ingestion.source import (
 )
 
 
-async def _collect_refs(
-    source: LocalDocumentSource, patterns: list[str]
-) -> list[DocumentFileRef]:
+async def _collect_refs(source: LocalDocumentSource, patterns: list[str]) -> list[DocumentFileRef]:
     refs: list[DocumentFileRef] = []
     async for ref in source.iter_files(patterns):
         refs.append(ref)
@@ -47,9 +45,7 @@ async def test_local_iter_files_matches_path_glob(corpus: Path) -> None:
     refs = await _collect_refs(source, ["**/*.md"])
     yielded = sorted(r.path for r in refs)
     expected = sorted(
-        str(p.relative_to(corpus).as_posix())
-        for p in corpus.glob("**/*.md")
-        if p.is_file()
+        str(p.relative_to(corpus).as_posix()) for p in corpus.glob("**/*.md") if p.is_file()
     )
     assert yielded == expected
 
@@ -404,9 +400,7 @@ async def _collect_backend_refs(
         ("docs/nested/deep.md", "docs/*.md", False),
     ],
 )
-def test_backend_matches_glob_semantics(
-    path: str, pattern: str, expected: bool
-) -> None:
+def test_backend_matches_glob_semantics(path: str, pattern: str, expected: bool) -> None:
     assert BackendDocumentSource._matches(path, pattern) is expected
 
 
@@ -717,9 +711,7 @@ class _PrefixRecordingBackend(_StaticBackend):
         super().__init__(files, file_records)
         self.list_calls: list[dict[str, Any]] = []
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[Any]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[Any]:
         self.list_calls.append({"domain_id": domain_id, "prefix": prefix})
         if prefix:
             return [r for r in self._records if r.path.startswith(prefix)]

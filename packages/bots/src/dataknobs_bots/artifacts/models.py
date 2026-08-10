@@ -142,9 +142,7 @@ class Artifact:
             status=ArtifactStatus(data.get("status", "draft")),
             content=data.get("content", {}),
             content_schema=data.get("content_schema"),
-            provenance=ProvenanceRecord.from_dict(
-                data.get("provenance", {})
-            ),
+            provenance=ProvenanceRecord.from_dict(data.get("provenance", {})),
             tags=data.get("tags", []),
             rubric_ids=data.get("rubric_ids", []),
             evaluation_ids=data.get("evaluation_ids", []),
@@ -182,9 +180,7 @@ class ArtifactTypeDefinition:
     tags: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_config(
-        cls, type_id: str, config: dict[str, Any]
-    ) -> ArtifactTypeDefinition:
+    def from_config(cls, type_id: str, config: dict[str, Any]) -> ArtifactTypeDefinition:
         """Create from a configuration dictionary.
 
         Args:

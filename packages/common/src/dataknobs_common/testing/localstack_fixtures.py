@@ -98,11 +98,7 @@ try:
         """
 
         def factory(bucket: str) -> Iterator[dict[str, Any]]:
-            asyncio.run(
-                ensure_localstack_s3_bucket(
-                    bucket, endpoint=localstack_endpoint
-                )
-            )
+            asyncio.run(ensure_localstack_s3_bucket(bucket, endpoint=localstack_endpoint))
             yield {
                 "bucket": bucket,
                 "endpoint_url": localstack_endpoint,

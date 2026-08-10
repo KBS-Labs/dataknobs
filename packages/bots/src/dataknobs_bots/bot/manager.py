@@ -246,8 +246,7 @@ class BotManager:
         if config is None:
             if self._config_loader is None:
                 raise ValueError(
-                    f"No configuration provided for bot '{bot_id}' "
-                    "and no config_loader is set"
+                    f"No configuration provided for bot '{bot_id}' and no config_loader is set"
                 )
             config = await self._load_config(bot_id)
 

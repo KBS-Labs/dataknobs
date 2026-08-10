@@ -48,7 +48,7 @@ class AsyncS3Database(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """Native async S3 database backend with aioboto3 and session pooling.
 
@@ -98,6 +98,7 @@ class AsyncS3Database(  # type: ignore[misc]
 
         # Get or create session for current event loop
         from ..pooling import BasePoolConfig
+
         self._session = await _session_manager.get_pool(
             self._pool_config,
             cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_aioboto3_session),
@@ -213,14 +214,13 @@ class AsyncS3Database(  # type: ignore[misc]
         key = self._get_key(id)
 
         try:
-            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-                response = await s3.get_object(
-                    Bucket=self._pool_config.bucket,
-                    Key=key
-                )
+            async with self._session.client(
+                "s3", endpoint_url=self._pool_config.endpoint_url
+            ) as s3:
+                response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
 
                 # Read the object body
-                body = await response['Body'].read()
+                body = await response["Body"].read()
                 obj = json.loads(body)
 
                 record = self._s3_object_to_record(obj)
@@ -245,7 +245,9 @@ class AsyncS3Database(  # type: ignore[misc]
         from botocore.exceptions import ClientError
 
         try:
-            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+            async with self._session.client(
+                "s3", endpoint_url=self._pool_config.endpoint_url
+            ) as s3:
                 response = await s3.head_object(
                     Bucket=self._pool_config.bucket,
                     Key=key,
@@ -256,9 +258,7 @@ class AsyncS3Database(  # type: ignore[misc]
             raise
         return response.get("ETag")
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record in S3.
 
         When ``expected_version`` is provided the PUT carries an
@@ -294,7 +294,9 @@ class AsyncS3Database(  # type: ignore[misc]
         from botocore.exceptions import ClientError
 
         try:
-            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+            async with self._session.client(
+                "s3", endpoint_url=self._pool_config.endpoint_url
+            ) as s3:
                 await s3.put_object(**put_kwargs)
         except ClientError as e:
             if expected_version is not None:
@@ -316,9 +318,7 @@ class AsyncS3Database(  # type: ignore[misc]
 
         return True
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record from S3.
 
         When ``expected_version`` is provided the ``DeleteObject`` carries an
@@ -359,11 +359,10 @@ class AsyncS3Database(  # type: ignore[misc]
                 raise
 
         try:
-            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-                await s3.delete_object(
-                    Bucket=self._pool_config.bucket,
-                    Key=key
-                )
+            async with self._session.client(
+                "s3", endpoint_url=self._pool_config.endpoint_url
+            ) as s3:
+                await s3.delete_object(Bucket=self._pool_config.bucket, Key=key)
             return True
         except Exception:
             return False
@@ -375,11 +374,10 @@ class AsyncS3Database(  # type: ignore[misc]
         key = self._get_key(id)
 
         try:
-            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-                await s3.head_object(
-                    Bucket=self._pool_config.bucket,
-                    Key=key
-                )
+            async with self._session.client(
+                "s3", endpoint_url=self._pool_config.endpoint_url
+            ) as s3:
+                await s3.head_object(Bucket=self._pool_config.bucket, Key=key)
             return True
         except Exception:
             return False
@@ -429,7 +427,7 @@ class AsyncS3Database(  # type: ignore[misc]
                 Bucket=self._pool_config.bucket,
                 Key=key,
                 Body=json.dumps(obj),
-                ContentType="application/json"
+                ContentType="application/json",
             )
 
         return id
@@ -448,38 +446,35 @@ class AsyncS3Database(  # type: ignore[misc]
 
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             # List all objects
-            paginator = s3.get_paginator('list_objects_v2')
+            paginator = s3.get_paginator("list_objects_v2")
 
             params = {
-                'Bucket': self._pool_config.bucket,
+                "Bucket": self._pool_config.bucket,
             }
             if self._pool_config.prefix:
-                params['Prefix'] = self._pool_config.prefix
+                params["Prefix"] = self._pool_config.prefix
 
             async for page in paginator.paginate(**params):
-                if 'Contents' not in page:
+                if "Contents" not in page:
                     continue
 
                 # Process each object
-                for obj_summary in page['Contents']:
-                    key = obj_summary['Key']
+                for obj_summary in page["Contents"]:
+                    key = obj_summary["Key"]
 
                     # Skip non-JSON files
-                    if not key.endswith('.json'):
+                    if not key.endswith(".json"):
                         continue
 
                     # Get the object
-                    response = await s3.get_object(
-                        Bucket=self._pool_config.bucket,
-                        Key=key
-                    )
+                    response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
 
-                    body = await response['Body'].read()
+                    body = await response["Body"].read()
                     obj = json.loads(body)
                     record = self._s3_object_to_record(obj)
 
                     # Extract ID from key
-                    id = key.replace(self._pool_config.prefix + '/', '').replace('.json', '')
+                    id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
                     record.metadata["id"] = id
 
                     # Apply filters
@@ -515,18 +510,18 @@ class AsyncS3Database(  # type: ignore[misc]
 
         count = 0
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator('list_objects_v2')
+            paginator = s3.get_paginator("list_objects_v2")
 
             params = {
-                'Bucket': self._pool_config.bucket,
+                "Bucket": self._pool_config.bucket,
             }
             if self._pool_config.prefix:
-                params['Prefix'] = self._pool_config.prefix
+                params["Prefix"] = self._pool_config.prefix
 
             async for page in paginator.paginate(**params):
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        if obj['Key'].endswith('.json'):
+                if "Contents" in page:
+                    for obj in page["Contents"]:
+                        if obj["Key"].endswith(".json"):
                             count += 1
 
         return count
@@ -538,75 +533,66 @@ class AsyncS3Database(  # type: ignore[misc]
         count = 0
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             # List and delete all objects
-            paginator = s3.get_paginator('list_objects_v2')
+            paginator = s3.get_paginator("list_objects_v2")
 
             params = {
-                'Bucket': self._pool_config.bucket,
+                "Bucket": self._pool_config.bucket,
             }
             if self._pool_config.prefix:
-                params['Prefix'] = self._pool_config.prefix
+                params["Prefix"] = self._pool_config.prefix
 
             async for page in paginator.paginate(**params):
-                if 'Contents' not in page:
+                if "Contents" not in page:
                     continue
 
                 # Build delete request
                 objects_to_delete = []
-                for obj in page['Contents']:
-                    if obj['Key'].endswith('.json'):
-                        objects_to_delete.append({'Key': obj['Key']})
+                for obj in page["Contents"]:
+                    if obj["Key"].endswith(".json"):
+                        objects_to_delete.append({"Key": obj["Key"]})
                         count += 1
 
                 # Delete in batch
                 if objects_to_delete:
                     await s3.delete_objects(
-                        Bucket=self._pool_config.bucket,
-                        Delete={'Objects': objects_to_delete}
+                        Bucket=self._pool_config.bucket, Delete={"Objects": objects_to_delete}
                     )
 
         return count
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from S3."""
         self._check_connection()
         config = config or StreamConfig()
 
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator('list_objects_v2')
+            paginator = s3.get_paginator("list_objects_v2")
 
-            params = {
-                'Bucket': self._pool_config.bucket,
-                'MaxKeys': config.batch_size
-            }
+            params = {"Bucket": self._pool_config.bucket, "MaxKeys": config.batch_size}
             if self._pool_config.prefix:
-                params['Prefix'] = self._pool_config.prefix
+                params["Prefix"] = self._pool_config.prefix
 
             async for page in paginator.paginate(**params):
-                if 'Contents' not in page:
+                if "Contents" not in page:
                     continue
 
-                for obj_summary in page['Contents']:
-                    key = obj_summary['Key']
+                for obj_summary in page["Contents"]:
+                    key = obj_summary["Key"]
 
-                    if not key.endswith('.json'):
+                    if not key.endswith(".json"):
                         continue
 
                     # Get the object
-                    response = await s3.get_object(
-                        Bucket=self._pool_config.bucket,
-                        Key=key
-                    )
+                    response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
 
-                    body = await response['Body'].read()
+                    body = await response["Body"].read()
                     obj = json.loads(body)
                     record = self._s3_object_to_record(obj)
 
                     # Extract ID from key
-                    id = key.replace(self._pool_config.prefix + '/', '').replace('.json', '')
+                    id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
                     record.metadata["id"] = id
 
                     # Apply filters if query provided
@@ -621,9 +607,7 @@ class AsyncS3Database(  # type: ignore[misc]
                     yield record
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into S3.
 
@@ -661,23 +645,23 @@ class AsyncS3Database(  # type: ignore[misc]
 
         ids = []
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator('list_objects_v2')
+            paginator = s3.get_paginator("list_objects_v2")
 
             params = {
-                'Bucket': self._pool_config.bucket,
+                "Bucket": self._pool_config.bucket,
             }
             if self._pool_config.prefix:
-                params['Prefix'] = self._pool_config.prefix
+                params["Prefix"] = self._pool_config.prefix
 
             async for page in paginator.paginate(**params):
-                if 'Contents' not in page:
+                if "Contents" not in page:
                     continue
 
-                for obj in page['Contents']:
-                    key = obj['Key']
-                    if key.endswith('.json'):
+                for obj in page["Contents"]:
+                    key = obj["Key"]
+                    if key.endswith(".json"):
                         # Extract ID from key
-                        id = key.replace(self._pool_config.prefix + '/', '').replace('.json', '')
+                        id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
                         ids.append(id)
 
         return ids
@@ -689,15 +673,15 @@ class AsyncS3Database(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations.
-        
+
         WARNING: This implementation downloads all records from S3 to perform
         the search locally. This is inefficient for large datasets. Consider
         using a vector-enabled backend like PostgreSQL or Elasticsearch for
         production use with large datasets.
-        
+
         Future optimization: Override this method to use AWS OpenSearch or
         similar vector-enabled service when available.
         """
@@ -707,5 +691,5 @@ class AsyncS3Database(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )

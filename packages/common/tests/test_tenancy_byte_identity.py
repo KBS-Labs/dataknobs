@@ -89,10 +89,7 @@ def test_bound_tenant_state_key_prefix() -> None:
     """BoundTenantContext.state_key_prefix() MUST equal
     ``"tenants/{tenant_id}/_state/"`` exactly, including trailing slash.
     The trailing slash is part of the concatenation convention."""
-    assert (
-        BoundTenantContext("acme", "kb").state_key_prefix()
-        == "tenants/acme/_state/"
-    )
+    assert BoundTenantContext("acme", "kb").state_key_prefix() == "tenants/acme/_state/"
 
 
 def test_shared_corpus_lock_key_uses_corpus_not_domain() -> None:
@@ -109,14 +106,8 @@ def test_shared_corpus_lock_key_uses_corpus_not_domain() -> None:
         domain_id="contracts_view",
         shared_corpus_id="legal_corpus",
     )
-    assert (
-        ctx_view_a.lock_key("save_metadata")
-        == "save_metadata:acme:legal_corpus"
-    )
-    assert (
-        ctx_view_b.lock_key("save_metadata")
-        == "save_metadata:acme:legal_corpus"
-    )
+    assert ctx_view_a.lock_key("save_metadata") == "save_metadata:acme:legal_corpus"
+    assert ctx_view_b.lock_key("save_metadata") == "save_metadata:acme:legal_corpus"
     # Same lock key — concurrent state writes from two views serialize.
 
 

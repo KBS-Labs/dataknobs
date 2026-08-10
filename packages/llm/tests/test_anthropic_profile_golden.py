@@ -106,16 +106,16 @@ def _reset_caches() -> None:
 # substrate (family-alias to the resource, dated snapshot, Claude-5 vs 4.x
 # temperature rejection, fable/mythos family names, unknown / non-Claude).
 _MODELS: tuple[str, ...] = (
-    "claude-opus-5",                 # Claude 5 flagship; resource ceilings; rejects temperature
-    "claude-sonnet-5",               # Claude 5; resource ceilings; rejects temperature
-    "claude-mythos-5",               # Claude 5 (invitation-only family name); rejects temperature
-    "claude-fable-5",                # Claude 5 family name without opus/sonnet/haiku marker
-    "claude-haiku-4-5-20251001",     # dated snapshot → `claude-haiku-4-5` alias; accepts temperature
-    "claude-opus-4-8",               # Claude 4.x; resource ceilings; accepts temperature
-    "claude-sonnet-5-20260514",      # dated Claude-5 snapshot → bare-family alias
-    "claude-3-5-sonnet-20241022",    # older modern-capability family; no resource ceiling
-    "some-unknown-model",            # nothing matches → permissive, base capabilities only
-    "gpt-4o",                        # non-Claude id → base capabilities only, no ceilings
+    "claude-opus-5",  # Claude 5 flagship; resource ceilings; rejects temperature
+    "claude-sonnet-5",  # Claude 5; resource ceilings; rejects temperature
+    "claude-mythos-5",  # Claude 5 (invitation-only family name); rejects temperature
+    "claude-fable-5",  # Claude 5 family name without opus/sonnet/haiku marker
+    "claude-haiku-4-5-20251001",  # dated snapshot → `claude-haiku-4-5` alias; accepts temperature
+    "claude-opus-4-8",  # Claude 4.x; resource ceilings; accepts temperature
+    "claude-sonnet-5-20260514",  # dated Claude-5 snapshot → bare-family alias
+    "claude-3-5-sonnet-20241022",  # older modern-capability family; no resource ceiling
+    "some-unknown-model",  # nothing matches → permissive, base capabilities only
+    "gpt-4o",  # non-Claude id → base capabilities only, no ceilings
 )
 
 
@@ -336,9 +336,7 @@ async def test_golden_master_matches_fixture() -> None:
                 f"    expected: {expected_outputs}\n"
                 f"    actual:   {actual_row['outputs']}"
             )
-    assert not diffs, "Golden-master drift in {} cell(s):{}".format(
-        len(diffs), "".join(diffs)
-    )
+    assert not diffs, "Golden-master drift in {} cell(s):{}".format(len(diffs), "".join(diffs))
 
 
 def test_matrix_has_expected_shape() -> None:

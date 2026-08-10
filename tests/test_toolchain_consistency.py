@@ -117,7 +117,9 @@ def test_workspace_tests_are_reachable():
     parser.read(ROOT / "pytest.ini")
     testpaths = parser.get("pytest", "testpaths", fallback="").split()
     if not any((ROOT / p).resolve() == here for p in testpaths):
-        violations.append(f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}")
+        violations.append(
+            f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}"
+        )
 
     collected = subprocess.run(
         [str(ROOT / "bin" / "test.sh"), "-n", "workspace", "--", "--collect-only", "-q"],
@@ -1053,9 +1055,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     literal = sorted(
-        value
-        for value in assignments
-        if value and "$" not in value and not value.startswith("-")
+        value for value in assignments if value and "$" not in value and not value.startswith("-")
     )
     assert not literal, (
         f"bin/run-quality-checks.sh passes {literal} to validate.sh as a literal "
@@ -1070,9 +1070,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     # trigger, so it marked all ten packages changed and took that branch — which
     # means the change that started linting bin/ recorded a passing validation
     # without linting bin/.
-    silent = sorted(
-        value for value in assignments if value and "--workspace" not in value
-    )
+    silent = sorted(value for value in assignments if value and "--workspace" not in value)
     assert not silent, (
         f"bin/run-quality-checks.sh assigns VALIDATE_ARGS={silent} without "
         "--workspace, so that branch validates package sources alone and the "
@@ -1082,8 +1080,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     sources = {
-        name: (ROOT / name).read_text(encoding="utf-8")
-        for name in WORKSPACE_TARGET_CONSUMERS
+        name: (ROOT / name).read_text(encoding="utf-8") for name in WORKSPACE_TARGET_CONSUMERS
     }
 
     #: Delegation is only "not keeping your own copy" if what it delegates to is
@@ -1103,8 +1100,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     unread = sorted(
         name
         for name, text in sources.items()
-        if not WORKSPACE_TARGETS_CALL.search(text)
-        and not WORKSPACE_TARGETS_DELEGATION.search(text)
+        if not WORKSPACE_TARGETS_CALL.search(text) and not WORKSPACE_TARGETS_DELEGATION.search(text)
     )
     assert not unread, (
         f"{unread} build a default set of things to check without calling "
@@ -1210,6 +1206,7 @@ def test_the_print_check_recognises_test_files_by_name_not_by_substring():
         "glob before, which is how they came to disagree; a branch that stops "
         "consulting the shared predicate has silently grown its own answer again."
     )
+
 
 def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path):
     """The predicate being right does not mean the directory walk uses it.
@@ -1504,9 +1501,8 @@ def test_mypy_configs_declare_the_same_search_path():
         if declared[name] != reference
     ]
 
-    assert not violations, (
-        f"mypy search paths disagree with {names[0]}:\n"
-        + "\n".join(f"  - {v}" for v in violations)
+    assert not violations, f"mypy search paths disagree with {names[0]}:\n" + "\n".join(
+        f"  - {v}" for v in violations
     )
 
 
@@ -1672,9 +1668,10 @@ def test_every_state_that_should_validate_something_does():
             ["bash", "-c", script], capture_output=True, text=True, check=True
         ).stdout.strip()
         if (verdict == "VALIDATES") != must_validate:
-            wrong.append(f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}")
+            wrong.append(
+                f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}"
+            )
 
-    assert not wrong, (
-        "bin/run-quality-checks.sh decides the wrong validation scope:\n"
-        + "\n".join(f"  - {item}" for item in wrong)
+    assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
+        f"  - {item}" for item in wrong
     )

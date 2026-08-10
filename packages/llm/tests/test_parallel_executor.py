@@ -31,18 +31,22 @@ def _msg(content: str) -> list[LLMMessage]:
 @pytest.mark.asyncio
 async def test_parallel_execution(provider: EchoProvider) -> None:
     """Three LLM tasks run concurrently and all succeed."""
-    provider.set_responses([
-        text_response("r1"),
-        text_response("r2"),
-        text_response("r3"),
-    ])
+    provider.set_responses(
+        [
+            text_response("r1"),
+            text_response("r2"),
+            text_response("r3"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("q1")),
-        "b": LLMTask(messages=_msg("q2")),
-        "c": LLMTask(messages=_msg("q3")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("q1")),
+            "b": LLMTask(messages=_msg("q2")),
+            "c": LLMTask(messages=_msg("q3")),
+        }
+    )
 
     assert len(results) == 3
     for tag in ("a", "b", "c"):
@@ -63,11 +67,13 @@ async def test_mixed_execution(provider: EchoProvider) -> None:
     async def async_fn(text: str) -> str:
         return text.upper()
 
-    results = await executor.execute_mixed({
-        "llm": LLMTask(messages=_msg("hello")),
-        "sync": DeterministicTask(fn=sync_fn, args=(3, 4)),
-        "async": DeterministicTask(fn=async_fn, args=("hello",)),
-    })
+    results = await executor.execute_mixed(
+        {
+            "llm": LLMTask(messages=_msg("hello")),
+            "sync": DeterministicTask(fn=sync_fn, args=(3, 4)),
+            "async": DeterministicTask(fn=async_fn, args=("hello",)),
+        }
+    )
 
     assert len(results) == 3
     assert results["llm"].success is True
@@ -81,18 +87,22 @@ async def test_mixed_execution(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_error_isolation(provider: EchoProvider) -> None:
     """One failing task does not affect others."""
-    provider.set_responses([
-        text_response("ok1"),
-        ErrorResponse(RuntimeError("simulated")),
-        text_response("ok3"),
-    ])
+    provider.set_responses(
+        [
+            text_response("ok1"),
+            ErrorResponse(RuntimeError("simulated")),
+            text_response("ok3"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=1)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("q1")),
-        "b": LLMTask(messages=_msg("q2")),
-        "c": LLMTask(messages=_msg("q3")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("q1")),
+            "b": LLMTask(messages=_msg("q2")),
+            "c": LLMTask(messages=_msg("q3")),
+        }
+    )
 
     assert results["a"].success is True
     assert results["b"].success is False
@@ -105,9 +115,7 @@ async def test_concurrency_limit(provider: EchoProvider) -> None:
     """With max_concurrency=1, tasks run sequentially."""
     delay_per_task = 0.05  # 50ms
 
-    async def slow_complete(
-        messages, config_overrides=None, **kwargs
-    ) -> LLMResponse:
+    async def slow_complete(messages, config_overrides=None, **kwargs) -> LLMResponse:
         await asyncio.sleep(delay_per_task)
         return text_response("ok")
 
@@ -116,11 +124,13 @@ async def test_concurrency_limit(provider: EchoProvider) -> None:
     executor = ParallelLLMExecutor(provider, max_concurrency=1)
 
     start = asyncio.get_event_loop().time()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("q1")),
-        "b": LLMTask(messages=_msg("q2")),
-        "c": LLMTask(messages=_msg("q3")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("q1")),
+            "b": LLMTask(messages=_msg("q2")),
+            "c": LLMTask(messages=_msg("q3")),
+        }
+    )
     elapsed = asyncio.get_event_loop().time() - start
 
     assert all(r.success for r in results.values())
@@ -131,16 +141,20 @@ async def test_concurrency_limit(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_retry_on_failure(provider: EchoProvider) -> None:
     """Task with retry succeeds after transient failure."""
-    provider.set_responses([
-        ErrorResponse(RuntimeError("transient")),
-        text_response("recovered"),
-    ])
+    provider.set_responses(
+        [
+            ErrorResponse(RuntimeError("transient")),
+            text_response("recovered"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
     retry = RetryConfig(max_attempts=3, initial_delay=0.01)
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello"), retry=retry),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello"), retry=retry),
+        }
+    )
 
     assert results["a"].success is True
     assert results["a"].value.content == "recovered"
@@ -151,10 +165,12 @@ async def test_retry_on_failure(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_sequential_with_context_passing(provider: EchoProvider) -> None:
     """Sequential tasks pass previous result as assistant message."""
-    provider.set_responses([
-        text_response("step1 output"),
-        text_response("step2 output"),
-    ])
+    provider.set_responses(
+        [
+            text_response("step1 output"),
+            text_response("step2 output"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
     results = await executor.execute_sequential(
@@ -185,12 +201,14 @@ async def test_execute_sequential_fail_fast_stops_on_first_failure(
     The returned list is shorter than the input list. Callers can detect
     short-circuit via ``len(results) < len(tasks)``.
     """
-    provider.set_responses([
-        text_response("ok0"),
-        ErrorResponse(RuntimeError("step 1 fail")),
-        text_response("ok2"),
-        text_response("ok3"),
-    ])
+    provider.set_responses(
+        [
+            text_response("ok0"),
+            ErrorResponse(RuntimeError("step 1 fail")),
+            text_response("ok2"),
+            text_response("ok3"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
     results = await executor.execute_sequential(
@@ -216,12 +234,14 @@ async def test_execute_sequential_fail_fast_default_off(
     provider: EchoProvider,
 ) -> None:
     """Without fail_fast, sequential runs the full list (regression guard)."""
-    provider.set_responses([
-        text_response("ok0"),
-        ErrorResponse(RuntimeError("step 1 fail")),
-        text_response("ok2"),
-        text_response("ok3"),
-    ])
+    provider.set_responses(
+        [
+            text_response("ok0"),
+            ErrorResponse(RuntimeError("step 1 fail")),
+            text_response("ok2"),
+            text_response("ok3"),
+        ]
+    )
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
     results = await executor.execute_sequential(
@@ -275,8 +295,10 @@ async def test_duration_tracking(provider: EchoProvider) -> None:
     provider.set_responses([text_response("ok")])
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello")),
+        }
+    )
 
     assert results["a"].duration_ms > 0

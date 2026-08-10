@@ -24,9 +24,7 @@ class TestSchemaExtractorOllamaIntegration:
     """Integration tests for SchemaExtractor with Ollama."""
 
     @pytest.mark.asyncio
-    async def test_extract_simple_fields(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_simple_fields(self, ollama_extractor_config: dict) -> None:
         """Test extracting simple string and integer fields."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -52,9 +50,7 @@ class TestSchemaExtractorOllamaIntegration:
         assert result.is_confident
 
     @pytest.mark.asyncio
-    async def test_extract_with_enum_constraint(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_with_enum_constraint(self, ollama_extractor_config: dict) -> None:
         """Test extracting with enum constraints."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -83,9 +79,7 @@ class TestSchemaExtractorOllamaIntegration:
         assert result.is_confident
 
     @pytest.mark.asyncio
-    async def test_extract_array_field(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_array_field(self, ollama_extractor_config: dict) -> None:
         """Test extracting array fields."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -116,9 +110,7 @@ class TestSchemaExtractorOllamaIntegration:
         assert result.is_confident
 
     @pytest.mark.asyncio
-    async def test_extract_bot_configuration(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_bot_configuration(self, ollama_extractor_config: dict) -> None:
         """Test extracting bot configuration (ConfigBot use case)."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -163,9 +155,7 @@ class TestSchemaExtractorOllamaIntegration:
         assert result.confidence >= 0.8
 
     @pytest.mark.asyncio
-    async def test_extract_partial_information(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_partial_information(self, ollama_extractor_config: dict) -> None:
         """Test extraction when only partial information is provided."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -188,14 +178,14 @@ class TestSchemaExtractorOllamaIntegration:
         await extractor._provider.close()
 
         # Should extract what's available
-        assert result.data.get("domain_id") is not None or result.data.get("domain_name") is not None
+        assert (
+            result.data.get("domain_id") is not None or result.data.get("domain_name") is not None
+        )
         # Confidence should reflect partial extraction
         assert result.confidence > 0
 
     @pytest.mark.asyncio
-    async def test_extract_nested_object(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_nested_object(self, ollama_extractor_config: dict) -> None:
         """Test extracting nested objects."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -236,9 +226,7 @@ class TestSchemaExtractorOllamaIntegration:
             assert prefs.get("theme") == "dark"
 
     @pytest.mark.asyncio
-    async def test_extract_with_context(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extract_with_context(self, ollama_extractor_config: dict) -> None:
         """Test that context influences extraction."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -285,9 +273,7 @@ class TestSchemaExtractorOllamaIntegration:
         )
 
     @pytest.mark.asyncio
-    async def test_handles_ambiguous_input(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_handles_ambiguous_input(self, ollama_extractor_config: dict) -> None:
         """Test handling of ambiguous or unclear input."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -321,9 +307,7 @@ class TestSchemaExtractorExtractionQuality:
     """Tests focused on extraction quality and edge cases."""
 
     @pytest.mark.asyncio
-    async def test_handles_json_in_natural_language(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_handles_json_in_natural_language(self, ollama_extractor_config: dict) -> None:
         """Test that extractor works when user mentions JSON-like content."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -346,9 +330,7 @@ class TestSchemaExtractorExtractionQuality:
         assert result.data.get("config_value") == "production"
 
     @pytest.mark.asyncio
-    async def test_maintains_data_types(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_maintains_data_types(self, ollama_extractor_config: dict) -> None:
         """Test that extracted data maintains correct types."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 
@@ -379,9 +361,7 @@ class TestSchemaExtractorExtractionQuality:
             assert isinstance(result.data["name"], str)
 
     @pytest.mark.asyncio
-    async def test_extraction_is_deterministic(
-        self, ollama_extractor_config: dict
-    ) -> None:
+    async def test_extraction_is_deterministic(self, ollama_extractor_config: dict) -> None:
         """Test that extraction with temperature=0 is reasonably consistent."""
         extractor = SchemaExtractor.from_config(ollama_extractor_config)
 

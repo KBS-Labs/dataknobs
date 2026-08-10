@@ -315,9 +315,7 @@ class ResponseSequenceBuilder:
         Returns:
             Self for chaining
         """
-        self._responses.append(
-            tool_call_response(tool_name, arguments, model=self._model)
-        )
+        self._responses.append(tool_call_response(tool_name, arguments, model=self._model))
         return self
 
     def add_multi_tool(
@@ -432,7 +430,8 @@ class ConfigurableExtractor:
         else:
             self._results = [
                 SimpleExtractionResult(
-                    data=result_data or {}, confidence=confidence,
+                    data=result_data or {},
+                    confidence=confidence,
                 )
             ]
         self.call_index = 0
@@ -446,12 +445,14 @@ class ConfigurableExtractor:
         model: str | None = None,
     ) -> SimpleExtractionResult:
         """Return next result in sequence and record the call."""
-        self.extract_calls.append({
-            "text": text,
-            "schema": schema,
-            "context": context,
-            "model": model,
-        })
+        self.extract_calls.append(
+            {
+                "text": text,
+                "schema": schema,
+                "context": context,
+                "model": model,
+            }
+        )
         idx = min(self.call_index, len(self._results) - 1)
         self.call_index += 1
         return self._results[idx]
@@ -807,7 +808,9 @@ class CapturingProvider(AsyncLLMProvider):
         # Build assembled response for capture
         assembled_response = LLMResponse(
             content=assembled_content,
-            model=final_chunk.model or self._delegate.config.model if final_chunk else self._delegate.config.model,
+            model=final_chunk.model or self._delegate.config.model
+            if final_chunk
+            else self._delegate.config.model,
             finish_reason=final_chunk.finish_reason if final_chunk else None,
             usage=final_chunk.usage if final_chunk else None,
             tool_calls=final_chunk.tool_calls if final_chunk else None,
@@ -895,9 +898,7 @@ class CallTracker:
     def __init__(self, **providers: CapturingProvider) -> None:
         self._providers: dict[str, CapturingProvider] = dict(providers)
         # Track how many calls we've already seen per provider
-        self._cursors: dict[str, int] = {
-            name: p.call_count for name, p in self._providers.items()
-        }
+        self._cursors: dict[str, int] = {name: p.call_count for name, p in self._providers.items()}
         self._global_index: int = 0
 
     def get_provider(self, name: str) -> CapturingProvider | None:

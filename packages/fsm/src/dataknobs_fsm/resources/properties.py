@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 class PropertiesHandle:
     """Handle for a properties resource instance."""
 
-    def __init__(self, resource_name: str, owner_id: str, instance_id: str, properties: Dict[str, Any]):
+    def __init__(
+        self, resource_name: str, owner_id: str, instance_id: str, properties: Dict[str, Any]
+    ):
         """Initialize properties handle.
 
         Args:
@@ -58,12 +60,9 @@ class PropertiesHandle:
         old_value = self.properties.get(key)
         self.properties[key] = value
         self.accessed_at = datetime.now()
-        self.modifications.append({
-            'timestamp': datetime.now(),
-            'key': key,
-            'old_value': old_value,
-            'new_value': value
-        })
+        self.modifications.append(
+            {"timestamp": datetime.now(), "key": key, "old_value": old_value, "new_value": value}
+        )
 
     def update(self, properties: Dict[str, Any]) -> None:
         """Update multiple properties.
@@ -85,23 +84,22 @@ class PropertiesHandle:
         """
         if key in self.properties:
             value = self.properties.pop(key)
-            self.modifications.append({
-                'timestamp': datetime.now(),
-                'key': key,
-                'old_value': value,
-                'new_value': None,
-                'operation': 'delete'
-            })
+            self.modifications.append(
+                {
+                    "timestamp": datetime.now(),
+                    "key": key,
+                    "old_value": value,
+                    "new_value": None,
+                    "operation": "delete",
+                }
+            )
             return value
         return None
 
     def clear(self) -> None:
         """Clear all properties."""
         self.properties.clear()
-        self.modifications.append({
-            'timestamp': datetime.now(),
-            'operation': 'clear'
-        })
+        self.modifications.append({"timestamp": datetime.now(), "operation": "clear"})
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert handle to dictionary representation.
@@ -110,14 +108,14 @@ class PropertiesHandle:
             Dictionary with handle information.
         """
         return {
-            'resource_name': self.resource_name,
-            'owner_id': self.owner_id,
-            'instance_id': self.instance_id,
-            'properties': self.properties.copy(),
-            'created_at': self.created_at.isoformat(),
-            'accessed_at': self.accessed_at.isoformat(),
-            'access_count': self.access_count,
-            'modification_count': len(self.modifications)
+            "resource_name": self.resource_name,
+            "owner_id": self.owner_id,
+            "instance_id": self.instance_id,
+            "properties": self.properties.copy(),
+            "created_at": self.created_at.isoformat(),
+            "accessed_at": self.accessed_at.isoformat(),
+            "access_count": self.access_count,
+            "modification_count": len(self.modifications),
         }
 
 
@@ -137,7 +135,7 @@ class PropertiesResource(BaseResourceProvider):
         initial_properties: Dict[str, Any] | None = None,
         max_instances: int = 10,
         track_history: bool = True,
-        **config
+        **config,
     ):
         """Initialize properties resource.
 
@@ -168,10 +166,7 @@ class PropertiesResource(BaseResourceProvider):
         logger.info(f"Initialized PropertiesResource '{name}' with max_instances={max_instances}")
 
     def acquire(
-        self,
-        owner_id: str | None = None,
-        properties: Dict[str, Any] | None = None,
-        **kwargs
+        self, owner_id: str | None = None, properties: Dict[str, Any] | None = None, **kwargs
     ) -> PropertiesHandle:
         """Acquire a properties resource instance.
 
@@ -191,7 +186,7 @@ class PropertiesResource(BaseResourceProvider):
             raise ResourceError(
                 f"Maximum instances ({self.max_instances}) exceeded",
                 resource_name=self.name,
-                operation="acquire"
+                operation="acquire",
             )
 
         # Generate instance ID
@@ -205,11 +200,11 @@ class PropertiesResource(BaseResourceProvider):
             merged_properties.update(properties)
 
         # Add metadata
-        merged_properties['_metadata'] = {
-            'resource_name': self.name,
-            'instance_id': instance_id,
-            'owner_id': owner_id,
-            'acquired_at': datetime.now().isoformat()
+        merged_properties["_metadata"] = {
+            "resource_name": self.name,
+            "instance_id": instance_id,
+            "owner_id": owner_id,
+            "acquired_at": datetime.now().isoformat(),
         }
 
         # Create handle
@@ -217,7 +212,7 @@ class PropertiesResource(BaseResourceProvider):
             resource_name=self.name,
             owner_id=owner_id,
             instance_id=instance_id,
-            properties=merged_properties
+            properties=merged_properties,
         )
 
         # Track instance
@@ -226,12 +221,14 @@ class PropertiesResource(BaseResourceProvider):
 
         # Track history
         if self.track_history:
-            self._acquisition_history.append({
-                'timestamp': datetime.now(),
-                'instance_id': instance_id,
-                'owner_id': owner_id,
-                'properties': merged_properties.copy()
-            })
+            self._acquisition_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "instance_id": instance_id,
+                    "owner_id": owner_id,
+                    "properties": merged_properties.copy(),
+                }
+            )
 
         # Update status
         self.status = ResourceStatus.ACTIVE
@@ -266,18 +263,18 @@ class PropertiesResource(BaseResourceProvider):
 
             # Track history
             if self.track_history:
-                self._release_history.append({
-                    'timestamp': datetime.now(),
-                    'instance_id': instance_id,
-                    'owner_id': handle.owner_id,
-                    'final_properties': handle.properties.copy(),
-                    'access_count': handle.access_count,
-                    'modification_count': len(handle.modifications)
-                })
+                self._release_history.append(
+                    {
+                        "timestamp": datetime.now(),
+                        "instance_id": instance_id,
+                        "owner_id": handle.owner_id,
+                        "final_properties": handle.properties.copy(),
+                        "access_count": handle.access_count,
+                        "modification_count": len(handle.modifications),
+                    }
+                )
 
-            self.metrics.record_release(
-                (datetime.now() - handle.created_at).total_seconds()
-            )
+            self.metrics.record_release((datetime.now() - handle.created_at).total_seconds())
 
             logger.debug(f"Released properties resource: {instance_id}")
 
@@ -324,31 +321,30 @@ class PropertiesResource(BaseResourceProvider):
             Dictionary with resource statistics.
         """
         stats = {
-            'name': self.name,
-            'status': self.status.value,
-            'health': self.health_check().value,
-            'active_instances': len(self._instances),
-            'max_instances': self.max_instances,
-            'total_acquisitions': len(self._acquisition_history),
-            'total_releases': len(self._release_history),
-            'instance_ids': list(self._instances.keys())
+            "name": self.name,
+            "status": self.status.value,
+            "health": self.health_check().value,
+            "active_instances": len(self._instances),
+            "max_instances": self.max_instances,
+            "total_acquisitions": len(self._acquisition_history),
+            "total_releases": len(self._release_history),
+            "instance_ids": list(self._instances.keys()),
         }
 
         # Add instance details
         if self._instances:
-            stats['instances'] = {
-                instance_id: handle.to_dict()
-                for instance_id, handle in self._instances.items()
+            stats["instances"] = {
+                instance_id: handle.to_dict() for instance_id, handle in self._instances.items()
             }
 
         # Add metrics
         metrics = self.get_metrics()
-        stats['metrics'] = {
-            'total_acquisitions': metrics.total_acquisitions,
-            'active_connections': metrics.active_connections,
-            'failed_acquisitions': metrics.failed_acquisitions,
-            'average_hold_time': metrics.average_hold_time,
-            'average_acquisition_time': metrics.average_acquisition_time
+        stats["metrics"] = {
+            "total_acquisitions": metrics.total_acquisitions,
+            "active_connections": metrics.active_connections,
+            "failed_acquisitions": metrics.failed_acquisitions,
+            "average_hold_time": metrics.average_hold_time,
+            "average_acquisition_time": metrics.average_acquisition_time,
         }
 
         return stats

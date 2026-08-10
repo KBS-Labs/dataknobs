@@ -26,10 +26,7 @@ class TestPromptBuilderInitialization:
         library = ConfigPromptLibrary()
         adapter = DictResourceAdapter({"key": "value"})
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"data": adapter}
-        )
+        builder = PromptBuilder(library=library, adapters={"data": adapter})
 
         assert "data" in builder.adapters
         assert builder.adapters["data"] is adapter
@@ -42,18 +39,12 @@ class TestPromptBuilderInitialization:
         async_adapter = AsyncDictResourceAdapter({"key": "value"})
 
         with pytest.raises(TypeError, match="async.*AsyncPromptBuilder"):
-            PromptBuilder(
-                library=library,
-                adapters={"data": async_adapter}
-            )
+            PromptBuilder(library=library, adapters={"data": async_adapter})
 
     def test_initialization_with_validation_level(self):
         """Test initialization with custom validation level."""
         library = ConfigPromptLibrary()
-        builder = PromptBuilder(
-            library=library,
-            default_validation=ValidationLevel.ERROR
-        )
+        builder = PromptBuilder(library=library, default_validation=ValidationLevel.ERROR)
 
         assert builder._renderer._default_validation == ValidationLevel.ERROR
 
@@ -63,20 +54,11 @@ class TestPromptBuilderSystemPrompts:
 
     def test_render_system_prompt_basic(self):
         """Test rendering a basic system prompt."""
-        config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}!"
-                }
-            }
-        }
+        config = {"system": {"greet": {"template": "Hello {{name}}!"}}}
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
-        result = builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice"}
-        )
+        result = builder.render_system_prompt("greet", params={"name": "Alice"})
 
         assert result.content == "Hello Alice!"
         assert "name" in result.params_used
@@ -85,12 +67,7 @@ class TestPromptBuilderSystemPrompts:
     def test_render_system_prompt_with_defaults(self):
         """Test rendering system prompt with default values."""
         config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}!",
-                    "defaults": {"name": "World"}
-                }
-            }
+            "system": {"greet": {"template": "Hello {{name}}!", "defaults": {"name": "World"}}}
         }
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
@@ -106,27 +83,17 @@ class TestPromptBuilderSystemPrompts:
     def test_render_system_prompt_with_conditionals(self):
         """Test rendering system prompt with conditional sections."""
         config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}((, you are {{age}} years old))!"
-                }
-            }
+            "system": {"greet": {"template": "Hello {{name}}((, you are {{age}} years old))!"}}
         }
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
         # With all params
-        result = builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice", "age": 30}
-        )
+        result = builder.render_system_prompt("greet", params={"name": "Alice", "age": 30})
         assert "you are 30 years old" in result.content
 
         # Without age (conditional should be removed)
-        result = builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice"}
-        )
+        result = builder.render_system_prompt("greet", params={"name": "Alice"})
         assert "you are" not in result.content
         assert result.content == "Hello Alice!"
 
@@ -144,10 +111,7 @@ class TestPromptBuilderSystemPrompts:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code"]},
                 }
             }
         }
@@ -159,10 +123,7 @@ class TestPromptBuilderSystemPrompts:
             builder.render_system_prompt("analyze")
 
         # Should succeed with required param
-        result = builder.render_system_prompt(
-            "analyze",
-            params={"code": "print('hello')"}
-        )
+        result = builder.render_system_prompt("analyze", params={"code": "print('hello')"})
         assert result.content == "Analyze print('hello')"
 
     def test_render_system_prompt_with_validation_override(self):
@@ -171,10 +132,7 @@ class TestPromptBuilderSystemPrompts:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code"]},
                 }
             }
         }
@@ -182,10 +140,7 @@ class TestPromptBuilderSystemPrompts:
         builder = PromptBuilder(library=library)
 
         # Override ERROR to IGNORE
-        result = builder.render_system_prompt(
-            "analyze",
-            validation_override=ValidationLevel.IGNORE
-        )
+        result = builder.render_system_prompt("analyze", validation_override=ValidationLevel.IGNORE)
 
         # Should not raise error (missing var stays as-is in template)
         assert result.content == "Analyze {{code}}"
@@ -196,20 +151,11 @@ class TestPromptBuilderUserPrompts:
 
     def test_render_user_prompt_basic(self):
         """Test rendering a basic user prompt."""
-        config = {
-            "user": {
-                "ask": {
-                    "template": "Tell me about {{topic}}"
-                }
-            }
-        }
+        config = {"user": {"ask": {"template": "Tell me about {{topic}}"}}}
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
-        result = builder.render_user_prompt(
-            "ask",
-            params={"topic": "Python"}
-        )
+        result = builder.render_user_prompt("ask", params={"topic": "Python"})
 
         assert result.content == "Tell me about Python"
 
@@ -218,7 +164,7 @@ class TestPromptBuilderUserPrompts:
         config = {
             "user": {
                 "ask": {"template": "First: {{question}}"},
-                "ask_followup": {"template": "Follow-up: {{question}}"}
+                "ask_followup": {"template": "Follow-up: {{question}}"},
             }
         }
         library = ConfigPromptLibrary(config)
@@ -248,16 +194,12 @@ class TestPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}\n\n{{RAG_CONTENT}}",
-                    "rag_config_refs": ["code_docs"]  # Add reference in template
+                    "rag_config_refs": ["code_docs"],  # Add reference in template
                 }
             },
             "rag": {
-                "code_docs": {
-                    "adapter_name": "docs",
-                    "query": "{{language}} documentation",
-                    "k": 3
-                }
-            }
+                "code_docs": {"adapter_name": "docs", "query": "{{language}} documentation", "k": 3}
+            },
         }
 
         # Create library with RAG reference
@@ -273,14 +215,10 @@ class TestPromptBuilderRAG:
             def search(self, query, k=5, filters=None, **kwargs):
                 return search_results
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": MockAdapter({})}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": MockAdapter({})})
 
         result = builder.render_system_prompt(
-            "analyze",
-            params={"code": "test", "language": "python"}
+            "analyze", params={"code": "test", "language": "python"}
         )
 
         # Should contain both template content and RAG content
@@ -294,7 +232,7 @@ class TestPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
             "rag": {
@@ -303,9 +241,9 @@ class TestPromptBuilderRAG:
                     "query": "test",
                     "k": 2,
                     "header": "# Documentation\n",
-                    "item_template": "{{index}}. {{content}}\n"
+                    "item_template": "{{index}}. {{content}}\n",
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -319,10 +257,7 @@ class TestPromptBuilderRAG:
             def search(self, query, k=5, filters=None, **kwargs):
                 return search_results
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": MockAdapter({})}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": MockAdapter({})})
 
         result = builder.render_system_prompt("analyze")
 
@@ -333,22 +268,12 @@ class TestPromptBuilderRAG:
 
     def test_render_without_rag(self):
         """Test rendering with RAG disabled."""
-        config = {
-            "system": {
-                "analyze": {
-                    "template": "Analyze {{code}}\n\n{{RAG_CONTENT}}"
-                }
-            }
-        }
+        config = {"system": {"analyze": {"template": "Analyze {{code}}\n\n{{RAG_CONTENT}}"}}}
 
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
-        result = builder.render_system_prompt(
-            "analyze",
-            params={"code": "test"},
-            include_rag=False
-        )
+        result = builder.render_system_prompt("analyze", params={"code": "test"}, include_rag=False)
 
         # RAG_CONTENT should be empty/missing
         assert "Analyze test" in result.content
@@ -359,15 +284,10 @@ class TestPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "nonexistent",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "nonexistent", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -384,15 +304,10 @@ class TestPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "docs",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "docs", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -404,7 +319,7 @@ class TestPromptBuilderRAG:
         builder = PromptBuilder(
             library=library,
             adapters={"docs": FailingAdapter({})},
-            raise_on_rag_error=False  # Should log warning, not raise
+            raise_on_rag_error=False,  # Should log warning, not raise
         )
 
         result = builder.render_system_prompt("analyze")
@@ -418,15 +333,10 @@ class TestPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "docs",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "docs", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -438,7 +348,7 @@ class TestPromptBuilderRAG:
         builder = PromptBuilder(
             library=library,
             adapters={"docs": FailingAdapter({})},
-            raise_on_rag_error=True  # Should raise error
+            raise_on_rag_error=True,  # Should raise error
         )
 
         with pytest.raises(RuntimeError, match="RAG search failed"):
@@ -454,10 +364,7 @@ class TestPromptBuilderHelpers:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code", "language"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code", "language"]},
                 }
             }
         }
@@ -473,12 +380,7 @@ class TestPromptBuilderHelpers:
         """Test getting required parameters for user prompt."""
         config = {
             "user": {
-                "ask": {
-                    "template": "{{question}}",
-                    "validation": {
-                        "required_params": ["question"]
-                    }
-                }
+                "ask": {"template": "{{question}}", "validation": {"required_params": ["question"]}}
             }
         }
         library = ConfigPromptLibrary(config)
@@ -500,10 +402,7 @@ class TestPromptBuilderHelpers:
         """Test string representation."""
         library = ConfigPromptLibrary()
         adapter = DictResourceAdapter({"key": "value"})
-        builder = PromptBuilder(
-            library=library,
-            adapters={"data": adapter}
-        )
+        builder = PromptBuilder(library=library, adapters={"data": adapter})
 
         repr_str = repr(builder)
 
@@ -521,11 +420,8 @@ class TestPromptBuilderIntegration:
                 "analyze": {
                     "template": "Analyze {{language}} code: {{code}}\n\n{{RAG_CONTENT}}",
                     "defaults": {"language": "python"},
-                    "validation": {
-                        "level": "warn",
-                        "required_params": ["code"]
-                    },
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "validation": {"level": "warn", "required_params": ["code"]},
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
             "rag": {
@@ -534,9 +430,9 @@ class TestPromptBuilderIntegration:
                     "query": "{{language}} best practices",
                     "k": 2,
                     "header": "Relevant docs:\n",
-                    "item_template": "- {{content}}\n"
+                    "item_template": "- {{content}}\n",
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -551,15 +447,9 @@ class TestPromptBuilderIntegration:
                 assert "python" in query.lower()
                 return search_results
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": MockAdapter({})}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": MockAdapter({})})
 
-        result = builder.render_system_prompt(
-            "analyze",
-            params={"code": "def foo(): pass"}
-        )
+        result = builder.render_system_prompt("analyze", params={"code": "def foo(): pass"})
 
         # Check all components are present
         assert "Analyze python code" in result.content  # Used default

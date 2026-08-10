@@ -540,14 +540,14 @@ class RequestHelper:
         verbose: bool = False,
     ) -> Any:
         """Convenience method for GET requests.
-        
+
         Args:
             path: API path
             params: Optional query parameters
             headers: Optional headers
             timeout: Optional timeout
             verbose: Whether to print debug info
-            
+
         Returns:
             ServerResponse object
         """
@@ -571,7 +571,7 @@ class RequestHelper:
         verbose: bool = False,
     ) -> Any:
         """Convenience method for POST requests.
-        
+
         Args:
             path: API path
             payload: Optional request body
@@ -580,7 +580,7 @@ class RequestHelper:
             headers: Optional headers
             timeout: Optional timeout
             verbose: Whether to print debug info
-            
+
         Returns:
             ServerResponse object
         """
@@ -605,7 +605,7 @@ class RequestHelper:
         verbose: bool = False,
     ) -> Any:
         """Convenience method for PUT requests.
-        
+
         Args:
             path: API path
             payload: Optional request body
@@ -613,7 +613,7 @@ class RequestHelper:
             headers: Optional headers
             timeout: Optional timeout
             verbose: Whether to print debug info
-            
+
         Returns:
             ServerResponse object
         """
@@ -636,14 +636,14 @@ class RequestHelper:
         verbose: bool = False,
     ) -> Any:
         """Convenience method for DELETE requests.
-        
+
         Args:
             path: API path
             params: Optional query parameters
             headers: Optional headers
             timeout: Optional timeout
             verbose: Whether to print debug info
-            
+
         Returns:
             ServerResponse object
         """
@@ -665,14 +665,14 @@ class RequestHelper:
         verbose: bool = False,
     ) -> Any:
         """Convenience method for HEAD requests.
-        
+
         Args:
             path: API path
             params: Optional query parameters
             headers: Optional headers
             timeout: Optional timeout
             verbose: Whether to print debug info
-            
+
         Returns:
             ServerResponse object
         """

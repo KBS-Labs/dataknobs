@@ -4,11 +4,7 @@ import time
 from unittest.mock import Mock, patch
 import pytest
 
-from dataknobs_fsm.execution.stream import (
-    StreamExecutor,
-    StreamPipeline,
-    StreamProgress
-)
+from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -44,7 +40,7 @@ class TestStreamProgress:
         progress.chunks_processed = 10
 
         # When elapsed time is effectively 0, should return 0
-        with patch('time.time', return_value=progress.start_time):
+        with patch("time.time", return_value=progress.start_time):
             assert progress.chunks_per_second == 0.0
 
     def test_chunks_per_second_normal(self):
@@ -62,7 +58,7 @@ class TestStreamProgress:
         progress.start_time = time.time()
         progress.records_processed = 50
 
-        with patch('time.time', return_value=progress.start_time):
+        with patch("time.time", return_value=progress.start_time):
             assert progress.records_per_second == 0.0
 
     def test_records_per_second_normal(self):
@@ -98,10 +94,7 @@ class TestStreamPipeline:
         mock_source = Mock()
         mock_sink = Mock()
 
-        pipeline = StreamPipeline(
-            source=mock_source,
-            sink=mock_sink
-        )
+        pipeline = StreamPipeline(source=mock_source, sink=mock_sink)
 
         assert pipeline.source == mock_source
         assert pipeline.sink == mock_sink
@@ -114,10 +107,7 @@ class TestStreamPipeline:
         transform1 = lambda x: x * 2
         transform2 = lambda x: x + 1
 
-        pipeline = StreamPipeline(
-            source=mock_source,
-            transformations=[transform1, transform2]
-        )
+        pipeline = StreamPipeline(source=mock_source, transformations=[transform1, transform2])
 
         assert len(pipeline.transformations) == 2
         assert pipeline.transformations[0] == transform1
@@ -155,18 +145,13 @@ class TestStreamExecutor:
     def stream_config(self):
         """Create a stream configuration."""
         return StreamConfig(
-            chunk_size=100,
-            parallelism=2,
-            memory_limit_mb=128,
-            backpressure_threshold=0.8
+            chunk_size=100, parallelism=2, memory_limit_mb=128, backpressure_threshold=0.8
         )
 
     def test_executor_initialization(self, simple_fsm, stream_config):
         """Test StreamExecutor initialization."""
         executor = StreamExecutor(
-            fsm=simple_fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
+            fsm=simple_fsm, stream_config=stream_config, enable_backpressure=True
         )
 
         assert executor.fsm == simple_fsm
@@ -186,10 +171,7 @@ class TestStreamExecutor:
     def test_executor_with_progress_callback(self, simple_fsm):
         """Test executor with progress callback."""
         callback = Mock()
-        executor = StreamExecutor(
-            fsm=simple_fsm,
-            progress_callback=callback
-        )
+        executor = StreamExecutor(fsm=simple_fsm, progress_callback=callback)
 
         assert executor.progress_callback == callback
 
@@ -209,14 +191,14 @@ class TestStreamExecutor:
         pipeline = StreamPipeline(source=mock_source, sink=mock_sink)
 
         # Mock engine execution
-        with patch.object(executor.engine, 'execute', return_value=(True, "result")):
+        with patch.object(executor.engine, "execute", return_value=(True, "result")):
             result = executor.execute_stream(pipeline)
 
         # Verify results
-        assert 'total_processed' in result
-        assert 'successful' in result
-        assert result['chunks_processed'] == 2
-        assert result['total_processed'] == 6
+        assert "total_processed" in result
+        assert "successful" in result
+        assert result["chunks_processed"] == 2
+        assert result["total_processed"] == 6
 
     def test_execute_stream_with_transformations(self, simple_fsm):
         """Test stream execution with transformations."""
@@ -228,18 +210,17 @@ class TestStreamExecutor:
 
         # Transformation functions
         transform_calls = []
+
         def transform1(data):
-            transform_calls.append(('transform1', data))
+            transform_calls.append(("transform1", data))
             return data * 2
 
         def transform2(data):
-            transform_calls.append(('transform2', data))
+            transform_calls.append(("transform2", data))
             return data + 1
 
         pipeline = StreamPipeline(
-            source=mock_source,
-            sink=mock_sink,
-            transformations=[transform1, transform2]
+            source=mock_source, sink=mock_sink, transformations=[transform1, transform2]
         )
 
         # Configure source
@@ -247,7 +228,7 @@ class TestStreamExecutor:
         mock_source.read_chunk.side_effect = [chunk, None]
 
         # Mock engine execution
-        with patch.object(executor.engine, 'execute', return_value=(True, "result")):
+        with patch.object(executor.engine, "execute", return_value=(True, "result")):
             result = executor.execute_stream(pipeline)
 
         # Verify transformations were applied
@@ -264,17 +245,14 @@ class TestStreamExecutor:
             processor_calls.append(chunk.chunk_id)
             return chunk
 
-        pipeline = StreamPipeline(
-            source=mock_source,
-            chunk_processors=[chunk_processor]
-        )
+        pipeline = StreamPipeline(source=mock_source, chunk_processors=[chunk_processor])
 
         # Configure source
         chunk1 = StreamChunk(data=[1, 2], chunk_id=0)
         chunk2 = StreamChunk(data=[3, 4], chunk_id=1)
         mock_source.read_chunk.side_effect = [chunk1, chunk2, None]
 
-        with patch.object(executor.engine, 'execute', return_value=(True, "result")):
+        with patch.object(executor.engine, "execute", return_value=(True, "result")):
             executor.execute_stream(pipeline)
 
         # Verify chunk processors were called
@@ -285,26 +263,22 @@ class TestStreamExecutor:
         progress_updates = []
 
         def progress_callback(progress):
-            progress_updates.append({
-                'chunks': progress.chunks_processed,
-                'records': progress.records_processed
-            })
+            progress_updates.append(
+                {"chunks": progress.chunks_processed, "records": progress.records_processed}
+            )
 
-        executor = StreamExecutor(
-            fsm=simple_fsm,
-            progress_callback=progress_callback
-        )
+        executor = StreamExecutor(fsm=simple_fsm, progress_callback=progress_callback)
 
         mock_source = Mock()
         mock_source.read_chunk.side_effect = [
             StreamChunk(data=[1, 2], chunk_id=0),
             StreamChunk(data=[3, 4], chunk_id=1),
-            None
+            None,
         ]
 
         pipeline = StreamPipeline(source=mock_source)
 
-        with patch.object(executor.engine, 'execute', return_value=(True, "result")):
+        with patch.object(executor.engine, "execute", return_value=(True, "result")):
             executor.execute_stream(pipeline)
 
         # Verify progress was reported
@@ -315,10 +289,7 @@ class TestStreamExecutor:
 
     def test_should_apply_backpressure_disabled(self, simple_fsm):
         """Test backpressure check when disabled."""
-        executor = StreamExecutor(
-            fsm=simple_fsm,
-            enable_backpressure=False
-        )
+        executor = StreamExecutor(fsm=simple_fsm, enable_backpressure=False)
 
         # Even with high memory usage, should not apply backpressure
         executor._memory_usage = 999999999
@@ -326,15 +297,10 @@ class TestStreamExecutor:
 
     def test_should_apply_backpressure_under_threshold(self, simple_fsm):
         """Test backpressure check under threshold."""
-        stream_config = StreamConfig(
-            memory_limit_mb=100,
-            backpressure_threshold=0.8
-        )
+        stream_config = StreamConfig(memory_limit_mb=100, backpressure_threshold=0.8)
 
         executor = StreamExecutor(
-            fsm=simple_fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
+            fsm=simple_fsm, stream_config=stream_config, enable_backpressure=True
         )
 
         # Under threshold
@@ -343,15 +309,10 @@ class TestStreamExecutor:
 
     def test_should_apply_backpressure_over_threshold(self, simple_fsm):
         """Test backpressure check over threshold."""
-        stream_config = StreamConfig(
-            memory_limit_mb=100,
-            backpressure_threshold=0.8
-        )
+        stream_config = StreamConfig(memory_limit_mb=100, backpressure_threshold=0.8)
 
         executor = StreamExecutor(
-            fsm=simple_fsm,
-            stream_config=stream_config,
-            enable_backpressure=True
+            fsm=simple_fsm, stream_config=stream_config, enable_backpressure=True
         )
 
         # Over memory limit

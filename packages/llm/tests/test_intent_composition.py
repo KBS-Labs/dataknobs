@@ -76,18 +76,21 @@ class TestComposeIntentSchema:
         assert "text_queries" in props
 
     def test_single_source_with_filters(self) -> None:
-        source = StubSource("courses", schema=SourceSchema(
-            source_name="courses",
-            fields={
-                "department": {
-                    "type": "string",
-                    "enum": ["CS", "Math"],
-                    "x-extraction": {"normalize": True},
+        source = StubSource(
+            "courses",
+            schema=SourceSchema(
+                source_name="courses",
+                fields={
+                    "department": {
+                        "type": "string",
+                        "enum": ["CS", "Math"],
+                        "x-extraction": {"normalize": True},
+                    },
+                    "level": {"type": "integer"},
                 },
-                "level": {"type": "integer"},
-            },
-            description="Course catalog",
-        ))
+                description="Course catalog",
+            ),
+        )
         schema = compose_intent_schema([source])
         props = schema["properties"]
 
@@ -99,14 +102,20 @@ class TestComposeIntentSchema:
 
     def test_multiple_sources_namespaced(self) -> None:
         """Each source's fields are nested under its name."""
-        source_a = StubSource("docs", schema=SourceSchema(
-            source_name="docs",
-            fields={"category": {"type": "string"}},
-        ))
-        source_b = StubSource("courses", schema=SourceSchema(
-            source_name="courses",
-            fields={"department": {"type": "string"}},
-        ))
+        source_a = StubSource(
+            "docs",
+            schema=SourceSchema(
+                source_name="docs",
+                fields={"category": {"type": "string"}},
+            ),
+        )
+        source_b = StubSource(
+            "courses",
+            schema=SourceSchema(
+                source_name="courses",
+                fields={"department": {"type": "string"}},
+            ),
+        )
         schema = compose_intent_schema([source_a, source_b])
         props = schema["properties"]
 
@@ -121,30 +130,39 @@ class TestComposeIntentSchema:
         assert "OAuth 2.0" in desc
 
     def test_source_required_fields_propagated(self) -> None:
-        source = StubSource("db", schema=SourceSchema(
-            source_name="db",
-            fields={"status": {"type": "string"}},
-            required_fields=["status"],
-        ))
+        source = StubSource(
+            "db",
+            schema=SourceSchema(
+                source_name="db",
+                fields={"status": {"type": "string"}},
+                required_fields=["status"],
+            ),
+        )
         schema = compose_intent_schema([source])
         assert schema["properties"]["db"]["required"] == ["status"]
 
     def test_empty_fields_source_skipped(self) -> None:
         """Source with empty fields dict doesn't add a property."""
-        source = StubSource("empty", schema=SourceSchema(
-            source_name="empty",
-            fields={},
-        ))
+        source = StubSource(
+            "empty",
+            schema=SourceSchema(
+                source_name="empty",
+                fields={},
+            ),
+        )
         schema = compose_intent_schema([source])
         assert "empty" not in schema["properties"]
 
     def test_mixed_filter_and_no_filter_sources(self) -> None:
         """Only sources with schemas add properties."""
         no_filter = StubSource("kb", schema=None)
-        with_filter = StubSource("db", schema=SourceSchema(
-            source_name="db",
-            fields={"name": {"type": "string"}},
-        ))
+        with_filter = StubSource(
+            "db",
+            schema=SourceSchema(
+                source_name="db",
+                fields={"name": {"type": "string"}},
+            ),
+        )
         schema = compose_intent_schema([no_filter, with_filter])
         assert "kb" not in schema["properties"]
         assert "db" in schema["properties"]

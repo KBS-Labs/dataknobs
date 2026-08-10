@@ -55,7 +55,7 @@ class KeywordCondition(TransitionCondition):
 
             if self.match_whole_word:
                 # Use word boundaries
-                pattern = r'\b' + re.escape(kw) + r'\b'
+                pattern = r"\b" + re.escape(kw) + r"\b"
                 if re.search(pattern, text):
                     return True
             else:
@@ -119,15 +119,14 @@ class LLMClassifierCondition(TransitionCondition):
         from dataknobs_llm.llm import create_llm_provider, LLMConfig
 
         # Get LLM provider from context or create new one
-        llm = context.get('_llm_provider')
+        llm = context.get("_llm_provider")
         if llm is None and self.llm_config:
             config = LLMConfig(**self.llm_config)
             llm = create_llm_provider(config)
 
         if llm is None:
             raise ValueError(
-                "LLMClassifierCondition requires an LLM provider in context "
-                "or llm_config parameter"
+                "LLMClassifierCondition requires an LLM provider in context or llm_config parameter"
             )
 
         # Format the classifier prompt with the response
@@ -185,10 +184,7 @@ class CompositeCondition(TransitionCondition):
 
     async def evaluate(self, response: str, context: Dict[str, Any]) -> bool:
         """Evaluate all conditions with specified operator."""
-        results = [
-            await cond.evaluate(response, context)
-            for cond in self.conditions
-        ]
+        results = [await cond.evaluate(response, context) for cond in self.conditions]
 
         if self.operator == "and":
             return all(results)
@@ -216,36 +212,34 @@ class SentimentCondition(TransitionCondition):
 
     def __post_init__(self):
         """Validate sentiment value."""
-        valid_sentiments = ('positive', 'negative', 'neutral')
+        valid_sentiments = ("positive", "negative", "neutral")
         if self.expected_sentiment not in valid_sentiments:
-            raise ValueError(
-                f"expected_sentiment must be one of {valid_sentiments}"
-            )
+            raise ValueError(f"expected_sentiment must be one of {valid_sentiments}")
 
     async def evaluate(self, response: str, context: Dict[str, Any]) -> bool:
         """Analyze sentiment and check against expected value."""
         # Simple keyword-based sentiment analysis (can be replaced with ML model)
         response_lower = response.lower()
 
-        positive_words = {'happy', 'good', 'great', 'excellent', 'yes', 'sure', 'love', 'like'}
-        negative_words = {'sad', 'bad', 'terrible', 'no', 'hate', 'dislike', 'poor'}
+        positive_words = {"happy", "good", "great", "excellent", "yes", "sure", "love", "like"}
+        negative_words = {"sad", "bad", "terrible", "no", "hate", "dislike", "poor"}
 
         positive_count = sum(1 for word in positive_words if word in response_lower)
         negative_count = sum(1 for word in negative_words if word in response_lower)
 
         total = positive_count + negative_count
         if total == 0:
-            sentiment = 'neutral'
+            sentiment = "neutral"
             confidence = 1.0
         else:
             if positive_count > negative_count:
-                sentiment = 'positive'
+                sentiment = "positive"
                 confidence = positive_count / total
             elif negative_count > positive_count:
-                sentiment = 'negative'
+                sentiment = "negative"
                 confidence = negative_count / total
             else:
-                sentiment = 'neutral'
+                sentiment = "neutral"
                 confidence = 0.5
 
         return sentiment == self.expected_sentiment and confidence >= self.threshold
@@ -256,6 +250,7 @@ class SentimentCondition(TransitionCondition):
 
 
 # Factory functions for common conditions
+
 
 def keyword_condition(keywords: List[str], **kwargs) -> KeywordCondition:
     """Create a keyword condition.

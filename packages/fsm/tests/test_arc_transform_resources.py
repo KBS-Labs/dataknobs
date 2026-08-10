@@ -55,6 +55,7 @@ def _warm_async_backend_registry() -> None:
 # Helpers
 # --------------------------------------------------------------------------- #
 
+
 def _arc_upsert_fsm(
     target_cfg: dict[str, Any],
     *,
@@ -122,6 +123,7 @@ async def _read_row(target_cfg: dict[str, Any], record_id: str) -> Any:
 # 1-2: Arc transform persists via its resource (name-based) + no blocking
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.asyncio
 async def test_arc_transform_persists_row(tmp_path: Path) -> None:
     """An arc-transform DatabaseUpsert must persist via its declared resource.
@@ -170,6 +172,7 @@ async def test_arc_transform_does_not_block(tmp_path: Path) -> None:
 # relied on that dispatch was removed rather than re-homed against the
 # non-dispatching behavior. The arc-condition coverage below uses inline /
 # registered condition functions, which the engine does dispatch.
+
 
 @pytest.mark.asyncio
 async def test_arc_condition_reads_resource(tmp_path: Path) -> None:
@@ -232,6 +235,7 @@ async def test_arc_condition_reads_resource(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 4: Resourceless arc parity — FunctionContext built unconditionally
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_resourceless_arc_still_builds_function_context(tmp_path: Path) -> None:
@@ -301,6 +305,7 @@ async def test_resourceless_arc_still_builds_function_context(tmp_path: Path) ->
 # 5: Role-based access via resource_for_role
 # --------------------------------------------------------------------------- #
 
+
 class _RoleUpsert(DatabaseUpsert):
     """DatabaseUpsert variant that resolves its resource by logical role."""
 
@@ -349,6 +354,7 @@ async def test_arc_transform_role_based_access(tmp_path: Path) -> None:
 # 6: require_resource error contract (one message across paths)
 # --------------------------------------------------------------------------- #
 
+
 def test_require_resource_error_contract() -> None:
     """FunctionContext.require_resource and the library helper share one error.
 
@@ -380,6 +386,7 @@ def test_resource_for_role_error_contract() -> None:
 # --------------------------------------------------------------------------- #
 # 8: transform_context_factory honored on the async engine (state + arc)
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_transform_context_factory_honored_on_async_engine(tmp_path: Path) -> None:
@@ -448,6 +455,7 @@ async def test_transform_context_factory_honored_on_async_engine(tmp_path: Path)
 # --------------------------------------------------------------------------- #
 # 9: Cross-engine keying parity (FU1b) — hand-built {type: name} arc
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
@@ -521,6 +529,7 @@ async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 10: transform_context_factory is transform-scoped — sync condition skips it
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_arc_condition_skips_transform_context_factory(
@@ -602,6 +611,7 @@ async def test_arc_condition_skips_transform_context_factory(
 # 11: {role: name} arc resources are reachable from config (dict-shaped)
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.asyncio
 async def test_arc_dict_resources_bind_roles_from_config(tmp_path: Path) -> None:
     """An arc may declare ``resources`` as a ``{role: name}`` map in config.
@@ -639,9 +649,7 @@ async def test_arc_dict_resources_bind_roles_from_config(tmp_path: Path) -> None
         config,
         data_mode=DataHandlingMode.COPY,
         custom_functions={
-            "load": DatabaseUpsert(
-                resource_name="target_db", table="rows", key_columns=["id"]
-            ),
+            "load": DatabaseUpsert(resource_name="target_db", table="rows", key_columns=["id"]),
         },
     )
     try:
@@ -664,6 +672,7 @@ async def test_arc_dict_resources_bind_roles_from_config(tmp_path: Path) -> None
 # --------------------------------------------------------------------------- #
 # 13: the engine acquires an arc's resources once per transition (not per retry)
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_arc_resources_acquired_once_per_transition(
@@ -763,6 +772,7 @@ async def test_arc_resources_acquired_once_per_transition(
 # --------------------------------------------------------------------------- #
 # 14: an UNEXPECTED arc-condition exception surfaces as a record error
 # --------------------------------------------------------------------------- #
+
 
 def _two_arc_gate_config(condition_name: str) -> dict[str, Any]:
     """A start state with a priority-10 gated arc + an unconditional fallback."""
@@ -866,6 +876,7 @@ async def test_async_arc_condition_validation_error_is_soft_reject() -> None:
 # --------------------------------------------------------------------------- #
 # 16: BATCH mode isolates a raising condition per record (no batch abort)
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_batch_mode_isolates_a_raising_condition_per_record() -> None:

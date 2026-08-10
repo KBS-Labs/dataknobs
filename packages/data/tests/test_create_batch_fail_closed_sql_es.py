@@ -74,9 +74,7 @@ def test_sql_create_batch_is_atomic_on_collision(sql_db: object) -> None:
 def test_sql_create_batch_within_batch_duplicate_raises(sql_db: object) -> None:
     """Two records sharing an id within one batch fail closed (nothing written)."""
     with pytest.raises(DuplicateRecordError):
-        sql_db.create_batch(
-            [Record({"v": 1}, id="same"), Record({"v": 2}, id="same")]
-        )
+        sql_db.create_batch([Record({"v": 1}, id="same"), Record({"v": 2}, id="same")])
     assert sql_db.read("same") is None
 
 

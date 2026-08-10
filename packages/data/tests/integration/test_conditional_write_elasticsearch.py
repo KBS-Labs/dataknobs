@@ -65,9 +65,7 @@ async def test_async_conditional_write(elasticsearch_test_index) -> None:
         token = await db.get_version("k")
         assert token is not None
 
-        assert (
-            await db.update("k", Record({"v": 1}, id="k"), expected_version=token)
-        ) is True
+        assert (await db.update("k", Record({"v": 1}, id="k"), expected_version=token)) is True
         got = await db.read("k")
         assert got.get_value("v") == 1
 
@@ -84,9 +82,7 @@ def test_sync_conditional_update_missing_returns_false(elasticsearch_test_index)
     db = SyncElasticsearchDatabase(elasticsearch_test_index)
     db.connect()
     try:
-        result = db.update(
-            "ghost", Record({"v": 1}, id="ghost"), expected_version="1:1"
-        )
+        result = db.update("ghost", Record({"v": 1}, id="ghost"), expected_version="1:1")
         assert result is False
         assert db.read("ghost") is None
     finally:
@@ -108,9 +104,7 @@ async def test_async_conditional_update_missing_returns_false(
     db = AsyncElasticsearchDatabase(elasticsearch_test_index)
     await db.connect()
     try:
-        result = await db.update(
-            "ghost", Record({"v": 1}, id="ghost"), expected_version="1:1"
-        )
+        result = await db.update("ghost", Record({"v": 1}, id="ghost"), expected_version="1:1")
         assert result is False
         assert await db.read("ghost") is None
     finally:

@@ -17,24 +17,26 @@ from dataknobs_data import Record
 def simple_fsm():
     """Create a real FSM instance for testing."""
     config = {
-        'name': 'test_advanced_fsm',
-        'main_network': 'main',
-        'networks': [{
-            'name': 'main',
-            'states': [
-                {'name': 'start', 'is_start': True},
-                {'name': 'middle'},
-                {'name': 'end', 'is_end': True}
-            ],
-            'arcs': [
-                {'from': 'start', 'to': 'middle', 'name': 'proceed'},
-                {'from': 'middle', 'to': 'end', 'name': 'finish'}
-            ]
-        }]
+        "name": "test_advanced_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {"name": "start", "is_start": True},
+                    {"name": "middle"},
+                    {"name": "end", "is_end": True},
+                ],
+                "arcs": [
+                    {"from": "start", "to": "middle", "name": "proceed"},
+                    {"from": "middle", "to": "end", "name": "finish"},
+                ],
+            }
+        ],
     }
-    
+
     from dataknobs_fsm.config.loader import ConfigLoader
-    
+
     loader = ConfigLoader()
     fsm_config = loader.load_from_dict(config)
     builder = FSMBuilder()
@@ -45,55 +47,52 @@ def simple_fsm():
 def complex_fsm():
     """Create a more complex FSM with multiple paths."""
     config = {
-        'name': 'complex_workflow',
-        'main_network': 'main',
-        'networks': [{
-            'name': 'main',
-            'states': [
-                {
-                    'name': 'validate', 
-                    'is_start': True,
-                    'functions': {
-                        'validate': 'lambda state: {"valid": state.data.get("value", 0) > 0}'
-                    }
-                },
-                {
-                    'name': 'process',
-                    'functions': {
-                        'transform': 'lambda state: {"result": state.data.get("value", 1) * 2}'
-                    }
-                },
-                {
-                    'name': 'review'},
-                {'name': 'complete', 'is_end': True},
-                {'name': 'error', 'is_end': True}
-            ],
-            'arcs': [
-                {
-                    'from': 'validate',
-                    'to': 'process',
-                    'name': 'valid',
-                    'pre_test': {
-                        'test': 'lambda state: state.data.get("valid", False)'
-                    }
-                },
-                {
-                    'from': 'validate',
-                    'to': 'error', 
-                    'name': 'invalid',
-                    'pre_test': {
-                        'test': 'lambda state: not state.data.get("valid", False)'
-                    }
-                },
-                {'from': 'process', 'to': 'review', 'name': 'processed'},
-                {'from': 'review', 'to': 'complete', 'name': 'approved'},
-                {'from': 'review', 'to': 'process', 'name': 'rejected'}
-            ]
-        }]
+        "name": "complex_workflow",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "validate",
+                        "is_start": True,
+                        "functions": {
+                            "validate": 'lambda state: {"valid": state.data.get("value", 0) > 0}'
+                        },
+                    },
+                    {
+                        "name": "process",
+                        "functions": {
+                            "transform": 'lambda state: {"result": state.data.get("value", 1) * 2}'
+                        },
+                    },
+                    {"name": "review"},
+                    {"name": "complete", "is_end": True},
+                    {"name": "error", "is_end": True},
+                ],
+                "arcs": [
+                    {
+                        "from": "validate",
+                        "to": "process",
+                        "name": "valid",
+                        "pre_test": {"test": 'lambda state: state.data.get("valid", False)'},
+                    },
+                    {
+                        "from": "validate",
+                        "to": "error",
+                        "name": "invalid",
+                        "pre_test": {"test": 'lambda state: not state.data.get("valid", False)'},
+                    },
+                    {"from": "process", "to": "review", "name": "processed"},
+                    {"from": "review", "to": "complete", "name": "approved"},
+                    {"from": "review", "to": "process", "name": "rejected"},
+                ],
+            }
+        ],
     }
-    
+
     from dataknobs_fsm.config.loader import ConfigLoader
-    
+
     loader = ConfigLoader()
     fsm_config = loader.load_from_dict(config)
     builder = FSMBuilder()
@@ -108,11 +107,11 @@ def advanced_fsm(simple_fsm):
 
 class TestAdvancedFSMInitialization:
     """Test AdvancedFSM initialization with real FSM."""
-    
+
     def test_basic_initialization(self, simple_fsm):
         """Test AdvancedFSM initialization with real FSM."""
         fsm = AdvancedFSM(simple_fsm)
-        
+
         assert fsm.fsm == simple_fsm
         assert fsm.execution_mode == ExecutionMode.STEP_BY_STEP
         assert fsm._engine is not None
@@ -121,7 +120,7 @@ class TestAdvancedFSMInitialization:
         assert fsm._breakpoints == set()
         assert fsm._trace_buffer == []
         assert fsm._profile_data == {}
-    
+
     def test_initialization_with_execution_mode(self, simple_fsm):
         """Test initialization with different execution modes."""
         modes = [
@@ -129,20 +128,17 @@ class TestAdvancedFSMInitialization:
             ExecutionMode.BREAKPOINT,
             ExecutionMode.TRACE,
             ExecutionMode.PROFILE,
-            ExecutionMode.DEBUG
+            ExecutionMode.DEBUG,
         ]
-        
+
         for mode in modes:
             fsm = AdvancedFSM(simple_fsm, mode)
             assert fsm.execution_mode == mode
-    
+
     def test_set_execution_strategy(self, advanced_fsm):
         """Test setting execution strategy."""
-        strategies = [
-            TraversalStrategy.DEPTH_FIRST,
-            TraversalStrategy.BREADTH_FIRST
-        ]
-        
+        strategies = [TraversalStrategy.DEPTH_FIRST, TraversalStrategy.BREADTH_FIRST]
+
         for strategy in strategies:
             advanced_fsm.set_execution_strategy(strategy)
             assert advanced_fsm._engine.strategy == strategy
@@ -150,159 +146,152 @@ class TestAdvancedFSMInitialization:
 
 class TestAdvancedFSMResourceManagement:
     """Test AdvancedFSM resource management with real components."""
-    
+
     def test_register_resource_dict(self, advanced_fsm):
         """Test registering resource from dictionary config."""
-        resource_config = {
-            'type': 'memory',
-            'capacity': 1000,
-            'data': {'key1': 'value1'}
-        }
-        
-        advanced_fsm.register_resource('test_db', resource_config)
-        
+        resource_config = {"type": "memory", "capacity": 1000, "data": {"key1": "value1"}}
+
+        advanced_fsm.register_resource("test_db", resource_config)
+
         # Verify resource was registered (exact verification depends on manager)
         # The resource should be available through the resource manager
-        assert 'test_db' in advanced_fsm._resource_manager._resources or \
-               hasattr(advanced_fsm._resource_manager, 'get_resource')
-    
+        assert "test_db" in advanced_fsm._resource_manager._resources or hasattr(
+            advanced_fsm._resource_manager, "get_resource"
+        )
+
     def test_register_multiple_resources(self, advanced_fsm):
         """Test registering multiple resources."""
         resources = {
-            'db': {'type': 'database', 'url': 'test://localhost'},
-            'cache': {'type': 'memory', 'size': '100MB'},
-            'queue': {'type': 'queue', 'max_size': 1000}
+            "db": {"type": "database", "url": "test://localhost"},
+            "cache": {"type": "memory", "size": "100MB"},
+            "queue": {"type": "queue", "max_size": 1000},
         }
-        
+
         for name, config in resources.items():
             advanced_fsm.register_resource(name, config)
-        
+
         # All resources should be registered
         # (exact verification depends on resource manager implementation)
 
 
 class TestAdvancedFSMHooksAndBreakpoints:
     """Test AdvancedFSM hooks and breakpoints with real execution."""
-    
+
     def test_execution_hooks_setup(self, advanced_fsm):
         """Test setting up execution hooks."""
         hook_calls = []
-        
+
         async def on_enter(state):
-            hook_calls.append(f'enter_{state.definition.name}')
-            
+            hook_calls.append(f"enter_{state.definition.name}")
+
         async def on_exit(state):
-            hook_calls.append(f'exit_{state.definition.name}')
-            
+            hook_calls.append(f"exit_{state.definition.name}")
+
         async def on_arc_execute(arc):
-            hook_calls.append(f'arc_{arc.name}')
-        
+            hook_calls.append(f"arc_{arc.name}")
+
         hooks = ExecutionHook(
-            on_state_enter=on_enter,
-            on_state_exit=on_exit,
-            on_arc_execute=on_arc_execute
+            on_state_enter=on_enter, on_state_exit=on_exit, on_arc_execute=on_arc_execute
         )
-        
+
         advanced_fsm.set_hooks(hooks)
-        
+
         assert advanced_fsm._hooks.on_state_enter == on_enter
         assert advanced_fsm._hooks.on_state_exit == on_exit
         assert advanced_fsm._hooks.on_arc_execute == on_arc_execute
-    
+
     def test_breakpoint_management(self, advanced_fsm):
         """Test breakpoint addition and removal."""
         # Add breakpoints
-        advanced_fsm.add_breakpoint('middle')
-        advanced_fsm.add_breakpoint('review')
-        
-        assert 'middle' in advanced_fsm._breakpoints
-        assert 'review' in advanced_fsm._breakpoints
+        advanced_fsm.add_breakpoint("middle")
+        advanced_fsm.add_breakpoint("review")
+
+        assert "middle" in advanced_fsm._breakpoints
+        assert "review" in advanced_fsm._breakpoints
         assert len(advanced_fsm._breakpoints) == 2
-        
+
         # Remove breakpoint
-        advanced_fsm.remove_breakpoint('middle')
-        
-        assert 'middle' not in advanced_fsm._breakpoints
-        assert 'review' in advanced_fsm._breakpoints
+        advanced_fsm.remove_breakpoint("middle")
+
+        assert "middle" not in advanced_fsm._breakpoints
+        assert "review" in advanced_fsm._breakpoints
         assert len(advanced_fsm._breakpoints) == 1
-        
+
         # Remove non-existent breakpoint (should not error)
-        advanced_fsm.remove_breakpoint('nonexistent')
+        advanced_fsm.remove_breakpoint("nonexistent")
         assert len(advanced_fsm._breakpoints) == 1
 
 
 class TestAdvancedFSMExecutionContext:
     """Test AdvancedFSM execution context with real FSM."""
-    
+
     @pytest.mark.asyncio
     async def test_execution_context_creation(self, advanced_fsm):
         """Test creating execution context with real FSM."""
-        test_data = {'test': 'data', 'value': 42}
-        
+        test_data = {"test": "data", "value": 42}
+
         async with advanced_fsm.execution_context(
-            data=test_data,
-            data_mode=DataHandlingMode.COPY
+            data=test_data, data_mode=DataHandlingMode.COPY
         ) as context:
             # Verify context was created correctly
             assert context is not None
             assert context.current_state is not None
-            assert context.current_state == 'start'
+            assert context.current_state == "start"
             assert context.data == test_data
-    
+
     @pytest.mark.asyncio
     async def test_execution_context_with_initial_state(self, advanced_fsm):
         """Test execution context with specific initial state."""
-        test_data = {'test': 'data'}
-        
+        test_data = {"test": "data"}
+
         async with advanced_fsm.execution_context(
-            data=test_data,
-            initial_state='middle'
+            data=test_data, initial_state="middle"
         ) as context:
-            assert context.current_state == 'middle'
-    
+            assert context.current_state == "middle"
+
     @pytest.mark.asyncio
     async def test_execution_context_with_record(self, advanced_fsm):
         """Test execution context with Record input."""
-        record = Record({'test': 'record_data'})
-        
+        record = Record({"test": "record_data"})
+
         async with advanced_fsm.execution_context(data=record) as context:
             assert context.current_state is not None
-            assert context.data == {'test': 'record_data'}
+            assert context.data == {"test": "record_data"}
             # Also check that we have a state instance with data
-            assert hasattr(context, 'current_state_instance')
-            assert context.current_state_instance.data == {'test': 'record_data'}
-    
+            assert hasattr(context, "current_state_instance")
+            assert context.current_state_instance.data == {"test": "record_data"}
+
     @pytest.mark.asyncio
     async def test_execution_context_with_hooks(self, advanced_fsm):
         """Test execution context with hooks."""
         hook_calls = []
-        
+
         async def on_enter(state):
-            hook_calls.append(f'enter_{state.definition.name}')
-            
+            hook_calls.append(f"enter_{state.definition.name}")
+
         async def on_exit(state):
-            hook_calls.append(f'exit_{state.definition.name}')
-        
+            hook_calls.append(f"exit_{state.definition.name}")
+
         hooks = ExecutionHook(on_state_enter=on_enter, on_state_exit=on_exit)
         advanced_fsm.set_hooks(hooks)
-        
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             pass  # Just test context creation and cleanup
-        
+
         # Hooks should have been called
         assert len(hook_calls) >= 1  # At least on_enter should be called
 
 
 class TestAdvancedFSMStepExecution:
     """Test AdvancedFSM step-by-step execution with real FSM."""
-    
+
     @pytest.mark.asyncio
     async def test_single_step_execution(self, advanced_fsm):
         """Test executing a single step."""
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             # Initial state should be 'start'
-            assert context.current_state == 'start'
-            assert context.current_state_instance.definition.name == 'start'
+            assert context.current_state == "start"
+            assert context.current_state_instance.definition.name == "start"
 
             # Execute one step
             result = await advanced_fsm.step(context)
@@ -312,13 +301,13 @@ class TestAdvancedFSMStepExecution:
 
             # Should transition to 'middle'
             if result.success and result.transition != "none":
-                assert result.to_state == 'middle'
-                assert context.current_state == 'middle'
-    
+                assert result.to_state == "middle"
+                assert context.current_state == "middle"
+
     @pytest.mark.asyncio
     async def test_multi_step_execution(self, advanced_fsm):
         """Test executing multiple steps to completion."""
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             states_visited = [context.current_state_instance.definition.name]
 
             # Execute steps until no more transitions
@@ -333,36 +322,36 @@ class TestAdvancedFSMStepExecution:
                     break
 
             # Should have visited start -> middle -> end
-            assert 'start' in states_visited
-            assert states_visited[-1] == 'end' or len(states_visited) > 1
-    
+            assert "start" in states_visited
+            assert states_visited[-1] == "end" or len(states_visited) > 1
+
     @pytest.mark.asyncio
     async def test_step_with_specific_arc(self, complex_fsm):
         """Test step execution with specific arc selection."""
         advanced_fsm = AdvancedFSM(complex_fsm)
 
         # Use valid data that will pass validation
-        async with advanced_fsm.execution_context({'value': 10}) as context:
+        async with advanced_fsm.execution_context({"value": 10}) as context:
             # Should start at 'validate' state
-            assert context.current_state == 'validate'
-            assert context.current_state_instance.definition.name == 'validate'
+            assert context.current_state == "validate"
+            assert context.current_state_instance.definition.name == "validate"
 
             # Execute validation step (should set 'valid' to true)
             result = await advanced_fsm.step(context)
 
             if result.success and result.transition != "none":
                 # After validation, should be able to take 'valid' arc
-                next_result = await advanced_fsm.step(context, arc_name='valid')
+                next_result = await advanced_fsm.step(context, arc_name="valid")
 
                 if next_result.success and next_result.transition != "none":
-                    assert next_result.to_state == 'process'
-    
+                    assert next_result.to_state == "process"
+
     @pytest.mark.asyncio
     async def test_step_with_tracing(self, advanced_fsm):
         """Test step execution with tracing enabled."""
         advanced_fsm.execution_mode = ExecutionMode.TRACE
 
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             # Execute a few steps
             await advanced_fsm.step(context)
             await advanced_fsm.step(context)
@@ -372,42 +361,42 @@ class TestAdvancedFSMStepExecution:
 
             # Each trace entry should have required fields
             for trace in advanced_fsm._trace_buffer:
-                assert 'from_state' in trace
-                assert 'to_state' in trace
-                assert 'transition' in trace
-                assert 'data' in trace
+                assert "from_state" in trace
+                assert "to_state" in trace
+                assert "transition" in trace
+                assert "data" in trace
 
 
 class TestAdvancedFSMHistoryManagement:
     """Test AdvancedFSM history management with real execution."""
-    
+
     def test_enable_history_tracking(self, advanced_fsm):
         """Test enabling history tracking."""
         advanced_fsm.enable_history(max_depth=50)
-        
+
         assert advanced_fsm._history is not None
         assert advanced_fsm._storage is None  # No storage backend specified
-    
+
     def test_enable_history_with_storage(self, advanced_fsm):
         """Test enabling history with storage backend."""
         # Create a simple mock storage for testing
         mock_storage = AsyncMock()
-        
+
         advanced_fsm.enable_history(storage=mock_storage, max_depth=100)
-        
+
         assert advanced_fsm._history is not None
         assert advanced_fsm._storage == mock_storage
-    
+
     @pytest.mark.asyncio
     async def test_history_tracking_during_execution(self, advanced_fsm):
         """Test that history is tracked during execution."""
         advanced_fsm.enable_history()
-        
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             # Execute some steps
             await advanced_fsm.step(context)
             await advanced_fsm.step(context)
-        
+
         # History should have been recorded
         # (exact verification depends on ExecutionHistory implementation)
         assert advanced_fsm._history is not None
@@ -415,35 +404,35 @@ class TestAdvancedFSMHistoryManagement:
 
 class TestAdvancedFSMComplexWorkflows:
     """Test AdvancedFSM with complex workflow scenarios."""
-    
+
     @pytest.mark.asyncio
     async def test_conditional_branching(self, complex_fsm):
         """Test conditional branching with real FSM."""
         advanced_fsm = AdvancedFSM(complex_fsm)
-        
+
         # Test with valid data (should go to process)
-        async with advanced_fsm.execution_context({'value': 5}) as context:
+        async with advanced_fsm.execution_context({"value": 5}) as context:
             # Execute validation
             await advanced_fsm.step(context)
-            
+
             # Should be able to proceed to processing
             # (exact path depends on FSM execution logic)
             current_state = context.current_state
-            assert current_state in ['validate', 'process', 'error']
-        
+            assert current_state in ["validate", "process", "error"]
+
         # Test with invalid data (should go to error)
-        async with advanced_fsm.execution_context({'value': -1}) as context:
+        async with advanced_fsm.execution_context({"value": -1}) as context:
             await advanced_fsm.step(context)
-            
+
             current_state = context.current_state
-            assert current_state in ['validate', 'error']
-    
+            assert current_state in ["validate", "error"]
+
     @pytest.mark.asyncio
     async def test_workflow_with_loops(self, complex_fsm):
         """Test workflow that can loop (review -> process -> review)."""
         advanced_fsm = AdvancedFSM(complex_fsm)
 
-        async with advanced_fsm.execution_context({'value': 10}) as context:
+        async with advanced_fsm.execution_context({"value": 10}) as context:
             states_visited = []
             max_steps = 10  # Prevent infinite loops
 
@@ -452,7 +441,7 @@ class TestAdvancedFSMComplexWorkflows:
                 states_visited.append(current_name)
 
                 # Stop if we reach an end state
-                if current_name in ['complete', 'error']:
+                if current_name in ["complete", "error"]:
                     break
 
                 result = await advanced_fsm.step(context)
@@ -461,15 +450,15 @@ class TestAdvancedFSMComplexWorkflows:
 
             # Should have executed some workflow
             assert len(states_visited) > 0
-            assert states_visited[0] == 'validate'
-    
+            assert states_visited[0] == "validate"
+
     @pytest.mark.asyncio
     async def test_breakpoint_execution(self, advanced_fsm):
         """Test execution that stops at breakpoints."""
         # Set a breakpoint
-        advanced_fsm.add_breakpoint('middle')
+        advanced_fsm.add_breakpoint("middle")
 
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             # Run until breakpoint
             result = await advanced_fsm.run_until_breakpoint(context)
 
@@ -477,64 +466,63 @@ class TestAdvancedFSMComplexWorkflows:
             if result is not None:
                 assert isinstance(result, StepResult)
                 # Either we hit the breakpoint or reached it during stepping
-                assert result.at_breakpoint or result.to_state == 'middle'
+                assert result.at_breakpoint or result.to_state == "middle"
 
 
 class TestAdvancedFSMIntegration:
     """Integration tests using real FSM components."""
-    
+
     def test_full_advanced_fsm_setup(self, complex_fsm):
         """Test complete AdvancedFSM setup with all features."""
         # Create FSM with full configuration
         fsm = AdvancedFSM(complex_fsm, ExecutionMode.DEBUG)
-        
+
         # Configure all features
         fsm.set_execution_strategy(TraversalStrategy.BREADTH_FIRST)
-        fsm.register_resource('test_db', {'type': 'memory', 'data': {}})
-        
+        fsm.register_resource("test_db", {"type": "memory", "data": {}})
+
         # Set up hooks
         hooks = ExecutionHook(
-            on_state_enter=AsyncMock(),
-            on_state_exit=AsyncMock(),
-            on_arc_execute=AsyncMock()
+            on_state_enter=AsyncMock(), on_state_exit=AsyncMock(), on_arc_execute=AsyncMock()
         )
         fsm.set_hooks(hooks)
-        
+
         # Add breakpoints and enable history
-        fsm.add_breakpoint('review')
+        fsm.add_breakpoint("review")
         fsm.enable_history(max_depth=100)
-        
+
         # Verify configuration
         assert fsm.execution_mode == ExecutionMode.DEBUG
         assert fsm._engine.strategy == TraversalStrategy.BREADTH_FIRST
-        assert 'review' in fsm._breakpoints
+        assert "review" in fsm._breakpoints
         assert fsm._history is not None
         assert fsm._hooks == hooks
-    
+
     @pytest.mark.asyncio
     async def test_end_to_end_workflow_execution(self, simple_fsm):
         """Test complete workflow execution from start to finish."""
         advanced_fsm = AdvancedFSM(simple_fsm, ExecutionMode.TRACE)
-        
+
         # Enable all monitoring
         advanced_fsm.enable_history()
-        
+
         hook_calls = []
-        
+
         async def track_hook(event_type):
             async def hook(obj):
                 hook_calls.append(event_type)
+
             return hook
-        
+
         hooks = ExecutionHook(
-            on_state_enter=await track_hook('enter'),
-            on_state_exit=await track_hook('exit'),
-            on_arc_execute=await track_hook('arc')
+            on_state_enter=await track_hook("enter"),
+            on_state_exit=await track_hook("exit"),
+            on_arc_execute=await track_hook("arc"),
         )
         advanced_fsm.set_hooks(hooks)
-        
+
         # Execute complete workflow
-        async with advanced_fsm.execution_context({'test': 'data'}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}) as context:
             # Execute until completion
             steps = 0
             while steps < 5:  # Safety limit
@@ -544,13 +532,13 @@ class TestAdvancedFSMIntegration:
                 steps += 1
 
                 # Stop if we reach end state
-                if result.is_complete or context.current_state == 'end':
+                if result.is_complete or context.current_state == "end":
                     break
-        
+
         # Verify monitoring captured execution
         assert len(advanced_fsm._trace_buffer) >= 0
         assert len(hook_calls) >= 0
-        
+
         # Final state should be 'end' or we should have made progress
         final_state_name = context.current_state
-        assert final_state_name in ['start', 'middle', 'end']
+        assert final_state_name in ["start", "middle", "end"]

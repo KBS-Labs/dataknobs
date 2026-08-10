@@ -88,10 +88,12 @@ class TestDefaultBehaviorBackwardCompat:
     """The three defaults must preserve historical behavior exactly."""
 
     async def test_default_dedup_and_source_id_backward_compat(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record("a", "doc.md", 0),
-            _record("b", "doc.md", 1),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record("a", "doc.md", 0),
+                _record("b", "doc.md", 1),
+            ]
+        )
         source = VectorKnowledgeSource(kb, name="docs")
 
         intent = RetrievalIntent(text_queries=["q"])
@@ -130,15 +132,17 @@ class TestDefaultBehaviorBackwardCompat:
         assert len(results) == 2
 
     async def test_default_metadata_surface_backward_compat(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "x",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="A > B",
-                metadata={"extra": 1},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "x",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="A > B",
+                    metadata={"extra": 1},
+                ),
+            ]
+        )
         source = VectorKnowledgeSource(kb, name="docs")
 
         intent = RetrievalIntent(text_queries=["q"])
@@ -159,20 +163,22 @@ class TestCustomCallables:
     async def test_custom_dedup_key_collapses_by_entity_ref(self) -> None:
         # Two records with same entity_ref but distinct source/chunk_index
         # — default dedup would keep both, custom dedup collapses.
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "first",
-                source="doc-1.md",
-                chunk_index=0,
-                metadata={"entity_ref": "REF-001"},
-            ),
-            _record(
-                "second",
-                source="doc-2.md",
-                chunk_index=5,
-                metadata={"entity_ref": "REF-001"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "first",
+                    source="doc-1.md",
+                    chunk_index=0,
+                    metadata={"entity_ref": "REF-001"},
+                ),
+                _record(
+                    "second",
+                    source="doc-2.md",
+                    chunk_index=5,
+                    metadata={"entity_ref": "REF-001"},
+                ),
+            ]
+        )
         source = VectorKnowledgeSource(
             kb,
             name="catalog",
@@ -185,14 +191,16 @@ class TestCustomCallables:
         assert len(results) == 1
 
     async def test_custom_source_id_fn(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "entry",
-                source="doc.md",
-                chunk_index=0,
-                metadata={"entity_ref": "REF-001"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "entry",
+                    source="doc.md",
+                    chunk_index=0,
+                    metadata={"entity_ref": "REF-001"},
+                ),
+            ]
+        )
         source = VectorKnowledgeSource(
             kb,
             name="catalog",
@@ -204,15 +212,17 @@ class TestCustomCallables:
         assert results[0].source_id == "REF-001"
 
     async def test_custom_metadata_fn_replaces_surface(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "entry",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="Sec > Sub",
-                metadata={"entity_ref": "REF-001", "noise": "ignore"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "entry",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="Sec > Sub",
+                    metadata={"entity_ref": "REF-001", "noise": "ignore"},
+                ),
+            ]
+        )
         source = VectorKnowledgeSource(
             kb,
             name="catalog",
@@ -226,26 +236,28 @@ class TestCustomCallables:
         assert "source" not in results[0].metadata
 
     async def test_custom_callables_together(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc-1.md",
-                chunk_index=0,
-                metadata={"entity_ref": "REF-001"},
-            ),
-            _record(
-                "b",
-                source="doc-2.md",
-                chunk_index=7,
-                metadata={"entity_ref": "REF-001"},  # duplicate by entity_ref
-            ),
-            _record(
-                "c",
-                source="doc-3.md",
-                chunk_index=2,
-                metadata={"entity_ref": "REF-002"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc-1.md",
+                    chunk_index=0,
+                    metadata={"entity_ref": "REF-001"},
+                ),
+                _record(
+                    "b",
+                    source="doc-2.md",
+                    chunk_index=7,
+                    metadata={"entity_ref": "REF-001"},  # duplicate by entity_ref
+                ),
+                _record(
+                    "c",
+                    source="doc-3.md",
+                    chunk_index=2,
+                    metadata={"entity_ref": "REF-002"},
+                ),
+            ]
+        )
         source = VectorKnowledgeSource(
             kb,
             name="catalog",
@@ -293,10 +305,12 @@ class TestRaisingCallables:
         def boom(r: dict[str, Any]) -> Any:
             raise RuntimeError("dedup_key blew up")
 
-        kb = ScriptedKnowledgeBase([
-            _record("a", "doc.md", 0),
-            _record("b", "doc.md", 1),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record("a", "doc.md", 0),
+                _record("b", "doc.md", 1),
+            ]
+        )
         source = VectorKnowledgeSource(kb, name="docs", dedup_key=boom)
 
         results = await source.query(RetrievalIntent(text_queries=["q"]))
@@ -314,12 +328,16 @@ class TestRaisingCallables:
                 raise ValueError("nope")
             return r.get("source", "")
 
-        kb = ScriptedKnowledgeBase([
-            _record("good", "good.md", 0),
-            _record("bad", "bad.md", 0),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record("good", "good.md", 0),
+                _record("bad", "bad.md", 0),
+            ]
+        )
         source = VectorKnowledgeSource(
-            kb, name="docs", source_id_fn=partial_boom,
+            kb,
+            name="docs",
+            source_id_fn=partial_boom,
         )
 
         results = await source.query(RetrievalIntent(text_queries=["q"]))
@@ -344,7 +362,9 @@ class TestRaisingCallables:
 
         kb = ScriptedKnowledgeBase([_record("a", "doc.md", 0)])
         source = VectorKnowledgeSource(
-            kb, name="docs", metadata_fn=raise_first_then_pass,
+            kb,
+            name="docs",
+            metadata_fn=raise_first_then_pass,
         )
 
         # Two identical queries — if the dedup key from the first
@@ -365,10 +385,12 @@ class TestRaisingCallables:
                 raise ValueError("nope")
             return f"{r.get('source', '')}:chunk_{r.get('metadata', {}).get('chunk_index', '')}"
 
-        kb = ScriptedKnowledgeBase([
-            _record("good", "good.md", 0),
-            _record("bad", "bad.md", 0),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record("good", "good.md", 0),
+                _record("bad", "bad.md", 0),
+            ]
+        )
         fn = _build_vector_query_fn(kb, "docs", source_id_fn=boom_once)
 
         results = await fn("q", top_k=5)
@@ -389,20 +411,22 @@ class TestTopicIndexFilterPassthrough:
         # fetch, not the no-filter fallback. The filter assertion is
         # independent of whether resolve() emits results — we only
         # need the seed fetch to run.
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="Security",
-                metadata={
-                    "entity_ref": "REF-001",
-                    "headings": ["Security"],
-                    "heading_levels": [1],
-                },
-                similarity=0.95,
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="Security",
+                    metadata={
+                        "entity_ref": "REF-001",
+                        "headings": ["Security"],
+                        "heading_levels": [1],
+                    },
+                    similarity=0.95,
+                ),
+            ]
+        )
         cfg = GroundedSourceConfig(
             source_type="vector_kb",
             name="catalog",
@@ -430,19 +454,21 @@ class TestTopicIndexFilterPassthrough:
         self,
     ) -> None:
         # Without intent.filters the KB must see ``None``, not ``{}``.
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="Security",
-                metadata={
-                    "headings": ["Security"],
-                    "heading_levels": [1],
-                },
-                similarity=0.95,
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="Security",
+                    metadata={
+                        "headings": ["Security"],
+                        "heading_levels": [1],
+                    },
+                    similarity=0.95,
+                ),
+            ]
+        )
         cfg = GroundedSourceConfig(
             source_type="vector_kb",
             name="catalog",
@@ -507,9 +533,11 @@ class TestTopicIndexPath:
     callables when configured."""
 
     async def test_topic_index_default_source_id(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record("a", "doc.md", 0),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record("a", "doc.md", 0),
+            ]
+        )
         fn = _build_vector_query_fn(kb, "docs")
 
         results = await fn("q", top_k=5)
@@ -520,16 +548,20 @@ class TestTopicIndexPath:
         assert results[0].source_type == "vector_kb"
 
     async def test_topic_index_custom_source_id_fn(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc.md",
-                chunk_index=0,
-                metadata={"entity_ref": "REF-001"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc.md",
+                    chunk_index=0,
+                    metadata={"entity_ref": "REF-001"},
+                ),
+            ]
+        )
         fn = _build_vector_query_fn(
-            kb, "catalog", source_id_fn=_id_by_entity_ref,
+            kb,
+            "catalog",
+            source_id_fn=_id_by_entity_ref,
         )
 
         results = await fn("q", top_k=5)
@@ -537,17 +569,21 @@ class TestTopicIndexPath:
         assert results[0].source_id == "REF-001"
 
     async def test_topic_index_custom_metadata_fn(self) -> None:
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="Sec",
-                metadata={"entity_ref": "REF-001", "noise": "x"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="Sec",
+                    metadata={"entity_ref": "REF-001", "noise": "x"},
+                ),
+            ]
+        )
         fn = _build_vector_query_fn(
-            kb, "catalog", metadata_fn=_md_by_entity_ref,
+            kb,
+            "catalog",
+            metadata_fn=_md_by_entity_ref,
         )
 
         results = await fn("q", top_k=5)
@@ -633,15 +669,17 @@ class TestFactoryResolution:
         # public ``_fetch_vector_seeds`` path the index uses at query
         # time (no reliance on a specific resolve()-level heading
         # configuration).
-        kb = ScriptedKnowledgeBase([
-            _record(
-                "a",
-                source="doc.md",
-                chunk_index=0,
-                heading_path="Sec",
-                metadata={"entity_ref": "REF-001"},
-            ),
-        ])
+        kb = ScriptedKnowledgeBase(
+            [
+                _record(
+                    "a",
+                    source="doc.md",
+                    chunk_index=0,
+                    heading_path="Sec",
+                    metadata={"entity_ref": "REF-001"},
+                ),
+            ]
+        )
         topic_index = build_topic_index(
             {"type": "heading_tree", "seed_score_threshold": 0.0},
             kb,
@@ -658,7 +696,8 @@ class TestFactoryResolution:
 
         params = _resolve_params(topic_index._config, None)
         seeds = await topic_index._fetch_vector_seeds(
-            "anything", params,
+            "anything",
+            params,
         )
 
         assert len(seeds) == 1

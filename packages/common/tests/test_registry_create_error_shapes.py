@@ -114,10 +114,7 @@ def test_create_unknown_key_lists_available_sorted() -> None:
         registry.create(config={"backend": "kafka"})
 
     # Sorted, with aardvark first
-    assert (
-        "Available backends: aardvark, memory, postgres, redis"
-        in str(excinfo.value)
-    )
+    assert "Available backends: aardvark, memory, postgres, redis" in str(excinfo.value)
 
 
 def test_create_unknown_key_default_shape_context_available_is_sorted() -> None:
@@ -134,7 +131,9 @@ def test_create_unknown_key_default_shape_context_available_is_sorted() -> None:
         registry.create(key="missing")
 
     assert excinfo.value.context["available"] == [
-        "aardvark", "monkey", "zebra",
+        "aardvark",
+        "monkey",
+        "zebra",
     ]
 
 
@@ -179,9 +178,7 @@ def test_create_validate_type_failure() -> None:
     class Base:
         pass
 
-    registry: PluginRegistry[Base] = PluginRegistry(
-        "test_validate", validate_type=Base
-    )
+    registry: PluginRegistry[Base] = PluginRegistry("test_validate", validate_type=Base)
     # Factory returns the wrong type
     registry.register("wrong", lambda config: object())
 
@@ -191,9 +188,7 @@ def test_create_validate_type_failure() -> None:
     # A factory that *returned the wrong thing* is a different failure from a
     # factory that *raised*, and the message says which. Both are authored
     # here, so both survive the bounded wrap intact.
-    assert "Factory for plugin 'wrong' must return a Base instance" in str(
-        excinfo.value
-    )
+    assert "Factory for plugin 'wrong' must return a Base instance" in str(excinfo.value)
     assert excinfo.value.__cause__ is None
 
 

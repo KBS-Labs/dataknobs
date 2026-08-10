@@ -226,9 +226,7 @@ class TestQueryRelevanceRanker:
             ),
         ]
         ranker = QueryRelevanceRanker(boost_weight=0.5)
-        out = await ranker.process(
-            results, _intent(), "What security risks should I be aware of?"
-        )
+        out = await ranker.process(results, _intent(), "What security risks should I be aware of?")
         # "security risks" overlaps more with result b
         assert out[0].source_id == "b"
 
@@ -256,9 +254,7 @@ class TestQueryRelevanceRanker:
             _result(content="security risks in authentication", relevance=0.5),
         ]
         ranker = QueryRelevanceRanker(boost_weight=0.3)
-        out = await ranker.process(
-            results, _intent(), "security risks"
-        )
+        out = await ranker.process(results, _intent(), "security risks")
         assert "_query_overlap" in out[0].metadata
         assert out[0].metadata["_query_overlap"] > 0
 
@@ -380,10 +376,12 @@ class TestResultPipeline:
 
     @pytest.mark.asyncio
     async def test_pipeline_runs_stages_in_order(self) -> None:
-        pipeline = ResultPipeline(stages=[
-            CrossSourceNormalizer(strategy="min_max"),
-            RelativeRelevanceFilter(threshold=0.3, min_results=1),
-        ])
+        pipeline = ResultPipeline(
+            stages=[
+                CrossSourceNormalizer(strategy="min_max"),
+                RelativeRelevanceFilter(threshold=0.3, min_results=1),
+            ]
+        )
         results = [
             _result(source_name="a", relevance=0.9, source_id="x"),
             _result(source_name="a", relevance=0.1, source_id="y"),
@@ -396,12 +394,14 @@ class TestResultPipeline:
 
     @pytest.mark.asyncio
     async def test_pipeline_with_strategy_chain(self) -> None:
-        pipeline = ResultPipeline(stages=[
-            StrategyChain(
-                strategies=[_AlwaysUnavailable(), _AddMetadata("chain_ok")],
-                name="test",
-            ),
-        ])
+        pipeline = ResultPipeline(
+            stages=[
+                StrategyChain(
+                    strategies=[_AlwaysUnavailable(), _AddMetadata("chain_ok")],
+                    name="test",
+                ),
+            ]
+        )
         out = await pipeline.process([_result()], _intent(), "test")
         assert out[0].metadata["_processed_by"] == "chain_ok"
 
@@ -414,10 +414,12 @@ class TestResultPipeline:
 
     @pytest.mark.asyncio
     async def test_empty_results(self) -> None:
-        pipeline = ResultPipeline(stages=[
-            CrossSourceNormalizer(strategy="min_max"),
-            RelativeRelevanceFilter(threshold=0.5),
-        ])
+        pipeline = ResultPipeline(
+            stages=[
+                CrossSourceNormalizer(strategy="min_max"),
+                RelativeRelevanceFilter(threshold=0.5),
+            ]
+        )
         out = await pipeline.process([], _intent(), "test")
         assert out == []
 
@@ -440,12 +442,14 @@ class TestBuildPipeline:
         assert len(pipeline.stages) == 1
 
     def test_normalize_chain(self) -> None:
-        pipeline = build_pipeline({
-            "normalize_strategy": [
-                {"method": "z_score"},
-                {"method": "min_max"},
-            ],
-        })
+        pipeline = build_pipeline(
+            {
+                "normalize_strategy": [
+                    {"method": "z_score"},
+                    {"method": "min_max"},
+                ],
+            }
+        )
         assert pipeline is not None
         assert len(pipeline.stages) == 1
         stage = pipeline.stages[0]
@@ -453,12 +457,14 @@ class TestBuildPipeline:
         assert len(stage.strategies) == 2
 
     def test_all_level1_stages(self) -> None:
-        pipeline = build_pipeline({
-            "normalize_strategy": "rank",
-            "relative_threshold": 0.4,
-            "min_results": 2,
-            "query_rerank_weight": 0.3,
-        })
+        pipeline = build_pipeline(
+            {
+                "normalize_strategy": "rank",
+                "relative_threshold": 0.4,
+                "min_results": 2,
+                "query_rerank_weight": 0.3,
+            }
+        )
         assert pipeline is not None
         assert len(pipeline.stages) == 3  # normalize + filter + ranker
 
@@ -476,11 +482,13 @@ class TestBuildPipeline:
 
     @pytest.mark.asyncio
     async def test_built_pipeline_runs(self) -> None:
-        pipeline = build_pipeline({
-            "normalize_strategy": "min_max",
-            "relative_threshold": 0.3,
-            "min_results": 1,
-        })
+        pipeline = build_pipeline(
+            {
+                "normalize_strategy": "min_max",
+                "relative_threshold": 0.3,
+                "min_results": 1,
+            }
+        )
         assert pipeline is not None
         results = [
             _result(source_name="a", relevance=0.9, source_id="x"),
@@ -624,7 +632,9 @@ class TestEmbeddingClusterer:
             _result(content="Database migration", source_id="c"),
         ]
         clusterer = EmbeddingClusterer(
-            similarity_threshold=0.5, min_cluster_size=2, embed_fn=mock_embed,
+            similarity_threshold=0.5,
+            min_cluster_size=2,
+            embed_fn=mock_embed,
         )
         out = await clusterer.process(results, _intent(), "test")
 
@@ -646,19 +656,36 @@ class TestQueryClusterScorer:
     async def test_scores_with_terms(self) -> None:
         """Term-based scoring when no embed_fn."""
         results = [
-            SourceResult(content="security risks in OAuth", source_id="a",
-                         source_name="kb", source_type="vector_kb", relevance=0.8,
-                         metadata={"cluster_id": 0, "cluster_label": "security", "cluster_size": 2}),
-            SourceResult(content="token security vulnerabilities", source_id="b",
-                         source_name="kb", source_type="vector_kb", relevance=0.7,
-                         metadata={"cluster_id": 0, "cluster_label": "security", "cluster_size": 2}),
-            SourceResult(content="database migration patterns", source_id="c",
-                         source_name="kb", source_type="vector_kb", relevance=0.5,
-                         metadata={"cluster_id": 1, "cluster_label": "database", "cluster_size": 1}),
+            SourceResult(
+                content="security risks in OAuth",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.8,
+                metadata={"cluster_id": 0, "cluster_label": "security", "cluster_size": 2},
+            ),
+            SourceResult(
+                content="token security vulnerabilities",
+                source_id="b",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.7,
+                metadata={"cluster_id": 0, "cluster_label": "security", "cluster_size": 2},
+            ),
+            SourceResult(
+                content="database migration patterns",
+                source_id="c",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.5,
+                metadata={"cluster_id": 1, "cluster_label": "database", "cluster_size": 1},
+            ),
         ]
         scorer = QueryClusterScorer(embed_fn=None)
         out = await scorer.process(
-            results, _intent(), "What security risks should I worry about?",
+            results,
+            _intent(),
+            "What security risks should I worry about?",
         )
 
         # Security cluster should score higher than database
@@ -671,16 +698,28 @@ class TestQueryClusterScorer:
     async def test_reorders_by_cluster_score(self) -> None:
         """Higher-scoring clusters appear first."""
         results = [
-            SourceResult(content="database migration", source_id="a",
-                         source_name="kb", source_type="vector_kb", relevance=0.9,
-                         metadata={"cluster_id": 0, "cluster_label": "db", "cluster_size": 1}),
-            SourceResult(content="security risks vulnerabilities", source_id="b",
-                         source_name="kb", source_type="vector_kb", relevance=0.5,
-                         metadata={"cluster_id": 1, "cluster_label": "sec", "cluster_size": 1}),
+            SourceResult(
+                content="database migration",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.9,
+                metadata={"cluster_id": 0, "cluster_label": "db", "cluster_size": 1},
+            ),
+            SourceResult(
+                content="security risks vulnerabilities",
+                source_id="b",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.5,
+                metadata={"cluster_id": 1, "cluster_label": "sec", "cluster_size": 1},
+            ),
         ]
         scorer = QueryClusterScorer(embed_fn=None)
         out = await scorer.process(
-            results, _intent(), "security risks",
+            results,
+            _intent(),
+            "security risks",
         )
         # Security result should come first despite lower relevance
         assert out[0].source_id == "b"
@@ -697,16 +736,28 @@ class TestQueryClusterScorer:
             return embeddings
 
         results = [
-            SourceResult(content="security risks", source_id="a",
-                         source_name="kb", source_type="vector_kb", relevance=0.8,
-                         metadata={"cluster_id": 0, "cluster_label": "sec", "cluster_size": 1}),
-            SourceResult(content="database migration", source_id="b",
-                         source_name="kb", source_type="vector_kb", relevance=0.5,
-                         metadata={"cluster_id": 1, "cluster_label": "db", "cluster_size": 1}),
+            SourceResult(
+                content="security risks",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.8,
+                metadata={"cluster_id": 0, "cluster_label": "sec", "cluster_size": 1},
+            ),
+            SourceResult(
+                content="database migration",
+                source_id="b",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.5,
+                metadata={"cluster_id": 1, "cluster_label": "db", "cluster_size": 1},
+            ),
         ]
         scorer = QueryClusterScorer(embed_fn=mock_embed)
         out = await scorer.process(
-            results, _intent(), "security concerns",
+            results,
+            _intent(),
+            "security concerns",
         )
         sec = [r for r in out if r.source_id == "a"][0]
         db = [r for r in out if r.source_id == "b"][0]
@@ -728,35 +779,41 @@ class TestBuildPipelineWithClustering:
         assert len(pipeline.stages) == 2
 
     def test_cluster_chain(self) -> None:
-        pipeline = build_pipeline({
-            "cluster_strategy": [
-                {"method": "embedding"},
-                {"method": "tfidf"},
-            ],
-        })
+        pipeline = build_pipeline(
+            {
+                "cluster_strategy": [
+                    {"method": "embedding"},
+                    {"method": "tfidf"},
+                ],
+            }
+        )
         assert pipeline is not None
         # StrategyChain(cluster) + QueryClusterScorer = 2 stages
         assert len(pipeline.stages) == 2
         assert isinstance(pipeline.stages[0], StrategyChain)
 
     def test_full_pipeline(self) -> None:
-        pipeline = build_pipeline({
-            "normalize_strategy": "min_max",
-            "relative_threshold": 0.3,
-            "query_rerank_weight": 0.2,
-            "cluster_strategy": "tfidf",
-        })
+        pipeline = build_pipeline(
+            {
+                "normalize_strategy": "min_max",
+                "relative_threshold": 0.3,
+                "query_rerank_weight": 0.2,
+                "cluster_strategy": "tfidf",
+            }
+        )
         assert pipeline is not None
         # normalize + filter + ranker + cluster + scorer = 5
         assert len(pipeline.stages) == 5
 
     @pytest.mark.asyncio
     async def test_cluster_pipeline_runs(self) -> None:
-        pipeline = build_pipeline({
-            "cluster_strategy": "term_overlap",
-            "cluster_threshold": 0.15,
-            "cluster_min_size": 2,
-        })
+        pipeline = build_pipeline(
+            {
+                "cluster_strategy": "term_overlap",
+                "cluster_threshold": 0.15,
+                "cluster_min_size": 2,
+            }
+        )
         assert pipeline is not None
         results = [
             _result(content="security risks in authentication", source_id="a"),
@@ -764,7 +821,9 @@ class TestBuildPipelineWithClustering:
             _result(content="database performance optimization", source_id="c"),
         ]
         out = await pipeline.process(
-            results, _intent(), "security risks",
+            results,
+            _intent(),
+            "security risks",
         )
         # All results should have cluster metadata
         assert all("cluster_id" in r.metadata for r in out)

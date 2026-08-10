@@ -72,10 +72,7 @@ def _react_config(compaction: dict[str, Any] | None) -> dict[str, Any]:
 
 def _tool_loop_script(n_iterations: int) -> list[Any]:
     """n tool-call turns (drives the loop) then a final text answer."""
-    script = [
-        tool_call_response("echo", {"text": f"step {i}"})
-        for i in range(n_iterations)
-    ]
+    script = [tool_call_response("echo", {"text": f"step {i}"}) for i in range(n_iterations)]
     script.append(text_response("All done."))
     return script
 
@@ -88,9 +85,7 @@ async def _history_after_run(compaction: dict[str, Any] | None) -> list[Any]:
         tools=[_EchoTool()],
     ) as harness:
         await harness.chat("please do the multi-step task")
-        manager = harness.bot.get_conversation_manager(
-            harness.context.conversation_id
-        )
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
         return await manager.get_history()
 
 
@@ -134,9 +129,7 @@ class TestPhasedProactiveCompaction:
             }
         )
         summary_nodes = [
-            m
-            for m in compacted
-            if m.role == "system" and "step 0" in (m.content or "")
+            m for m in compacted if m.role == "system" and "step 0" in (m.content or "")
         ]
         assert summary_nodes, "expected a compaction summary node"
         _assert_no_dangling_tool_use(compacted)
@@ -224,9 +217,7 @@ class TestReactiveBackstop:
                 raise ContextLengthExceededError("input too long")
             return "recovered"
 
-        result = await strategy._complete_with_reactive_compaction(
-            manager, llm, complete
-        )
+        result = await strategy._complete_with_reactive_compaction(manager, llm, complete)
 
         assert result == "recovered"
         assert calls["n"] == 2  # exactly one retry
@@ -241,9 +232,7 @@ class TestReactiveBackstop:
             raise ContextLengthExceededError("input too long")
 
         with pytest.raises(ContextLengthExceededError):
-            await strategy._complete_with_reactive_compaction(
-                manager, llm, complete
-            )
+            await strategy._complete_with_reactive_compaction(manager, llm, complete)
 
 
 # ---------------------------------------------------------------------------
@@ -301,9 +290,7 @@ class TestBudgetResolution:
     async def test_absolute_budget_sole_threshold_without_ceiling(self) -> None:
         """No resolved ceiling (plain EchoProvider) → budget used as-is."""
         llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
-        strategy = self._strategy(
-            {"enabled": True, "history_token_budget": 50_000}
-        )
+        strategy = self._strategy({"enabled": True, "history_token_budget": 50_000})
         assert strategy._resolve_history_budget(llm) == 50_000
 
 
@@ -339,9 +326,7 @@ class TestConcurrentStrategyBuild:
                 await super().initialize()
 
         def _counting_factory(_cfg: Any) -> EchoProvider:
-            provider = _SlowInitEcho(
-                LLMConfig(provider="echo", model="summary")
-            )
+            provider = _SlowInitEcho(LLMConfig(provider="echo", model="summary"))
             built.append(provider)
             return provider
 
@@ -365,8 +350,6 @@ class TestConcurrentStrategyBuild:
             strategy._get_compaction_strategy(llm),
             strategy._get_compaction_strategy(llm),
         )
-        assert len(built) == 1, (
-            f"expected one summary provider, built {len(built)}"
-        )
+        assert len(built) == 1, f"expected one summary provider, built {len(built)}"
         assert first is second  # both got the one cached strategy
         await strategy.close()

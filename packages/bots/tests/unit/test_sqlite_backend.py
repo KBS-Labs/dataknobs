@@ -32,6 +32,7 @@ from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 # Helpers
 # =====================================================================
 
+
 def _make_wizard() -> WizardReasoning:
     """Create a minimal WizardReasoning for testing _create_bank_db."""
     config: dict[str, Any] = {
@@ -65,9 +66,7 @@ def _make_sqlite_db_factory(
     """
     call_log: list[tuple[str, dict[str, Any]]] = []
 
-    def factory(
-        name: str, cfg: dict[str, Any]
-    ) -> tuple[SyncDatabase, str]:
+    def factory(name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
         call_log.append((name, cfg))
         db_path = str(tmp_path / f"{name}.db")
         db = SyncSQLiteDatabase({"path": db_path, "table": name})
@@ -93,18 +92,15 @@ def _make_artifact_with_data(
     }
     artifact = ArtifactBank.from_config(config, db_factory=db_factory)
     artifact.set_field("recipe_name", "Chocolate Chip Cookies")
-    artifact.section("ingredients").add(
-        {"name": "flour", "amount": "2 cups"}, source_stage="test"
-    )
-    artifact.section("ingredients").add(
-        {"name": "sugar", "amount": "1 cup"}, source_stage="test"
-    )
+    artifact.section("ingredients").add({"name": "flour", "amount": "2 cups"}, source_stage="test")
+    artifact.section("ingredients").add({"name": "sugar", "amount": "1 cup"}, source_stage="test")
     return artifact
 
 
 # =====================================================================
 # _create_bank_db tests
 # =====================================================================
+
 
 class TestCreateBankDb:
     """Tests for WizardReasoning._create_bank_db()."""
@@ -124,37 +120,42 @@ class TestCreateBankDb:
     def test_sqlite_backend_returns_connected_db(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db("items", {
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        db, mode = wizard._create_bank_db(
+            "items",
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            },
+        )
         assert isinstance(db, SyncSQLiteDatabase)
         assert mode == "external"
         # Verify the database is connected and usable
         assert db._connected
         db.close()
 
-    def test_sqlite_backend_table_defaults_to_bank_name(
-        self, tmp_path: Path
-    ) -> None:
+    def test_sqlite_backend_table_defaults_to_bank_name(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db("ingredients", {
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        db, mode = wizard._create_bank_db(
+            "ingredients",
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            },
+        )
         assert db.table_name == "ingredients"
         db.close()
 
-    def test_sqlite_backend_respects_table_config(
-        self, tmp_path: Path
-    ) -> None:
+    def test_sqlite_backend_respects_table_config(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db("ingredients", {
-            "backend": "sqlite",
-            "backend_config": {"path": db_path, "table": "custom_table"},
-        })
+        db, mode = wizard._create_bank_db(
+            "ingredients",
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path, "table": "custom_table"},
+            },
+        )
         assert db.table_name == "custom_table"
         db.close()
 
@@ -162,10 +163,13 @@ class TestCreateBankDb:
         """A bank created via _create_bank_db with sqlite can do CRUD."""
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db("ingredients", {
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        db, mode = wizard._create_bank_db(
+            "ingredients",
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            },
+        )
         bank = MemoryBank(
             name="ingredients",
             schema={"required": ["name"]},
@@ -184,6 +188,7 @@ class TestCreateBankDb:
 # =====================================================================
 # File-based persistence tests
 # =====================================================================
+
 
 class TestSQLitePersistence:
     """Tests for cross-session persistence via file-based SQLite."""
@@ -219,9 +224,7 @@ class TestSQLitePersistence:
         assert names == {"flour", "sugar"}
         bank2.close()
 
-    def test_external_mode_serialization_roundtrip(
-        self, tmp_path: Path
-    ) -> None:
+    def test_external_mode_serialization_roundtrip(self, tmp_path: Path) -> None:
         db_path = str(tmp_path / "items.db")
 
         # Create bank, add records
@@ -277,9 +280,7 @@ class TestSQLitePersistence:
         db_path = str(tmp_path / "ingredients.db")
 
         # Create with factory
-        def factory1(
-            name: str, cfg: dict[str, Any]
-        ) -> tuple[SyncDatabase, str]:
+        def factory1(name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
             db = SyncSQLiteDatabase({"path": db_path, "table": name})
             db.connect()
             return db, "external"
@@ -298,9 +299,7 @@ class TestSQLitePersistence:
         artifact.section("ingredients").close()
 
         # Restore with a new factory that reconnects
-        def factory2(
-            name: str, cfg: dict[str, Any]
-        ) -> tuple[SyncDatabase, str]:
+        def factory2(name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
             path = cfg.get("backend_config", {}).get("path", db_path)
             db = SyncSQLiteDatabase({"path": path, "table": name})
             db.connect()
@@ -309,10 +308,7 @@ class TestSQLitePersistence:
         restored = ArtifactBank.from_dict(data, db_factory=factory2)
         assert restored.field("recipe_name") == "Chocolate Chip Cookies"
         assert restored.section("ingredients").count() == 2
-        names = {
-            r.data["name"]
-            for r in restored.section("ingredients").all()
-        }
+        names = {r.data["name"] for r in restored.section("ingredients").all()}
         assert names == {"flour", "sugar"}
         restored.section("ingredients").close()
 
@@ -321,15 +317,18 @@ class TestSQLitePersistence:
 # Catalog SQLite backend tests
 # =====================================================================
 
+
 class TestCatalogSQLiteBackend:
     """Tests for ArtifactBankCatalog with SQLite backend."""
 
     def test_catalog_from_config_sqlite(self, tmp_path: Path) -> None:
         db_path = str(tmp_path / "catalog.db")
-        catalog = ArtifactBankCatalog.from_config({
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        catalog = ArtifactBankCatalog.from_config(
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            }
+        )
 
         # Create and save an artifact
         artifact = _make_artifact_with_data()
@@ -348,19 +347,23 @@ class TestCatalogSQLiteBackend:
         db_path = str(tmp_path / "catalog.db")
 
         # Session 1: create catalog, save artifact
-        catalog1 = ArtifactBankCatalog.from_config({
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        catalog1 = ArtifactBankCatalog.from_config(
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            }
+        )
         artifact = _make_artifact_with_data()
         catalog1.save(artifact)
         assert catalog1.count() == 1
 
         # Session 2: reopen catalog, artifact is still there
-        catalog2 = ArtifactBankCatalog.from_config({
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        catalog2 = ArtifactBankCatalog.from_config(
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            }
+        )
         assert catalog2.count() == 1
         result = catalog2.get("recipe")
         assert result is not None
@@ -370,21 +373,25 @@ class TestCatalogSQLiteBackend:
         db_path = str(tmp_path / "catalog.db")
 
         # Create catalog with saved artifact
-        catalog = ArtifactBankCatalog.from_config({
-            "backend": "sqlite",
-            "backend_config": {"path": db_path},
-        })
+        catalog = ArtifactBankCatalog.from_config(
+            {
+                "backend": "sqlite",
+                "backend_config": {"path": db_path},
+            }
+        )
         artifact = _make_artifact_with_data()
         catalog.save(artifact)
 
         # Load into a fresh artifact
-        fresh = ArtifactBank.from_config({
-            "name": "recipe",
-            "fields": {"recipe_name": {"required": True}},
-            "sections": {
-                "ingredients": {"schema": {"required": ["name"]}},
-            },
-        })
+        fresh = ArtifactBank.from_config(
+            {
+                "name": "recipe",
+                "fields": {"recipe_name": {"required": True}},
+                "sections": {
+                    "ingredients": {"schema": {"required": ["name"]}},
+                },
+            }
+        )
         assert fresh.section("ingredients").count() == 0
 
         loaded = catalog.load_into("recipe", fresh)

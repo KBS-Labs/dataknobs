@@ -110,17 +110,14 @@ class VersionManager:
             # Validate version format
             if not self.VERSION_PATTERN.match(version):
                 raise VersioningError(
-                    f"Invalid version format: {version}. "
-                    f"Expected semantic version (e.g., '1.0.0')"
+                    f"Invalid version format: {version}. Expected semantic version (e.g., '1.0.0')"
                 )
 
         # Check if version already exists
         key = self._make_key(name, prompt_type)
         existing_versions = await self.list_versions(name, prompt_type)
         if any(v.version == version for v in existing_versions):
-            raise VersioningError(
-                f"Version {version} already exists for {name} ({prompt_type})"
-            )
+            raise VersioningError(f"Version {version} already exists for {name} ({prompt_type})")
 
         # Generate unique version ID
         version_id = str(uuid.uuid4())
@@ -339,8 +336,7 @@ class VersionManager:
         key = self._make_key(version.name, version.prompt_type)
         if key in self._version_index:
             self._version_index[key] = [
-                vid for vid in self._version_index[key]
-                if vid != version_id
+                vid for vid in self._version_index[key] if vid != version_id
             ]
 
         # Remove from storage
@@ -371,15 +367,15 @@ class VersionManager:
             return None
 
         # Filter out archived/deprecated if active versions exist
-        active = [v for v in versions if v.status in (VersionStatus.ACTIVE, VersionStatus.PRODUCTION)]
+        active = [
+            v for v in versions if v.status in (VersionStatus.ACTIVE, VersionStatus.PRODUCTION)
+        ]
         if active:
             versions = active
 
         # Sort by version number
         sorted_versions = sorted(
-            versions,
-            key=lambda v: self._parse_version(v.version),
-            reverse=True
+            versions, key=lambda v: self._parse_version(v.version), reverse=True
         )
         return sorted_versions[0]
 

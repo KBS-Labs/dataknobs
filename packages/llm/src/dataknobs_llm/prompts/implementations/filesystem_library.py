@@ -68,7 +68,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         self,
         prompt_dir: Union[str, Path],
         auto_load: bool = True,
-        file_extensions: List[str] | None = None
+        file_extensions: List[str] | None = None,
     ):
         """Initialize filesystem prompt library.
 
@@ -208,8 +208,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         # Add optional fields
         if "rag_configs" in data:
             message_index["rag_configs"] = [
-                self._parse_rag_config(rag_data)
-                for rag_data in data["rag_configs"]
+                self._parse_rag_config(rag_data) for rag_data in data["rag_configs"]
             ]
 
         if "metadata" in data:
@@ -303,10 +302,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         return self._get_cached_rag_config(name)
 
     def get_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str = "user",
-        **kwargs: Any
+        self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
     ) -> List[RAGConfig]:
         """Get RAG configurations for a specific prompt.
 
@@ -343,8 +339,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
                     configs.append(ref_config)
                 else:
                     logger.warning(
-                        f"RAG config reference '{ref_name}' not found "
-                        f"for prompt '{prompt_name}'"
+                        f"RAG config reference '{ref_name}' not found for prompt '{prompt_name}'"
                     )
 
         return configs

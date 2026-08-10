@@ -148,23 +148,27 @@ class TestGroundedReasoningConfig:
         assert cfg.query_generation.num_queries == 3
 
     def test_from_dict_with_intent_key(self) -> None:
-        cfg = GroundedReasoningConfig.from_dict({
-            "intent": {"mode": "static", "text_queries": ["test"]},
-            "retrieval": {"top_k": 10},
-            "synthesis": {"mode": "template", "template": "{{ results }}"},
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "intent": {"mode": "static", "text_queries": ["test"]},
+                "retrieval": {"top_k": 10},
+                "synthesis": {"mode": "template", "template": "{{ results }}"},
+            }
+        )
         assert cfg.intent.mode == "static"
         assert cfg.intent.text_queries == ["test"]
         assert cfg.synthesis.mode == "template"
 
     def test_from_dict_with_legacy_query_generation_key(self) -> None:
         """Legacy query_generation key maps to extract mode."""
-        cfg = GroundedReasoningConfig.from_dict({
-            "query_generation": {"num_queries": 5, "domain_context": "OAuth"},
-            "retrieval": {"top_k": 10, "score_threshold": 0.5},
-            "synthesis": {"allow_parametric": True, "citation_format": "source"},
-            "store_provenance": False,
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "query_generation": {"num_queries": 5, "domain_context": "OAuth"},
+                "retrieval": {"top_k": 10, "score_threshold": 0.5},
+                "synthesis": {"allow_parametric": True, "citation_format": "source"},
+                "store_provenance": False,
+            }
+        )
         assert cfg.intent.mode == "extract"
         assert cfg.intent.num_queries == 5
         assert cfg.intent.domain_context == "OAuth"
@@ -179,12 +183,14 @@ class TestGroundedReasoningConfig:
         assert cfg.store_provenance is True
 
     def test_from_dict_with_sources(self) -> None:
-        cfg = GroundedReasoningConfig.from_dict({
-            "sources": [
-                {"type": "vector_kb", "name": "docs"},
-                {"type": "database", "name": "courses", "backend": "sqlite"},
-            ],
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "sources": [
+                    {"type": "vector_kb", "name": "docs"},
+                    {"type": "database", "name": "courses", "backend": "sqlite"},
+                ],
+            }
+        )
         assert len(cfg.sources) == 2
         assert cfg.sources[0].source_type == "vector_kb"
         assert cfg.sources[0].name == "docs"
@@ -199,12 +205,14 @@ class TestGroundedReasoningConfig:
         assert cfg.text_queries == []
 
     def test_source_config_from_dict(self) -> None:
-        sc = GroundedSourceConfig.from_dict({
-            "type": "database",
-            "name": "users",
-            "backend": "sqlite",
-            "connection": "users.db",
-        })
+        sc = GroundedSourceConfig.from_dict(
+            {
+                "type": "database",
+                "name": "users",
+                "backend": "sqlite",
+                "connection": "users.db",
+            }
+        )
         assert sc.source_type == "database"
         assert sc.name == "users"
         assert sc.options == {"backend": "sqlite", "connection": "users.db"}
@@ -241,7 +249,11 @@ class TestGroundedReasoningUnit:
 
     def test_extract_user_message_prefers_raw_content(self) -> None:
         messages = [
-            {"role": "user", "content": "augmented msg", "metadata": {"raw_content": "original msg"}},
+            {
+                "role": "user",
+                "content": "augmented msg",
+                "metadata": {"raw_content": "original msg"},
+            },
         ]
         assert GroundedReasoning._extract_user_message(messages) == "original msg"
 
@@ -283,7 +295,9 @@ class TestGroundedReasoningUnit:
             def source_type(self) -> str:
                 return "stub"
 
-            async def query(self, intent: RetrievalIntent, *, top_k: int = 5, score_threshold: float = 0.0) -> list[SourceResult]:
+            async def query(
+                self, intent: RetrievalIntent, *, top_k: int = 5, score_threshold: float = 0.0
+            ) -> list[SourceResult]:
                 return []
 
         strategy = GroundedReasoning(config=GroundedReasoningConfig())
@@ -327,7 +341,7 @@ class TestGroundedReasoningUnit:
                 mode="template",
                 template=(
                     "text_queries:\n"
-                    "  - \"{{ message }}\"\n"
+                    '  - "{{ message }}"\n'
                     "filters:\n"
                     "  courses:\n"
                     "    department: CS\n"
@@ -348,7 +362,7 @@ class TestGroundedReasoningUnit:
                 mode="template",
                 template=(
                     "text_queries:\n"
-                    "  - \"{{ message }}\"\n"
+                    '  - "{{ message }}"\n'
                     "filters:\n"
                     "  courses:\n"
                     "    department: \"{{ metadata.get('department', 'CS') }}\"\n"
@@ -391,7 +405,10 @@ class TestGroundedReasoningUnit:
             "intent": {},
         }
         text = strategy._render_provenance_output(
-            "formatted context", provenance, "user msg", {},
+            "formatted context",
+            provenance,
+            "user msg",
+            {},
         )
         assert "Found 2 results:" in text
         assert "Auth code grant" in text
@@ -403,7 +420,10 @@ class TestGroundedReasoningUnit:
         )
         strategy = GroundedReasoning(config=cfg)
         text = strategy._render_provenance_output(
-            "raw context", {"results": [], "results_by_source": {}}, "msg", {},
+            "raw context",
+            {"results": [], "results_by_source": {}},
+            "msg",
+            {},
         )
         assert "No relevant results found." in text
 
@@ -532,9 +552,7 @@ class TestGroundedReasoningIntegration:
             bot_config=_grounded_bot_config(num_queries=3),
             main_responses=[
                 text_response(
-                    "OAuth grant types\n"
-                    "authorization code flow\n"
-                    "implicit grant comparison"
+                    "OAuth grant types\nauthorization code flow\nimplicit grant comparison"
                 ),
                 text_response("synthesis"),
             ],
@@ -602,9 +620,7 @@ class TestGroundedReasoningIntegration:
     @pytest.mark.asyncio
     async def test_score_threshold_filters_results(self) -> None:
         """Results below score_threshold are excluded."""
-        low_score_results = [
-            {**r, "similarity": 0.1} for r in SAMPLE_KB_RESULTS
-        ]
+        low_score_results = [{**r, "similarity": 0.1} for r in SAMPLE_KB_RESULTS]
         kb = InMemoryKnowledgeBase(results=low_score_results)
 
         config = _grounded_bot_config()
@@ -730,9 +746,7 @@ class TestTemplateIntentMode:
 
         config = _grounded_bot_config(intent_mode="template")
         config["reasoning"]["intent"]["template"] = (
-            "text_queries:\n"
-            "  - \"{{ message }}\"\n"
-            "scope: focused\n"
+            'text_queries:\n  - "{{ message }}"\nscope: focused\n'
         )
 
         async with await BotTestHarness.create(
@@ -818,9 +832,15 @@ class TestDefaultFilters:
         strategy = GroundedReasoning(config=cfg)
 
         import asyncio
-        intent = asyncio.run(strategy._resolve_intent(
-            "test", [], None, {},
-        ))
+
+        intent = asyncio.run(
+            strategy._resolve_intent(
+                "test",
+                [],
+                None,
+                {},
+            )
+        )
         # default_filters overrides 'status' but preserves 'category'
         assert intent.filters["src"]["status"] == "published"
         assert intent.filters["src"]["category"] == "auth"
@@ -872,10 +892,7 @@ class TestSynthesisTemplateMode:
             synthesis_mode="template",
         )
         config["reasoning"]["synthesis"]["template"] = (
-            "Results for: {{ message }}\n"
-            "{% for r in results %}"
-            "- {{ r.text_preview }}\n"
-            "{% endfor %}"
+            "Results for: {{ message }}\n{% for r in results %}- {{ r.text_preview }}\n{% endfor %}"
         )
 
         async with await BotTestHarness.create(
@@ -941,10 +958,12 @@ class TestResultMerge:
         cfg = GroundedReasoningConfig()
         strategy = GroundedReasoning(config=cfg)
 
-        results = strategy._merge_source_results({
-            "a": self._make_results("a", 3),
-            "b": self._make_results("b", 3),
-        })
+        results = strategy._merge_source_results(
+            {
+                "a": self._make_results("a", 3),
+                "b": self._make_results("b", 3),
+            }
+        )
         names = [r.source_name for r in results]
         # Round-robin: a, b, a, b, a, b
         assert names == ["a", "b", "a", "b", "a", "b"]
@@ -959,16 +978,24 @@ class TestResultMerge:
         )
         strategy = GroundedReasoning(config=cfg)
 
-        results = strategy._merge_source_results({
-            "primary": self._make_results("primary", 6),
-            "secondary": self._make_results("secondary", 2),
-        })
+        results = strategy._merge_source_results(
+            {
+                "primary": self._make_results("primary", 6),
+                "secondary": self._make_results("secondary", 2),
+            }
+        )
         names = [r.source_name for r in results]
         # Round 1: primary x3, secondary x1
         # Round 2: primary x3, secondary x1
         assert names == [
-            "primary", "primary", "primary", "secondary",
-            "primary", "primary", "primary", "secondary",
+            "primary",
+            "primary",
+            "primary",
+            "secondary",
+            "primary",
+            "primary",
+            "primary",
+            "secondary",
         ]
 
     def test_weighted_exhaustion(self) -> None:
@@ -981,10 +1008,12 @@ class TestResultMerge:
         )
         strategy = GroundedReasoning(config=cfg)
 
-        results = strategy._merge_source_results({
-            "big": self._make_results("big", 2),    # Runs out mid-round
-            "small": self._make_results("small", 3),
-        })
+        results = strategy._merge_source_results(
+            {
+                "big": self._make_results("big", 2),  # Runs out mid-round
+                "small": self._make_results("small", 3),
+            }
+        )
         # Round 1: big x2 (exhausted at 3rd), small x1
         # Round 2: small x1
         # Round 3: small x1
@@ -1000,14 +1029,24 @@ class TestResultMerge:
         strategy = GroundedReasoning(config=cfg)
 
         # Same source_id from two sources
-        results_a = [SourceResult(
-            content="same", source_id="dup", source_name="a",
-            source_type="test", relevance=0.9,
-        )]
-        results_b = [SourceResult(
-            content="same", source_id="dup", source_name="b",
-            source_type="test", relevance=0.8,
-        )]
+        results_a = [
+            SourceResult(
+                content="same",
+                source_id="dup",
+                source_name="a",
+                source_type="test",
+                relevance=0.9,
+            )
+        ]
+        results_b = [
+            SourceResult(
+                content="same",
+                source_id="dup",
+                source_name="b",
+                source_type="test",
+                relevance=0.8,
+            )
+        ]
         merged = strategy._merge_source_results({"a": results_a, "b": results_b})
         # Without dedup, both appear
         assert len(merged) == 2
@@ -1024,20 +1063,24 @@ class TestGroundedFactory:
     def test_create_from_config(self) -> None:
         from dataknobs_bots.reasoning import create_reasoning_from_config
 
-        strategy = create_reasoning_from_config({
-            "strategy": "grounded",
-            "query_generation": {"num_queries": 2},
-        })
+        strategy = create_reasoning_from_config(
+            {
+                "strategy": "grounded",
+                "query_generation": {"num_queries": 2},
+            }
+        )
         assert isinstance(strategy, GroundedReasoning)
         assert strategy._config.query_generation.num_queries == 2
 
     def test_create_from_config_with_intent_key(self) -> None:
         from dataknobs_bots.reasoning import create_reasoning_from_config
 
-        strategy = create_reasoning_from_config({
-            "strategy": "grounded",
-            "intent": {"mode": "static", "text_queries": ["test"]},
-        })
+        strategy = create_reasoning_from_config(
+            {
+                "strategy": "grounded",
+                "intent": {"mode": "static", "text_queries": ["test"]},
+            }
+        )
         assert isinstance(strategy, GroundedReasoning)
         assert strategy._config.intent.mode == "static"
 
@@ -1100,7 +1143,8 @@ class TestSynthesisPrompt:
         )
         strategy = GroundedReasoning(config=cfg)
         prompt = strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "Original system prompt" in prompt
         assert "## Knowledge base" in prompt
@@ -1118,7 +1162,8 @@ class TestSynthesisPrompt:
             prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
         )
         prompt = strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
         assert "## Knowledge base" not in prompt
@@ -1324,9 +1369,11 @@ class TestSourceFactorySchema:
     def test_dict_type_with_enum(self) -> None:
         from dataknobs_bots.knowledge.sources.factory import _build_database_schema
 
-        schema = _build_database_schema({
-            "dept": {"type": "string", "enum": ["CS", "Math"]},
-        })
+        schema = _build_database_schema(
+            {
+                "dept": {"type": "string", "enum": ["CS", "Math"]},
+            }
+        )
         assert "dept" in schema.fields
         assert schema.fields["dept"].metadata.get("enum") == ["CS", "Math"]
 
@@ -1558,9 +1605,11 @@ class TestSchemaExtractorIntentExtraction:
             strategy = harness.bot.reasoning_strategy
 
             # Inject a scripted extractor that returns structured intent
-            extractor, _provider = scripted_schema_extractor([
-                '{"text_queries": ["OAuth grant types", "authorization code flow"], "scope": "focused"}',
-            ])
+            extractor, _provider = scripted_schema_extractor(
+                [
+                    '{"text_queries": ["OAuth grant types", "authorization code flow"], "scope": "focused"}',
+                ]
+            )
             strategy.set_extractor(extractor)
 
             result = await harness.chat("What are OAuth grant types?")
@@ -1581,9 +1630,11 @@ class TestSchemaExtractorIntentExtraction:
         )
         strategy = GroundedReasoning(config=config)
 
-        extractor, _provider = scripted_schema_extractor([
-            '{"text_queries": ["broad search"], "scope": "broad"}',
-        ])
+        extractor, _provider = scripted_schema_extractor(
+            [
+                '{"text_queries": ["broad search"], "scope": "broad"}',
+            ]
+        )
         strategy.set_extractor(extractor)
 
         intent = await strategy._extract_intent(
@@ -1606,9 +1657,11 @@ class TestSchemaExtractorIntentExtraction:
         )
         strategy = GroundedReasoning(config=config)
 
-        extractor, _provider = scripted_schema_extractor([
-            '{"text_queries": []}',
-        ])
+        extractor, _provider = scripted_schema_extractor(
+            [
+                '{"text_queries": []}',
+            ]
+        )
         strategy.set_extractor(extractor)
 
         intent = await strategy._extract_intent("my question", [])
@@ -1649,9 +1702,11 @@ class TestSchemaExtractorIntentExtraction:
         )
         strategy = GroundedReasoning(config=config)
 
-        extractor, _provider = scripted_schema_extractor([
-            '{"text_queries": ["q1", "q2", "q3", "q4"]}',
-        ])
+        extractor, _provider = scripted_schema_extractor(
+            [
+                '{"text_queries": ["q1", "q2", "q3", "q4"]}',
+            ]
+        )
         strategy.set_extractor(extractor)
 
         intent = await strategy._extract_intent("question", [])
@@ -1671,9 +1726,11 @@ class TestSchemaExtractorIntentExtraction:
         )
         strategy = GroundedReasoning(config=config)
 
-        extractor, ext_provider = scripted_schema_extractor([
-            '{"text_queries": ["context-aware query"]}',
-        ])
+        extractor, ext_provider = scripted_schema_extractor(
+            [
+                '{"text_queries": ["context-aware query"]}',
+            ]
+        )
         strategy.set_extractor(extractor)
 
         messages = [
@@ -1717,17 +1774,19 @@ class TestSchemaExtractorIntentExtraction:
 
     def test_extraction_config_from_dict(self) -> None:
         """extraction_config survives GroundedReasoningConfig.from_dict()."""
-        config = GroundedReasoningConfig.from_dict({
-            "intent": {
-                "mode": "extract",
-                "num_queries": 3,
-                "extraction_config": {
-                    "provider": "ollama",
-                    "model": "qwen3:8b",
-                    "temperature": 0.0,
+        config = GroundedReasoningConfig.from_dict(
+            {
+                "intent": {
+                    "mode": "extract",
+                    "num_queries": 3,
+                    "extraction_config": {
+                        "provider": "ollama",
+                        "model": "qwen3:8b",
+                        "temperature": 0.0,
+                    },
                 },
-            },
-        })
+            }
+        )
         assert config.intent.extraction_config is not None
         assert config.intent.extraction_config["model"] == "qwen3:8b"
 
@@ -1793,10 +1852,7 @@ class TestRawContentPreference:
         messages = [
             {
                 "role": "user",
-                "content": (
-                    "## Knowledge base\n\nchunks\n\n---\n\n"
-                    "## Question\n\nWhat is OAuth?"
-                ),
+                "content": ("## Knowledge base\n\nchunks\n\n---\n\n## Question\n\nWhat is OAuth?"),
                 "metadata": {"raw_content": "What is OAuth?"},
             },
             {"role": "assistant", "content": "OAuth is an authorization framework."},
@@ -1968,7 +2024,9 @@ class TestSynthesisPlan:
         """Conversational plan has system_prompt, no template_text."""
         strategy = self._make_strategy(style="conversational")
         plan = strategy.resolve_synthesis(
-            "kb context", self._FakeManager(), self._make_provenance(),
+            "kb context",
+            self._FakeManager(),
+            self._make_provenance(),
         )
         assert plan.effective_style == "conversational"
         assert plan.system_prompt is not None
@@ -1978,7 +2036,9 @@ class TestSynthesisPlan:
         """Structured plan has template_text, no system_prompt."""
         strategy = self._make_strategy(style="structured")
         plan = strategy.resolve_synthesis(
-            "kb context", self._FakeManager(), self._make_provenance(),
+            "kb context",
+            self._FakeManager(),
+            self._make_provenance(),
         )
         assert plan.effective_style == "structured"
         assert plan.template_text is not None
@@ -1988,7 +2048,9 @@ class TestSynthesisPlan:
         """Hybrid plan has both system_prompt and template_text."""
         strategy = self._make_strategy(style="hybrid")
         plan = strategy.resolve_synthesis(
-            "kb context", self._FakeManager(), self._make_provenance(),
+            "kb context",
+            self._FakeManager(),
+            self._make_provenance(),
         )
         assert plan.effective_style == "hybrid"
         assert plan.system_prompt is not None
@@ -2277,11 +2339,7 @@ class TestSynthesisStyleIntegration:
     async def test_provenance_includes_raw_data(self) -> None:
         """Provenance intent dict includes raw_data for per-turn style."""
         kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
-        config = (
-            GroundedConfigBuilder()
-            .intent(mode="static", text_queries=["test"])
-            .build()
-        )
+        config = GroundedConfigBuilder().intent(mode="static", text_queries=["test"]).build()
 
         async with await BotTestHarness.create(
             bot_config=config,
@@ -2322,7 +2380,8 @@ class TestSynthesisStyleStreaming:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             chunks = []
             async for chunk in harness.bot.stream_chat(
-                "Show grants", harness.context,
+                "Show grants",
+                harness.context,
             ):
                 chunks.append(chunk)
             # stream_chat wraps LLMResponse into LLMStreamResponse with .delta
@@ -2348,7 +2407,8 @@ class TestSynthesisStyleStreaming:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             chunks = []
             async for chunk in harness.bot.stream_chat(
-                "Explain grants", harness.context,
+                "Explain grants",
+                harness.context,
             ):
                 chunks.append(chunk)
             full_text = "".join(c.delta for c in chunks if c.delta)
@@ -2372,7 +2432,9 @@ class TestIntentSchemaOutputStyle:
         props = INTENT_EXTRACTION_SCHEMA["properties"]
         assert "output_style" in props
         assert set(props["output_style"]["enum"]) == {
-            "conversational", "structured", "hybrid",
+            "conversational",
+            "structured",
+            "hybrid",
         }
 
     def test_output_style_not_required(self) -> None:
@@ -2397,9 +2459,7 @@ class TestIntentSchemaOutputStyle:
         # Simulate what _extract_intent does: deepcopy + override
         schema = copy.deepcopy(INTENT_EXTRACTION_SCHEMA)
         if config.intent.output_style_hint:
-            schema["properties"]["output_style"]["description"] = (
-                config.intent.output_style_hint
-            )
+            schema["properties"]["output_style"]["description"] = config.intent.output_style_hint
 
         assert schema["properties"]["output_style"]["description"] == custom_hint
         # Original is unchanged
@@ -2444,9 +2504,11 @@ class TestIntentGrounding:
 
             # Extractor returns output_style: structured, but the user
             # message has no grounding for "structured"
-            extractor, _provider = scripted_schema_extractor([
-                '{"text_queries": ["security risks"], "output_style": "structured"}',
-            ])
+            extractor, _provider = scripted_schema_extractor(
+                [
+                    '{"text_queries": ["security risks"], "output_style": "structured"}',
+                ]
+            )
             strategy.set_extractor(extractor)
 
             result = await harness.chat(
@@ -2475,9 +2537,11 @@ class TestIntentGrounding:
             strategy = harness.bot.reasoning_strategy
 
             # User explicitly says "structured" — grounding passes
-            extractor, _provider = scripted_schema_extractor([
-                '{"text_queries": ["security risks"], "output_style": "structured"}',
-            ])
+            extractor, _provider = scripted_schema_extractor(
+                [
+                    '{"text_queries": ["security risks"], "output_style": "structured"}',
+                ]
+            )
             strategy.set_extractor(extractor)
 
             result = await harness.chat(
@@ -2506,9 +2570,11 @@ class TestIntentGrounding:
 
             # Queries about topic X — the query words may not literally
             # appear in the user message (LLM can reformulate)
-            extractor, _provider = scripted_schema_extractor([
-                '{"text_queries": ["OAuth2 grant types", "authorization code"], "scope": "focused"}',
-            ])
+            extractor, _provider = scripted_schema_extractor(
+                [
+                    '{"text_queries": ["OAuth2 grant types", "authorization code"], "scope": "focused"}',
+                ]
+            )
             strategy.set_extractor(extractor)
 
             result = await harness.chat("Tell me about auth patterns")
@@ -2535,9 +2601,11 @@ class TestIntentGrounding:
             strategy = harness.bot.reasoning_strategy
 
             # scope: "exact" but user didn't say "exact"
-            extractor, _provider = scripted_schema_extractor([
-                '{"text_queries": ["test query"], "scope": "exact"}',
-            ])
+            extractor, _provider = scripted_schema_extractor(
+                [
+                    '{"text_queries": ["test query"], "scope": "exact"}',
+                ]
+            )
             strategy.set_extractor(extractor)
 
             result = await harness.chat("Tell me about testing")
@@ -2562,7 +2630,8 @@ class TestSynthesisInstruction:
         )
         strategy = GroundedReasoning(config=cfg)
         prompt = strategy.build_synthesis_system_prompt(
-            "KB content", "System prompt",
+            "KB content",
+            "System prompt",
         )
         assert "Focus on security risks." in prompt
         # Instruction should come after grounding lines
@@ -2580,10 +2649,12 @@ class TestSynthesisInstruction:
         strategy_with = GroundedReasoning(config=cfg_with)
         strategy_without = GroundedReasoning(config=cfg_without)
         prompt_with = strategy_with.build_synthesis_system_prompt(
-            "KB content", "System prompt",
+            "KB content",
+            "System prompt",
         )
         prompt_without = strategy_without.build_synthesis_system_prompt(
-            "KB content", "System prompt",
+            "KB content",
+            "System prompt",
         )
         assert "Extra guidance." in prompt_with
         assert "Extra guidance." not in prompt_without
@@ -2619,11 +2690,13 @@ class TestSynthesisInstruction:
             assert result.response == "response"
 
     def test_config_from_dict_with_instruction(self) -> None:
-        cfg = GroundedReasoningConfig.from_dict({
-            "synthesis": {
-                "instruction": "Be concise.",
-            },
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "synthesis": {
+                    "instruction": "Be concise.",
+                },
+            }
+        )
         assert cfg.synthesis.instruction == "Be concise."
 
 
@@ -2636,13 +2709,15 @@ class TestResultProcessingConfig:
     """Tests for GroundedResultProcessingConfig and pipeline wiring."""
 
     def test_config_from_dict_with_result_processing(self) -> None:
-        cfg = GroundedReasoningConfig.from_dict({
-            "result_processing": {
-                "normalize_strategy": "min_max",
-                "relative_threshold": 0.4,
-                "query_rerank_weight": 0.3,
-            },
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "result_processing": {
+                    "normalize_strategy": "min_max",
+                    "relative_threshold": 0.4,
+                    "query_rerank_weight": 0.3,
+                },
+            }
+        )
         assert cfg.result_processing is not None
         assert cfg.result_processing.normalize_strategy == "min_max"
         assert cfg.result_processing.relative_threshold == pytest.approx(0.4)
@@ -2739,9 +2814,11 @@ class TestBridgeMode:
         assert "connect and synthesize" not in prompt
 
     def test_bridge_config_from_dict(self) -> None:
-        cfg = GroundedReasoningConfig.from_dict({
-            "synthesis": {"allow_parametric": "bridge"},
-        })
+        cfg = GroundedReasoningConfig.from_dict(
+            {
+                "synthesis": {"allow_parametric": "bridge"},
+            }
+        )
         assert cfg.synthesis.allow_parametric == "bridge"
 
 
@@ -2762,8 +2839,12 @@ class TestClusteredFormatting:
                 source_name="kb",
                 source_type="vector_kb",
                 relevance=0.9,
-                metadata={"cluster_id": 0, "cluster_label": "security",
-                          "cluster_size": 2, "cluster_query_score": 0.9},
+                metadata={
+                    "cluster_id": 0,
+                    "cluster_label": "security",
+                    "cluster_size": 2,
+                    "cluster_query_score": 0.9,
+                },
             ),
             SourceResult(
                 content="Security risk B",
@@ -2771,8 +2852,12 @@ class TestClusteredFormatting:
                 source_name="kb",
                 source_type="vector_kb",
                 relevance=0.8,
-                metadata={"cluster_id": 0, "cluster_label": "security",
-                          "cluster_size": 2, "cluster_query_score": 0.9},
+                metadata={
+                    "cluster_id": 0,
+                    "cluster_label": "security",
+                    "cluster_size": 2,
+                    "cluster_query_score": 0.9,
+                },
             ),
             SourceResult(
                 content="Database info",
@@ -2780,8 +2865,12 @@ class TestClusteredFormatting:
                 source_name="kb",
                 source_type="vector_kb",
                 relevance=0.5,
-                metadata={"cluster_id": 1, "cluster_label": "database",
-                          "cluster_size": 1, "cluster_query_score": 0.3},
+                metadata={
+                    "cluster_id": 1,
+                    "cluster_label": "database",
+                    "cluster_size": 1,
+                    "cluster_query_score": 0.3,
+                },
             ),
         ]
         formatted = strategy._format_source_results(results)
@@ -2813,8 +2902,12 @@ class TestClusteredFormatting:
                 source_name="kb",
                 source_type="vector_kb",
                 relevance=0.9,
-                metadata={"cluster_id": 0, "cluster_label": "test",
-                          "cluster_size": 1, "cluster_query_score": 0.5},
+                metadata={
+                    "cluster_id": 0,
+                    "cluster_label": "test",
+                    "cluster_size": 1,
+                    "cluster_query_score": 0.5,
+                },
             ),
             SourceResult(
                 content="Unclustered item",
@@ -2822,8 +2915,7 @@ class TestClusteredFormatting:
                 source_name="kb",
                 source_type="vector_kb",
                 relevance=0.5,
-                metadata={"cluster_id": -1, "cluster_label": "unclustered",
-                          "cluster_size": 1},
+                metadata={"cluster_id": -1, "cluster_label": "unclustered", "cluster_size": 1},
             ),
         ]
         formatted = strategy._format_source_results(results)
@@ -2842,15 +2934,17 @@ class TestTopicIndexIntegration:
     @pytest.mark.asyncio
     async def test_source_config_with_topic_index(self) -> None:
         """GroundedSourceConfig.from_dict() preserves topic_index config."""
-        sc = GroundedSourceConfig.from_dict({
-            "type": "vector_kb",
-            "name": "docs",
-            "topic_index": {
-                "type": "heading_tree",
-                "entry_strategy": "both",
-                "expansion_mode": "subtree",
-            },
-        })
+        sc = GroundedSourceConfig.from_dict(
+            {
+                "type": "vector_kb",
+                "name": "docs",
+                "topic_index": {
+                    "type": "heading_tree",
+                    "entry_strategy": "both",
+                    "expansion_mode": "subtree",
+                },
+            }
+        )
         assert sc.topic_index is not None
         assert sc.topic_index["type"] == "heading_tree"
         assert sc.topic_index["entry_strategy"] == "both"
@@ -2859,10 +2953,12 @@ class TestTopicIndexIntegration:
     @pytest.mark.asyncio
     async def test_source_config_without_topic_index(self) -> None:
         """GroundedSourceConfig.from_dict() without topic_index keeps None."""
-        sc = GroundedSourceConfig.from_dict({
-            "type": "vector_kb",
-            "name": "docs",
-        })
+        sc = GroundedSourceConfig.from_dict(
+            {
+                "type": "vector_kb",
+                "name": "docs",
+            }
+        )
         assert sc.topic_index is None
 
     @pytest.mark.asyncio
@@ -2913,7 +3009,8 @@ class TestTopicIndexIntegration:
 
         intent = RetrievalIntent(text_queries=["security"])
         results_by_source = await strategy._retrieve_from_sources(
-            intent, user_message="security considerations",
+            intent,
+            user_message="security considerations",
         )
 
         assert "docs" in results_by_source
@@ -2940,7 +3037,8 @@ class TestTopicIndexIntegration:
 
         intent = RetrievalIntent(text_queries=["authorization"])
         results_by_source = await strategy._retrieve_from_sources(
-            intent, user_message="authorization grants",
+            intent,
+            user_message="authorization grants",
         )
 
         assert "docs" in results_by_source
@@ -2984,7 +3082,8 @@ class TestTopicIndexIntegration:
 
         intent = RetrievalIntent(text_queries=["security"])
         results = await strategy._retrieve_from_sources(
-            intent, user_message="security",
+            intent,
+            user_message="security",
         )
 
         # Both sources produced results
@@ -3011,14 +3110,17 @@ class TestPublicCompositionAPI:
 
         # Default: includes citation instructions
         default_prompt = strategy.build_synthesis_system_prompt(
-            "KB content", "You are a bot.",
+            "KB content",
+            "You are a bot.",
         )
         assert "Cite" in default_prompt
 
         # Override: no citations
         override = GroundedSynthesisConfig(require_citations=False)
         override_prompt = strategy.build_synthesis_system_prompt(
-            "KB content", "You are a bot.", synthesis_config=override,
+            "KB content",
+            "You are a bot.",
+            synthesis_config=override,
         )
         assert "Cite" not in override_prompt
 
@@ -3033,15 +3135,19 @@ class TestPublicCompositionAPI:
             instruction="Focus on security implications.",
         )
         prompt = strategy.build_synthesis_system_prompt(
-            "KB content", "Base prompt.", synthesis_config=override,
+            "KB content",
+            "Base prompt.",
+            synthesis_config=override,
         )
         assert "Focus on security implications." in prompt
 
     def test_build_synthesis_system_prompt_override_parametric(self) -> None:
         """Config override can switch parametric knowledge policy."""
-        strategy = GroundedReasoning(config=GroundedReasoningConfig(
-            synthesis=GroundedSynthesisConfig(allow_parametric=False),
-        ))
+        strategy = GroundedReasoning(
+            config=GroundedReasoningConfig(
+                synthesis=GroundedSynthesisConfig(allow_parametric=False),
+            )
+        )
 
         # Default: strict grounding
         default_prompt = strategy.build_synthesis_system_prompt("KB", "Prompt.")
@@ -3050,7 +3156,9 @@ class TestPublicCompositionAPI:
         # Override: bridge mode
         bridge = GroundedSynthesisConfig(allow_parametric="bridge")
         bridge_prompt = strategy.build_synthesis_system_prompt(
-            "KB", "Prompt.", synthesis_config=bridge,
+            "KB",
+            "Prompt.",
+            synthesis_config=bridge,
         )
         assert "connect and synthesize" in bridge_prompt
 
@@ -3079,9 +3187,11 @@ class TestPublicCompositionAPI:
         """Pre-built prompt is used directly, not rebuilt internally."""
         from dataknobs_bots.testing import StubManager
 
-        strategy = GroundedReasoning(config=GroundedReasoningConfig(
-            synthesis=GroundedSynthesisConfig(style="conversational"),
-        ))
+        strategy = GroundedReasoning(
+            config=GroundedReasoningConfig(
+                synthesis=GroundedSynthesisConfig(style="conversational"),
+            )
+        )
         manager = StubManager(
             system_prompt="Base.",
             messages=[{"role": "user", "content": "Hello"}],
@@ -3089,7 +3199,9 @@ class TestPublicCompositionAPI:
 
         pre_built = "THIS IS MY PRE-BUILT PROMPT"
         plan = strategy.resolve_synthesis(
-            "KB context", manager, {},
+            "KB context",
+            manager,
+            {},
             system_prompt=pre_built,
         )
 
@@ -3100,12 +3212,14 @@ class TestPublicCompositionAPI:
         """Without pre-built prompt, resolve_synthesis builds one."""
         from dataknobs_bots.testing import StubManager
 
-        strategy = GroundedReasoning(config=GroundedReasoningConfig(
-            synthesis=GroundedSynthesisConfig(
-                style="conversational",
-                require_citations=True,
-            ),
-        ))
+        strategy = GroundedReasoning(
+            config=GroundedReasoningConfig(
+                synthesis=GroundedSynthesisConfig(
+                    style="conversational",
+                    require_citations=True,
+                ),
+            )
+        )
         manager = StubManager(
             system_prompt="Base.",
             messages=[{"role": "user", "content": "Hello"}],
@@ -3124,12 +3238,14 @@ class TestPublicCompositionAPI:
         """synthesis_config override is forwarded to prompt construction."""
         from dataknobs_bots.testing import StubManager
 
-        strategy = GroundedReasoning(config=GroundedReasoningConfig(
-            synthesis=GroundedSynthesisConfig(
-                style="conversational",
-                require_citations=True,
-            ),
-        ))
+        strategy = GroundedReasoning(
+            config=GroundedReasoningConfig(
+                synthesis=GroundedSynthesisConfig(
+                    style="conversational",
+                    require_citations=True,
+                ),
+            )
+        )
         manager = StubManager(
             system_prompt="Base.",
             messages=[{"role": "user", "content": "Hello"}],
@@ -3137,7 +3253,10 @@ class TestPublicCompositionAPI:
 
         override = GroundedSynthesisConfig(require_citations=False)
         plan = strategy.resolve_synthesis(
-            "KB context", manager, {}, synthesis_config=override,
+            "KB context",
+            manager,
+            {},
+            synthesis_config=override,
         )
 
         assert plan.system_prompt is not None
@@ -3162,7 +3281,9 @@ class TestPublicCompositionAPI:
         pre_intent = RetrievalIntent(text_queries=["pre-resolved query"])
 
         context, provenance = await strategy.retrieve_context(
-            manager, None, intent=pre_intent,
+            manager,
+            None,
+            intent=pre_intent,
         )
 
         # The pre-resolved query should be what was used for retrieval

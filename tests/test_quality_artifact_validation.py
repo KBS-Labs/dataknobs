@@ -209,9 +209,7 @@ def test_a_skipped_check_reads_as_skipped(tmp_path):
         ("empty", ""),
     ],
 )
-def test_an_unreadable_summary_says_so_rather_than_reading_as_empty(
-    tmp_path, name, content
-):
+def test_an_unreadable_summary_says_so_rather_than_reading_as_empty(tmp_path, name, content):
     """Fails loud, not blank.
 
     "Could not parse the attestation" and "the attestation says the run passed"
@@ -239,7 +237,12 @@ def test_the_reader_prints_the_projection_and_nothing_else(tmp_path):
     to forget gets a parse failure that reads as a data problem.
     """
     result = subprocess.run(
-        ["bash", str(VALIDATOR), "--read-summary", str(_write(tmp_path / "s.json", _PRODUCER_ORDER))],
+        [
+            "bash",
+            str(VALIDATOR),
+            "--read-summary",
+            str(_write(tmp_path / "s.json", _PRODUCER_ORDER)),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -453,7 +456,7 @@ def test_the_projection_is_split_never_pattern_matched():
         for number, line in enumerate(text.splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue
-            if not any(f"${carrier}" in line or f'${{{carrier}}}' in line for carrier in carriers):
+            if not any(f"${carrier}" in line or f"${{{carrier}}}" in line for carrier in carriers):
                 continue
             if any(token in line for token in _TEXT_READERS):
                 offenders.append(f"{name}:{number}: {line.strip()}")

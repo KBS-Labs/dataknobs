@@ -109,9 +109,7 @@ def sync_db(request: pytest.FixtureRequest) -> Iterator[object]:
             db = SyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
             db.connect()
         else:
-            db = SyncDuckDBDatabase(
-                {"path": str(Path(d) / "records.duckdb"), "table": "records"}
-            )
+            db = SyncDuckDBDatabase({"path": str(Path(d) / "records.duckdb"), "table": "records"})
             db.connect()
         try:
             yield db

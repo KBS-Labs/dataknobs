@@ -81,10 +81,7 @@ def check_workflow_docs(registry: Registry, repo_root: Path) -> list[str]:
 
     doc_packages = [p for p in registry["packages"] if p.get("requires_docs_build", False)]
 
-    workflow_files = [
-        ".github/workflows/docs.yml",
-        ".github/workflows/quality-validation.yml"
-    ]
+    workflow_files = [".github/workflows/docs.yml", ".github/workflows/quality-validation.yml"]
 
     members_line = _root_workspace_members(repo_root)
 
@@ -95,9 +92,7 @@ def check_workflow_docs(registry: Registry, repo_root: Path) -> list[str]:
             continue
 
         content = workflow_path.read_text()
-        uses_workspace_install = any(
-            pattern in content for pattern in WORKSPACE_INSTALL_PATTERNS
-        )
+        uses_workspace_install = any(pattern in content for pattern in WORKSPACE_INSTALL_PATTERNS)
 
         for pkg in doc_packages:
             if uses_workspace_install:
@@ -122,7 +117,8 @@ def check_release_workflow(registry: Registry, repo_root: Path) -> list[str]:
     errors: list[str] = []
 
     releasable_packages = [
-        p for p in registry["packages"]
+        p
+        for p in registry["packages"]
         if not p.get("deprecated", False) and p["category"] != "experimental"
     ]
 
@@ -136,9 +132,7 @@ def check_release_workflow(registry: Registry, repo_root: Path) -> list[str]:
     for pkg in releasable_packages:
         # Check if package name appears in options section
         if f"- {pkg['name']}" not in content:
-            errors.append(
-                f"❌ release.yml: Package '{pkg['name']}' not in workflow choices"
-            )
+            errors.append(f"❌ release.yml: Package '{pkg['name']}' not in workflow choices")
 
     return errors
 
@@ -148,7 +142,8 @@ def check_readme(registry: Registry, repo_root: Path) -> list[str]:
     errors: list[str] = []
 
     listed_packages = [
-        p for p in registry["packages"]
+        p
+        for p in registry["packages"]
         if not p.get("deprecated", False) and p["category"] == "core"
     ]
 
@@ -161,9 +156,7 @@ def check_readme(registry: Registry, repo_root: Path) -> list[str]:
 
     for pkg in listed_packages:
         if pkg["pypi_name"] not in content:
-            errors.append(
-                f"❌ README.md: Package '{pkg['pypi_name']}' not mentioned"
-            )
+            errors.append(f"❌ README.md: Package '{pkg['pypi_name']}' not mentioned")
 
     return errors
 
@@ -181,9 +174,7 @@ def check_pyproject_toml(registry: Registry, repo_root: Path) -> list[str]:
 
     for pkg in registry["packages"]:
         if pkg["pypi_name"] not in content:
-            errors.append(
-                f"⚠️  pyproject.toml: Package '{pkg['pypi_name']}' not found"
-            )
+            errors.append(f"⚠️  pyproject.toml: Package '{pkg['pypi_name']}' not found")
 
     return errors
 

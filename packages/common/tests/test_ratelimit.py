@@ -141,8 +141,8 @@ class TestInMemoryTryAcquire:
         """Test that the most restrictive rate applies."""
         config = RateLimiterConfig(
             default_rates=[
-                RateLimit(limit=2, interval=0.1),   # 2 per 0.1s
-                RateLimit(limit=100, interval=60),   # 100 per minute
+                RateLimit(limit=2, interval=0.1),  # 2 per 0.1s
+                RateLimit(limit=100, interval=60),  # 100 per minute
             ],
         )
         limiter = InMemoryRateLimiter(config)
@@ -339,37 +339,45 @@ class TestCreateRateLimiter:
     @pytest.mark.asyncio
     async def test_memory_backend(self):
         """Test creating a memory backend limiter."""
-        limiter = create_rate_limiter({
-            "backend": "memory",
-            "rates": [{"limit": 10, "interval": 60}],
-        })
+        limiter = create_rate_limiter(
+            {
+                "backend": "memory",
+                "rates": [{"limit": 10, "interval": 60}],
+            }
+        )
         assert isinstance(limiter, InMemoryRateLimiter)
 
     @pytest.mark.asyncio
     async def test_default_is_memory(self):
         """Test that the default backend is memory."""
-        limiter = create_rate_limiter({
-            "rates": [{"limit": 10, "interval": 60}],
-        })
+        limiter = create_rate_limiter(
+            {
+                "rates": [{"limit": 10, "interval": 60}],
+            }
+        )
         assert isinstance(limiter, InMemoryRateLimiter)
 
     @pytest.mark.asyncio
     async def test_default_rates_alias(self):
         """Test that 'default_rates' works as an alias for 'rates'."""
-        limiter = create_rate_limiter({
-            "default_rates": [{"limit": 10, "interval": 60}],
-        })
+        limiter = create_rate_limiter(
+            {
+                "default_rates": [{"limit": 10, "interval": 60}],
+            }
+        )
         assert isinstance(limiter, InMemoryRateLimiter)
 
     @pytest.mark.asyncio
     async def test_per_category_config_roundtrip(self):
         """Test that per-category config is parsed and applied."""
-        limiter = create_rate_limiter({
-            "default_rates": [{"limit": 100, "interval": 60}],
-            "categories": {
-                "api_write": {"rates": [{"limit": 2, "interval": 0.1}]},
-            },
-        })
+        limiter = create_rate_limiter(
+            {
+                "default_rates": [{"limit": 100, "interval": 60}],
+                "categories": {
+                    "api_write": {"rates": [{"limit": 2, "interval": 0.1}]},
+                },
+            }
+        )
 
         assert await limiter.try_acquire("api_write") is True
         assert await limiter.try_acquire("api_write") is True
@@ -379,10 +387,12 @@ class TestCreateRateLimiter:
     async def test_unknown_backend_raises(self):
         """Test that an unknown backend raises ValueError."""
         with pytest.raises(ValueError) as excinfo:
-            create_rate_limiter({
-                "backend": "unknown",
-                "rates": [{"limit": 10, "interval": 60}],
-            })
+            create_rate_limiter(
+                {
+                    "backend": "unknown",
+                    "rates": [{"limit": 10, "interval": 60}],
+                }
+            )
         assert "unknown" in str(excinfo.value).lower()
         assert "memory" in str(excinfo.value)
 
@@ -397,9 +407,11 @@ class TestCreateRateLimiter:
     async def test_invalid_rate_dict_raises(self):
         """Test that a rate dict missing keys raises ValueError."""
         with pytest.raises(ValueError):
-            create_rate_limiter({
-                "rates": [{"limit": 10}],  # missing 'interval'
-            })
+            create_rate_limiter(
+                {
+                    "rates": [{"limit": 10}],  # missing 'interval'
+                }
+            )
 
 
 class TestRateLimiterBackendsPluginRegistry:
@@ -428,10 +440,12 @@ class TestRateLimiterBackendsPluginRegistry:
 
     def test_create_rate_limiter_shim_preserves_error_text(self):
         with pytest.raises(ValueError) as excinfo:
-            create_rate_limiter({
-                "backend": "still-nope",
-                "rates": [{"limit": 10, "interval": 60}],
-            })
+            create_rate_limiter(
+                {
+                    "backend": "still-nope",
+                    "rates": [{"limit": 10, "interval": 60}],
+                }
+            )
         msg = str(excinfo.value)
         assert "Unknown rate limiter backend: still-nope" in msg
         # Prefix-only check (defensive vs. exact ``memory, pyrate``
@@ -441,10 +455,12 @@ class TestRateLimiterBackendsPluginRegistry:
 
     def test_create_rate_limiter_shim_preserves_exception_class(self):
         with pytest.raises(ValueError):
-            create_rate_limiter({
-                "backend": "still-nope",
-                "rates": [{"limit": 10, "interval": 60}],
-            })
+            create_rate_limiter(
+                {
+                    "backend": "still-nope",
+                    "rates": [{"limit": 10, "interval": 60}],
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_create_rate_limiter_custom_backend_via_registry(self):
@@ -467,14 +483,10 @@ class TestRateLimiterBackendsPluginRegistry:
             ) -> None:
                 return None
 
-            async def try_acquire(
-                self, name: str = "default", weight: int = 1
-            ) -> bool:
+            async def try_acquire(self, name: str = "default", weight: int = 1) -> bool:
                 return True
 
-            async def get_status(
-                self, name: str = "default"
-            ) -> RateLimitStatus:
+            async def get_status(self, name: str = "default") -> RateLimitStatus:
                 limit = self.parsed.default_rates[0].limit
                 return RateLimitStatus(
                     name=name,
@@ -492,19 +504,19 @@ class TestRateLimiterBackendsPluginRegistry:
 
         parsed_seen: RateLimiterConfig | None = None
 
-        def _make_tracking(
-            config: dict[str, object], *, parsed: RateLimiterConfig
-        ) -> RateLimiter:
+        def _make_tracking(config: dict[str, object], *, parsed: RateLimiterConfig) -> RateLimiter:
             nonlocal parsed_seen
             parsed_seen = parsed
             return _TrackingLimiter(parsed)
 
         rate_limiter_backends.register("custom-test", _make_tracking)
         try:
-            limiter = create_rate_limiter({
-                "backend": "custom-test",
-                "rates": [{"limit": 42, "interval": 60}],
-            })
+            limiter = create_rate_limiter(
+                {
+                    "backend": "custom-test",
+                    "rates": [{"limit": 42, "interval": 60}],
+                }
+            )
             assert isinstance(limiter, _TrackingLimiter)
             assert parsed_seen is not None
             assert parsed_seen.default_rates[0].limit == 42
@@ -513,14 +525,18 @@ class TestRateLimiterBackendsPluginRegistry:
 
     @pytest.mark.asyncio
     async def test_create_rate_limiter_async_returns_same_type_as_sync(self):
-        sync_limiter = create_rate_limiter({
-            "backend": "memory",
-            "rates": [{"limit": 10, "interval": 60}],
-        })
-        async_limiter = await create_rate_limiter_async({
-            "backend": "memory",
-            "rates": [{"limit": 10, "interval": 60}],
-        })
+        sync_limiter = create_rate_limiter(
+            {
+                "backend": "memory",
+                "rates": [{"limit": 10, "interval": 60}],
+            }
+        )
+        async_limiter = await create_rate_limiter_async(
+            {
+                "backend": "memory",
+                "rates": [{"limit": 10, "interval": 60}],
+            }
+        )
         assert type(sync_limiter) is type(async_limiter)
         assert isinstance(async_limiter, InMemoryRateLimiter)
         await sync_limiter.close()
@@ -554,10 +570,12 @@ class TestRateLimiterBackendsPluginRegistry:
         error text the sync shim emits.
         """
         with pytest.raises(ValueError) as excinfo:
-            await create_rate_limiter_async({
-                "backend": "still-nope",
-                "rates": [{"limit": 10, "interval": 60}],
-            })
+            await create_rate_limiter_async(
+                {
+                    "backend": "still-nope",
+                    "rates": [{"limit": 10, "interval": 60}],
+                }
+            )
         msg = str(excinfo.value)
         assert "Unknown rate limiter backend: still-nope" in msg
         assert "Available backends:" in msg

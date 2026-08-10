@@ -95,14 +95,14 @@ class TestChunkQualityFilter:
 
     def test_heading_only_chunk_allowed(self):
         """Test that heading-only chunks can be allowed."""
-        filter_obj = ChunkQualityFilter(ChunkQualityConfig(
-            skip_heading_only=False,
-            min_content_chars=10,
-            min_words=3,
-        ))
-        chunk = self._make_chunk(
-            "Test with enough content and words", headings=["Test"]
+        filter_obj = ChunkQualityFilter(
+            ChunkQualityConfig(
+                skip_heading_only=False,
+                min_content_chars=10,
+                min_words=3,
+            )
         )
+        chunk = self._make_chunk("Test with enough content and words", headings=["Test"])
         assert filter_obj.is_valid(chunk) is True
 
     def test_code_blocks_allowed(self):
@@ -135,9 +135,7 @@ class TestChunkQualityFilter:
         chunks = [
             self._make_chunk("This is a valid chunk with enough content to pass."),
             self._make_chunk("Short"),  # Too short
-            self._make_chunk(
-                "Another valid chunk with sufficient words and characters."
-            ),
+            self._make_chunk("Another valid chunk with sufficient words and characters."),
             self._make_chunk("---"),  # Low alphanumeric
         ]
         filtered = filter_obj.filter_chunks(chunks)

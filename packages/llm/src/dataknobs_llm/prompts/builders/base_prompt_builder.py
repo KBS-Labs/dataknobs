@@ -41,7 +41,7 @@ class BasePromptBuilder(ABC):
         library: AbstractPromptLibrary,
         adapters: Dict[str, Any] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
-        raise_on_rag_error: bool = False
+        raise_on_rag_error: bool = False,
     ):
         """Initialize the base prompt builder.
 
@@ -62,10 +62,7 @@ class BasePromptBuilder(ABC):
 
     # ===== Shared Helper Methods =====
 
-    def _extract_formatted_content_from_cache(
-        self,
-        cached_rag: Dict[str, Any]
-    ) -> Dict[str, str]:
+    def _extract_formatted_content_from_cache(self, cached_rag: Dict[str, Any]) -> Dict[str, str]:
         r"""Extract formatted content from cached RAG metadata.
 
         This method extracts the pre-formatted RAG content from cache
@@ -103,11 +100,7 @@ class BasePromptBuilder(ABC):
             rag_content[placeholder] = cache_entry.get("formatted_content", "")
         return rag_content
 
-    def _compute_rag_query_hash(
-        self,
-        adapter_name: str,
-        query: str
-    ) -> str:
+    def _compute_rag_query_hash(self, adapter_name: str, query: str) -> str:
         """Compute a hash for RAG query matching.
 
         This hash is used to match cached RAG results with new queries.
@@ -128,6 +121,7 @@ class BasePromptBuilder(ABC):
             True
         """
         import hashlib
+
         combined = f"{adapter_name}:{query}"
         return hashlib.sha256(combined.encode()).hexdigest()
 
@@ -142,13 +136,11 @@ class BasePromptBuilder(ABC):
             Rendered query string
         """
         from dataknobs_llm.template_utils import render_conditional_template
+
         return render_conditional_template(query_template, params)
 
     def _format_rag_results(
-        self,
-        results: List[Dict[str, Any]],
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
+        self, results: List[Dict[str, Any]], rag_config: RAGConfig, params: Dict[str, Any]
     ) -> str:
         """Format RAG search results according to configuration.
 
@@ -180,7 +172,7 @@ class BasePromptBuilder(ABC):
                 "content": result.get("content", ""),
                 "score": result.get("score", 0.0),
                 "metadata": result.get("metadata", {}),
-                **result.get("metadata", {})  # Also expose metadata fields directly
+                **result.get("metadata", {}),  # Also expose metadata fields directly
             }
 
             # Render item
@@ -191,9 +183,7 @@ class BasePromptBuilder(ABC):
         return formatted_header + "".join(formatted_items)
 
     def _merge_params_with_defaults(
-        self,
-        template_dict: PromptTemplateDict,
-        runtime_params: Dict[str, Any]
+        self, template_dict: PromptTemplateDict, runtime_params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Merge template defaults with runtime parameters.
 
@@ -208,9 +198,7 @@ class BasePromptBuilder(ABC):
         return {**defaults, **runtime_params}
 
     def _prepare_validation_config(
-        self,
-        template_dict: PromptTemplateDict,
-        validation_override: ValidationLevel | None
+        self, template_dict: PromptTemplateDict, validation_override: ValidationLevel | None
     ) -> ValidationConfig | None:
         """Prepare validation configuration with override support.
 
@@ -232,11 +220,7 @@ class BasePromptBuilder(ABC):
         return validation_config
 
     def get_required_parameters(
-        self,
-        name: str,
-        prompt_type: str = "system",
-        index: int = 0,
-        **kwargs: Any
+        self, name: str, prompt_type: str = "system", index: int = 0, **kwargs: Any
     ) -> List[str]:
         """Get list of required parameters for a prompt.
 
@@ -302,7 +286,7 @@ class BasePromptBuilder(ABC):
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
         index: int = 0,
-        **kwargs: Any
+        **kwargs: Any,
     ):
         """Internal method to render a prompt template.
 
@@ -335,7 +319,7 @@ class BasePromptBuilder(ABC):
         index: int,
         params: Dict[str, Any],
         capture_metadata: bool = False,
-        **kwargs: Any
+        **kwargs: Any,
     ):
         """Execute RAG searches and format results for injection.
 

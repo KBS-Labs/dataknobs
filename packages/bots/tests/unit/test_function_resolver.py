@@ -87,9 +87,16 @@ class TestResolveFunctionErrors:
             ),
             ("os.path:sep", DottedPathReason.NOT_CALLABLE, "not callable"),
         ],
-        ids=["empty", "whitespace", "no-separator", "empty-function",
-             "empty-module", "missing-module", "missing-function",
-             "not-callable"],
+        ids=[
+            "empty",
+            "whitespace",
+            "no-separator",
+            "empty-function",
+            "empty-module",
+            "missing-module",
+            "missing-function",
+            "not-callable",
+        ],
     )
     def test_every_fault_is_one_type_with_a_distinct_reason(
         self, ref: str, reason: DottedPathReason, expected_text: str
@@ -205,9 +212,7 @@ class TestWizardLoaderIntegration:
 
         loader = WizardConfigLoader()
         # Pass custom_functions with colon format
-        result = loader.load_from_dict(
-            config, custom_functions={"path_joiner": "os.path:join"}
-        )
+        result = loader.load_from_dict(config, custom_functions={"path_joiner": "os.path:join"})
 
         assert result is not None
 
@@ -222,9 +227,7 @@ class TestWizardLoaderIntegration:
 
         loader = WizardConfigLoader()
         # Pass custom_functions with dot format
-        result = loader.load_from_dict(
-            config, custom_functions={"path_joiner": "os.path.join"}
-        )
+        result = loader.load_from_dict(config, custom_functions={"path_joiner": "os.path.join"})
 
         assert result is not None
 

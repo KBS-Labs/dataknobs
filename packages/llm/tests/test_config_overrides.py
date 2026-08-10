@@ -22,14 +22,16 @@ class TestConfigOverridesValidation:
     def test_validate_allowed_overrides(self, echo_provider):
         """Test that allowed override fields pass validation."""
         # All allowed fields should not raise
-        echo_provider._validate_config_overrides({
-            "model": "new-model",
-            "temperature": 0.9,
-            "max_tokens": 200,
-            "top_p": 0.95,
-            "stop_sequences": ["END"],
-            "seed": 42,
-        })
+        echo_provider._validate_config_overrides(
+            {
+                "model": "new-model",
+                "temperature": 0.9,
+                "max_tokens": 200,
+                "top_p": 0.95,
+                "stop_sequences": ["END"],
+                "seed": 42,
+            }
+        )
 
     def test_validate_empty_overrides(self, echo_provider):
         """Test that empty/None overrides pass validation."""
@@ -39,20 +41,24 @@ class TestConfigOverridesValidation:
     def test_validate_invalid_overrides_raises(self, echo_provider):
         """Test that unsupported override fields raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
-            echo_provider._validate_config_overrides({
-                "model": "new-model",
-                "invalid_field": "value",
-            })
+            echo_provider._validate_config_overrides(
+                {
+                    "model": "new-model",
+                    "invalid_field": "value",
+                }
+            )
         assert "Unsupported config overrides" in str(exc_info.value)
         assert "invalid_field" in str(exc_info.value)
 
     def test_validate_multiple_invalid_overrides(self, echo_provider):
         """Test that multiple unsupported fields are all reported."""
         with pytest.raises(ValueError) as exc_info:
-            echo_provider._validate_config_overrides({
-                "bad_field1": "value1",
-                "bad_field2": "value2",
-            })
+            echo_provider._validate_config_overrides(
+                {
+                    "bad_field1": "value1",
+                    "bad_field2": "value2",
+                }
+            )
         error_msg = str(exc_info.value)
         assert "bad_field1" in error_msg or "bad_field2" in error_msg
 
@@ -83,10 +89,12 @@ class TestGetRuntimeConfig:
 
     def test_overrides_creates_new_config(self, echo_provider):
         """Test that overrides create a cloned config with new values."""
-        runtime_config = echo_provider._get_runtime_config({
-            "model": "overridden-model",
-            "temperature": 0.9,
-        })
+        runtime_config = echo_provider._get_runtime_config(
+            {
+                "model": "overridden-model",
+                "temperature": 0.9,
+            }
+        )
 
         # Runtime config should have overridden values
         assert runtime_config.model == "overridden-model"
@@ -104,10 +112,12 @@ class TestGetRuntimeConfig:
         original_model = echo_provider.config.model
         original_temp = echo_provider.config.temperature
 
-        echo_provider._get_runtime_config({
-            "model": "different-model",
-            "temperature": 1.0,
-        })
+        echo_provider._get_runtime_config(
+            {
+                "model": "different-model",
+                "temperature": 1.0,
+            }
+        )
 
         # Verify original config unchanged
         assert echo_provider.config.model == original_model
@@ -137,8 +147,7 @@ class TestProviderCompleteWithOverrides:
     async def test_complete_with_model_override(self, echo_provider):
         """Test complete() applies model override."""
         response = await echo_provider.complete(
-            "Hello",
-            config_overrides={"model": "overridden-model"}
+            "Hello", config_overrides={"model": "overridden-model"}
         )
         assert response.model == "overridden-model"
 
@@ -155,7 +164,7 @@ class TestProviderCompleteWithOverrides:
                 "model": "new-model",
                 "temperature": 0.9,
                 "max_tokens": 500,
-            }
+            },
         )
         assert response.model == "new-model"
 
@@ -163,10 +172,7 @@ class TestProviderCompleteWithOverrides:
     async def test_complete_invalid_override_raises(self, echo_provider):
         """Test complete() raises on invalid override."""
         with pytest.raises(ValueError) as exc_info:
-            await echo_provider.complete(
-                "Hello",
-                config_overrides={"invalid_param": "value"}
-            )
+            await echo_provider.complete("Hello", config_overrides={"invalid_param": "value"})
         assert "Unsupported config overrides" in str(exc_info.value)
 
 
@@ -196,8 +202,7 @@ class TestProviderStreamCompleteWithOverrides:
         """Test stream_complete() applies overrides."""
         chunks = []
         async for chunk in echo_provider.stream_complete(
-            "Hello",
-            config_overrides={"model": "overridden-model", "temperature": 0.9}
+            "Hello", config_overrides={"model": "overridden-model", "temperature": 0.9}
         ):
             chunks.append(chunk)
         assert len(chunks) > 0
@@ -207,8 +212,7 @@ class TestProviderStreamCompleteWithOverrides:
         """Test stream_complete() raises on invalid override."""
         with pytest.raises(ValueError) as exc_info:
             async for _ in echo_provider.stream_complete(
-                "Hello",
-                config_overrides={"bad_field": "value"}
+                "Hello", config_overrides={"bad_field": "value"}
             ):
                 pass
         assert "Unsupported config overrides" in str(exc_info.value)
@@ -326,9 +330,7 @@ class TestConversationManagerWithOverrides:
     async def test_overrides_dont_persist_between_calls(self, manager):
         """Test that overrides from one call don't affect subsequent calls."""
         # First call with override
-        response1 = await manager.complete(
-            llm_config_overrides={"model": "temp-model"}
-        )
+        response1 = await manager.complete(llm_config_overrides={"model": "temp-model"})
         assert response1.model == "temp-model"
 
         # Add another user message
@@ -359,9 +361,7 @@ class TestAllowedOverrideFields:
     @pytest.mark.asyncio
     async def test_model_override(self, echo_provider):
         """Test model override."""
-        response = await echo_provider.complete(
-            "test", config_overrides={"model": "new-model"}
-        )
+        response = await echo_provider.complete("test", config_overrides={"model": "new-model"})
         assert response.model == "new-model"
 
     @pytest.mark.asyncio
@@ -445,7 +445,7 @@ class TestExtendedOverrideFields:
             {
                 "name": "get_weather",
                 "description": "Get the weather",
-                "parameters": {"type": "object", "properties": {}}
+                "parameters": {"type": "object", "properties": {}},
             }
         ]
         runtime = echo_provider._get_runtime_config({"functions": functions})
@@ -483,9 +483,9 @@ class TestOptionsOverride:
 
     def test_options_override_merges_with_existing(self, echo_provider_with_options):
         """Test that options override merges with existing options."""
-        runtime = echo_provider_with_options._get_runtime_config({
-            "options": {"new_key": "new_value", "custom_key": "overridden"}
-        })
+        runtime = echo_provider_with_options._get_runtime_config(
+            {"options": {"new_key": "new_value", "custom_key": "overridden"}}
+        )
         # Original keys preserved
         assert runtime.options.get("echo_prefix") == "Base: "
         # New key added
@@ -497,9 +497,9 @@ class TestOptionsOverride:
 
     def test_options_override_without_existing(self, echo_provider_no_options):
         """Test options override when no existing options."""
-        runtime = echo_provider_no_options._get_runtime_config({
-            "options": {"new_key": "new_value"}
-        })
+        runtime = echo_provider_no_options._get_runtime_config(
+            {"options": {"new_key": "new_value"}}
+        )
         assert runtime.options.get("new_key") == "new_value"
 
 
@@ -510,6 +510,7 @@ class TestOverridePresets:
     def clear_presets(self):
         """Clear presets before and after each test."""
         from dataknobs_llm.llm.base import AsyncLLMProvider
+
         AsyncLLMProvider._override_presets.clear()
         yield
         AsyncLLMProvider._override_presets.clear()
@@ -526,10 +527,13 @@ class TestOverridePresets:
 
     def test_register_preset(self, echo_provider):
         """Test registering a preset."""
-        EchoProvider.register_preset("creative", {
-            "temperature": 1.2,
-            "top_p": 0.95,
-        })
+        EchoProvider.register_preset(
+            "creative",
+            {
+                "temperature": 1.2,
+                "top_p": 0.95,
+            },
+        )
         assert "creative" in EchoProvider.list_presets()
         preset = EchoProvider.get_preset("creative")
         assert preset == {"temperature": 1.2, "top_p": 0.95}
@@ -543,10 +547,13 @@ class TestOverridePresets:
 
     def test_preset_expansion(self, echo_provider):
         """Test that preset is expanded to actual values."""
-        EchoProvider.register_preset("precise", {
-            "temperature": 0.1,
-            "top_p": 0.5,
-        })
+        EchoProvider.register_preset(
+            "precise",
+            {
+                "temperature": 0.1,
+                "top_p": 0.5,
+            },
+        )
         runtime = echo_provider._get_runtime_config({"preset": "precise"})
         assert runtime.temperature == 0.1
         assert runtime.top_p == 0.5
@@ -554,14 +561,19 @@ class TestOverridePresets:
 
     def test_preset_with_explicit_override(self, echo_provider):
         """Test that explicit overrides take precedence over preset."""
-        EchoProvider.register_preset("fast", {
-            "temperature": 0.0,
-            "max_tokens": 50,
-        })
-        runtime = echo_provider._get_runtime_config({
-            "preset": "fast",
-            "temperature": 0.3,  # Override the preset value
-        })
+        EchoProvider.register_preset(
+            "fast",
+            {
+                "temperature": 0.0,
+                "max_tokens": 50,
+            },
+        )
+        runtime = echo_provider._get_runtime_config(
+            {
+                "preset": "fast",
+                "temperature": 0.3,  # Override the preset value
+            }
+        )
         assert runtime.temperature == 0.3  # Explicit override wins
         assert runtime.max_tokens == 50  # From preset
 
@@ -576,13 +588,13 @@ class TestOverridePresets:
     @pytest.mark.asyncio
     async def test_preset_in_complete(self, echo_provider):
         """Test using preset in complete() call."""
-        EchoProvider.register_preset("test_preset", {
-            "model": "preset-model",
-        })
-        response = await echo_provider.complete(
-            "Hello",
-            config_overrides={"preset": "test_preset"}
+        EchoProvider.register_preset(
+            "test_preset",
+            {
+                "model": "preset-model",
+            },
         )
+        response = await echo_provider.complete("Hello", config_overrides={"preset": "test_preset"})
         assert response.model == "preset-model"
 
 
@@ -593,6 +605,7 @@ class TestOverrideCallbacks:
     def clear_callbacks(self):
         """Clear callbacks before and after each test."""
         from dataknobs_llm.llm.base import AsyncLLMProvider
+
         AsyncLLMProvider.clear_override_callbacks()
         yield
         AsyncLLMProvider.clear_override_callbacks()
@@ -612,11 +625,13 @@ class TestOverrideCallbacks:
         called = []
 
         def track_callback(provider, overrides, runtime_config):
-            called.append({
-                "provider": provider,
-                "overrides": overrides,
-                "runtime_config": runtime_config,
-            })
+            called.append(
+                {
+                    "provider": provider,
+                    "overrides": overrides,
+                    "runtime_config": runtime_config,
+                }
+            )
 
         EchoProvider.on_override_applied(track_callback)
         echo_provider._get_runtime_config({"model": "new-model"})
@@ -657,6 +672,7 @@ class TestOverrideCallbacks:
 
     def test_callback_error_does_not_break_flow(self, echo_provider):
         """Test that callback errors don't break the main flow."""
+
         def bad_callback(provider, overrides, runtime_config):
             raise RuntimeError("Callback error!")
 

@@ -1,5 +1,4 @@
-"""Migration progress tracking, separate from migration logic.
-"""
+"""Migration progress tracking, separate from migration logic."""
 
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ from typing import Any
 @dataclass
 class MigrationProgress:
     """Track migration progress and statistics.
-    
+
     Provides a clean separation between migration logic and progress tracking,
     allowing for flexible reporting without cluttering the migration code.
     """
@@ -29,7 +28,7 @@ class MigrationProgress:
 
     def start(self) -> MigrationProgress:
         """Mark migration as started.
-        
+
         Returns:
             Self for chaining
         """
@@ -38,7 +37,7 @@ class MigrationProgress:
 
     def finish(self) -> MigrationProgress:
         """Mark migration as finished.
-        
+
         Returns:
             Self for chaining
         """
@@ -48,7 +47,7 @@ class MigrationProgress:
     @property
     def duration(self) -> float:
         """Get migration duration in seconds.
-        
+
         Returns:
             Duration in seconds, or 0 if not started
         """
@@ -61,7 +60,7 @@ class MigrationProgress:
     @property
     def percent(self) -> float:
         """Get completion percentage.
-        
+
         Returns:
             Percentage complete (0-100)
         """
@@ -72,7 +71,7 @@ class MigrationProgress:
     @property
     def success_rate(self) -> float:
         """Get success rate as percentage.
-        
+
         Returns:
             Success rate (0-100)
         """
@@ -83,7 +82,7 @@ class MigrationProgress:
     @property
     def is_complete(self) -> bool:
         """Check if migration is complete.
-        
+
         Returns:
             True if all records have been processed
         """
@@ -92,7 +91,7 @@ class MigrationProgress:
     @property
     def has_errors(self) -> bool:
         """Check if migration had any errors.
-        
+
         Returns:
             True if there were any failures
         """
@@ -100,10 +99,10 @@ class MigrationProgress:
 
     def record_success(self, record_id: str | None = None) -> MigrationProgress:
         """Record a successful migration.
-        
+
         Args:
             record_id: Optional ID of successfully migrated record
-            
+
         Returns:
             Self for chaining
         """
@@ -112,29 +111,22 @@ class MigrationProgress:
         return self
 
     def record_failure(
-        self,
-        error: str,
-        record_id: str | None = None,
-        exception: Exception | None = None
+        self, error: str, record_id: str | None = None, exception: Exception | None = None
     ) -> MigrationProgress:
         """Record a failed migration.
-        
+
         Args:
             error: Error message
             record_id: Optional ID of failed record
             exception: Optional exception that caused failure
-            
+
         Returns:
             Self for chaining
         """
         self.processed += 1
         self.failed += 1
 
-        error_info = {
-            "error": error,
-            "record_id": record_id,
-            "timestamp": time.time()
-        }
+        error_info = {"error": error, "record_id": record_id, "timestamp": time.time()}
 
         if exception:
             error_info["exception"] = str(exception)
@@ -186,11 +178,11 @@ class MigrationProgress:
 
     def record_skip(self, reason: str, record_id: str | None = None) -> MigrationProgress:
         """Record a skipped record.
-        
+
         Args:
             reason: Reason for skipping
             record_id: Optional ID of skipped record
-            
+
         Returns:
             Self for chaining
         """
@@ -201,10 +193,10 @@ class MigrationProgress:
 
     def add_warning(self, warning: str) -> MigrationProgress:
         """Add a warning message.
-        
+
         Args:
             warning: Warning message
-            
+
         Returns:
             Self for chaining
         """
@@ -213,11 +205,11 @@ class MigrationProgress:
 
     def set_metadata(self, key: str, value: Any) -> MigrationProgress:
         """Store metadata about the migration.
-        
+
         Args:
             key: Metadata key
             value: Metadata value
-            
+
         Returns:
             Self for chaining
         """
@@ -226,12 +218,12 @@ class MigrationProgress:
 
     def merge(self, other: MigrationProgress) -> MigrationProgress:
         """Merge another progress object into this one.
-        
+
         Useful for combining progress from parallel migrations.
-        
+
         Args:
             other: Another MigrationProgress to merge
-            
+
         Returns:
             Self for chaining
         """
@@ -262,7 +254,7 @@ class MigrationProgress:
 
     def get_summary(self) -> str:
         """Get a human-readable summary of the migration progress.
-        
+
         Returns:
             Summary string
         """
@@ -286,7 +278,7 @@ class MigrationProgress:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert progress to dictionary for serialization.
-        
+
         Returns:
             Dictionary representation
         """

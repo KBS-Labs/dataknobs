@@ -156,9 +156,7 @@ class TestBedrockFamily:
 class TestMissWarning:
     """Traffic priced at zero because nothing matched must say so."""
 
-    def test_warns_on_an_unknown_provider_family(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_warns_on_an_unknown_provider_family(self, caplog: pytest.LogCaptureFixture) -> None:
         mw = CostTrackingMiddleware()
 
         with caplog.at_level(logging.WARNING):
@@ -166,8 +164,7 @@ class TestMissWarning:
 
         assert cost == 0.0
         assert any(
-            "acme-llm" in r.getMessage() and r.levelno == logging.WARNING
-            for r in caplog.records
+            "acme-llm" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records
         )
 
     def test_warns_on_an_unknown_model_within_a_known_family(
@@ -179,13 +176,9 @@ class TestMissWarning:
             cost = mw._calculate_cost("openai", "some-unreleased-model", 1000, 1000)
 
         assert cost == 0.0
-        assert any(
-            "some-unreleased-model" in r.getMessage() for r in caplog.records
-        )
+        assert any("some-unreleased-model" in r.getMessage() for r in caplog.records)
 
-    def test_warns_once_per_provider_model_pair(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_warns_once_per_provider_model_pair(self, caplog: pytest.LogCaptureFixture) -> None:
         """An undeduplicated per-turn warning is a flood that gets filtered out.
 
         Filtering it restores exactly the silence the warning exists to break.
@@ -199,9 +192,7 @@ class TestMissWarning:
         misses = [r for r in caplog.records if "acme-llm" in r.getMessage()]
         assert len(misses) == 1
 
-    def test_distinct_pairs_each_warn(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_distinct_pairs_each_warn(self, caplog: pytest.LogCaptureFixture) -> None:
         """Dedup is per ``(provider, model)``, not a global once-only latch."""
         mw = CostTrackingMiddleware()
 
@@ -248,16 +239,12 @@ class TestCustomRatesDoNotLeak:
         """
         original = CostTrackingMiddleware.DEFAULT_RATES["openai"]["gpt-4o"].copy()
 
-        CostTrackingMiddleware(
-            cost_rates={"openai": {"gpt-4o": {"input": 99.0, "output": 99.0}}}
-        )
+        CostTrackingMiddleware(cost_rates={"openai": {"gpt-4o": {"input": 99.0, "output": 99.0}}})
 
         assert CostTrackingMiddleware.DEFAULT_RATES["openai"]["gpt-4o"] == original
 
     def test_a_later_instance_sees_the_untouched_defaults(self) -> None:
-        CostTrackingMiddleware(
-            cost_rates={"openai": {"gpt-4o": {"input": 99.0, "output": 99.0}}}
-        )
+        CostTrackingMiddleware(cost_rates={"openai": {"gpt-4o": {"input": 99.0, "output": 99.0}}})
         fresh = CostTrackingMiddleware()
 
         assert fresh.cost_rates["openai"]["gpt-4o"]["input"] == pytest.approx(0.0025)
@@ -270,13 +257,9 @@ class TestCustomRatesDoNotLeak:
 
     def test_a_custom_family_is_still_accepted(self) -> None:
         """Isolation must not break the documented way to price a new family."""
-        mw = CostTrackingMiddleware(
-            cost_rates={"huggingface": {"input": 0.001, "output": 0.002}}
-        )
+        mw = CostTrackingMiddleware(cost_rates={"huggingface": {"input": 0.001, "output": 0.002}})
 
-        assert mw._calculate_cost("huggingface", "any-model", 1000, 1000) == (
-            pytest.approx(0.003)
-        )
+        assert mw._calculate_cost("huggingface", "any-model", 1000, 1000) == (pytest.approx(0.003))
 
     def test_instances_built_from_one_shared_dict_do_not_alias(self) -> None:
         """The caller's dict is the other half of the isolation problem.
@@ -293,10 +276,7 @@ class TestCustomRatesDoNotLeak:
         first = CostTrackingMiddleware(cost_rates=shared)
         second = CostTrackingMiddleware(cost_rates=shared)
 
-        assert (
-            first.cost_rates["openai"]["gpt-4o"]
-            is not second.cost_rates["openai"]["gpt-4o"]
-        )
+        assert first.cost_rates["openai"]["gpt-4o"] is not second.cost_rates["openai"]["gpt-4o"]
 
     def test_the_callers_own_dict_is_never_mutated(self) -> None:
         """A config constant handed in must come back out unchanged."""

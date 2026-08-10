@@ -71,7 +71,8 @@ class PromptResolver:
 
         try:
             result = self._renderer.render_prompt_template(
-                template_dict, variables,
+                template_dict,
+                variables,
             )
             return result.content
         except ValueError:

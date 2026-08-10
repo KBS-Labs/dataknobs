@@ -79,9 +79,7 @@ def test_file_aggregator_builds_summary() -> None:
 
 
 def test_make_filter_requires_all_predicates() -> None:
-    filter_pass = _make_filter(
-        [lambda r: r["value"] > 0, lambda r: r["status"] == "active"]
-    )
+    filter_pass = _make_filter([lambda r: r["value"] > 0, lambda r: r["status"] == "active"])
     assert filter_pass({"value": 5, "status": "active"}, None) is True
     assert filter_pass({"value": 5, "status": "inactive"}, None) is False
     assert filter_pass({"value": -1, "status": "active"}, None) is False

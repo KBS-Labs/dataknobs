@@ -41,9 +41,7 @@ async def _make_vector_memory(
     }
     if immutable_metadata_keys is not None:
         config["immutable_metadata_keys"] = list(immutable_metadata_keys)
-    return VectorMemory.from_components(
-        config, vector_store=store, embedding_provider=provider
-    )
+    return VectorMemory.from_components(config, vector_store=store, embedding_provider=provider)
 
 
 class _FailingMemory(Memory):
@@ -158,9 +156,7 @@ class TestVectorMemoryScoping:
         assert mem._default_filter == {"tenant": "t1"}
 
     @pytest.mark.asyncio
-    async def test_immutable_metadata_keys_block_caller_override(
-        self, caplog
-    ):
+    async def test_immutable_metadata_keys_block_caller_override(self, caplog):
         """``immutable_metadata_keys`` blocks caller override.
 
         Reproduces the consumer-reported tenant-scoping bypass: when a
@@ -193,8 +189,7 @@ class TestVectorMemoryScoping:
         assert md["category"] == "support"
         # Warning emitted naming the key.
         assert any(
-            "user_id" in record.message
-            and "immutable" in record.message.lower()
+            "user_id" in record.message and "immutable" in record.message.lower()
             for record in caplog.records
         )
 
@@ -208,9 +203,7 @@ class TestVectorMemoryScoping:
         mem = await _make_vector_memory(
             default_metadata={"user_id": "tenant-A"},
         )
-        await mem.add_message(
-            "hello", "user", metadata={"user_id": "OVERRIDE"}
-        )
+        await mem.add_message("hello", "user", metadata={"user_id": "OVERRIDE"})
         context = await mem.get_context("hello")
         assert len(context) == 1
         # Same as the existing test_caller_metadata_overrides_default —
@@ -227,14 +220,9 @@ class TestVectorMemoryScoping:
             immutable_metadata_keys={"user_id"},
         )
         with caplog.at_level(logging.WARNING):
-            await mem.add_message(
-                "hello", "user", metadata={"user_id": "tenant-A"}
-            )
+            await mem.add_message("hello", "user", metadata={"user_id": "tenant-A"})
         # No warning because caller didn't try to override.
-        assert not any(
-            "immutable" in record.message.lower()
-            for record in caplog.records
-        )
+        assert not any("immutable" in record.message.lower() for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_from_config_plumbs_immutable_metadata_keys(self):
@@ -397,9 +385,7 @@ class TestVectorMemoryScoping:
 
         # u2's data must survive — composition forbids escape.
         u2_contents = await mem_u2.get_context("query")
-        assert any(
-            m["metadata"].get("user_id") == "u2" for m in u2_contents
-        ), (
+        assert any(m["metadata"].get("user_id") == "u2" for m in u2_contents), (
             "u2 records were wiped by u1's clear — explicit filter "
             "escaped the tenant scope. Composition must prevent this."
         )
@@ -800,9 +786,7 @@ class TestCompositeMemoryValidation:
         """
         buf1 = BufferMemory(max_messages=10)
         buf2 = BufferMemory(max_messages=10)
-        composite = CompositeMemory.from_components(
-            strategies=[buf1, buf2], primary_index=1
-        )
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2], primary_index=1)
 
         assert composite.config.primary_index == 1
 

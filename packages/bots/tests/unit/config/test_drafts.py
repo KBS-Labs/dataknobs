@@ -258,9 +258,7 @@ class TestConfigDraftManager:
         assert (tmp_path / f"_draft-{draft_id}.yaml").exists()
 
     def test_custom_prefix(self, tmp_path: Path) -> None:
-        manager = ConfigDraftManager(
-            output_dir=tmp_path, draft_prefix="wip-"
-        )
+        manager = ConfigDraftManager(output_dir=tmp_path, draft_prefix="wip-")
         draft_id = manager.create_draft(self._sample_config())
         assert (tmp_path / f"wip-{draft_id}.yaml").exists()
 

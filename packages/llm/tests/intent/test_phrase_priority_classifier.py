@@ -12,6 +12,7 @@ do not opt in. See the parity-equivalence test in
 ``packages/bots/tests/unit/test_wizard_boolean_recovery.py`` for the
 cross-path drift guard against ``detect_boolean_signal``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -55,7 +56,8 @@ class TestPhrasePriorityBeatsWord:
             phrase_priority=True,
         )
         result = await classifier.classify(
-            "no, looks good", _AFF_NEG_SPECS,
+            "no, looks good",
+            _AFF_NEG_SPECS,
         )
         assert result.intent is not None
         assert result.intent.name == "affirmative"
@@ -118,7 +120,8 @@ class TestPhrasePriorityAmbiguity:
             phrase_priority=True,
         )
         result = await classifier.classify(
-            "looks good but not yet", _AFF_NEG_SPECS,
+            "looks good but not yet",
+            _AFF_NEG_SPECS,
         )
         assert result.intent is None
 

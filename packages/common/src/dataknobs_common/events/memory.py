@@ -211,9 +211,7 @@ class InMemoryEventBus(StructuredConfigConsumer[MemoryEventBusConfig]):
             if sub.pattern:
                 # Remove from pattern subscribers
                 self._pattern_subscribers = [
-                    (p, sid)
-                    for p, sid in self._pattern_subscribers
-                    if sid != subscription_id
+                    (p, sid) for p, sid in self._pattern_subscribers if sid != subscription_id
                 ]
             else:
                 # Remove from topic subscribers

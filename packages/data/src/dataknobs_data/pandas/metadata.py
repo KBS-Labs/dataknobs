@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 class MetadataStrategy(Enum):
     """Strategy for handling metadata during conversion."""
+
     NONE = "none"  # Don't preserve metadata
     ATTRS = "attrs"  # Store in DataFrame.attrs
     COLUMNS = "columns"  # Store as additional columns
@@ -23,6 +24,7 @@ class MetadataStrategy(Enum):
 @dataclass
 class MetadataConfig:
     """Configuration for metadata handling."""
+
     strategy: MetadataStrategy = MetadataStrategy.ATTRS
     include_record_metadata: bool = True
     include_field_metadata: bool = True
@@ -35,7 +37,7 @@ class MetadataHandler:
 
     def __init__(self, config: MetadataConfig | None = None):
         """Initialize metadata handler.
-        
+
         Args:
             config: Metadata configuration
         """
@@ -43,10 +45,10 @@ class MetadataHandler:
 
     def extract_metadata_from_records(self, records: list[Record]) -> dict[str, Any]:
         """Extract metadata from records.
-        
+
         Args:
             records: List of records
-            
+
         Returns:
             Dictionary of metadata
         """
@@ -66,18 +68,15 @@ class MetadataHandler:
         return metadata
 
     def apply_metadata_to_dataframe(
-        self,
-        df: pd.DataFrame,
-        metadata: dict[str, Any],
-        records: list[Record] | None = None
+        self, df: pd.DataFrame, metadata: dict[str, Any], records: list[Record] | None = None
     ) -> pd.DataFrame:
         """Apply metadata to DataFrame based on strategy.
-        
+
         Args:
             df: Target DataFrame
             metadata: Metadata to apply
             records: Original records (for additional metadata)
-            
+
         Returns:
             DataFrame with metadata
         """
@@ -102,21 +101,18 @@ class MetadataHandler:
             if "field_types" in metadata:
                 arrays = [
                     df.columns.tolist(),
-                    [metadata["field_types"].get(col, "unknown") for col in df.columns]
+                    [metadata["field_types"].get(col, "unknown") for col in df.columns],
                 ]
-                df.columns = pd.MultiIndex.from_arrays(
-                    arrays,
-                    names=["field_name", "field_type"]
-                )
+                df.columns = pd.MultiIndex.from_arrays(arrays, names=["field_name", "field_type"])
 
         return df
 
     def extract_metadata_from_dataframe(self, df: pd.DataFrame) -> dict[str, Any]:
         """Extract metadata from DataFrame.
-        
+
         Args:
             df: Source DataFrame
-            
+
         Returns:
             Dictionary of metadata
         """
@@ -145,18 +141,15 @@ class MetadataHandler:
         return metadata
 
     def create_records_with_metadata(
-        self,
-        df: pd.DataFrame,
-        base_records: list[Record],
-        metadata: dict[str, Any] | None = None
+        self, df: pd.DataFrame, base_records: list[Record], metadata: dict[str, Any] | None = None
     ) -> list[Record]:
         """Create records with preserved metadata.
-        
+
         Args:
             df: Source DataFrame
             base_records: Base records from conversion
             metadata: Additional metadata
-            
+
         Returns:
             Records with metadata
         """
@@ -237,10 +230,10 @@ class MetadataHandler:
 
     def clean_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Remove metadata columns from DataFrame.
-        
+
         Args:
             df: DataFrame to clean
-            
+
         Returns:
             DataFrame without metadata columns
         """

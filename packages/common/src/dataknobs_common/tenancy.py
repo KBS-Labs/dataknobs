@@ -197,10 +197,7 @@ class SingleTenantContext:
         return ""
 
     def matches(self, other: TenantContext) -> bool:
-        return (
-            isinstance(other, SingleTenantContext)
-            and other.domain_id == self.domain_id
-        )
+        return isinstance(other, SingleTenantContext) and other.domain_id == self.domain_id
 
     def __eq__(self, other: object) -> bool:
         """Accept ``str`` equality for incremental consumer-code migration.
@@ -451,15 +448,12 @@ def create_tenant_context(config: Mapping[str, Any]) -> TenantContext:
     """
     domain_id = config.get("domain_id")
     if not domain_id:
-        raise ValueError(
-            "tenant-context config requires a non-empty 'domain_id'."
-        )
+        raise ValueError("tenant-context config requires a non-empty 'domain_id'.")
 
     kind = config.get("kind") or _infer_context_kind(config)
     if kind not in _CONTEXT_KINDS:
         raise ValueError(
-            f"Unknown tenant-context kind: {kind!r}. "
-            f"Available kinds: {sorted(_CONTEXT_KINDS)}."
+            f"Unknown tenant-context kind: {kind!r}. Available kinds: {sorted(_CONTEXT_KINDS)}."
         )
 
     if kind == "single":
@@ -467,10 +461,7 @@ def create_tenant_context(config: Mapping[str, Any]) -> TenantContext:
 
     tenant_id = config.get("tenant_id")
     if not tenant_id:
-        raise ValueError(
-            f"tenant-context kind {kind!r} requires a non-empty "
-            f"'tenant_id'."
-        )
+        raise ValueError(f"tenant-context kind {kind!r} requires a non-empty 'tenant_id'.")
 
     if kind == "bound":
         return BoundTenantContext(tenant_id=tenant_id, domain_id=domain_id)
@@ -479,8 +470,7 @@ def create_tenant_context(config: Mapping[str, Any]) -> TenantContext:
         prefix_pattern = config.get("prefix_pattern")
         if not prefix_pattern:
             raise ValueError(
-                "tenant-context kind 'prefixed' requires a non-empty "
-                "'prefix_pattern'."
+                "tenant-context kind 'prefixed' requires a non-empty 'prefix_pattern'."
             )
         return PrefixedTenantContext(
             tenant_id=tenant_id,
@@ -492,8 +482,7 @@ def create_tenant_context(config: Mapping[str, Any]) -> TenantContext:
     shared_corpus_id = config.get("shared_corpus_id")
     if not shared_corpus_id:
         raise ValueError(
-            "tenant-context kind 'shared_corpus' requires a non-empty "
-            "'shared_corpus_id'."
+            "tenant-context kind 'shared_corpus' requires a non-empty 'shared_corpus_id'."
         )
     return SharedCorpusTenantContext(
         tenant_id=tenant_id,
@@ -539,7 +528,6 @@ def tenant_context_from_env(
         config["shared_corpus_id"] = env["TENANT_SHARED_CORPUS_ID"]
     if "domain_id" not in config:
         raise ValueError(
-            "tenant_context_from_env requires the DOMAIN_ID environment "
-            "variable to be set."
+            "tenant_context_from_env requires the DOMAIN_ID environment variable to be set."
         )
     return create_tenant_context(config)

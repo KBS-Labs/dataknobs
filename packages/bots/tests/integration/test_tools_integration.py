@@ -316,9 +316,7 @@ class TestToolErrorHandling:
             def schema(self) -> Dict[str, Any]:
                 return {
                     "type": "object",
-                    "properties": {
-                        "input": {"type": "string"}
-                    },
+                    "properties": {"input": {"type": "string"}},
                 }
 
             async def execute(self, input: str) -> str:

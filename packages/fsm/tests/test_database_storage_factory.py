@@ -30,7 +30,7 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 class TestDatabaseStorageFactory:
     """Tests for database storage factory functionality using real implementations."""
-    
+
     @pytest.fixture
     def memory_config(self):
         """Create configuration for memory backend, on the current contract.
@@ -41,18 +41,18 @@ class TestDatabaseStorageFactory:
         """
         return StorageConfig(
             backend=StorageBackend.MEMORY,
-            connection_params={'database': 'test_db'},
+            connection_params={"database": "test_db"},
         )
 
     @pytest.fixture
     def sqlite_config(self):
         """Create configuration for SQLite backend, on the current contract."""
-        temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         temp_db.close()
 
         config = StorageConfig(
             backend=StorageBackend.SQLITE,
-            connection_params={'database': temp_db.name},
+            connection_params={"database": temp_db.name},
         )
 
         try:
@@ -62,54 +62,48 @@ class TestDatabaseStorageFactory:
             # not a scratch namespace for the path).
             if os.path.exists(temp_db.name):
                 os.unlink(temp_db.name)
-    
+
     @pytest.fixture
     def sample_history(self):
         """Create a sample execution history."""
         history = ExecutionHistory(
             execution_id=f"test-exec-{uuid.uuid4().hex[:8]}",
             fsm_name="test_fsm",
-            data_mode=DataHandlingMode.COPY
+            data_mode=DataHandlingMode.COPY,
         )
-        
+
         # Add steps using the proper add_step method signature
         step1 = history.add_step(
-            state_name="start",
-            network_name="main",
-            data=None,
-            parent_step_id=None
+            state_name="start", network_name="main", data=None, parent_step_id=None
         )
         step1.complete()
-        
+
         step2 = history.add_step(
-            state_name="process",
-            network_name="main",
-            data=None,
-            parent_step_id=step1.step_id
+            state_name="process", network_name="main", data=None, parent_step_id=step1.step_id
         )
         step2.complete()
-        
+
         history.end_time = 1002.0
         history.total_steps = 2
-        
+
         return history
-    
+
     @pytest.mark.asyncio
     async def test_database_factory_with_memory_backend(self, memory_config):
         """Test AsyncDatabaseFactory with memory backend using real implementation."""
         storage = UnifiedDatabaseStorage(memory_config)
-        
+
         # Initialize with real backend
         await storage.initialize()
-        
+
         # Verify storage is initialized
         assert storage._initialized
         assert storage._db is not None
-        
+
         # The database should be ready to use
         # Clean up
         await storage.cleanup()
-    
+
     @pytest.mark.asyncio
     async def test_database_factory_with_sqlite_backend(self, sqlite_config):
         """Test factory with SQLite backend using real implementation."""
@@ -125,7 +119,7 @@ class TestDatabaseStorageFactory:
 
         # Clean up
         await storage.cleanup()
-    
+
     # Note: a former ``test_database_factory_with_invalid_backend`` was
     # removed in the fix.  It relied on the buggy
     # ``connection_params['type']`` factory-input path that has since been
@@ -139,46 +133,46 @@ class TestDatabaseStorageFactory:
     async def test_database_connection_handling(self, memory_config):
         """Test database connection handling with real implementation."""
         storage = UnifiedDatabaseStorage(memory_config)
-        
+
         # Initialize (should connect if backend supports it)
         await storage.initialize()
         assert storage._initialized
         assert storage._db is not None
-        
+
         # Cleanup (should disconnect)
         await storage.cleanup()
         # Note: _initialized might not be set to False by cleanup in the real implementation
-        
+
         # Re-initialize should work
         await storage.initialize()
         assert storage._initialized
-        
+
         # Clean up
         await storage.cleanup()
-    
+
     @pytest.mark.asyncio
     async def test_cleanup_method(self, memory_config):
         """Test cleanup method using real implementation."""
         storage = UnifiedDatabaseStorage(memory_config)
-        
+
         await storage.initialize()
         assert storage._db is not None
         assert storage._initialized
-        
+
         # Cleanup should clean up resources
         await storage.cleanup()
         # The real implementation may not reset _initialized flag
         # but cleanup should be idempotent
-        
+
         # Multiple cleanups should be safe
         await storage.cleanup()  # Should not raise
-    
+
     @pytest.mark.asyncio
     async def test_concurrent_database_operations(self, memory_config):
         """Test concurrent database operations with real backend."""
         storage = UnifiedDatabaseStorage(memory_config)
         await storage.initialize()
-        
+
         try:
             # Create multiple unique histories
             histories = []
@@ -186,21 +180,21 @@ class TestDatabaseStorageFactory:
                 history = ExecutionHistory(
                     execution_id=f"exec-{uuid.uuid4().hex[:8]}",
                     fsm_name=f"fsm_{i}",
-                    data_mode=DataHandlingMode.COPY
+                    data_mode=DataHandlingMode.COPY,
                 )
                 history.start_time = 1000.0 + i
                 history.end_time = 1001.0 + i
                 histories.append(history)
-            
+
             # Save concurrently
             tasks = [storage.save_history(h) for h in histories]
             results = await asyncio.gather(*tasks)
-            
+
             # Verify all were saved
             assert len(results) == 5
             for i, result in enumerate(results):
                 assert result == histories[i].execution_id
-            
+
             # Try to load them back
             for history in histories:
                 loaded = await storage.load_history(history.execution_id)
@@ -208,32 +202,32 @@ class TestDatabaseStorageFactory:
                 # This depends on the backend implementation
         finally:
             await storage.cleanup()
-    
+
     @pytest.mark.asyncio
     async def test_save_and_load_history(self, memory_config, sample_history):
         """Test saving and loading execution history with real backend."""
         storage = UnifiedDatabaseStorage(memory_config)
         await storage.initialize()
-        
+
         try:
             # Save history
             history_id = await storage.save_history(sample_history)
             assert history_id == sample_history.execution_id
-            
+
             # Load history back
             loaded = await storage.load_history(history_id)
-            
+
             # Depending on backend, loaded might be the actual history
             # or might need deserialization
             if loaded is not None:
                 # If backend supports loading, verify some properties
-                if hasattr(loaded, 'execution_id'):
+                if hasattr(loaded, "execution_id"):
                     assert loaded.execution_id == history_id
                 elif isinstance(loaded, dict):
-                    assert loaded.get('execution_id') == history_id
+                    assert loaded.get("execution_id") == history_id
         finally:
             await storage.cleanup()
-    
+
     # Note: a former ``test_database_schema_creation`` was removed
     # alongside the ``_create_history_schema`` method.  The descriptor
     # was never consumed by any backend (the FSM history records carry
@@ -241,9 +235,7 @@ class TestDatabaseStorageFactory:
     # the method and its test had no semantic content to preserve.
 
     @pytest.mark.asyncio
-    async def test_resaving_history_preserves_created_at(
-        self, memory_config, sample_history
-    ):
+    async def test_resaving_history_preserves_created_at(self, memory_config, sample_history):
         """``created_at`` is stable across resaves; ``updated_at`` advances.
 
         ``save_history`` is an idempotent upsert on ``execution_id``.
@@ -275,12 +267,8 @@ class TestDatabaseStorageFactory:
             second_created = second.get_value("created_at")
             second_updated = second.get_value("updated_at")
 
-            assert second_created == first_created, (
-                "created_at must be preserved across resaves"
-            )
-            assert second_updated > first_updated, (
-                "updated_at must advance on each resave"
-            )
+            assert second_created == first_created, "created_at must be preserved across resaves"
+            assert second_updated > first_updated, "updated_at must advance on each resave"
         finally:
             await storage.cleanup()
 
@@ -289,32 +277,26 @@ class TestDatabaseStorageFactory:
         """Test error recovery in database operations."""
         storage = UnifiedDatabaseStorage(memory_config)
         await storage.initialize()
-        
+
         try:
             # Create history with invalid data that might cause errors
             invalid_history = ExecutionHistory(
-                execution_id="test-invalid",
-                fsm_name="test_fsm",
-                data_mode=DataHandlingMode.COPY
+                execution_id="test-invalid", fsm_name="test_fsm", data_mode=DataHandlingMode.COPY
             )
-            
+
             # Add a step using the proper interface
-            step = invalid_history.add_step(
-                state_name="test",
-                network_name="main",
-                data=None
-            )
+            step = invalid_history.add_step(state_name="test", network_name="main", data=None)
             # Mark it as failed
             step.fail(Exception("Test error message"))
-            
+
             # Should handle the error gracefully or save successfully
             # Real backend should handle this
             result = await storage.save_history(invalid_history)
             assert result == invalid_history.execution_id
-            
+
         finally:
             await storage.cleanup()
-    
+
     @pytest.mark.asyncio
     async def test_multiple_backend_initialization(self):
         """Test initialization with different backends in sequence using real implementations."""
@@ -330,15 +312,15 @@ class TestDatabaseStorageFactory:
         await storage.cleanup()
 
         # Then test with SQLite backend
-        temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         temp_db.close()
 
         try:
             sqlite_config = StorageConfig(
                 backend=StorageBackend.SQLITE,
-                connection_params={'database': temp_db.name},
+                connection_params={"database": temp_db.name},
             )
-            
+
             storage = UnifiedDatabaseStorage(sqlite_config)
             await storage.initialize()
             assert storage._initialized
@@ -347,13 +329,13 @@ class TestDatabaseStorageFactory:
             # Cleanup SQLite temp file
             if os.path.exists(temp_db.name):
                 os.unlink(temp_db.name)
-    
+
     @pytest.mark.asyncio
     async def test_list_histories(self, memory_config):
         """Test listing execution histories with real backend."""
         storage = UnifiedDatabaseStorage(memory_config)
         await storage.initialize()
-        
+
         try:
             # Save multiple histories
             history_ids = []
@@ -361,15 +343,15 @@ class TestDatabaseStorageFactory:
                 history = ExecutionHistory(
                     execution_id=f"list-test-{uuid.uuid4().hex[:8]}",
                     fsm_name=f"fsm_{i}",
-                    data_mode=DataHandlingMode.COPY
+                    data_mode=DataHandlingMode.COPY,
                 )
                 history.start_time = 1000.0 + i
                 history_id = await storage.save_history(history)
                 history_ids.append(history_id)
-            
+
             # Query all histories using the actual method with empty filters
             all_histories = await storage.query_histories(filters={})
-            
+
             # Check that our histories are included
             # Note: The format depends on backend implementation
             if all_histories:
@@ -378,7 +360,7 @@ class TestDatabaseStorageFactory:
                     assert len(all_histories) >= 3
         finally:
             await storage.cleanup()
-    
+
     @pytest.mark.asyncio
     async def test_factory_path_uses_canonical_backend_enum(self) -> None:
         """``_setup_backend`` reads from ``StorageConfig.backend``.
@@ -412,8 +394,7 @@ class TestDatabaseStorageFactory:
         try:
             await storage.initialize()
             assert isinstance(storage._db, AsyncSQLiteDatabase), (
-                f"Expected AsyncSQLiteDatabase from SQLITE enum, got "
-                f"{type(storage._db).__name__}"
+                f"Expected AsyncSQLiteDatabase from SQLITE enum, got {type(storage._db).__name__}"
             )
         finally:
             await storage.close()
@@ -468,9 +449,9 @@ class TestDatabaseStorageFactory:
         temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         temp_db.close()
         config = StorageConfig(
-            backend=StorageBackend.SQLITE,         # canonical: SQLite
+            backend=StorageBackend.SQLITE,  # canonical: SQLite
             connection_params={
-                "type": "memory",                  # deprecated alias: disagrees
+                "type": "memory",  # deprecated alias: disagrees
                 "database": temp_db.name,
             },
         )
@@ -507,48 +488,46 @@ class TestDatabaseStorageFactory:
         # Test with COPY mode
         storage = UnifiedDatabaseStorage(memory_config)
         await storage.initialize()
-        
+
         try:
             history = ExecutionHistory(
                 execution_id=f"serial-test-{uuid.uuid4().hex[:8]}",
                 fsm_name="test_fsm",
-                data_mode=DataHandlingMode.COPY
+                data_mode=DataHandlingMode.COPY,
             )
-            
+
             # Add step with data using proper interface
             step = history.add_step(
                 state_name="process",
                 network_name="main",
-                data={"key": "value", "nested": {"data": 123}}
+                data={"key": "value", "nested": {"data": 123}},
             )
             step.complete()
-            
+
             # Save and verify serialization works
             history_id = await storage.save_history(history)
             assert history_id == history.execution_id
-            
+
         finally:
             await storage.cleanup()
-        
+
         # Test with REFERENCE mode
         ref_config = StorageConfig(
             backend=StorageBackend.MEMORY,
             connection_params={},
-            mode_specific_config={
-                DataHandlingMode.REFERENCE: {}
-            }
+            mode_specific_config={DataHandlingMode.REFERENCE: {}},
         )
-        
+
         storage = UnifiedDatabaseStorage(ref_config)
         await storage.initialize()
-        
+
         try:
             history = ExecutionHistory(
                 execution_id=f"ref-test-{uuid.uuid4().hex[:8]}",
                 fsm_name="test_fsm",
-                data_mode=DataHandlingMode.REFERENCE
+                data_mode=DataHandlingMode.REFERENCE,
             )
-            
+
             # Save with reference mode
             history_id = await storage.save_history(history)
             assert history_id == history.execution_id
@@ -618,7 +597,9 @@ class TestInMemoryStorageIsolation:
         db = AsyncMemoryDatabase()
         steps_db = AsyncMemoryDatabase()
         storage = InMemoryStorage(
-            memory_config, database=db, steps_database=steps_db,
+            memory_config,
+            database=db,
+            steps_database=steps_db,
         )
         await storage.initialize()
 
@@ -668,7 +649,9 @@ class TestInMemoryStorageIsolation:
         db = AsyncMemoryDatabase()
         steps_db = AsyncMemoryDatabase()
         storage = InMemoryStorage(
-            memory_config, database=db, steps_database=steps_db,
+            memory_config,
+            database=db,
+            steps_database=steps_db,
         )
         await storage.initialize()
 
@@ -680,6 +663,7 @@ class TestInMemoryStorageIsolation:
 
         # Injected databases should still be usable after storage.close()
         from dataknobs_data.records import Record
+
         await db.upsert(Record({"id": "test", "value": "alive"}))
         result = await db.read("test")
         assert result is not None

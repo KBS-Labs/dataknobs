@@ -47,12 +47,7 @@ class PackageCreator:
         print(f"{prefix}{message}")
         self.changes.append(message)
 
-    def create_package_structure(
-        self,
-        name: str,
-        description: str,
-        version: str = "0.1.0"
-    ) -> bool:
+    def create_package_structure(self, name: str, description: str, version: str = "0.1.0") -> bool:
         """Create the basic package directory structure.
 
         Args:
@@ -77,8 +72,12 @@ class PackageCreator:
         ]
 
         files_to_create = {
-            package_dir / "pyproject.toml": self._generate_pyproject_toml(name, description, version),
-            package_dir / "src" / f"dataknobs_{name}" / "__init__.py": self._generate_init_py(name, version),
+            package_dir / "pyproject.toml": self._generate_pyproject_toml(
+                name, description, version
+            ),
+            package_dir / "src" / f"dataknobs_{name}" / "__init__.py": self._generate_init_py(
+                name, version
+            ),
             package_dir / "README.md": self._generate_package_readme(name, description),
             package_dir / "tests" / "__init__.py": "",
             package_dir / "tests" / f"test_{name}.py": self._generate_test_file(name),
@@ -108,7 +107,7 @@ class PackageCreator:
         description: str,
         version: str,
         category: str,
-        requires_docs_build: bool
+        requires_docs_build: bool,
     ) -> None:
         """Update .dataknobs/packages.json with new package."""
         registry_path = self.repo_root / ".dataknobs" / "packages.json"
@@ -130,7 +129,7 @@ class PackageCreator:
             "version": version,
             "category": category,
             "requires_docs_build": requires_docs_build,
-            "deprecated": False
+            "deprecated": False,
         }
 
         registry["packages"].append(new_package)
@@ -151,10 +150,7 @@ class PackageCreator:
 
     def update_workflow_docs(self, name: str) -> None:
         """Update GitHub workflow files for documentation builds."""
-        workflow_files = [
-            ".github/workflows/docs.yml",
-            ".github/workflows/quality-validation.yml"
-        ]
+        workflow_files = [".github/workflows/docs.yml", ".github/workflows/quality-validation.yml"]
 
         for workflow_file in workflow_files:
             workflow_path = self.repo_root / workflow_file
@@ -359,7 +355,7 @@ class PackageCreator:
                 j = i + 1
                 while j < len(lines) and "workspace = true" in lines[j]:
                     j += 1
-                new_source = f'{pypi_name} = {{ workspace = true }}'
+                new_source = f"{pypi_name} = {{ workspace = true }}"
                 if pypi_name not in content:
                     lines.insert(j, new_source)
                     updates_needed["sources"] = True
@@ -384,12 +380,12 @@ class PackageCreator:
                     # Extract the list and add new package
                     start = line.index("[")
                     end = line.rindex("]")
-                    packages_str = line[start + 1:end]
+                    packages_str = line[start + 1 : end]
                     packages = [p.strip().strip('"') for p in packages_str.split(",") if p.strip()]
                     packages.append(f"dataknobs_{name}")
                     packages.sort()
                     new_packages_str = ", ".join(f'"{p}"' for p in packages)
-                    lines[i] = f'known-first-party = [{new_packages_str}]'
+                    lines[i] = f"known-first-party = [{new_packages_str}]"
                     updates_needed["known_first_party"] = True
                 break
 
@@ -407,7 +403,7 @@ class PackageCreator:
         description: str,
         version: str = "0.1.0",
         category: str = "core",
-        requires_docs_build: bool = True
+        requires_docs_build: bool = True,
     ) -> bool:
         """Create a new package and integrate it into the ecosystem.
 
@@ -503,7 +499,7 @@ __all__ = [
 
     def _generate_package_readme(self, name: str, description: str) -> str:
         """Generate README.md for new package."""
-        return f'''# dataknobs-{name}
+        return f"""# dataknobs-{name}
 
 {description}
 
@@ -542,7 +538,7 @@ uv run mypy src/
 ## License
 
 See the [LICENSE](../../LICENSE) file for details.
-'''
+"""
 
     def _generate_test_file(self, name: str) -> str:
         """Generate initial test file."""
@@ -568,43 +564,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a new DataKnobs package",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
+    )
+
+    parser.add_argument("name", help="Package name (e.g., 'ml', 'agents', 'tools')")
+
+    parser.add_argument("-d", "--description", required=True, help="Short package description")
+
+    parser.add_argument(
+        "-v", "--version", default="0.1.0", help="Initial version number (default: 0.1.0)"
     )
 
     parser.add_argument(
-        "name",
-        help="Package name (e.g., 'ml', 'agents', 'tools')"
-    )
-
-    parser.add_argument(
-        "-d", "--description",
-        required=True,
-        help="Short package description"
-    )
-
-    parser.add_argument(
-        "-v", "--version",
-        default="0.1.0",
-        help="Initial version number (default: 0.1.0)"
-    )
-
-    parser.add_argument(
-        "-c", "--category",
+        "-c",
+        "--category",
         choices=["core", "experimental", "legacy"],
         default="core",
-        help="Package category (default: core)"
+        help="Package category (default: core)",
     )
 
     parser.add_argument(
-        "--no-docs",
-        action="store_true",
-        help="Package does not require documentation builds"
+        "--no-docs", action="store_true", help="Package does not require documentation builds"
     )
 
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without making changes"
+        "--dry-run", action="store_true", help="Show what would be done without making changes"
     )
 
     args = parser.parse_args()
@@ -625,7 +609,7 @@ def main() -> None:
         description=args.description,
         version=args.version,
         category=args.category,
-        requires_docs_build=not args.no_docs
+        requires_docs_build=not args.no_docs,
     )
 
     if args.dry_run:

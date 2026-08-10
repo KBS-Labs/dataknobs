@@ -70,9 +70,14 @@ class TestNormalizeEnumValue:
 
     def test_token_overlap_above_threshold(self) -> None:
         """'interactive quiz mode' shares 'quiz' with enum 'quiz'."""
-        assert _normalize_enum_value(
-            "interactive quiz", ENUM, threshold=0.5,
-        ) == "quiz"
+        assert (
+            _normalize_enum_value(
+                "interactive quiz",
+                ENUM,
+                threshold=0.5,
+            )
+            == "quiz"
+        )
 
     def test_token_overlap_below_threshold(self) -> None:
         """Low overlap does not match at high threshold."""
@@ -80,7 +85,9 @@ class TestNormalizeEnumValue:
         # token overlap: "study" appears in both but score = 1/3 < 0.9
         enum = ["study_companion_advanced"]
         result = _normalize_enum_value(
-            "study helper mode", enum, threshold=0.9,
+            "study helper mode",
+            enum,
+            threshold=0.9,
         )
         assert result is None
 
@@ -142,7 +149,9 @@ class TestNormalizeEnumValue:
 
     def test_threshold_zero_matches_any_overlap(self) -> None:
         result = _normalize_enum_value(
-            "quiz helper tool", ENUM, threshold=0.0,
+            "quiz helper tool",
+            ENUM,
+            threshold=0.0,
         )
         assert result == "quiz"
 
@@ -153,9 +162,14 @@ class TestNormalizeEnumValue:
         # "interactive quiz" has 2 tokens, "quiz" has 1 → score=0.5 → no match
         # But tier 3 substring catches "quiz" ⊆ "interactive quiz"
         # So this tests that substring takes priority over threshold
-        assert _normalize_enum_value(
-            "interactive quiz", ENUM, threshold=1.0,
-        ) == "quiz"
+        assert (
+            _normalize_enum_value(
+                "interactive quiz",
+                ENUM,
+                threshold=1.0,
+            )
+            == "quiz"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -173,12 +187,13 @@ class TestEnumNormalizationIntegration:
             WizardConfigBuilder("test")
             .settings(extraction_hints={"enum_normalize": True})
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz", "study_companion", "custom"],
-                    required=True,
-                )
-                .transition("done", "data.get('intent') == 'tutor'")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz", "study_companion", "custom"],
+                required=True,
+            )
+            .transition("done", "data.get('intent') == 'tutor'")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -199,16 +214,17 @@ class TestEnumNormalizationIntegration:
             WizardConfigBuilder("test")
             .settings(extraction_hints={"enum_normalize": True})
             .stage("gather", is_start=True, prompt="Which provider?")
-                .field(
-                    "provider", field_type="string",
-                    enum=["ollama", "openai", "anthropic"],
-                    required=True,
-                    x_extraction={
-                        "normalize": False,
-                        "reject_unmatched": False,
-                    },
-                )
-                .transition("done", "has('provider')")
+            .field(
+                "provider",
+                field_type="string",
+                enum=["ollama", "openai", "anthropic"],
+                required=True,
+                x_extraction={
+                    "normalize": False,
+                    "reject_unmatched": False,
+                },
+            )
+            .transition("done", "has('provider')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -229,13 +245,14 @@ class TestEnumNormalizationIntegration:
             WizardConfigBuilder("test")
             .settings(extraction_hints={"enum_normalize": False})
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                    x_extraction={"normalize": True},
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+                x_extraction={"normalize": True},
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -254,12 +271,13 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz", "study_companion"],
-                    required=True,
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz", "study_companion"],
+                required=True,
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -278,12 +296,13 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -302,16 +321,17 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                    x_extraction={
-                        "normalize": True,
-                        "normalize_threshold": 1.0,
-                    },
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+                x_extraction={
+                    "normalize": True,
+                    "normalize_threshold": 1.0,
+                },
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -334,12 +354,13 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -359,17 +380,20 @@ class TestEnumNormalizationIntegration:
         """With reject_unmatched=false, non-matching values pass through."""
         config = (
             WizardConfigBuilder("test")
-            .settings(extraction_hints={
-                "enum_normalize": True,
-                "reject_unmatched": False,
-            })
+            .settings(
+                extraction_hints={
+                    "enum_normalize": True,
+                    "reject_unmatched": False,
+                }
+            )
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                )
-                .transition("done", "has('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+            )
+            .transition("done", "has('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -388,18 +412,21 @@ class TestEnumNormalizationIntegration:
         """Per-field reject_unmatched overrides class-level setting."""
         config = (
             WizardConfigBuilder("test")
-            .settings(extraction_hints={
-                "enum_normalize": True,
-                "reject_unmatched": False,
-            })
+            .settings(
+                extraction_hints={
+                    "enum_normalize": True,
+                    "reject_unmatched": False,
+                }
+            )
             .stage("gather", is_start=True, prompt="Pick a provider.")
-                .field(
-                    "provider", field_type="string",
-                    enum=["ollama", "openai", "anthropic"],
-                    required=True,
-                    x_extraction={"reject_unmatched": True},
-                )
-                .transition("done", "has('provider')")
+            .field(
+                "provider",
+                field_type="string",
+                enum=["ollama", "openai", "anthropic"],
+                required=True,
+                x_extraction={"reject_unmatched": True},
+            )
+            .transition("done", "has('provider')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -420,12 +447,13 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="Pick a provider.")
-                .field(
-                    "provider", field_type="string",
-                    enum=["ollama", "openai", "anthropic"],
-                    required=True,
-                )
-                .transition("done", "data.get('provider')")
+            .field(
+                "provider",
+                field_type="string",
+                enum=["ollama", "openai", "anthropic"],
+                required=True,
+            )
+            .transition("done", "data.get('provider')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -446,12 +474,13 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
-                .field(
-                    "intent", field_type="string",
-                    enum=["tutor", "quiz"],
-                    required=True,
-                )
-                .transition("done", "data.get('intent')")
+            .field(
+                "intent",
+                field_type="string",
+                enum=["tutor", "quiz"],
+                required=True,
+            )
+            .transition("done", "data.get('intent')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -460,8 +489,8 @@ class TestEnumNormalizationIntegration:
             wizard_config=config,
             main_responses=["Got it!", "Got it!"],
             extraction_results=[
-                [{"intent": "magic"}],      # Rejected — no match
-                [{"intent": "tutor"}],       # Accepted — exact match
+                [{"intent": "magic"}],  # Rejected — no match
+                [{"intent": "tutor"}],  # Accepted — exact match
             ],
         ) as harness:
             await harness.chat("use magic")
@@ -478,19 +507,21 @@ class TestEnumNormalizationIntegration:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="Pick provider and model.")
-                .field(
-                    "provider", field_type="string",
-                    enum=["ollama", "openai", "anthropic"],
-                    required=True,
-                )
-                .field(
-                    "model", field_type="string",
-                    required=True,
-                )
-                .transition(
-                    "done",
-                    "data.get('provider') and data.get('model')",
-                )
+            .field(
+                "provider",
+                field_type="string",
+                enum=["ollama", "openai", "anthropic"],
+                required=True,
+            )
+            .field(
+                "model",
+                field_type="string",
+                required=True,
+            )
+            .transition(
+                "done",
+                "data.get('provider') and data.get('model')",
+            )
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -499,7 +530,7 @@ class TestEnumNormalizationIntegration:
             wizard_config=config,
             main_responses=["Got it!", "Got it!"],
             extraction_results=[
-                [{"provider": "ollama"}],                # Valid — stored
+                [{"provider": "ollama"}],  # Valid — stored
                 [{"provider": "magic", "model": "llama"}],  # provider rejected, model accepted
             ],
         ) as harness:
@@ -520,17 +551,20 @@ class TestEnumNormalizationIntegration:
         """reject_unmatched works as strict enum check when normalize=false."""
         config = (
             WizardConfigBuilder("test")
-            .settings(extraction_hints={
-                "enum_normalize": False,
-                "reject_unmatched": True,
-            })
+            .settings(
+                extraction_hints={
+                    "enum_normalize": False,
+                    "reject_unmatched": True,
+                }
+            )
             .stage("gather", is_start=True, prompt="Pick a provider.")
-                .field(
-                    "provider", field_type="string",
-                    enum=["ollama", "openai", "anthropic"],
-                    required=True,
-                )
-                .transition("done", "data.get('provider')")
+            .field(
+                "provider",
+                field_type="string",
+                enum=["ollama", "openai", "anthropic"],
+                required=True,
+            )
+            .transition("done", "data.get('provider')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -539,8 +573,8 @@ class TestEnumNormalizationIntegration:
             wizard_config=config,
             main_responses=["Got it!", "Got it!"],
             extraction_results=[
-                [{"provider": "Ollama"}],    # Case mismatch — rejected (no normalization)
-                [{"provider": "ollama"}],    # Exact match — accepted
+                [{"provider": "Ollama"}],  # Case mismatch — rejected (no normalization)
+                [{"provider": "ollama"}],  # Exact match — accepted
             ],
         ) as harness:
             await harness.chat("use Ollama")

@@ -138,13 +138,15 @@ class TestValidateBotCapabilities:
             },
             "llm": {"$resource": "main-llm", "type": "llm_providers"},
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {"model": "llama3.2"},
-            "llm_providers/extraction-llm": {
-                "model": "qwen3",
-                "capabilities": ["text_generation", "json_mode"],
-            },
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {"model": "llama3.2"},
+                "llm_providers/extraction-llm": {
+                    "model": "qwen3",
+                    "capabilities": ["text_generation", "json_mode"],
+                },
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         assert warnings == []
 
@@ -161,13 +163,15 @@ class TestValidateBotCapabilities:
             },
             "llm": {"$resource": "main-llm"},
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {"model": "llama3.2"},
-            "llm_providers/extraction-llm": {
-                "model": "tinyllama",
-                "capabilities": ["text_generation"],
-            },
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {"model": "llama3.2"},
+                "llm_providers/extraction-llm": {
+                    "model": "tinyllama",
+                    "capabilities": ["text_generation"],
+                },
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         assert any("json_mode" in w and "Extraction" in w for w in warnings)
 
@@ -188,12 +192,14 @@ class TestValidateBotCapabilities:
                 "type": "llm_providers",
             },
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {
-                "model": "llama3.2",
-                "capabilities": ["text_generation", "chat"],  # no json_mode
-            },
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {
+                    "model": "llama3.2",
+                    "capabilities": ["text_generation", "chat"],  # no json_mode
+                },
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         # No warnings about main LLM needing json_mode
         assert not any("Main" in w and "json_mode" in w for w in warnings)
@@ -213,9 +219,11 @@ class TestValidateBotCapabilities:
             },
             "llm": {"$resource": "main-llm"},
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {"model": "llama3.2"},
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {"model": "llama3.2"},
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         assert warnings == []
 
@@ -226,12 +234,14 @@ class TestValidateBotCapabilities:
             "tools": [{"name": "search"}],
             "llm": {"$resource": "main-llm", "type": "llm_providers"},
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {
-                "model": "llama3.2",
-                "capabilities": ["text_generation", "function_calling"],
-            },
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {
+                    "model": "llama3.2",
+                    "capabilities": ["text_generation", "function_calling"],
+                },
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         assert warnings == []
 
@@ -241,12 +251,14 @@ class TestValidateBotCapabilities:
             "tools": [{"name": "search"}],
             "llm": {"$resource": "main-llm", "type": "llm_providers"},
         }
-        env = _FakeEnvironment({
-            "llm_providers/main-llm": {
-                "model": "tinyllama",
-                "capabilities": ["text_generation"],
-            },
-        })
+        env = _FakeEnvironment(
+            {
+                "llm_providers/main-llm": {
+                    "model": "tinyllama",
+                    "capabilities": ["text_generation"],
+                },
+            }
+        )
         warnings = validate_bot_capabilities(config, env)
         assert any("function_calling" in w and "Main" in w for w in warnings)
 

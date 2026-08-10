@@ -236,7 +236,7 @@ def test_every_declined_rule_carries_a_reason_in_root():
     for rule in sorted(declined):
         line = next((ln for ln in lines if f'"{rule}",' in ln), None)
         if line is None:
-            violations.append(f"{rule}: declared in ignore but not found as a `\"{rule}\",` line")
+            violations.append(f'{rule}: declared in ignore but not found as a `"{rule}",` line')
         elif "#" not in line:
             violations.append(f"{rule}: declined with no reason on its line")
 

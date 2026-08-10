@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 
 class PythonVectorSearchMixin:
     """Mixin providing Python-based vector similarity search.
-    
+
     This mixin can be used by database backends that don't have native vector
     search capabilities (like SQLite) to provide vector search functionality
     using Python/NumPy calculations.
-    
+
     The backend must provide:
     - A way to fetch all records (with optional filtering)
     - A method to extract vector data from records
@@ -32,10 +32,10 @@ class PythonVectorSearchMixin:
         metric=None,
         fetch_all_method: str = "search",
         fetch_filtered_method: str = "search",
-        **kwargs
+        **kwargs,
     ) -> list["VectorSearchResult"]:
         """Perform async vector search using Python calculations.
-        
+
         Args:
             query_vector: Query vector
             vector_field: Name of the vector field to search
@@ -45,7 +45,7 @@ class PythonVectorSearchMixin:
             fetch_all_method: Name of method to fetch all records
             fetch_filtered_method: Name of method to fetch filtered records
             **kwargs: Additional arguments
-            
+
         Returns:
             List of VectorSearchResult objects
         """
@@ -57,7 +57,7 @@ class PythonVectorSearchMixin:
 
         # Get metric from parameter or instance default
         if metric is None:
-            metric = getattr(self, 'vector_metric', DistanceMetric.COSINE)
+            metric = getattr(self, "vector_metric", DistanceMetric.COSINE)
         if isinstance(metric, str):
             metric = DistanceMetric(metric)
 
@@ -89,8 +89,8 @@ class PythonVectorSearchMixin:
                 stored_vector = data[vector_field]
 
                 # Handle VectorField dict format (from to_dict())
-                if isinstance(stored_vector, dict) and 'value' in stored_vector:
-                    stored_vector = stored_vector['value']
+                if isinstance(stored_vector, dict) and "value" in stored_vector:
+                    stored_vector = stored_vector["value"]
 
                 # Convert to numpy array if needed
                 if not isinstance(stored_vector, np.ndarray):
@@ -107,9 +107,7 @@ class PythonVectorSearchMixin:
 
                 # Create result
                 result = VectorSearchResult(
-                    record=record,
-                    score=float(score),
-                    vector_field=vector_field
+                    record=record, score=float(score), vector_field=vector_field
                 )
                 results.append(result)
 
@@ -126,10 +124,10 @@ class PythonVectorSearchMixin:
         metric=None,
         fetch_all_method: str = "search",
         fetch_filtered_method: str = "search",
-        **kwargs
+        **kwargs,
     ) -> list["VectorSearchResult"]:
         """Perform sync vector search using Python calculations.
-        
+
         Args:
             query_vector: Query vector
             vector_field: Name of the vector field to search
@@ -139,7 +137,7 @@ class PythonVectorSearchMixin:
             fetch_all_method: Name of method to fetch all records
             fetch_filtered_method: Name of method to fetch filtered records
             **kwargs: Additional arguments
-            
+
         Returns:
             List of VectorSearchResult objects
         """
@@ -151,7 +149,7 @@ class PythonVectorSearchMixin:
 
         # Get metric from parameter or instance default
         if metric is None:
-            metric = getattr(self, 'vector_metric', DistanceMetric.COSINE)
+            metric = getattr(self, "vector_metric", DistanceMetric.COSINE)
         if isinstance(metric, str):
             metric = DistanceMetric(metric)
 
@@ -183,8 +181,8 @@ class PythonVectorSearchMixin:
                 stored_vector = data[vector_field]
 
                 # Handle VectorField dict format (from to_dict())
-                if isinstance(stored_vector, dict) and 'value' in stored_vector:
-                    stored_vector = stored_vector['value']
+                if isinstance(stored_vector, dict) and "value" in stored_vector:
+                    stored_vector = stored_vector["value"]
 
                 # Convert to numpy array if needed
                 if not isinstance(stored_vector, np.ndarray):
@@ -201,9 +199,7 @@ class PythonVectorSearchMixin:
 
                 # Create result
                 result = VectorSearchResult(
-                    record=record,
-                    score=float(score),
-                    vector_field=vector_field
+                    record=record, score=float(score), vector_field=vector_field
                 )
                 results.append(result)
 
@@ -213,44 +209,46 @@ class PythonVectorSearchMixin:
 
     def _extract_record_data(self, record_dict: dict[str, Any]) -> dict[str, Any]:
         """Extract the actual data from a record dictionary.
-        
+
         Handles different storage formats like:
         - Direct data storage
         - Data in a 'data' column (JSON)
         - Double-nested data structures
-        
+
         Args:
             record_dict: Raw record dictionary from database
-            
+
         Returns:
             Extracted data dictionary
         """
         import json
 
         # Check if there's a 'data' column (common in generic table structures)
-        if 'data' in record_dict:
-            data = record_dict['data']
+        if "data" in record_dict:
+            data = record_dict["data"]
 
             # Parse JSON if needed
             if isinstance(data, str):
                 data = json.loads(data)
 
             # Handle double-nested data structure
-            if isinstance(data, dict) and 'data' in data:
-                data = data['data']
+            if isinstance(data, dict) and "data" in data:
+                data = data["data"]
 
             return data
 
         # Direct storage
         return record_dict
 
-    def _create_record_from_data(self, record_dict: dict[str, Any], data: dict[str, Any]) -> "Record":
+    def _create_record_from_data(
+        self, record_dict: dict[str, Any], data: dict[str, Any]
+    ) -> "Record":
         """Create a Record object from raw data.
-        
+
         Args:
             record_dict: Original record dictionary (may contain metadata)
             data: Extracted data dictionary
-            
+
         Returns:
             Record object
         """
@@ -259,7 +257,7 @@ class PythonVectorSearchMixin:
         from ..records import Record
 
         # Extract metadata if present
-        metadata = record_dict.get('metadata', {})
+        metadata = record_dict.get("metadata", {})
         if isinstance(metadata, str):
             try:
                 metadata = json.loads(metadata) if metadata else {}
@@ -267,6 +265,6 @@ class PythonVectorSearchMixin:
                 metadata = {}
 
         # Create Record with proper initialization
-        record = Record(data=data, id=record_dict.get('id'), metadata=metadata)
+        record = Record(data=data, id=record_dict.get("id"), metadata=metadata)
 
         return record

@@ -38,6 +38,7 @@ REDUNDANT_SPELLINGS = {
     "timezone.utc": "UTC, from datetime (the same object since 3.11)",
 }
 
+
 def _sub_floor_claim_re() -> re.Pattern[str]:
     """``Python <major>.<minor>`` for every minor below the floor.
 
@@ -54,6 +55,7 @@ def _sub_floor_claim_re() -> re.Pattern[str]:
     major, minor = _floor()
     olds = "|".join(str(n) for n in range(minor - 1, -1, -1))
     return re.compile(rf"Python {major}\.(?:{olds})\b")
+
 
 #: A line-level opt-out, for the case where the older spelling *is* the subject
 #: under test — a test proving ``asyncio.TimeoutError`` is still caught has to
@@ -103,9 +105,8 @@ def test_no_redundant_compat_spellings():
         for line in _hits(path.read_text(encoding="utf-8"), spelling)
     ]
 
-    assert not violations, (
-        "Spellings the interpreter floor made redundant:\n"
-        + "\n".join(f"  - {v}" for v in violations)
+    assert not violations, "Spellings the interpreter floor made redundant:\n" + "\n".join(
+        f"  - {v}" for v in violations
     )
 
 
@@ -146,7 +147,6 @@ def test_no_source_claims_a_sub_floor_python():
         if pattern.search(line) and not EXEMPT_RE.search(line)
     ]
 
-    assert not violations, (
-        "Shipped source names a Python below the declared floor:\n"
-        + "\n".join(f"  - {v}" for v in violations)
+    assert not violations, "Shipped source names a Python below the declared floor:\n" + "\n".join(
+        f"  - {v}" for v in violations
     )

@@ -150,7 +150,9 @@ class SyncPostgresDatabase(
             return  # Already connected
 
         # Initialize query builder with pyformat style for psycopg2
-        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
+        self.query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
 
         # Open connection and ensure table; if the database doesn't exist
         # and ensure_database is enabled, create it and retry.
@@ -203,6 +205,7 @@ class SyncPostgresDatabase(
         to checking the error message for the PostgreSQL FATAL text.
         """
         import psycopg2
+
         if not isinstance(exc, psycopg2.OperationalError):
             return False
         pgcode = getattr(exc, "pgcode", None)
@@ -244,9 +247,7 @@ class SyncPostgresDatabase(
         cursor = conn.cursor()
         try:
             cursor.execute(
-                psycopg2.sql.SQL("CREATE DATABASE {}").format(
-                    psycopg2.sql.Identifier(target_db)
-                )
+                psycopg2.sql.SQL("CREATE DATABASE {}").format(psycopg2.sql.Identifier(target_db))
             )
             logger.info("Created PostgreSQL database %r", target_db)
         except psycopg2.errors.DuplicateDatabase:
@@ -454,9 +455,7 @@ class SyncPostgresDatabase(
             DELETE FROM {self._q_qualified}
             WHERE id = %(id)s AND xmin::text = %(expected_version)s
             """
-            result = self.db.execute(
-                sql, {"id": id, "expected_version": expected_version}
-            )
+            result = self.db.execute(sql, {"id": id, "expected_version": expected_version})
             rows_affected = result if isinstance(result, int) else 0
             if rows_affected == 0:
                 # The atomic DELETE matched nothing: either the row is gone
@@ -598,12 +597,12 @@ class SyncPostgresDatabase(
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
-        
+
         Uses multi-value INSERT for better performance.
-        
+
         Args:
             records: List of records to create
-            
+
         Returns:
             List of created record IDs
         """
@@ -614,7 +613,10 @@ class SyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
+
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
 
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
@@ -634,9 +636,7 @@ class SyncPostgresDatabase(
         try:
             result_df = self.db.query(query, params_dict)
         except psycopg2.errors.UniqueViolation as e:
-            colliding = next(
-                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
-            )
+            colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
             raise DuplicateRecordError(colliding) from e
         except psycopg2.IntegrityError as e:
             # No id: a batch INSERT is one statement, and the driver names the
@@ -645,7 +645,7 @@ class SyncPostgresDatabase(
 
         # PostgreSQL RETURNING clause gives us the actual inserted IDs
         if not result_df.empty:
-            return result_df['id'].tolist()
+            return result_df["id"].tolist()
         return ids
 
     def upsert_batch(self, records: list[Record]) -> list[str]:
@@ -661,6 +661,7 @@ class SyncPostgresDatabase(
         self._check_connection()
 
         from .sql_base import SQLQueryBuilder
+
         query_builder = SQLQueryBuilder(
             self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
         )
@@ -679,12 +680,12 @@ class SyncPostgresDatabase(
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause for better performance.
-        
+
         Args:
             ids: List of record IDs to delete
-            
+
         Returns:
             List of success flags for each deletion
         """
@@ -695,7 +696,10 @@ class SyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
+
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
 
         # Use the shared batch delete query builder (includes RETURNING clause)
         query, params_list = query_builder.build_batch_delete_query(ids)
@@ -709,7 +713,7 @@ class SyncPostgresDatabase(
         result_df = self.db.query(query, params_dict)
 
         # Get list of deleted IDs from RETURNING clause
-        deleted_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
+        deleted_ids = set(result_df["id"].tolist()) if not result_df.empty else set()
 
         # Return results based on which IDs were actually deleted
         results = []
@@ -720,12 +724,12 @@ class SyncPostgresDatabase(
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
-        
+
         Uses PostgreSQL's CASE expressions for batch updates via shared SQL builder.
-        
+
         Args:
             updates: List of (id, record) tuples to update
-            
+
         Returns:
             List of success flags for each update
         """
@@ -736,7 +740,10 @@ class SyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
+
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
 
         # Use the shared batch update query builder
         query, params_list = query_builder.build_batch_update_query(updates)
@@ -750,7 +757,7 @@ class SyncPostgresDatabase(
         result_df = self.db.query(query, params_dict)
 
         # Get list of updated IDs from RETURNING clause
-        updated_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
+        updated_ids = set(result_df["id"].tolist()) if not result_df.empty else set()
 
         results = []
         for record_id, _ in updates:
@@ -759,9 +766,7 @@ class SyncPostgresDatabase(
         return results
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from PostgreSQL."""
         if query and query.filters:
@@ -814,9 +819,7 @@ class SyncPostgresDatabase(
                 break
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into PostgreSQL.
 
@@ -869,14 +872,12 @@ class SyncPostgresDatabase(
 
         sql = f"""
         INSERT INTO {self._q_qualified} (id, data, metadata)
-        VALUES {', '.join(values)}
+        VALUES {", ".join(values)}
         """
         try:
             self.db.execute(sql, params)
         except psycopg2.errors.UniqueViolation as e:
-            colliding = next(
-                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
-            )
+            colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
             raise DuplicateRecordError(colliding) from e
         except psycopg2.IntegrityError as e:
             raise constraint_violation_error() from e
@@ -888,17 +889,17 @@ class SyncPostgresDatabase(
         field_name: str,
         k: int = 10,
         filter: Query | None = None,
-        metric: DistanceMetric | str = "cosine"
+        metric: DistanceMetric | str = "cosine",
     ) -> list[VectorSearchResult]:
         """Search for similar vectors using PostgreSQL pgvector.
-        
+
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
             field_name: Name of vector field to search (must be in data JSON)
             limit: Maximum number of results
             filters: Optional filters to apply
             metric: Distance metric to use (cosine, euclidean, l2, inner_product)
-            
+
         Returns:
             List of VectorSearchResult objects ordered by similarity
         """
@@ -945,7 +946,9 @@ class SyncPostgresDatabase(
         # Add filters if provided using the query builder
         if filter:
             # Query builder will generate pyformat placeholders since we configured it that way
-            where_clause, filter_params = self.query_builder.build_where_clause(filter, len(params) + 1)
+            where_clause, filter_params = self.query_builder.build_where_clause(
+                filter, len(params) + 1
+            )
             if where_clause:
                 sql += where_clause
                 params.extend(filter_params)
@@ -978,18 +981,14 @@ class SyncPostgresDatabase(
             else:
                 score = -distance  # Default: lower distance = better
 
-            result = VectorSearchResult(
-                record=record,
-                score=float(score),
-                vector_field=field_name
-            )
+            result = VectorSearchResult(record=record, score=float(score), vector_field=field_name)
             results.append(result)
 
         return results
 
     def has_vector_support(self) -> bool:
         """Check if this database has vector support enabled.
-        
+
         Returns:
             True if vector operations are supported
         """
@@ -997,7 +996,7 @@ class SyncPostgresDatabase(
 
     def enable_vector_support(self) -> bool:
         """Enable vector support for this database if possible.
-        
+
         Returns:
             True if vector support is now enabled
         """
@@ -1018,7 +1017,7 @@ class SyncPostgresDatabase(
         model_version: str | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records (stub for abstract requirement).
-        
+
         This is a placeholder implementation to satisfy the abstract method requirement.
         Full implementation would require actual embedding function.
         """
@@ -1100,11 +1099,12 @@ class AsyncPostgresDatabase(
         # Attempt pool creation; if the database doesn't exist and
         # ensure_database is enabled, create it and retry.
         from ..pooling import BasePoolConfig
+
         try:
             self._pool = await _pool_manager.get_pool(
                 self._pool_config,
                 cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
-                validate_asyncpg_pool
+                validate_asyncpg_pool,
             )
         except asyncpg.InvalidCatalogNameError:
             if self._ensure_database_enabled:
@@ -1112,7 +1112,7 @@ class AsyncPostgresDatabase(
                 self._pool = await _pool_manager.get_pool(
                     self._pool_config,
                     cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
-                    validate_asyncpg_pool
+                    validate_asyncpg_pool,
                 )
             else:
                 raise
@@ -1123,7 +1123,9 @@ class AsyncPostgresDatabase(
         # after a failed connect() (which would otherwise leak the holder).
         try:
             # Initialize query builder
-            self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+            self.query_builder = SQLQueryBuilder(
+                self.table_name, self.schema_name, dialect="postgres"
+            )
 
             # Ensure table exists
             await self._ensure_table()
@@ -1243,7 +1245,7 @@ class AsyncPostgresDatabase(
 
     async def _ensure_vector_column(self, field_name: str, dimensions: int) -> None:
         """Ensure a vector column exists for the given field.
-        
+
         Args:
             field_name: Name of the vector field
             dimensions: Number of dimensions
@@ -1261,7 +1263,9 @@ class AsyncPostgresDatabase(
         """
 
         async with self._pool.acquire() as conn:
-            existing = await conn.fetchval(check_sql, self.schema_name, self.table_name, column_name)
+            existing = await conn.fetchval(
+                check_sql, self.schema_name, self.table_name, column_name
+            )
 
             if not existing:
                 # Add vector column
@@ -1289,7 +1293,7 @@ class AsyncPostgresDatabase(
                         dimensions,
                         metric="cosine",
                         index_type=index_type,
-                        index_params=index_params
+                        index_params=index_params,
                     )
 
                     # Note: IVFFlat requires table to have data before creating index
@@ -1353,9 +1357,7 @@ class AsyncPostgresDatabase(
             values.append(vec_str)
         return columns, placeholders, values
 
-    async def _collect_vector_inserts(
-        self, record: Record
-    ) -> list[tuple[str, str]]:
+    async def _collect_vector_inserts(self, record: Record) -> list[tuple[str, str]]:
         """Return [(quoted_col_name, formatted_vec_str)] for every VectorField.
 
         Also calls _ensure_vector_column so the pgvector column is guaranteed
@@ -1393,8 +1395,8 @@ class AsyncPostgresDatabase(
         values.extend(vec_values)
 
         sql = f"""
-        INSERT INTO {self._q_qualified} ({', '.join(columns)})
-        VALUES ({', '.join(placeholders)})
+        INSERT INTO {self._q_qualified} ({", ".join(columns)})
+        VALUES ({", ".join(placeholders)})
         """
 
         try:
@@ -1442,9 +1444,7 @@ class AsyncPostgresDatabase(
             version = await conn.fetchval(sql, id)
         return None if version is None else str(version)
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -1485,7 +1485,7 @@ class AsyncPostgresDatabase(
 
         sql = f"""
         UPDATE {self._q_qualified}
-        SET {', '.join(set_clauses)}
+        SET {", ".join(set_clauses)}
         {where}
         """
 
@@ -1510,9 +1510,7 @@ class AsyncPostgresDatabase(
 
         return rows_affected > 0
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         When ``expected_version`` is provided the ``DELETE`` carries an
@@ -1624,10 +1622,10 @@ class AsyncPostgresDatabase(
             update_clauses.append(f"{q_col} = EXCLUDED.{q_col}")
 
         sql = f"""
-        INSERT INTO {self._q_qualified} ({', '.join(columns)})
-        VALUES ({', '.join(placeholders)})
+        INSERT INTO {self._q_qualified} ({", ".join(columns)})
+        VALUES ({", ".join(placeholders)})
         ON CONFLICT (id) DO UPDATE
-        SET {', '.join(update_clauses)}
+        SET {", ".join(update_clauses)}
         """
 
         async with self._pool.acquire() as conn:
@@ -1640,7 +1638,7 @@ class AsyncPostgresDatabase(
         self._check_connection()
 
         # Initialize query builder if not already done
-        if not hasattr(self, 'query_builder'):
+        if not hasattr(self, "query_builder"):
             self.query_builder = SQLQueryBuilder(
                 self.table_name, self.schema_name, dialect="postgres"
             )
@@ -1730,9 +1728,7 @@ class AsyncPostgresDatabase(
             async with self._pool.acquire() as conn:
                 yield conn
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records efficiently using a single query.
 
         Uses multi-value INSERT with RETURNING for better performance.
@@ -1754,6 +1750,7 @@ class AsyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL
         from .sql_base import SQLQueryBuilder
+
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
         # Use the shared batch create query builder (honors record.id, mints via
@@ -1790,9 +1787,7 @@ class AsyncPostgresDatabase(
             return [row["id"] for row in rows]
         return ids  # Fallback to generated IDs
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records in a single statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
@@ -1807,9 +1802,8 @@ class AsyncPostgresDatabase(
         self._check_connection()
 
         from .sql_base import SQLQueryBuilder
-        query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres"
-        )
+
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         query, params, ids = query_builder.build_batch_upsert_query(
             records, id_factory=self._generate_id
         )
@@ -1821,9 +1815,7 @@ class AsyncPostgresDatabase(
         # builder's input-order ids.
         return ids
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently using a single query.
 
         Uses single DELETE with IN clause and RETURNING for verification.
@@ -1843,6 +1835,7 @@ class AsyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL
         from .sql_base import SQLQueryBuilder
+
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
         # Use the shared batch delete query builder
@@ -1864,12 +1857,12 @@ class AsyncPostgresDatabase(
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
-        
+
         Uses PostgreSQL's CASE expressions for batch updates with native asyncpg.
-        
+
         Args:
             updates: List of (id, record) tuples to update
-            
+
         Returns:
             List of success flags for each update
         """
@@ -1880,6 +1873,7 @@ class AsyncPostgresDatabase(
 
         # Create a query builder for PostgreSQL
         from .sql_base import SQLQueryBuilder
+
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
         # Use the shared batch update query builder. It already
@@ -1909,17 +1903,17 @@ class AsyncPostgresDatabase(
         field_name: str,
         k: int = 10,
         filter: Query | None = None,
-        metric: DistanceMetric | str = "cosine"
+        metric: DistanceMetric | str = "cosine",
     ) -> list[VectorSearchResult]:
         """Search for similar vectors using PostgreSQL pgvector.
-        
+
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
             field_name: Name of vector field to search
             limit: Maximum number of results
             filters: Optional filters to apply
             metric: Distance metric to use
-            
+
         Returns:
             List of VectorSearchResult objects
         """
@@ -1987,9 +1981,11 @@ class AsyncPostgresDatabase(
             record = self._row_to_record(row)
 
             # Convert distance to similarity score (1 - normalized_distance for cosine)
-            distance = float(row['distance'])
+            distance = float(row["distance"])
             if metric_str == "cosine":
-                score = 1.0 - min(distance, 2.0) / 2.0  # Normalize cosine distance [0,2] to similarity [0,1]
+                score = (
+                    1.0 - min(distance, 2.0) / 2.0
+                )  # Normalize cosine distance [0,2] to similarity [0,1]
             elif metric_str in ["euclidean", "l2"]:
                 score = 1.0 / (1.0 + distance)  # Convert distance to similarity
             else:
@@ -1999,7 +1995,7 @@ class AsyncPostgresDatabase(
                 record=record,
                 score=score,
                 vector_field=field_name,
-                metadata={"distance": distance, "metric": metric_str}
+                metadata={"distance": distance, "metric": metric_str},
             )
             results.append(result)
 
@@ -2007,7 +2003,7 @@ class AsyncPostgresDatabase(
 
     async def enable_vector_support(self) -> bool:
         """Enable vector support for this database.
-        
+
         Returns:
             True if vector support is enabled
         """
@@ -2019,7 +2015,7 @@ class AsyncPostgresDatabase(
 
     async def has_vector_support(self) -> bool:
         """Check if this database has vector support enabled.
-        
+
         Returns:
             True if vector support is available
         """
@@ -2036,12 +2032,12 @@ class AsyncPostgresDatabase(
         model_version: str | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
-        
+
         This is a placeholder implementation. In a real scenario, you would:
         1. Extract text from the specified fields
         2. Call the embedding function to generate vectors
         3. Store the vectors alongside the records
-        
+
         Args:
             records: Records to process
             text_field: Field name(s) containing text to embed
@@ -2050,7 +2046,7 @@ class AsyncPostgresDatabase(
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             List of record IDs that were processed
         """
@@ -2063,15 +2059,23 @@ class AsyncPostgresDatabase(
 
         # Process in batches
         for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+            batch = records[i : i + batch_size]
 
             # Extract texts
             texts = []
             for record in batch:
                 if isinstance(text_field, list):
-                    text = " ".join(str(record.fields.get(f, {}).value) for f in text_field if f in record.fields)
+                    text = " ".join(
+                        str(record.fields.get(f, {}).value)
+                        for f in text_field
+                        if f in record.fields
+                    )
                 else:
-                    text = str(record.fields.get(text_field, {}).value) if text_field in record.fields else ""
+                    text = (
+                        str(record.fields.get(text_field, {}).value)
+                        if text_field in record.fields
+                        else ""
+                    )
                 texts.append(text)
 
             # Generate embeddings
@@ -2087,8 +2091,10 @@ class AsyncPostgresDatabase(
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
-                            dimensions=len(vector) if hasattr(vector, '__len__') else None,
-                            source_field=text_field if isinstance(text_field, str) else ",".join(text_field),
+                            dimensions=len(vector) if hasattr(vector, "__len__") else None,
+                            source_field=text_field
+                            if isinstance(text_field, str)
+                            else ",".join(text_field),
                             model_name=model_name,
                             model_version=model_version,
                         )
@@ -2096,7 +2102,9 @@ class AsyncPostgresDatabase(
                         # Create or update record
                         if record.has_storage_id():
                             if record.storage_id is None:
-                                raise ValueError("Record has_storage_id() returned True but storage_id is None")
+                                raise ValueError(
+                                    "Record has_storage_id() returned True but storage_id is None"
+                                )
                             await self.update(record.storage_id, record)
                         else:
                             record_id = await self.create(record)
@@ -2117,14 +2125,14 @@ class AsyncPostgresDatabase(
         lists: int | None = None,
     ) -> bool:
         """Create a vector index for efficient similarity search.
-        
+
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions in the vectors
             metric: Distance metric for the index
             index_type: Type of index (ivfflat, hnsw)
             lists: Number of lists for IVFFlat index
-            
+
         Returns:
             True if index was created successfully
         """
@@ -2150,7 +2158,7 @@ class AsyncPostgresDatabase(
                 lists = params.get("lists", 100)
 
         # Convert metric enum to string if needed
-        if hasattr(metric, 'value'):
+        if hasattr(metric, "value"):
             metric_str = metric.value
         else:
             metric_str = str(metric).lower()
@@ -2167,7 +2175,7 @@ class AsyncPostgresDatabase(
             metric=metric_str,
             index_type=index_type,
             index_params={"lists": lists} if lists else None,
-            field_name=vector_field
+            field_name=vector_field,
         )
 
         # Create the index
@@ -2183,11 +2191,11 @@ class AsyncPostgresDatabase(
 
     async def drop_vector_index(self, vector_field: str, metric: str = "cosine") -> bool:
         """Drop a vector index.
-        
+
         Args:
             vector_field: Name of the vector field
             metric: Distance metric used in the index
-            
+
         Returns:
             True if index was dropped successfully
         """
@@ -2209,10 +2217,10 @@ class AsyncPostgresDatabase(
 
     async def get_vector_index_stats(self, vector_field: str) -> dict[str, Any]:
         """Get statistics about a vector field and its index.
-        
+
         Args:
             vector_field: Name of the vector field
-            
+
         Returns:
             Dictionary with index statistics
         """
@@ -2236,7 +2244,9 @@ class AsyncPostgresDatabase(
                 # get_index_check_sql queries pg_indexes using $1/$2 parameterized
                 # bindings against catalog text columns (schemaname, tablename), not
                 # via identifier interpolation, so quoting would produce wrong matches.
-                index_sql, params = get_index_check_sql(self.schema_name, self.table_name, vector_field)
+                index_sql, params = get_index_check_sql(
+                    self.schema_name, self.table_name, vector_field
+                )
                 stats["indexed"] = await conn.fetchval(index_sql, *params) or False
         except Exception as e:
             logger.warning(f"Failed to get vector index stats: {e}")
@@ -2244,9 +2254,7 @@ class AsyncPostgresDatabase(
         return stats
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from PostgreSQL using cursor."""
         if query and query.filters:
@@ -2299,9 +2307,7 @@ class AsyncPostgresDatabase(
                     yield rec
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into PostgreSQL using batch inserts.
 
@@ -2356,11 +2362,7 @@ class AsyncPostgresDatabase(
             record_id = record.id or self._generate_id()
             row_data = self._record_to_row(record, record_id)
             ids.append(row_data["id"])
-            rows.append((
-                row_data["id"],
-                row_data["data"],
-                row_data["metadata"]
-            ))
+            rows.append((row_data["id"], row_data["data"], row_data["metadata"]))
 
         # Use COPY for efficient bulk insert
         try:
@@ -2369,7 +2371,7 @@ class AsyncPostgresDatabase(
                     self.table_name,
                     schema_name=self.schema_name or None,
                     records=rows,
-                    columns=["id", "data", "metadata"]
+                    columns=["id", "data", "metadata"],
                 )
         except asyncpg.exceptions.UniqueViolationError as e:
             colliding = ids[0]
@@ -2439,6 +2441,7 @@ class AsyncPostgresDatabase(
         # For other strategies, use the parent implementation
         if config.fusion_strategy not in (FusionStrategy.NATIVE, FusionStrategy.RRF):
             from ..vector.mixins import VectorOperationsMixin
+
             return await VectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -2460,6 +2463,7 @@ class AsyncPostgresDatabase(
         # Prepare vector search
         if isinstance(query_vector, (list, tuple)):
             import numpy as np
+
             query_vector = np.array(query_vector, dtype=np.float32)
 
         vector_str = format_vector_for_postgres(query_vector)
@@ -2532,8 +2536,11 @@ class AsyncPostgresDatabase(
                 rows = await conn.fetch(sql, *params)
         except Exception as e:
             # If full-text search fails, fall back to client-side fusion
-            logger.warning(f"Native PostgreSQL hybrid search failed ({e}), falling back to client-side")
+            logger.warning(
+                f"Native PostgreSQL hybrid search failed ({e}), falling back to client-side"
+            )
             from ..vector.mixins import VectorOperationsMixin
+
             return await VectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -2559,13 +2566,13 @@ class AsyncPostgresDatabase(
 
         for row in rows:
             record = self._row_to_record(row)
-            record_id = row['id']
+            record_id = row["id"]
             records_by_id[record_id] = record
 
-            if row['text_score'] is not None:
-                text_scores.append((record_id, float(row['text_score'])))
-            if row['vector_score'] is not None:
-                vector_scores.append((record_id, float(row['vector_score'])))
+            if row["text_score"] is not None:
+                text_scores.append((record_id, float(row["text_score"])))
+            if row["vector_score"] is not None:
+                vector_scores.append((record_id, float(row["vector_score"])))
 
         # Sort by score for rank-based fusion
         text_scores.sort(key=lambda x: x[1], reverse=True)
@@ -2591,20 +2598,22 @@ class AsyncPostgresDatabase(
             if record_id not in records_by_id:
                 continue
 
-            results.append(HybridSearchResult(
-                record=records_by_id[record_id],
-                combined_score=combined_score,
-                text_score=text_score_map.get(record_id),
-                vector_score=vector_score_map.get(record_id),
-                text_rank=text_rank_map.get(record_id),
-                vector_rank=vector_rank_map.get(record_id),
-                metadata={
-                    "fusion_strategy": config.fusion_strategy.value,
-                    "text_weight": config.text_weight,
-                    "vector_weight": config.vector_weight,
-                    "backend": "postgresql",
-                },
-            ))
+            results.append(
+                HybridSearchResult(
+                    record=records_by_id[record_id],
+                    combined_score=combined_score,
+                    text_score=text_score_map.get(record_id),
+                    vector_score=vector_score_map.get(record_id),
+                    text_rank=text_rank_map.get(record_id),
+                    vector_rank=vector_rank_map.get(record_id),
+                    metadata={
+                        "fusion_strategy": config.fusion_strategy.value,
+                        "text_weight": config.text_weight,
+                        "vector_weight": config.vector_weight,
+                        "backend": "postgresql",
+                    },
+                )
+            )
 
         return results
 
@@ -2673,6 +2682,7 @@ class AsyncPostgresDatabase(
             # Fall back to LIKE-based search if full-text search fails
             logger.warning(f"PostgreSQL full-text search failed ({e}), falling back to LIKE")
             from ..vector.mixins import VectorOperationsMixin
+
             return await VectorOperationsMixin._text_search_for_hybrid(
                 self,
                 query_text=query_text,
@@ -2683,11 +2693,11 @@ class AsyncPostgresDatabase(
 
         # Normalize scores
         results: list[tuple[Record, float]] = []
-        max_score = max((float(row['score']) for row in rows), default=1.0) or 1.0
+        max_score = max((float(row["score"]) for row in rows), default=1.0) or 1.0
 
         for row in rows:
             record = self._row_to_record(row)
-            score = float(row['score']) / max_score if max_score > 0 else 0.0
+            score = float(row["score"]) / max_score if max_score > 0 else 0.0
             results.append((record, score))
 
         return results

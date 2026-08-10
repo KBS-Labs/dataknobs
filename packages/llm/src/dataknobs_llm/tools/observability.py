@@ -189,10 +189,12 @@ class ExecutionTracker(CapabilityMixin):
         ```
     """
 
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
-        Capability.CALLBACK_REGISTRY,
-        Capability.EXECUTION_TRACKING,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {
+            Capability.CALLBACK_REGISTRY,
+            Capability.EXECUTION_TRACKING,
+        }
+    )
 
     def __init__(self, max_history: int = 100):
         """Initialize tracker.
@@ -269,9 +271,7 @@ class ExecutionTracker(CapabilityMixin):
         """
         self._store(execution)
         if self._execution_callbacks is not None:
-            self._execution_callbacks.fire(
-                EXECUTION_RECORD_TOPIC, self._record_payload(execution)
-            )
+            self._execution_callbacks.fire(EXECUTION_RECORD_TOPIC, self._record_payload(execution))
 
     async def record_async(self, execution: ToolExecutionRecord) -> None:
         """Record a tool execution (async dispatch).
@@ -296,9 +296,7 @@ class ExecutionTracker(CapabilityMixin):
                 EXECUTION_RECORD_TOPIC, self._record_payload(execution)
             )
 
-    def query(
-        self, query: ExecutionHistoryQuery | None = None
-    ) -> list[ToolExecutionRecord]:
+    def query(self, query: ExecutionHistoryQuery | None = None) -> list[ToolExecutionRecord]:
         """Query execution history.
 
         Args:

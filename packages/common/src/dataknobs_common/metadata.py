@@ -101,11 +101,7 @@ def enforce_immutable_keys(
         if key not in source:
             continue
         source_value = source[key]
-        if (
-            caller is not None
-            and key in caller
-            and _values_differ(caller[key], source_value)
-        ):
+        if caller is not None and key in caller and _values_differ(caller[key], source_value):
             ctx = f"{context}: " if context else ""
             log.warning(
                 "%s%r is an immutable metadata key; caller-supplied value %r "

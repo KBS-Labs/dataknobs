@@ -9,6 +9,7 @@ a per-site ``reason`` discriminator on the opaque event payload.
 These tests pin each fire-point through behavioural setup so a
 regression that drops one of the new awaits is caught immediately.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -39,8 +40,8 @@ async def test_on_turn_end_fires_on_navigation_early_return() -> None:
     config = (
         WizardConfigBuilder("nav-test")
         .stage("first", is_start=True, prompt="Tell me a name.")
-            .field("name", field_type="string", required=True)
-            .transition("second", "data.get('name')")
+        .field("name", field_type="string", required=True)
+        .transition("second", "data.get('name')")
         .stage("second", is_end=True, prompt="Second stage.")
         .build()
     )
@@ -87,9 +88,9 @@ async def test_on_turn_end_fires_on_clarification_early_return() -> None:
     config = (
         WizardConfigBuilder("clarification-test")
         .stage("ask", is_start=True, prompt="Tell me a name and age.")
-            .field("name", field_type="string", required=True)
-            .field("age", field_type="string", required=True)
-            .transition("done", "data.get('name') and data.get('age')")
+        .field("name", field_type="string", required=True)
+        .field("age", field_type="string", required=True)
+        .transition("done", "data.get('name') and data.get('age')")
         .stage("done", is_end=True, prompt="All done!")
         .build()
     )
@@ -107,10 +108,12 @@ async def test_on_turn_end_fires_on_clarification_early_return() -> None:
             ConfigurableExtractor,
             SimpleExtractionResult,
         )
+
         low_conf = ConfigurableExtractor(
             results=[SimpleExtractionResult(data={}, confidence=0.0)],
         )
         from dataknobs_bots.testing import inject_providers
+
         inject_providers(harness.bot, extractor=low_conf)
 
         fired: list[dict[str, Any]] = []
@@ -390,7 +393,9 @@ async def test_on_turn_end_fires_on_stream_abandonment() -> None:
         await manager.add_message(role="user", content="hello")
 
         handle = await strategy.begin_turn(
-            manager, harness.bot.llm, tools=None,
+            manager,
+            harness.bot.llm,
+            tools=None,
         )
         result = await strategy.process_input(handle)
         assert result.early_response is None, (
@@ -468,7 +473,9 @@ async def test_on_turn_end_fires_on_advance() -> None:
     hooks.on_turn_end(my_hook)
 
     wizard = WizardReasoning(
-        wizard_fsm=fsm, hooks=hooks, strict_validation=False,
+        wizard_fsm=fsm,
+        hooks=hooks,
+        strict_validation=False,
     )
     state = WizardState(current_stage="first")
     state.history = ["first"]
@@ -476,7 +483,8 @@ async def test_on_turn_end_fires_on_advance() -> None:
     # Dict-mode advance — merges directly into state.data without
     # touching the extractor.
     result = await wizard.advance(
-        user_input={"name": "Alice"}, state=state,
+        user_input={"name": "Alice"},
+        state=state,
     )
 
     assert result.transitioned is True

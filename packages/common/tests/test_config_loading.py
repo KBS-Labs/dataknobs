@@ -60,9 +60,7 @@ class TestFindConfigFile:
     def test_default_extension_order(self) -> None:
         assert DEFAULT_CONFIG_EXTENSIONS == (".yaml", ".yml", ".json")
 
-    def test_extensions_without_leading_dot_are_normalized(
-        self, tmp_path: Path
-    ) -> None:
+    def test_extensions_without_leading_dot_are_normalized(self, tmp_path: Path) -> None:
         """Callers passing ``"yaml"`` (no dot) should match ``.yaml`` files."""
         (tmp_path / "x.yaml").write_text("a: 1\n")
         match = find_config_file(tmp_path, "x", extensions=("yaml",))
@@ -183,7 +181,8 @@ class TestParseYamlOrJson:
     def test_invalid_format(self) -> None:
         with pytest.raises(ConfigUnsupportedFormatError):
             parse_yaml_or_json(
-                "", format="toml",  # type: ignore[arg-type]
+                "",
+                format="toml",  # type: ignore[arg-type]
             )
 
     def test_source_name_in_shape_error(self) -> None:
@@ -192,18 +191,14 @@ class TestParseYamlOrJson:
 
     def test_source_name_in_parse_error(self) -> None:
         with pytest.raises(ConfigParseError, match="my-source"):
-            parse_yaml_or_json(
-                "{not json", format="json", source_name="my-source"
-            )
+            parse_yaml_or_json("{not json", format="json", source_name="my-source")
 
     def test_default_source_name_used_when_omitted(self) -> None:
         with pytest.raises(ConfigShapeError, match=r"<yaml>"):
             parse_yaml_or_json("- a", format="yaml")
 
     def test_require_dict_false_allows_list(self) -> None:
-        assert parse_yaml_or_json(
-            "- a\n- b\n", format="yaml", require_dict=False
-        ) == ["a", "b"]
+        assert parse_yaml_or_json("- a\n- b\n", format="yaml", require_dict=False) == ["a", "b"]
 
     def test_non_utf8_bytes_raise_parse_error(self) -> None:
         """Non-UTF-8 bytes are wrapped as ``ConfigParseError`` so the
@@ -218,9 +213,7 @@ class TestParseYamlOrJson:
     def test_non_utf8_bytes_includes_source_name(self) -> None:
         bad_bytes = b"\xe9"
         with pytest.raises(ConfigParseError, match="my-source"):
-            parse_yaml_or_json(
-                bad_bytes, format="yaml", source_name="my-source"
-            )
+            parse_yaml_or_json(bad_bytes, format="yaml", source_name="my-source")
 
 
 class TestExceptionHierarchy:
@@ -240,17 +233,13 @@ class TestExceptionHierarchy:
 
 
 class TestYAMLNotInstalled:
-    def test_parse_yaml_raises_when_pyyaml_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_parse_yaml_raises_when_pyyaml_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``parse_yaml_or_json(format='yaml')`` raises a clear error
         when PyYAML cannot be imported.
         """
         real_import = builtins.__import__
 
-        def fake_import(
-            name: str, *args: object, **kwargs: object
-        ) -> object:
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "yaml":
                 raise ImportError("No module named 'yaml'")
             return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
@@ -264,20 +253,14 @@ class TestYAMLNotInstalled:
     ) -> None:
         real_import = builtins.__import__
 
-        def fake_import(
-            name: str, *args: object, **kwargs: object
-        ) -> object:
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "yaml":
                 raise ImportError("No module named 'yaml'")
             return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
-        with pytest.raises(
-            ConfigYAMLNotInstalledError, match="my-source"
-        ):
-            parse_yaml_or_json(
-                "a: 1", format="yaml", source_name="my-source"
-            )
+        with pytest.raises(ConfigYAMLNotInstalledError, match="my-source"):
+            parse_yaml_or_json("a: 1", format="yaml", source_name="my-source")
 
     def test_load_yaml_raises_when_pyyaml_missing(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -289,9 +272,7 @@ class TestYAMLNotInstalled:
         p.write_text("a: 1\n")
         real_import = builtins.__import__
 
-        def fake_import(
-            name: str, *args: object, **kwargs: object
-        ) -> object:
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "yaml":
                 raise ImportError("No module named 'yaml'")
             return real_import(name, *args, **kwargs)  # type: ignore[arg-type]

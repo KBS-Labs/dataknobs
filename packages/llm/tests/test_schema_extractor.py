@@ -110,9 +110,7 @@ class TestSchemaExtractor:
     @pytest.fixture
     def echo_provider(self) -> EchoProvider:
         """Create an EchoProvider for testing."""
-        return EchoProvider(
-            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}}
-        )
+        return EchoProvider({"provider": "echo", "model": "test", "options": {"echo_prefix": ""}})
 
     @pytest.fixture
     def extractor(self, echo_provider: EchoProvider) -> SchemaExtractor:
@@ -355,9 +353,7 @@ class TestSchemaExtractor:
         }
 
         # All fields present
-        echo_provider.set_responses(
-            ['{"name": "Alice", "age": 30, "email": "alice@test.com"}']
-        )
+        echo_provider.set_responses(['{"name": "Alice", "age": 30, "email": "alice@test.com"}'])
 
         result = await extractor.extract(text="Alice, 30, alice@test.com", schema=schema)
 
@@ -640,9 +636,7 @@ class TestSchemaExtractorJSONParsing:
 
     def test_parse_json_embedded_in_text(self, extractor: SchemaExtractor) -> None:
         """Test parsing JSON embedded in text."""
-        data, errors = extractor._parse_json(
-            'Here is the result: {"value": 123} That is all.'
-        )
+        data, errors = extractor._parse_json('Here is the result: {"value": 123} That is all.')
 
         assert data == {"value": 123}
         assert errors == []
@@ -967,7 +961,7 @@ class TestSchemaExtractorWithTracking:
         tracker = ExtractionTracker()
 
         # Good response, then bad response
-        echo_provider.set_responses(['{"name": "Alice"}', '{}'])
+        echo_provider.set_responses(['{"name": "Alice"}', "{}"])
 
         await extractor.extract(text="Alice", schema=schema, tracker=tracker)
         await extractor.extract(text="???", schema=schema, tracker=tracker)

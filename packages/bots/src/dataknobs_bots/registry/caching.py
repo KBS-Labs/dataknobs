@@ -377,9 +377,7 @@ class CachingRegistryManager(ABC, Generic[T]):
         """
         now = time.time()
         expired_count = sum(
-            1
-            for _, (_, cached_at) in self._cache.items()
-            if now - cached_at >= self._cache_ttl
+            1 for _, (_, cached_at) in self._cache.items() if now - cached_at >= self._cache_ttl
         )
 
         return {

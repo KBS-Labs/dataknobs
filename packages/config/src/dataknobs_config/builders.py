@@ -129,7 +129,9 @@ class ObjectBuilder:
             The factory object (instance, class, or callable).
         """
         # Check registered factories first (if they exist)
-        if hasattr(self._config, '_registered_factories') and self._config._registered_factories.has(factory_path):
+        if hasattr(
+            self._config, "_registered_factories"
+        ) and self._config._registered_factories.has(factory_path):
             return self._config._registered_factories.get(factory_path)
         # Fall back to loading as a module path
         factory_cls = self._load_class(factory_path)
@@ -176,9 +178,7 @@ class ObjectBuilder:
                 "'from_config' method or be callable"
             )
 
-    async def build_async(
-        self, ref: str, cache: bool = True, **kwargs: Any
-    ) -> Any:
+    async def build_async(self, ref: str, cache: bool = True, **kwargs: Any) -> Any:
         """Build an object asynchronously from a configuration reference.
 
         Mirror of :meth:`build` for targets whose construction is async.
@@ -207,9 +207,7 @@ class ObjectBuilder:
 
         return obj
 
-    async def _build_from_config_async(
-        self, config: dict, **kwargs: Any
-    ) -> Any:
+    async def _build_from_config_async(self, config: dict, **kwargs: Any) -> Any:
         """Async counterpart of :meth:`_build_from_config`."""
         config = copy.deepcopy(config)
         config.update(kwargs)

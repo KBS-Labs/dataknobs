@@ -65,7 +65,8 @@ def _make_wizard_config(
         "name": "strategy-injection-test",
         "version": "1.0",
         "settings": {"tool_reasoning": tool_reasoning},
-        "stages": stages or [
+        "stages": stages
+        or [
             {
                 "name": "start",
                 "is_start": True,
@@ -85,7 +86,8 @@ class TestResolveStageStrategy:
     """Test _resolve_stage_strategy with various strategy names."""
 
     def _make_reasoning(
-        self, config: dict[str, Any],
+        self,
+        config: dict[str, Any],
     ) -> WizardReasoning:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
@@ -152,10 +154,12 @@ class TestResolveStageStrategy:
     def test_reasoning_config_forwarded(self) -> None:
         """reasoning_config dict is forwarded to strategy from_config."""
         reasoning = self._make_reasoning(_make_wizard_config())
-        strategy = reasoning._resolve_stage_strategy({
-            "reasoning": "react",
-            "reasoning_config": {"max_iterations": 7},
-        })
+        strategy = reasoning._resolve_stage_strategy(
+            {
+                "reasoning": "react",
+                "reasoning_config": {"max_iterations": 7},
+            }
+        )
         assert isinstance(strategy, ReActReasoning)
         assert strategy.max_iterations == 7
 
@@ -194,10 +198,16 @@ class TestStrategyStageResponse:
         strategy = reasoning._resolve_stage_strategy(stage)
         assert strategy is not None
         state = WizardState(
-            current_stage=stage.get("name", "test"), data={},
+            current_stage=stage.get("name", "test"),
+            data={},
         )
         response, *_ = await reasoning._strategy_stage_response(
-            strategy, manager, "Test prompt", stage, state, tools,
+            strategy,
+            manager,
+            "Test prompt",
+            stage,
+            state,
+            tools,
         )
         return response
 
@@ -211,10 +221,12 @@ class TestStrategyStageResponse:
         manager, provider = conversation_manager_pair
         await manager.add_message(role="user", content="echo hello")
 
-        provider.set_responses([
-            tool_call_response("echo_tool", {"message": "hello"}),
-            text_response("Echoed: hello"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("echo_tool", {"message": "hello"}),
+                text_response("Echoed: hello"),
+            ]
+        )
 
         config = _make_wizard_config()
         loader = WizardConfigLoader()
@@ -255,7 +267,12 @@ class TestStrategyStageResponse:
         # back to simple completion internally
         state = WizardState(current_stage="greet", data={})
         response, *_ = await reasoning._strategy_stage_response(
-            strategy, manager, "Test prompt", stage, state, tools=[],
+            strategy,
+            manager,
+            "Test prompt",
+            stage,
+            state,
+            tools=[],
         )
         assert response.content == "Hi there"
 
@@ -293,10 +310,7 @@ class TestStrategyNameValidation:
                 default_tool_reasoning="react",
             )
 
-        warning_msgs = [
-            r for r in caplog.records
-            if "Unknown reasoning strategy" in r.message
-        ]
+        warning_msgs = [r for r in caplog.records if "Unknown reasoning strategy" in r.message]
         assert len(warning_msgs) == 0
 
     def test_unknown_default_warns(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -313,36 +327,33 @@ class TestStrategyNameValidation:
                 default_tool_reasoning="nonexistent",
             )
 
-        warning_msgs = [
-            r for r in caplog.records
-            if "Unknown reasoning strategy" in r.message
-        ]
+        warning_msgs = [r for r in caplog.records if "Unknown reasoning strategy" in r.message]
         assert len(warning_msgs) >= 1
 
     def test_unknown_stage_reasoning_warns(
-        self, caplog: pytest.LogCaptureFixture,
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Unknown per-stage reasoning value produces a warning."""
         import logging
 
-        config = _make_wizard_config(stages=[
-            {
-                "name": "bad",
-                "is_start": True,
-                "is_end": True,
-                "prompt": "Done",
-                "reasoning": "totally_fake",
-            },
-        ])
+        config = _make_wizard_config(
+            stages=[
+                {
+                    "name": "bad",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Done",
+                    "reasoning": "totally_fake",
+                },
+            ]
+        )
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
 
         with caplog.at_level(logging.WARNING):
             WizardReasoning(wizard_fsm=wizard_fsm)
 
-        warning_msgs = [
-            r for r in caplog.records
-            if "Unknown reasoning strategy" in r.message
-        ]
+        warning_msgs = [r for r in caplog.records if "Unknown reasoning strategy" in r.message]
         assert len(warning_msgs) >= 1
         assert "totally_fake" in warning_msgs[0].message

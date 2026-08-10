@@ -77,9 +77,7 @@ _DYNAMIC_IMPORT_CALLS = frozenset({"import_module", "__import__"})
 #: ``resolve_name`` hook that maps a config *name* to a *path*, and matching
 #: it on the bare name flagged a public API of a neighbouring subsystem as a
 #: tenth copy of this one.
-_QUALIFIED_DYNAMIC_IMPORT_CALLS = frozenset(
-    {("pkgutil", "resolve_name"), ("pydoc", "locate")}
-)
+_QUALIFIED_DYNAMIC_IMPORT_CALLS = frozenset({("pkgutil", "resolve_name"), ("pydoc", "locate")})
 
 
 class AdHocImportFinding(NamedTuple):
@@ -179,11 +177,7 @@ def assert_no_ad_hoc_dotted_import(
                 continue
             for finding in _scan_file(path):
                 key = f"{posix}:{finding.lineno}"
-                matched = {
-                    entry
-                    for entry in exempt
-                    if key == entry or key.endswith(f"/{entry}")
-                }
+                matched = {entry for entry in exempt if key == entry or key.endswith(f"/{entry}")}
                 used |= matched
                 if not matched:
                     findings.append(finding)

@@ -31,12 +31,8 @@ class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
     def _setup(self) -> None:
         """Build the FIFO buffer from the validated config."""
         self.max_messages = self.config.max_messages
-        self.messages: deque[dict[str, Any]] = deque(
-            maxlen=self.config.max_messages
-        )
-        self._compiled_redactions = compile_history_redactions(
-            self.config.history_redactions
-        )
+        self.messages: deque[dict[str, Any]] = deque(maxlen=self.config.max_messages)
+        self._compiled_redactions = compile_history_redactions(self.config.history_redactions)
 
     async def add_message(
         self, content: str, role: str, metadata: dict[str, Any] | None = None
@@ -87,9 +83,7 @@ class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
         if count < 1:
             raise ValueError(f"count must be >= 1, got {count}")
         if count > len(self.messages):
-            raise ValueError(
-                f"Cannot pop {count} messages, only {len(self.messages)} available"
-            )
+            raise ValueError(f"Cannot pop {count} messages, only {len(self.messages)} available")
         removed = []
         for _ in range(count):
             removed.append(self.messages.pop())

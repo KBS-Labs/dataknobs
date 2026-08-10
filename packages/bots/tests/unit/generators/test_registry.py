@@ -527,9 +527,7 @@ class TestGeneratorRegistryMetadata:
 # --- Pagination + count ---
 
 
-def _make_template_gen(
-    generator_id: str, version: str = "1.0.0"
-) -> TemplateGenerator:
+def _make_template_gen(generator_id: str, version: str = "1.0.0") -> TemplateGenerator:
     """Build a minimal :class:`TemplateGenerator` with a unique id.
 
     The schemas are kept trivial because pagination tests only care
@@ -640,15 +638,9 @@ class TestGeneratorRegistryPagination:
         db = AsyncMemoryDatabase()
         registry = GeneratorRegistry(db)
 
-        await registry.register(
-            _make_template_gen("gen_c"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_a"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_b"), metadata={"tenant_id": "globex"}
-        )
+        await registry.register(_make_template_gen("gen_c"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_a"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_b"), metadata={"tenant_id": "globex"})
 
         results = await registry.list_definitions(
             filter_metadata={"tenant_id": "acme"},
@@ -712,28 +704,12 @@ class TestGeneratorRegistryCount:
         db = AsyncMemoryDatabase()
         registry = GeneratorRegistry(db)
 
-        await registry.register(
-            _make_template_gen("gen_a"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_b"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_c"), metadata={"tenant_id": "globex"}
-        )
+        await registry.register(_make_template_gen("gen_a"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_b"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_c"), metadata={"tenant_id": "globex"})
 
-        assert (
-            await registry.count_definitions(
-                filter_metadata={"tenant_id": "acme"}
-            )
-            == 2
-        )
-        assert (
-            await registry.count_definitions(
-                filter_metadata={"tenant_id": "globex"}
-            )
-            == 1
-        )
+        assert await registry.count_definitions(filter_metadata={"tenant_id": "acme"}) == 2
+        assert await registry.count_definitions(filter_metadata={"tenant_id": "globex"}) == 1
 
     async def test_count_definitions_matches_list_definitions_length(
         self,
@@ -742,26 +718,14 @@ class TestGeneratorRegistryCount:
         db = AsyncMemoryDatabase()
         registry = GeneratorRegistry(db)
 
-        await registry.register(
-            _make_template_gen("gen_a"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_b"), metadata={"tenant_id": "acme"}
-        )
-        await registry.register(
-            _make_template_gen("gen_c"), metadata={"tenant_id": "globex"}
-        )
+        await registry.register(_make_template_gen("gen_a"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_b"), metadata={"tenant_id": "acme"})
+        await registry.register(_make_template_gen("gen_c"), metadata={"tenant_id": "globex"})
 
         # Unfiltered parity.
-        assert await registry.count_definitions() == len(
-            await registry.list_definitions()
-        )
+        assert await registry.count_definitions() == len(await registry.list_definitions())
 
         # Filtered parity.
-        assert await registry.count_definitions(
-            filter_metadata={"tenant_id": "acme"}
-        ) == len(
-            await registry.list_definitions(
-                filter_metadata={"tenant_id": "acme"}
-            )
+        assert await registry.count_definitions(filter_metadata={"tenant_id": "acme"}) == len(
+            await registry.list_definitions(filter_metadata={"tenant_id": "acme"})
         )

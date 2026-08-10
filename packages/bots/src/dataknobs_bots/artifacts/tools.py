@@ -496,8 +496,6 @@ class GetArtifactTool(ContextAwareTool):
         }
 
         if include_evaluations:
-            result["evaluations"] = await self._registry.get_evaluations(
-                artifact_id
-            )
+            result["evaluations"] = await self._registry.get_evaluations(artifact_id)
 
         return result

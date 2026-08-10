@@ -7,6 +7,7 @@ suppress matches when a negation pattern is detected.
 Closes the foot-gun where ``"no, I don't want to accept that"``
 substring-matches the ``accept`` vocab without negation context.
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,8 +50,7 @@ class NegationFilter(IntentClassifier):
     ) -> None:
         self._inner = inner
         self._negation_keywords = (
-            negation_keywords if negation_keywords is not None
-            else DEFAULT_NEGATION_KEYWORDS
+            negation_keywords if negation_keywords is not None else DEFAULT_NEGATION_KEYWORDS
         )
         self._suppress_intents = suppress_intents
 
@@ -63,15 +63,13 @@ class NegationFilter(IntentClassifier):
         result = await self._inner.classify(message, intents, **kwargs)
         if result.intent is None:
             return result
-        if (
-            self._suppress_intents is not None
-            and result.intent.name not in self._suppress_intents
-        ):
+        if self._suppress_intents is not None and result.intent.name not in self._suppress_intents:
             return result
         if has_negation(message.lower(), self._negation_keywords):
             logger.debug(
                 "NegationFilter suppressed intent '%s' for message '%s'",
-                result.intent.name, message,
+                result.intent.name,
+                message,
             )
             # ``rule_based`` describes "how did we MATCH this intent" —
             # when the result is no-match, the field is semantically
@@ -79,7 +77,9 @@ class NegationFilter(IntentClassifier):
             # result's flag so a downstream observer doesn't see
             # ``intent=None, rule_based=True`` (a contradictory pair).
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
         return result

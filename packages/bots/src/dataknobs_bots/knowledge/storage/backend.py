@@ -209,9 +209,7 @@ class KnowledgeResourceBackend(Protocol):
         """
         ...
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[KnowledgeFile]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """List all files in a knowledge base.
 
         Args:
@@ -237,9 +235,7 @@ class KnowledgeResourceBackend(Protocol):
 
     # --- Knowledge Base Operations ---
 
-    async def create_kb(
-        self, domain_id: str, metadata: dict | None = None
-    ) -> KnowledgeBaseInfo:
+    async def create_kb(self, domain_id: str, metadata: dict | None = None) -> KnowledgeBaseInfo:
         """Create a new knowledge base.
 
         Args:
@@ -388,9 +384,7 @@ class KnowledgeResourceBackend(Protocol):
 
     # --- Change Detection ---
 
-    async def get_checksum(
-        self, domain_id: str, *, ctx: TenantContext | None = None
-    ) -> str:
+    async def get_checksum(self, domain_id: str, *, ctx: TenantContext | None = None) -> str:
         """Canonical content-snapshot identity of the whole KB.
 
         A stable hash over every file's ``path:checksum``, so it changes

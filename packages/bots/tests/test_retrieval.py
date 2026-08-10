@@ -388,13 +388,9 @@ class TestContextFormatter:
         context = "Some context here"
         for style in PromptEnvelopeStyle:
             env = PromptEnvelope(style)
-            via_formatter = formatter.wrap_for_prompt(
-                context, tag="knowledge_base", envelope=env
-            )
+            via_formatter = formatter.wrap_for_prompt(context, tag="knowledge_base", envelope=env)
             via_helper = env.knowledge_base_section(context)
-            assert via_formatter == via_helper, (
-                f"formatter/envelope drift for {style.value}"
-            )
+            assert via_formatter == via_helper, f"formatter/envelope drift for {style.value}"
 
     def test_group_by_source(self):
         """Test grouping results by source."""

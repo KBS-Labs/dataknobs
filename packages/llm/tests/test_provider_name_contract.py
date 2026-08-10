@@ -72,9 +72,7 @@ class TestProviderName:
     """``provider_name`` reports the canonical family key."""
 
     @pytest.mark.parametrize("family", _registered_families())
-    def test_every_registered_provider_reports_its_family(
-        self, family: str
-    ) -> None:
+    def test_every_registered_provider_reports_its_family(self, family: str) -> None:
         """Built through the factory, each provider reports the key it resolved on."""
         factory = LLMProviderFactory(is_async=True)
         provider = factory.create({"provider": family, "model": "test-model"})
@@ -133,9 +131,7 @@ class TestImplName:
     """``impl_name`` reports the concrete class."""
 
     @pytest.mark.parametrize("family", _registered_families())
-    def test_every_registered_provider_reports_its_class(
-        self, family: str
-    ) -> None:
+    def test_every_registered_provider_reports_its_class(self, family: str) -> None:
         factory = LLMProviderFactory(is_async=True)
         provider = factory.create({"provider": family, "model": "test-model"})
 
@@ -247,30 +243,22 @@ class TestSchemaExtractorUsesTheContract:
         return tracker.query()[0].provider
 
     @pytest.mark.asyncio
-    async def test_bare_provider_is_attributed_to_its_family(
-        self, schema: dict
-    ) -> None:
-        inner = EchoProvider(
-            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}}
-        )
+    async def test_bare_provider_is_attributed_to_its_family(self, schema: dict) -> None:
+        inner = EchoProvider({"provider": "echo", "model": "test", "options": {"echo_prefix": ""}})
 
         recorded = await self._extract_and_get_recorded_provider(inner, schema)
 
         assert recorded == "echo"
 
     @pytest.mark.asyncio
-    async def test_wrapped_provider_is_attributed_to_the_wrapped_family(
-        self, schema: dict
-    ) -> None:
+    async def test_wrapped_provider_is_attributed_to_the_wrapped_family(self, schema: dict) -> None:
         """The regression guard for the hand-rolled munging.
 
         Fails against the old implementation, which recorded
         ``'cachingembed'`` — a string that is not a family, matches no rate
         table, and names a wrapper rather than the thing being billed.
         """
-        inner = EchoProvider(
-            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}}
-        )
+        inner = EchoProvider({"provider": "echo", "model": "test", "options": {"echo_prefix": ""}})
         wrapper = CachingEmbedProvider(inner, MemoryEmbeddingCache())
 
         recorded = await self._extract_and_get_recorded_provider(wrapper, schema)
@@ -278,9 +266,7 @@ class TestSchemaExtractorUsesTheContract:
         assert recorded == "echo"
 
     @pytest.mark.asyncio
-    async def test_non_provider_double_still_records_something_usable(
-        self, schema: dict
-    ) -> None:
+    async def test_non_provider_double_still_records_something_usable(self, schema: dict) -> None:
         """``SchemaExtractor`` accepts any object with ``complete()``.
 
         The ``getattr`` fallback is deliberate — a test double that is not an
@@ -293,16 +279,12 @@ class TestSchemaExtractorUsesTheContract:
             async def complete(self, *args: object, **kwargs: object) -> LLMResponse:
                 return LLMResponse(content="{}", model="test-model")
 
-        recorded = await self._extract_and_get_recorded_provider(
-            AcmeDouble(), schema
-        )
+        recorded = await self._extract_and_get_recorded_provider(AcmeDouble(), schema)
 
         assert recorded == "AcmeDouble"
 
     @pytest.mark.asyncio
-    async def test_class_name_fallback_routes_through_impl_name(
-        self, schema: dict
-    ) -> None:
+    async def test_class_name_fallback_routes_through_impl_name(self, schema: dict) -> None:
         """Even the fallback asks the object rather than re-deriving its class.
 
         Narrow by construction — every ``LLMProvider`` answers
@@ -319,16 +301,12 @@ class TestSchemaExtractorUsesTheContract:
             async def complete(self, *args: object, **kwargs: object) -> LLMResponse:
                 return LLMResponse(content="{}", model="test-model")
 
-        recorded = await self._extract_and_get_recorded_provider(
-            AcmeDouble(), schema
-        )
+        recorded = await self._extract_and_get_recorded_provider(AcmeDouble(), schema)
 
         assert recorded == "AcmeGateway"
 
     @pytest.mark.asyncio
-    async def test_records_the_model_the_provider_is_configured_with(
-        self, schema: dict
-    ) -> None:
+    async def test_records_the_model_the_provider_is_configured_with(self, schema: dict) -> None:
         """``model_used`` must come from the config, not a private attribute.
 
         The original read ``provider._model``, which **no provider sets** — so
@@ -348,9 +326,7 @@ class TestSchemaExtractorUsesTheContract:
             }
         )
         tracker = ExtractionTracker()
-        await SchemaExtractor(provider=provider).extract(
-            "some text", schema, tracker=tracker
-        )
+        await SchemaExtractor(provider=provider).extract("some text", schema, tracker=tracker)
 
         assert tracker.query()[0].model_used == "llama3.2:3b"
 
@@ -375,9 +351,7 @@ class TestSyncProviderAdapter:
     def _sync_provider(self, spelling: str = "echo") -> object:
         from dataknobs_llm.llm.providers import create_llm_provider
 
-        return create_llm_provider(
-            {"provider": spelling, "model": "test-model"}, is_async=False
-        )
+        return create_llm_provider({"provider": spelling, "model": "test-model"}, is_async=False)
 
     def test_reports_the_wrapped_family(self) -> None:
         assert self._sync_provider().provider_name == "echo"

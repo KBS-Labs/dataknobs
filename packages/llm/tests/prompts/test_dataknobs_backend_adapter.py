@@ -29,10 +29,7 @@ class TestDataknobsBackendAdapter:
         """Test initialization with custom field names."""
         db = SyncMemoryDatabase()
         adapter = DataknobsBackendAdapter(
-            db,
-            name="custom_db",
-            text_field="text",
-            metadata_field="meta"
+            db, name="custom_db", text_field="text", metadata_field="meta"
         )
         assert adapter._text_field == "text"
         assert adapter._metadata_field == "meta"
@@ -40,10 +37,7 @@ class TestDataknobsBackendAdapter:
     def test_get_value_full_record(self):
         """Test getting full record by ID."""
         db = SyncMemoryDatabase()
-        record = Record(
-            data={"content": "Hello world", "author": "Alice"},
-            storage_id="rec_1"
-        )
+        record = Record(data={"content": "Hello world", "author": "Alice"}, storage_id="rec_1")
         db.create(record)
 
         adapter = DataknobsBackendAdapter(db)
@@ -57,8 +51,7 @@ class TestDataknobsBackendAdapter:
         """Test getting specific field from record."""
         db = SyncMemoryDatabase()
         record = Record(
-            data={"content": "Hello world", "author": "Alice", "score": 95},
-            storage_id="rec_1"
+            data={"content": "Hello world", "author": "Alice", "score": 95}, storage_id="rec_1"
         )
         db.create(record)
 
@@ -91,21 +84,17 @@ class TestDataknobsBackendAdapter:
         db = SyncMemoryDatabase()
 
         # Add test records
-        db.create(Record(
-            data={"content": "Alice in Wonderland"},
-            metadata={"score": 0.9},
-            storage_id="rec_1"
-        ))
-        db.create(Record(
-            data={"content": "Bob's adventure"},
-            metadata={"score": 0.8},
-            storage_id="rec_2"
-        ))
-        db.create(Record(
-            data={"content": "Alice in Paris"},
-            metadata={"score": 0.85},
-            storage_id="rec_3"
-        ))
+        db.create(
+            Record(
+                data={"content": "Alice in Wonderland"}, metadata={"score": 0.9}, storage_id="rec_1"
+            )
+        )
+        db.create(
+            Record(data={"content": "Bob's adventure"}, metadata={"score": 0.8}, storage_id="rec_2")
+        )
+        db.create(
+            Record(data={"content": "Alice in Paris"}, metadata={"score": 0.85}, storage_id="rec_3")
+        )
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -120,11 +109,13 @@ class TestDataknobsBackendAdapter:
 
         # Add multiple records
         for i in range(10):
-            db.create(Record(
-                data={"content": f"test item {i}"},
-                metadata={"score": 1.0},
-                storage_id=f"rec_{i}"
-            ))
+            db.create(
+                Record(
+                    data={"content": f"test item {i}"},
+                    metadata={"score": 1.0},
+                    storage_id=f"rec_{i}",
+                )
+            )
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -135,11 +126,13 @@ class TestDataknobsBackendAdapter:
         """Test that search results have correct structure."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "Hello world"},
-            metadata={"score": 0.95, "author": "Alice"},
-            storage_id="rec_1"
-        ))
+        db.create(
+            Record(
+                data={"content": "Hello world"},
+                metadata={"score": 0.95, "author": "Alice"},
+                storage_id="rec_1",
+            )
+        )
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("Hello")
@@ -159,11 +152,13 @@ class TestDataknobsBackendAdapter:
         """Test search using custom text field."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"text": "Custom text field", "content": "Ignored"},
-            metadata={"score": 1.0},
-            storage_id="rec_1"
-        ))
+        db.create(
+            Record(
+                data={"text": "Custom text field", "content": "Ignored"},
+                metadata={"score": 1.0},
+                storage_id="rec_1",
+            )
+        )
 
         adapter = DataknobsBackendAdapter(db, text_field="text")
         results = adapter.search("Custom")
@@ -175,16 +170,15 @@ class TestDataknobsBackendAdapter:
         """Test search with metadata field extraction."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "Hello", "category": "greeting"},
-            metadata={"score": 1.0},
-            storage_id="rec_1"
-        ))
-
-        adapter = DataknobsBackendAdapter(
-            db,
-            metadata_field="category"
+        db.create(
+            Record(
+                data={"content": "Hello", "category": "greeting"},
+                metadata={"score": 1.0},
+                storage_id="rec_1",
+            )
         )
+
+        adapter = DataknobsBackendAdapter(db, metadata_field="category")
         results = adapter.search("Hello")
 
         assert len(results) == 1
@@ -195,16 +189,12 @@ class TestDataknobsBackendAdapter:
         """Test search with minimum score filter."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "High score"},
-            metadata={"score": 0.9},
-            storage_id="rec_1"
-        ))
-        db.create(Record(
-            data={"content": "Low score"},
-            metadata={"score": 0.3},
-            storage_id="rec_2"
-        ))
+        db.create(
+            Record(data={"content": "High score"}, metadata={"score": 0.9}, storage_id="rec_1")
+        )
+        db.create(
+            Record(data={"content": "Low score"}, metadata={"score": 0.3}, storage_id="rec_2")
+        )
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -227,8 +217,7 @@ class TestDataknobsBackendAdapter:
         adapter = DataknobsBackendAdapter(db)
 
         results = adapter.batch_get_values(
-            ["rec_1.content", "rec_2.content", "rec_3.content"],
-            default="Missing"
+            ["rec_1.content", "rec_2.content", "rec_3.content"], default="Missing"
         )
 
         assert results["rec_1.content"] == "Value 1"
@@ -250,10 +239,7 @@ class TestAsyncDataknobsBackendAdapter:
     async def test_get_value_full_record(self):
         """Test getting full record by ID (async)."""
         db = AsyncMemoryDatabase()
-        record = Record(
-            data={"content": "Hello async", "author": "Bob"},
-            storage_id="rec_1"
-        )
+        record = Record(data={"content": "Hello async", "author": "Bob"}, storage_id="rec_1")
         await db.create(record)
 
         adapter = AsyncDataknobsBackendAdapter(db)
@@ -267,10 +253,7 @@ class TestAsyncDataknobsBackendAdapter:
     async def test_get_value_specific_field(self):
         """Test getting specific field from record (async)."""
         db = AsyncMemoryDatabase()
-        record = Record(
-            data={"content": "Hello", "author": "Charlie"},
-            storage_id="rec_1"
-        )
+        record = Record(data={"content": "Hello", "author": "Charlie"}, storage_id="rec_1")
         await db.create(record)
 
         adapter = AsyncDataknobsBackendAdapter(db)
@@ -290,16 +273,14 @@ class TestAsyncDataknobsBackendAdapter:
         """Test basic search functionality (async)."""
         db = AsyncMemoryDatabase()
 
-        await db.create(Record(
-            data={"content": "Async search test"},
-            metadata={"score": 1.0},
-            storage_id="rec_1"
-        ))
-        await db.create(Record(
-            data={"content": "Another test"},
-            metadata={"score": 0.9},
-            storage_id="rec_2"
-        ))
+        await db.create(
+            Record(
+                data={"content": "Async search test"}, metadata={"score": 1.0}, storage_id="rec_1"
+            )
+        )
+        await db.create(
+            Record(data={"content": "Another test"}, metadata={"score": 0.9}, storage_id="rec_2")
+        )
 
         adapter = AsyncDataknobsBackendAdapter(db)
         results = await adapter.search("test")
@@ -313,11 +294,13 @@ class TestAsyncDataknobsBackendAdapter:
         db = AsyncMemoryDatabase()
 
         for i in range(10):
-            await db.create(Record(
-                data={"content": f"async item {i}"},
-                metadata={"score": 1.0},
-                storage_id=f"rec_{i}"
-            ))
+            await db.create(
+                Record(
+                    data={"content": f"async item {i}"},
+                    metadata={"score": 1.0},
+                    storage_id=f"rec_{i}",
+                )
+            )
 
         adapter = AsyncDataknobsBackendAdapter(db)
         results = await adapter.search("async", k=3)
@@ -335,8 +318,7 @@ class TestAsyncDataknobsBackendAdapter:
         adapter = AsyncDataknobsBackendAdapter(db)
 
         results = await adapter.batch_get_values(
-            ["rec_1.content", "rec_2.content", "rec_3.content"],
-            default="Missing"
+            ["rec_1.content", "rec_2.content", "rec_3.content"], default="Missing"
         )
 
         assert results["rec_1.content"] == "Async 1"
@@ -359,11 +341,7 @@ class TestDataknobsAdapterEdgeCases:
         """Test search that matches no records."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "Hello"},
-            metadata={"score": 1.0},
-            storage_id="rec_1"
-        ))
+        db.create(Record(data={"content": "Hello"}, metadata={"score": 1.0}, storage_id="rec_1"))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("NonExistent")
@@ -374,10 +352,7 @@ class TestDataknobsAdapterEdgeCases:
         """Test handling records without score in metadata."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "No score"},
-            storage_id="rec_1"
-        ))
+        db.create(Record(data={"content": "No score"}, storage_id="rec_1"))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("score")
@@ -390,11 +365,11 @@ class TestDataknobsAdapterEdgeCases:
         """Test using _score field as alternative to score."""
         db = SyncMemoryDatabase()
 
-        db.create(Record(
-            data={"content": "Alternative score"},
-            metadata={"_score": 0.75},
-            storage_id="rec_1"
-        ))
+        db.create(
+            Record(
+                data={"content": "Alternative score"}, metadata={"_score": 0.75}, storage_id="rec_1"
+            )
+        )
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("score")

@@ -171,10 +171,12 @@ class TestExecuteStepAsyncHooksAwaited:
 
         config = _simple_config()
         advanced = create_advanced_fsm(config)
-        advanced.set_hooks(ExecutionHook(
-            on_state_enter=on_enter,
-            on_state_exit=on_exit,
-        ))
+        advanced.set_hooks(
+            ExecutionHook(
+                on_state_enter=on_enter,
+                on_state_exit=on_exit,
+            )
+        )
         context = advanced.create_context({})
 
         await advanced.execute_step_async(context)

@@ -138,9 +138,7 @@ class GroupManager:
         # Index values must be unique and sorted in the collapsed form
         if df.index.value_counts().max() > 1 or not (df.index.sort_values() == df.index).all():
             # Index isn't unique or in order, so need to reset the index
-            df = df.reset_index(
-                drop=False, allow_duplicates=False, names="__orig_idx__"
-            )
+            df = df.reset_index(drop=False, allow_duplicates=False, names="__orig_idx__")
         return df
 
     @property

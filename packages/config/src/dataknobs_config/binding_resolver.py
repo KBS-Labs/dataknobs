@@ -330,9 +330,7 @@ class ConfigBindingResolver:
 
         return config
 
-    def _get_factory(
-        self, resource_type: str
-    ) -> ResourceFactory | Callable[..., Any]:
+    def _get_factory(self, resource_type: str) -> ResourceFactory | Callable[..., Any]:
         """Get the factory for a resource type.
 
         Args:
@@ -595,6 +593,5 @@ class AsyncCallableFactory:
             RuntimeError: Always, use create_async instead
         """
         raise RuntimeError(
-            "AsyncCallableFactory requires async context. "
-            "Use resolve_async() instead of resolve()."
+            "AsyncCallableFactory requires async context. Use resolve_async() instead of resolve()."
         )

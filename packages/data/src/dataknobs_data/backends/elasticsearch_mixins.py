@@ -44,10 +44,10 @@ class ElasticsearchBaseConfig:
 
     def _parse_elasticsearch_config(self, config: dict[str, Any]) -> tuple[str, int, str, dict]:
         """Parse Elasticsearch configuration.
-        
+
         Args:
             config: Configuration dictionary
-            
+
         Returns:
             Tuple of (host, port, index_name, extra_config)
         """
@@ -58,10 +58,13 @@ class ElasticsearchBaseConfig:
         # Extract other config options
         extra_config = {
             "refresh": config.get("refresh", True),
-            "settings": config.get("settings", {
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }),
+            "settings": config.get(
+                "settings",
+                {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0,
+                },
+            ),
             "mappings": config.get("mappings"),
         }
 
@@ -74,20 +77,17 @@ class ElasticsearchIndexManager:
     @staticmethod
     def get_index_mappings(vector_fields: dict[str, int] | None = None) -> dict:
         """Get index mappings with vector field support.
-        
+
         Args:
             vector_fields: Dict mapping vector field names to dimensions
-            
+
         Returns:
             Elasticsearch mappings dictionary
         """
         mappings = {
             "properties": {
                 "id": {"type": "keyword"},
-                "data": {
-                    "type": "object",
-                    "properties": {}
-                },
+                "data": {"type": "object", "properties": {}},
                 "metadata": {"type": "object", "enabled": True},
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
@@ -103,7 +103,7 @@ class ElasticsearchIndexManager:
                     "type": "dense_vector",
                     "dims": dimensions,
                     "index": True,
-                    "similarity": "cosine"  # Default similarity
+                    "similarity": "cosine",  # Default similarity
                 }
 
         return mappings
@@ -111,7 +111,7 @@ class ElasticsearchIndexManager:
     @staticmethod
     def get_knn_index_settings() -> dict:
         """Get index settings optimized for KNN search.
-        
+
         Returns:
             Index settings dictionary
         """
@@ -133,10 +133,10 @@ class ElasticsearchVectorSupport:
 
     def _detect_vector_fields(self, record: Record) -> dict[str, int]:
         """Detect vector fields in a record.
-        
+
         Args:
             record: Record to examine
-            
+
         Returns:
             Dict mapping field names to dimensions
         """
@@ -147,7 +147,11 @@ class ElasticsearchVectorSupport:
                 if isinstance(field_obj, VectorField) and field_obj.value is not None:
                     # Get dimensions from the vector value
                     if isinstance(field_obj.value, (list, np.ndarray)):
-                        dims = len(field_obj.value) if isinstance(field_obj.value, list) else field_obj.value.shape[0]
+                        dims = (
+                            len(field_obj.value)
+                            if isinstance(field_obj.value, list)
+                            else field_obj.value.shape[0]
+                        )
                         vector_fields[field_name] = dims
                         logger.debug(f"Detected vector field '{field_name}' with {dims} dimensions")
 
@@ -155,10 +159,10 @@ class ElasticsearchVectorSupport:
 
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if a record has vector fields.
-        
+
         Args:
             record: Record to check
-            
+
         Returns:
             True if record has vector fields
         """
@@ -166,7 +170,7 @@ class ElasticsearchVectorSupport:
 
     def _update_vector_tracking(self, record: Record) -> None:
         """Update tracking of vector fields from a record.
-        
+
         Args:
             record: Record to examine
         """
@@ -183,7 +187,7 @@ class ElasticsearchErrorHandler:
     @staticmethod
     def _handle_elasticsearch_error(error: Exception, operation: str) -> None:
         """Handle Elasticsearch errors consistently.
-        
+
         Args:
             error: The exception that occurred
             operation: Description of the operation that failed
@@ -218,10 +222,10 @@ class ElasticsearchRecordSerializer:
     @staticmethod
     def _record_to_document(record: Record) -> dict[str, Any]:
         """Convert a record to an Elasticsearch document.
-        
+
         Args:
             record: Record to convert
-            
+
         Returns:
             Document dictionary for Elasticsearch
         """
@@ -259,11 +263,11 @@ class ElasticsearchRecordSerializer:
     @staticmethod
     def _document_to_record(doc: dict[str, Any], doc_id: str | None = None) -> Record:
         """Convert an Elasticsearch document to a record.
-        
+
         Args:
             doc: Document from Elasticsearch
             doc_id: Document ID from Elasticsearch
-            
+
         Returns:
             Record instance
         """
@@ -281,11 +285,14 @@ class ElasticsearchRecordSerializer:
             field_meta = metadata.get("vector_fields", {}).get(field_name, {})
 
             if field_meta.get("type") == "vector" or (
-                isinstance(value, list) and len(value) > 0 and
-                all(isinstance(v, (int, float)) for v in value)
+                isinstance(value, list)
+                and len(value) > 0
+                and all(isinstance(v, (int, float)) for v in value)
             ):
                 # This looks like a vector field
-                vector_value = np.array(value, dtype=np.float32) if value else np.array([], dtype=np.float32)
+                vector_value = (
+                    np.array(value, dtype=np.float32) if value else np.array([], dtype=np.float32)
+                )
                 fields[field_name] = VectorField(
                     name=field_name,
                     value=vector_value,
@@ -302,7 +309,10 @@ class ElasticsearchRecordSerializer:
                     field_type = FieldType.INTEGER
                 elif isinstance(value, float):
                     field_type = FieldType.FLOAT
-                elif isinstance(value, dict) or (isinstance(value, (list, tuple)) and not all(isinstance(v, (int, float)) for v in value)):
+                elif isinstance(value, dict) or (
+                    isinstance(value, (list, tuple))
+                    and not all(isinstance(v, (int, float)) for v in value)
+                ):
                     field_type = FieldType.JSON
 
                 fields[field_name] = Field(
@@ -313,6 +323,7 @@ class ElasticsearchRecordSerializer:
 
         # Create the record - pass fields as OrderedDict since they're Field objects
         from collections import OrderedDict
+
         record = Record(data=OrderedDict(fields), metadata=metadata)
 
         # Set ID from document
@@ -326,10 +337,12 @@ class ElasticsearchRecordSerializer:
         # Set timestamps if available (as attributes, not fields)
         if source.get("created_at"):
             from datetime import datetime
+
             record.created_at = datetime.fromisoformat(source["created_at"])
 
         if source.get("updated_at"):
             from datetime import datetime
+
             record.updated_at = datetime.fromisoformat(source["updated_at"])
 
         return record

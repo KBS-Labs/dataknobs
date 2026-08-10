@@ -114,9 +114,7 @@ config_registries.register("llm", _resolve_llm_config_cls, allow_overwrite=True)
 # the same registry the construction factory consults, so the no-drift guard in
 # ``tests/test_llm_config_resolver.py`` (which enumerates
 # ``_provider_registry.list_keys()``) covers both bindings at once.
-config_registries.register(
-    "embedding", _resolve_llm_config_cls, allow_overwrite=True
-)
+config_registries.register("embedding", _resolve_llm_config_cls, allow_overwrite=True)
 
 
 class LLMProviderFactory:
@@ -177,8 +175,7 @@ class LLMProviderFactory:
             # sorted rather than in registration order.
             available = self.list_providers()
             raise ValueError(
-                f"Unknown provider: {llm_config.provider}. "
-                f"Available providers: {available}"
+                f"Unknown provider: {llm_config.provider}. Available providers: {available}"
             )
 
         # Create provider instance
@@ -349,10 +346,7 @@ async def create_embedding_provider(
             provider_name = embedding_config.get("provider", default_provider)
             model_name = embedding_config.get("model", default_model)
             # Forward all extra keys (api_base, api_key, dimensions, etc.)
-            extra = {
-                k: v for k, v in embedding_config.items()
-                if k not in ("provider", "model")
-            }
+            extra = {k: v for k, v in embedding_config.items() if k not in ("provider", "model")}
         else:
             # 2. Legacy prefix format (embedding_provider / embedding_model)
             provider_name = config.get("embedding_provider", default_provider)
@@ -400,29 +394,29 @@ async def create_embedding_provider(
 # Export all providers and factory for backward compatibility
 __all__ = [
     # Base classes (re-exported for convenience)
-    'AsyncLLMProvider',
-    'SyncLLMProvider',
-    'LLMConfig',
-    'LLMMessage',
-    'LLMResponse',
+    "AsyncLLMProvider",
+    "SyncLLMProvider",
+    "LLMConfig",
+    "LLMMessage",
+    "LLMResponse",
     # Adapters
-    'SyncProviderAdapter',
-    'OpenAIAdapter',
-    'BedrockConverseAdapter',
+    "SyncProviderAdapter",
+    "OpenAIAdapter",
+    "BedrockConverseAdapter",
     # Providers
-    'OpenAIProvider',
-    'AnthropicProvider',
-    'BedrockProvider',
-    'OllamaProvider',
-    'HuggingFaceProvider',
-    'EchoProvider',
-    'CachingEmbedProvider',
-    'EmbeddingCache',
-    'MemoryEmbeddingCache',
-    'create_caching_provider',
+    "OpenAIProvider",
+    "AnthropicProvider",
+    "BedrockProvider",
+    "OllamaProvider",
+    "HuggingFaceProvider",
+    "EchoProvider",
+    "CachingEmbedProvider",
+    "EmbeddingCache",
+    "MemoryEmbeddingCache",
+    "create_caching_provider",
     # Factory
-    'LLMProviderFactory',
-    'create_llm_provider',
-    'create_embedding_provider',
-    'normalize_llm_config',
+    "LLMProviderFactory",
+    "create_llm_provider",
+    "create_embedding_provider",
+    "normalize_llm_config",
 ]

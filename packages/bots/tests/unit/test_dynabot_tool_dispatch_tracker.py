@@ -123,9 +123,7 @@ class TestDynaBotPopulatesRegistryTracker:
     """
 
     @pytest.mark.asyncio
-    async def test_execute_tools_populates_registry_tracker(
-        self, bot_with_tracking_registry
-    ):
+    async def test_execute_tools_populates_registry_tracker(self, bot_with_tracking_registry):
         """Reproducing pin — fails against pre-fix HEAD.
 
         Pre-fix: ``DynaBot._execute_tools`` calls ``tool.execute(...)``
@@ -171,9 +169,7 @@ class TestDynaBotPopulatesRegistryTracker:
         assert history[0].parameters == {"q": "foo"}
 
     @pytest.mark.asyncio
-    async def test_execute_tools_records_failures_on_tracker(
-        self, bot_with_tracking_registry
-    ):
+    async def test_execute_tools_records_failures_on_tracker(self, bot_with_tracking_registry):
         """A tool that raises must still record onto the tracker as a
         failed execution — matches the registry's documented
         record-on-exception semantic.

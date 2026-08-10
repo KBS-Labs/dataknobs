@@ -248,9 +248,7 @@ def profile_from_loose(data: Mapping[str, Any]) -> ModelProfile:
     pricing = data.get("pricing")
     if pricing is not None:
         parsed["pricing"] = (
-            pricing
-            if isinstance(pricing, ModelPricing)
-            else ModelPricing.from_dict(dict(pricing))
+            pricing if isinstance(pricing, ModelPricing) else ModelPricing.from_dict(dict(pricing))
         )
 
     for facet in ("context_window", "max_output_tokens"):
@@ -613,12 +611,8 @@ class LiveApiSource:
         self._model_id = model_id
         self._match = match
         self._cache: dict[str, _LiveEntry] = {}
-        self._last_fetch: weakref.WeakKeyDictionary[Any, float] = (
-            weakref.WeakKeyDictionary()
-        )
-        self._locks: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
-            weakref.WeakKeyDictionary()
-        )
+        self._last_fetch: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDictionary()
+        self._locks: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
     # -- read path (synchronous, I/O-free) --------------------------------
 
@@ -707,9 +701,7 @@ class LiveApiSource:
                 # Bound the poll independently of the client's request timeout:
                 # the lock is held across it, so a *hung* control-plane would
                 # otherwise stall every cold-cache caller.
-                models = await asyncio.wait_for(
-                    self._list_models(), timeout=self._refresh_timeout
-                )
+                models = await asyncio.wait_for(self._list_models(), timeout=self._refresh_timeout)
             except Exception as exc:  # never fatal — serve cached/fallback value
                 logger.debug(
                     "%s live model refresh failed, using fallback: %s",
@@ -723,7 +715,9 @@ class LiveApiSource:
                 model_id = self._model_id(model_obj)
                 if model_id and _has_known_facet(profile):
                     self._cache[model_id.lower()] = _LiveEntry(
-                        profile=profile, source="dynamic", fetched_at=now,
+                        profile=profile,
+                        source="dynamic",
+                        fetched_at=now,
                     )
 
     def _lock(self) -> asyncio.Lock:
@@ -742,9 +736,7 @@ class LiveApiSource:
 
     # -- seeding / lifecycle helpers --------------------------------------
 
-    def seed(
-        self, model_id: str, profile: ModelProfile, *, source: str = "dynamic"
-    ) -> None:
+    def seed(self, model_id: str, profile: ModelProfile, *, source: str = "dynamic") -> None:
         """Seed a cache entry directly (manual-priming / test helper)."""
         self._cache[model_id.lower()] = _LiveEntry(
             profile=profile, source=source, fetched_at=time.monotonic()

@@ -1,5 +1,4 @@
-"""Constraint implementations with consistent, composable API.
-"""
+"""Constraint implementations with consistent, composable API."""
 
 from __future__ import annotations
 
@@ -22,11 +21,11 @@ class Constraint(ABC):
     @abstractmethod
     def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Validate a value against this constraint.
-        
+
         Args:
             value: Value to validate
             context: Optional validation context for stateful constraints
-            
+
         Returns:
             ValidationResult with validation outcome
         """
@@ -58,7 +57,7 @@ class All(Constraint):
 
     def __init__(self, constraints: list[Constraint]):
         """Initialize with list of constraints.
-        
+
         Args:
             constraints: List of constraints that must all pass
         """
@@ -82,7 +81,7 @@ class AnyOf(Constraint):
 
     def __init__(self, constraints: list[Constraint]):
         """Initialize with list of constraints.
-        
+
         Args:
             constraints: List of constraints where at least one must pass
         """
@@ -99,8 +98,7 @@ class AnyOf(Constraint):
             all_errors.extend(check_result.errors)
 
         return ValidationResult.failure(
-            value,
-            [f"None of the constraints passed: {', '.join(all_errors)}"]
+            value, [f"None of the constraints passed: {', '.join(all_errors)}"]
         )
 
 
@@ -109,7 +107,7 @@ class Not(Constraint):
 
     def __init__(self, constraint: Constraint):
         """Initialize with constraint to negate.
-        
+
         Args:
             constraint: Constraint to negate
         """
@@ -120,8 +118,7 @@ class Not(Constraint):
         result = self.constraint.check(value, context)
         if result.valid:
             return ValidationResult.failure(
-                value,
-                ["Value should not satisfy constraint but it does"]
+                value, ["Value should not satisfy constraint but it does"]
             )
         return ValidationResult.success(value)
 
@@ -131,7 +128,7 @@ class Required(Constraint):
 
     def __init__(self, allow_empty: bool = False):
         """Initialize required constraint.
-        
+
         Args:
             allow_empty: If True, empty strings/collections are allowed
         """
@@ -178,19 +175,19 @@ class Range(Constraint):
     def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in range."""
         if value is None:
-            return ValidationResult.success(value)  # None is considered valid (use Required to enforce)
+            return ValidationResult.success(
+                value
+            )  # None is considered valid (use Required to enforce)
 
         if not isinstance(value, Number):
             return ValidationResult.failure(
-                value,
-                [f"Value must be a number, got {type(value).__name__}"]
+                value, [f"Value must be a number, got {type(value).__name__}"]
             )
 
         # Check for NaN (Not a Number) - NaN is not valid for range comparisons
         if isinstance(value, float) and math.isnan(value):
             return ValidationResult.failure(
-                value,
-                ["Value is NaN (Not a Number), which is not valid for range comparisons"]
+                value, ["Value is NaN (Not a Number), which is not valid for range comparisons"]
             )
 
         errors = []
@@ -220,7 +217,7 @@ class Length(Constraint):
 
     def __init__(self, min: int | None = None, max: int | None = None):
         """Initialize length constraint.
-        
+
         Args:
             min: Minimum length (inclusive)
             max: Maximum length (inclusive)
@@ -239,10 +236,9 @@ class Length(Constraint):
         if value is None:
             return ValidationResult.success(value)
 
-        if not hasattr(value, '__len__'):
+        if not hasattr(value, "__len__"):
             return ValidationResult.failure(
-                value,
-                [f"Value does not have a length: {type(value).__name__}"]
+                value, [f"Value does not have a length: {type(value).__name__}"]
             )
 
         length = len(value)
@@ -263,7 +259,7 @@ class Pattern(Constraint):
 
     def __init__(self, pattern: str | RegexPattern):
         """Initialize pattern constraint.
-        
+
         Args:
             pattern: Regex pattern (string or compiled pattern)
         """
@@ -280,14 +276,12 @@ class Pattern(Constraint):
 
         if not isinstance(value, str):
             return ValidationResult.failure(
-                value,
-                [f"Value must be a string for pattern matching, got {type(value).__name__}"]
+                value, [f"Value must be a string for pattern matching, got {type(value).__name__}"]
             )
 
         if not self.regex.match(value):
             return ValidationResult.failure(
-                value,
-                [f"Value '{value}' does not match pattern '{self.pattern_str}'"]
+                value, [f"Value '{value}' does not match pattern '{self.pattern_str}'"]
             )
 
         return ValidationResult.success(value)
@@ -307,15 +301,13 @@ class Enum(Constraint):
             raise ValueError("Enum constraint requires at least one allowed value")
         self.values = values
         self.case_sensitive = case_sensitive
-        self.allowed_str = ', '.join(repr(v) for v in values)
+        self.allowed_str = ", ".join(repr(v) for v in values)
 
         if case_sensitive:
             self.allowed = set(values)
         else:
             # For case-insensitive, store lowercase versions for comparison
-            self.allowed_lower = {
-                v.lower() if isinstance(v, str) else v for v in values
-            }
+            self.allowed_lower = {v.lower() if isinstance(v, str) else v for v in values}
 
     def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in allowed set."""
@@ -325,16 +317,14 @@ class Enum(Constraint):
         if self.case_sensitive:
             if value not in self.allowed:
                 return ValidationResult.failure(
-                    value,
-                    [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
+                    value, [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
                 )
         else:
             # Case-insensitive comparison
             check_value = value.lower() if isinstance(value, str) else value
             if check_value not in self.allowed_lower:
                 return ValidationResult.failure(
-                    value,
-                    [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
+                    value, [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
                 )
 
         return ValidationResult.success(value)
@@ -345,7 +335,7 @@ class Unique(Constraint):
 
     def __init__(self, field_name: str | None = None):
         """Initialize unique constraint.
-        
+
         Args:
             field_name: Optional field name for context tracking
         """
@@ -359,14 +349,12 @@ class Unique(Constraint):
         if context is None:
             # Without context, we can't track uniqueness
             return ValidationResult.success(
-                value,
-                warnings=["Unique constraint requires context for tracking"]
+                value, warnings=["Unique constraint requires context for tracking"]
             )
 
         if context.has_seen(self.field_name, value):
             return ValidationResult.failure(
-                value,
-                [f"Duplicate value '{value}' for field '{self.field_name}'"]
+                value, [f"Duplicate value '{value}' for field '{self.field_name}'"]
             )
 
         context.mark_seen(self.field_name, value)
@@ -379,10 +367,10 @@ class Custom(Constraint):
     def __init__(
         self,
         validator: Callable[[AnyType], bool | ValidationResult],
-        error_message: str = "Custom validation failed"
+        error_message: str = "Custom validation failed",
     ):
         """Initialize custom constraint.
-        
+
         Args:
             validator: Callable that returns bool or ValidationResult
             error_message: Error message if validation fails
@@ -404,11 +392,7 @@ class Custom(Constraint):
                     return ValidationResult.failure(value, [self.error_message])
             else:
                 return ValidationResult.failure(  # type: ignore[unreachable]
-                    value,
-                    [f"Custom validator returned unexpected type: {type(result).__name__}"]
+                    value, [f"Custom validator returned unexpected type: {type(result).__name__}"]
                 )
         except Exception as e:
-            return ValidationResult.failure(
-                value,
-                [f"Custom validation error: {e!s}"]
-            )
+            return ValidationResult.failure(value, [f"Custom validation error: {e!s}"])

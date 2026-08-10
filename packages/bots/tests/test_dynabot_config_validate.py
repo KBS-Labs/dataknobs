@@ -170,18 +170,14 @@ def test_vector_memory_unknown_embedding_provider_raises() -> None:
 
 def test_vector_memory_flat_embedding_keys_not_validated() -> None:
     # Legacy flat keys (no nested ``embedding`` dict) are not validated.
-    VectorMemoryConfig.from_dict(
-        {"embedding_provider": "nope", "embedding_model": "x"}
-    ).validate()
+    VectorMemoryConfig.from_dict({"embedding_provider": "nope", "embedding_model": "x"}).validate()
 
 
 def test_unknown_embedding_via_vector_memory_recursion_raises() -> None:
     # A single DynaBotConfig.validate() descends: memory resolves to
     # VectorMemoryConfig (type=vector), which carries the embedding binding,
     # so an unknown embedding provider surfaces from the dry-run build.
-    cfg = DynaBotConfig.from_dict(
-        {"memory": {"type": "vector", "embedding": {"provider": "nope"}}}
-    )
+    cfg = DynaBotConfig.from_dict({"memory": {"type": "vector", "embedding": {"provider": "nope"}}})
     with pytest.raises(ConfigurationError, match="embedding"):
         cfg.validate()
 
@@ -265,6 +261,4 @@ def test_bare_callable_backend_skipped_without_raising(
     # resolver returns SKIP_VALIDATION, so validate() skips its section rather
     # than false-positive-raising on a valid, constructible backend.
     register_untyped_backend(memory_backends)
-    DynaBotConfig.from_dict(
-        {"memory": {"type": "untyped_test_backend", "anything": 1}}
-    ).validate()
+    DynaBotConfig.from_dict({"memory": {"type": "untyped_test_backend", "anything": 1}}).validate()

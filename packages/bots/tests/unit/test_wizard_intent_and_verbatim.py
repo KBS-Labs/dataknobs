@@ -24,6 +24,7 @@ from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 # Helpers
 # =====================================================================
 
+
 def _make_wizard(
     schema: dict[str, Any] | None = None,
     collection_config: dict[str, Any] | None = None,
@@ -55,6 +56,7 @@ def _make_wizard(
 # _needs_llm_extraction tests
 # =====================================================================
 
+
 class TestNeedsLlmExtraction:
     """Tests for _needs_llm_extraction auto-detection and config override."""
 
@@ -67,7 +69,9 @@ class TestNeedsLlmExtraction:
             "required": ["instruction"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert (
+            wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        )
 
     def test_multi_field_requires_llm(self) -> None:
         """Multiple fields → LLM extraction needed."""
@@ -151,7 +155,9 @@ class TestNeedsLlmExtraction:
             "name": "test",
             "collection_config": {"capture_mode": "verbatim"},
         }
-        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert (
+            wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        )
 
     def test_capture_mode_extract_overrides_auto(self) -> None:
         """capture_mode='extract' forces LLM even for trivial schemas."""
@@ -177,7 +183,9 @@ class TestNeedsLlmExtraction:
         }
         # No collection_config at all
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert (
+            wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        )
 
     def test_optional_field_only_requires_llm(self) -> None:
         """Single property with no required fields → LLM extraction."""
@@ -210,57 +218,52 @@ class TestNeedsLlmExtraction:
 # _classify_collection_intent tests
 # =====================================================================
 
+
 class TestClassifyCollectionIntent:
     """Tests for _classify_collection_intent rule-based classification."""
 
     def test_data_input_default(self) -> None:
         """Regular data input returns 'data_input'."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "2 cups flour", stage
-        ) == "data_input"
+        assert WizardExtractor.classify_collection_intent("2 cups flour", stage) == "data_input"
 
     def test_question_mark_is_help(self) -> None:
         """Messages ending with ? are classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "What goes here?", stage
-        ) == "help"
+        assert WizardExtractor.classify_collection_intent("What goes here?", stage) == "help"
 
     def test_help_keyword(self) -> None:
         """'help' alone is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "help", stage
-        ) == "help"
+        assert WizardExtractor.classify_collection_intent("help", stage) == "help"
 
     def test_what_should_i(self) -> None:
         """'what should i...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "what should I put here", stage
-        ) == "help"
+        assert WizardExtractor.classify_collection_intent("what should I put here", stage) == "help"
 
     def test_i_dont_understand(self) -> None:
         """'i don't understand' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "I don't understand what you need", stage
-        ) == "help"
+        assert (
+            WizardExtractor.classify_collection_intent("I don't understand what you need", stage)
+            == "help"
+        )
 
     def test_explain(self) -> None:
         """'explain...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "explain what this step is about", stage
-        ) == "help"
+        assert (
+            WizardExtractor.classify_collection_intent("explain what this step is about", stage)
+            == "help"
+        )
 
     def test_what_format(self) -> None:
         """'what format...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "what format should I use", stage
-        ) == "help"
+        assert (
+            WizardExtractor.classify_collection_intent("what format should I use", stage) == "help"
+        )
 
     def test_custom_help_keywords(self) -> None:
         """Stage-configured help_keywords are respected."""
@@ -270,12 +273,8 @@ class TestClassifyCollectionIntent:
                 "help_keywords": ["info", "details"],
             },
         }
-        assert WizardExtractor.classify_collection_intent(
-            "info", stage
-        ) == "help"
-        assert WizardExtractor.classify_collection_intent(
-            "details", stage
-        ) == "help"
+        assert WizardExtractor.classify_collection_intent("info", stage) == "help"
+        assert WizardExtractor.classify_collection_intent("details", stage) == "help"
 
     def test_custom_help_keywords_exact_match(self) -> None:
         """Custom help keywords require exact match."""
@@ -286,40 +285,37 @@ class TestClassifyCollectionIntent:
             },
         }
         # "information" should NOT match "info" (exact match)
-        assert WizardExtractor.classify_collection_intent(
-            "information about cooking", stage
-        ) == "data_input"
+        assert (
+            WizardExtractor.classify_collection_intent("information about cooking", stage)
+            == "data_input"
+        )
 
     def test_data_with_question_word_no_question_mark(self) -> None:
         """Data starting with 'what' but no ? is data_input."""
         stage: dict[str, Any] = {"name": "collect"}
         # "what should i" starts a help phrase, so this IS help
-        result = WizardExtractor.classify_collection_intent(
-            "what should I", stage
-        )
+        result = WizardExtractor.classify_collection_intent("what should I", stage)
         assert result == "help"
 
     def test_regular_sentence_not_help(self) -> None:
         """Normal sentences are data_input."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "Mix the flour and sugar together", stage
-        ) == "data_input"
+        assert (
+            WizardExtractor.classify_collection_intent("Mix the flour and sugar together", stage)
+            == "data_input"
+        )
 
     def test_case_insensitive(self) -> None:
         """Help detection is case-insensitive."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardExtractor.classify_collection_intent(
-            "HELP", stage
-        ) == "help"
-        assert WizardExtractor.classify_collection_intent(
-            "What Should I Do?", stage
-        ) == "help"
+        assert WizardExtractor.classify_collection_intent("HELP", stage) == "help"
+        assert WizardExtractor.classify_collection_intent("What Should I Do?", stage) == "help"
 
 
 # =====================================================================
 # Verbatim capture in _extract_data
 # =====================================================================
+
 
 class TestVerbatimCaptureInExtraction:
     """Tests for verbatim capture path in _extract_data."""
@@ -344,7 +340,9 @@ class TestVerbatimCaptureInExtraction:
         }
 
         result = await wizard._extraction._extract_data(
-            "Mix, bake, and enjoy!", stage, llm=None,
+            "Mix, bake, and enjoy!",
+            stage,
+            llm=None,
         )
 
         assert result.data == {"instruction": "Mix, bake, and enjoy!"}
@@ -369,7 +367,9 @@ class TestVerbatimCaptureInExtraction:
 
         # No extractor configured → falls back to SimpleExtractionResult
         result = await wizard._extraction._extract_data(
-            "2 cups flour", stage, llm=None,
+            "2 cups flour",
+            stage,
+            llm=None,
         )
 
         # Should NOT be verbatim — should fall through to fallback
@@ -394,7 +394,9 @@ class TestVerbatimCaptureInExtraction:
         }
 
         result = await wizard._extraction._extract_data(
-            "flour", stage, llm=None,
+            "flour",
+            stage,
+            llm=None,
         )
 
         # Verbatim captures into the first property key
@@ -418,7 +420,9 @@ class TestVerbatimCaptureInExtraction:
 
         # No extractor → falls back to SimpleExtractionResult (not verbatim)
         result = await wizard._extraction._extract_data(
-            "Mix and bake", stage, llm=None,
+            "Mix and bake",
+            stage,
+            llm=None,
         )
 
         assert result.data == {"_raw_input": "Mix and bake"}
@@ -463,15 +467,17 @@ async def test_intent_detection_keyword_uses_word_boundary_not_substring() -> No
     state = WizardState(current_stage="collect")
 
     await wizard._extraction.detect_intent(
-        "yesterday I was reading", stage, state, llm=None,
+        "yesterday I was reading",
+        stage,
+        state,
+        llm=None,
     )
 
     assert "_intent" not in state.data
 
 
 @pytest.mark.asyncio
-async def test_intent_detection_writes_per_intent_boolean_when_flag_set(
-) -> None:
+async def test_intent_detection_writes_per_intent_boolean_when_flag_set() -> None:
     """Adjacent extension: detect_intent optionally writes per-intent
     booleans (used by the intent_confirm synthesizer).
 
@@ -493,7 +499,10 @@ async def test_intent_detection_writes_per_intent_boolean_when_flag_set(
     state = WizardState(current_stage="collect")
 
     await wizard._extraction.detect_intent(
-        "yes please", stage, state, llm=None,
+        "yes please",
+        stage,
+        state,
+        llm=None,
     )
 
     assert state.data.get("accept") is True

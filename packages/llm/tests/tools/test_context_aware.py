@@ -44,11 +44,7 @@ class SampleContextAwareTool(ContextAwareTool):
             "conversation_id": context.conversation_id,
             "user_id": context.user_id,
             "has_wizard_state": context.wizard_state is not None,
-            "wizard_data": (
-                context.wizard_state.collected_data
-                if context.wizard_state
-                else {}
-            ),
+            "wizard_data": (context.wizard_state.collected_data if context.wizard_state else {}),
         }
 
 

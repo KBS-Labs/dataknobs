@@ -79,7 +79,13 @@ from .reasoning.state_bridge import (
     SubscribingBridge,
     SubsetBridge,
 )
-from .testing import BotTestHarness, CaptureReplay, TurnResult, WizardConfigBuilder, inject_providers
+from .testing import (
+    BotTestHarness,
+    CaptureReplay,
+    TurnResult,
+    WizardConfigBuilder,
+    inject_providers,
+)
 from .tools import (
     AddKBResourceTool,
     CheckKnowledgeSourceTool,

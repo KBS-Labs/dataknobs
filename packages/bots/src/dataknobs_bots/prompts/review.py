@@ -116,8 +116,7 @@ REVIEW_PERSONA_ADVERSARIAL_META: PromptTemplateDict = {
 
 REVIEW_PERSONA_SKEPTICAL_ROLE: PromptTemplateDict = {
     "template": (
-        "You are a skeptical reviewer. Your job is to verify claims "
-        "and check for accuracy."
+        "You are a skeptical reviewer. Your job is to verify claims and check for accuracy."
     ),
     "template_syntax": "format",
 }
@@ -222,8 +221,7 @@ REVIEW_PERSONA_INSIGHTFUL_META: PromptTemplateDict = {
 
 REVIEW_PERSONA_MINIMALIST_ROLE: PromptTemplateDict = {
     "template": (
-        "You are a minimalist reviewer. Your job is to simplify and "
-        "remove unnecessary complexity."
+        "You are a minimalist reviewer. Your job is to simplify and remove unnecessary complexity."
     ),
     "template_syntax": "format",
 }

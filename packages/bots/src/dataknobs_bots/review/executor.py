@@ -64,11 +64,16 @@ class ArtifactReview:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": self.id, "artifact_id": self.artifact_id,
-            "reviewer": self.reviewer, "review_type": self.review_type,
-            "passed": self.passed, "score": self.score,
-            "feedback": self.feedback, "suggestions": self.suggestions,
-            "issues": self.issues, "timestamp": self.timestamp,
+            "id": self.id,
+            "artifact_id": self.artifact_id,
+            "reviewer": self.reviewer,
+            "review_type": self.review_type,
+            "passed": self.passed,
+            "score": self.score,
+            "feedback": self.feedback,
+            "suggestions": self.suggestions,
+            "issues": self.issues,
+            "timestamp": self.timestamp,
             "metadata": self.metadata,
         }
 
@@ -87,6 +92,7 @@ class ArtifactReview:
             timestamp=data.get("timestamp", time.time()),
             metadata=data.get("metadata", {}),
         )
+
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +158,7 @@ class ReviewExecutor:
         """
         protocols: dict[str, ReviewProtocolDefinition] = {}
         for proto_id, proto_config in config.get("review_protocols", {}).items():
-            protocols[proto_id] = ReviewProtocolDefinition.from_config(
-                proto_id, proto_config
-            )
+            protocols[proto_id] = ReviewProtocolDefinition.from_config(proto_id, proto_config)
 
         # Custom functions must be registered separately via register_function
         return cls(
@@ -323,9 +327,9 @@ class ReviewExecutor:
             else str(artifact.content)
         )
 
-        artifact_purpose = getattr(
-            getattr(artifact, "metadata", None), "purpose", None
-        ) or "Not specified"
+        artifact_purpose = (
+            getattr(getattr(artifact, "metadata", None), "purpose", None) or "Not specified"
+        )
 
         # Try library resolution for persona prompt.
         # The key follows the pattern review.persona.{persona_id}.
@@ -413,9 +417,7 @@ class ReviewExecutor:
         schema = protocol.schema
         if not schema and protocol.schema_ref:
             # Schema ref loading would be implemented based on schema storage
-            logger.warning(
-                "Schema ref loading not implemented: %s", protocol.schema_ref
-            )
+            logger.warning("Schema ref loading not implemented: %s", protocol.schema_ref)
             return ArtifactReview(
                 artifact_id=artifact.id,
                 reviewer=protocol.id,
@@ -559,7 +561,8 @@ class ReviewExecutor:
         protocol_ids: list[str] = []
         if artifact_definition:
             protocol_ids = getattr(
-                artifact_definition, "reviews",
+                artifact_definition,
+                "reviews",
                 getattr(artifact_definition, "rubrics", []),
             )
 

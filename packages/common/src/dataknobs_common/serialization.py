@@ -417,9 +417,7 @@ def _sanitize_recursive(
         result = {}
         for f in dataclasses.fields(value):
             child_path = f"{_path}.{f.name}" if _path else f.name
-            sanitized = _sanitize_recursive(
-                getattr(value, f.name), on_drop, child_path, _dropped
-            )
+            sanitized = _sanitize_recursive(getattr(value, f.name), on_drop, child_path, _dropped)
             if sanitized is not _SENTINEL:
                 result[f.name] = sanitized
         return result
@@ -431,24 +429,18 @@ def _sanitize_recursive(
             if isinstance(dict_result, dict):
                 return _sanitize_recursive(dict_result, on_drop, _path, _dropped)
         except Exception:
-            logger.debug(
-                "to_dict() failed for %s, dropping", type(value).__name__
-            )
+            logger.debug("to_dict() failed for %s, dropping", type(value).__name__)
 
     # Not convertible — handle according to on_drop mode
     path_label = _path or "<root>"
     type_name = type(value).__name__
 
     if on_drop == "warn":
-        logger.warning(
-            "Dropping non-serializable '%s' (type=%s)", path_label, type_name
-        )
+        logger.warning("Dropping non-serializable '%s' (type=%s)", path_label, type_name)
     elif on_drop == "error" and _dropped is not None:
         _dropped.append(f"{path_label} (type={type_name})")
     else:
-        logger.debug(
-            "Dropping non-serializable value of type %s", type_name
-        )
+        logger.debug("Dropping non-serializable value of type %s", type_name)
 
     return _SENTINEL
 

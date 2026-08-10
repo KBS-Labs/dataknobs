@@ -121,9 +121,7 @@ async def test_create_file_reader_does_not_block(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_read_jsonl_opens_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_read_jsonl_opens_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.jsonl"
     path.write_text('{"a": 1}\n')
     threads: list[str] = []
@@ -134,9 +132,7 @@ async def test_read_jsonl_opens_on_worker_thread(
     assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
-async def test_read_csv_opens_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_read_csv_opens_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.csv"
     path.write_text("name,value\nalice,1\n")
     threads: list[str] = []
@@ -146,9 +142,7 @@ async def test_read_csv_opens_on_worker_thread(
     assert all(name.startswith(DK_AITER_PUMP_THREAD) for name in threads)
 
 
-async def test_read_text_opens_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_read_text_opens_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "data.txt"
     path.write_text("first\n")
     threads: list[str] = []

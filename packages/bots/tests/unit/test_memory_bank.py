@@ -22,6 +22,7 @@ from dataknobs_llm.conversations import ConversationManager
 # Helpers
 # =====================================================================
 
+
 def _make_bank(
     name: str = "items",
     schema: dict[str, Any] | None = None,
@@ -50,7 +51,8 @@ def _make_wizard_with_banks(
         "name": "bank-wizard",
         "version": "1.0",
         "settings": {
-            "banks": banks_config or {
+            "banks": banks_config
+            or {
                 "ingredients": {
                     "schema": {
                         "required": ["name"],
@@ -75,9 +77,7 @@ def _make_wizard_with_banks(
                 "transitions": [
                     {
                         "target": "review",
-                        "condition": (
-                            "bank('ingredients').count() > 0"
-                        ),
+                        "condition": ("bank('ingredients').count() > 0"),
                     },
                 ],
             },
@@ -85,9 +85,7 @@ def _make_wizard_with_banks(
                 "name": "review",
                 "is_end": True,
                 "prompt": "Here are your ingredients",
-                "response_template": (
-                    "You added {{ bank('ingredients').count() }} items."
-                ),
+                "response_template": ("You added {{ bank('ingredients').count() }} items."),
             },
         ],
     }
@@ -100,8 +98,8 @@ def _make_wizard_with_banks(
 # BankRecord tests
 # =====================================================================
 
-class TestBankRecord:
 
+class TestBankRecord:
     def test_to_dict_roundtrip(self) -> None:
         record = BankRecord(
             record_id="abc123",
@@ -172,8 +170,8 @@ class TestBankRecord:
 # MemoryBank CRUD tests
 # =====================================================================
 
-class TestMemoryBankCRUD:
 
+class TestMemoryBankCRUD:
     def test_add_and_get(self) -> None:
         bank = _make_bank()
         rid = bank.add({"name": "flour", "amount": "2 cups"}, source_stage="s1")
@@ -239,8 +237,8 @@ class TestMemoryBankCRUD:
 # Validation tests
 # =====================================================================
 
-class TestMemoryBankValidation:
 
+class TestMemoryBankValidation:
     def test_missing_required_field_rejected(self) -> None:
         bank = _make_bank(schema={"required": ["name", "amount"]})
         with pytest.raises(ValueError, match="missing required fields"):
@@ -261,8 +259,8 @@ class TestMemoryBankValidation:
 # Max records tests
 # =====================================================================
 
-class TestMemoryBankMaxRecords:
 
+class TestMemoryBankMaxRecords:
     def test_max_records_enforced(self) -> None:
         bank = _make_bank(max_records=2)
         bank.add({"name": "a"})
@@ -281,8 +279,8 @@ class TestMemoryBankMaxRecords:
 # Duplicate detection tests
 # =====================================================================
 
-class TestMemoryBankDuplicates:
 
+class TestMemoryBankDuplicates:
     def test_allow_strategy_permits_duplicates(self) -> None:
         bank = _make_bank(duplicate_strategy="allow")
         bank.add({"name": "flour"})
@@ -358,8 +356,8 @@ class TestMemoryBankDuplicates:
 # Find tests
 # =====================================================================
 
-class TestMemoryBankFind:
 
+class TestMemoryBankFind:
     def test_find_by_field(self) -> None:
         bank = _make_bank()
         bank.add({"name": "flour", "category": "dry"})
@@ -380,8 +378,8 @@ class TestMemoryBankFind:
 # Serialization tests
 # =====================================================================
 
-class TestMemoryBankSerialization:
 
+class TestMemoryBankSerialization:
     def test_to_dict_roundtrip(self) -> None:
         bank = _make_bank(max_records=10)
         bank.add({"name": "flour", "amount": "2 cups"}, source_stage="s1")
@@ -464,8 +462,8 @@ class TestMemoryBankSerialization:
 # EmptyBankProxy tests
 # =====================================================================
 
-class TestEmptyBankProxy:
 
+class TestEmptyBankProxy:
     def test_count_is_zero(self) -> None:
         proxy = EmptyBankProxy("missing")
         assert proxy.count() == 0
@@ -507,8 +505,8 @@ class TestEmptyBankProxy:
 # WizardReasoning integration tests
 # =====================================================================
 
-class TestWizardBankIntegration:
 
+class TestWizardBankIntegration:
     def test_banks_initialised_from_config(self) -> None:
         reasoning = _make_wizard_with_banks()
         assert "ingredients" in reasoning._banks
@@ -573,12 +571,8 @@ class TestWizardBankIntegration:
         state = reasoning._get_wizard_state(conversation_manager)
 
         # Add records to the bank
-        reasoning._banks["ingredients"].add(
-            {"name": "flour"}, source_stage="collect"
-        )
-        reasoning._banks["ingredients"].add(
-            {"name": "sugar"}, source_stage="collect"
-        )
+        reasoning._banks["ingredients"].add({"name": "flour"}, source_stage="collect")
+        reasoning._banks["ingredients"].add({"name": "sugar"}, source_stage="collect")
         assert reasoning._banks["ingredients"].count() == 2
 
         # Save state
@@ -601,9 +595,7 @@ class TestWizardBankIntegration:
         assert records[1].data["name"] == "sugar"
 
     @pytest.mark.asyncio
-    async def test_restart_clears_banks(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_restart_clears_banks(self, conversation_manager: ConversationManager) -> None:
         reasoning = _make_wizard_with_banks()
         state = reasoning._get_wizard_state(conversation_manager)
         reasoning._banks["ingredients"].add({"name": "flour"})
@@ -614,9 +606,7 @@ class TestWizardBankIntegration:
         from dataknobs_llm.llm import LLMConfig
 
         provider = EchoProvider(LLMConfig(provider="echo", model="test"))
-        await reasoning._execute_restart(
-            "restart", state, conversation_manager, provider
-        )
+        await reasoning._execute_restart("restart", state, conversation_manager, provider)
         assert reasoning._banks["ingredients"].count() == 0
 
     def test_bank_in_template_context(self) -> None:
@@ -629,9 +619,7 @@ class TestWizardBankIntegration:
         from dataknobs_bots.utils.template_env import create_template_env
 
         env = create_template_env()
-        template = env.from_string(
-            "Count: {{ bank('ingredients').count() }}"
-        )
+        template = env.from_string("Count: {{ bank('ingredients').count() }}")
         accessor = reasoning._make_bank_accessor()
         result = template.render(bank=accessor)
         assert result == "Count: 1"
@@ -657,8 +645,8 @@ class TestWizardBankIntegration:
 # Storage mode tests
 # =====================================================================
 
-class TestMemoryBankStorageMode:
 
+class TestMemoryBankStorageMode:
     def test_storage_mode_defaults_to_inline(self) -> None:
         bank = _make_bank()
         d = bank.to_dict()
@@ -728,8 +716,8 @@ class TestMemoryBankStorageMode:
 # Close / cleanup tests
 # =====================================================================
 
-class TestMemoryBankClose:
 
+class TestMemoryBankClose:
     def test_close_calls_db_close(self) -> None:
         db = SyncMemoryDatabase()
         bank = MemoryBank(
@@ -771,16 +759,16 @@ class TestMemoryBankClose:
     async def test_wizard_close_closes_bank_dbs(self) -> None:
         from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 
-        reasoning = _make_wizard_with_banks(banks_config={
-            "ingredients": {
-                "schema": {"required": ["name"]},
-                "max_records": 50,
-            },
-        })
-        # Replace the memory db with an SQLite db so we can observe close
-        sqlite_db = SyncSQLiteDatabase(
-            {"path": ":memory:", "table": "ingredients"}
+        reasoning = _make_wizard_with_banks(
+            banks_config={
+                "ingredients": {
+                    "schema": {"required": ["name"]},
+                    "max_records": 50,
+                },
+            }
         )
+        # Replace the memory db with an SQLite db so we can observe close
+        sqlite_db = SyncSQLiteDatabase({"path": ":memory:", "table": "ingredients"})
         sqlite_db.connect()
         # owns_db=True mirrors what _init_banks does for wizard-built banks:
         # the wizard creates the db for the bank, so the bank owns it and

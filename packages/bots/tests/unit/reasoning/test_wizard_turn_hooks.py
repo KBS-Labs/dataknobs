@@ -6,6 +6,7 @@ post-turn logic. The manager-metadata inbox bridge is the
 dataknobs-shipped reference adopter; this file exercises the hook
 surface itself (so consumers can rely on the contract).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -158,7 +159,9 @@ async def test_on_turn_start_hook_runs_after_per_turn_clear() -> None:
     hooks = WizardHooks()
     hooks.on_turn_start(my_hook)
     wizard = WizardReasoning(
-        wizard_fsm=fsm, hooks=hooks, strict_validation=False,
+        wizard_fsm=fsm,
+        hooks=hooks,
+        strict_validation=False,
     )
     manager = _FakeManager()
     manager.metadata["wizard"] = {
@@ -500,8 +503,7 @@ async def test_on_turn_end_fires_from_stream_finalize_turn() -> None:
             pass
 
         assert len(fired_events) == 1, (
-            "on_turn_end must fire after stream_finalize_turn's "
-            "save_wizard_state"
+            "on_turn_end must fire after stream_finalize_turn's save_wizard_state"
         )
         # Canonical exit publishes reason="normal".
         assert fired_events[0]["reason"] == "normal"

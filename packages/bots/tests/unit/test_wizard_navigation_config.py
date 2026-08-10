@@ -27,6 +27,7 @@ from dataknobs_llm.conversations import ConversationManager
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_two_stage_config(
     *,
     settings: dict[str, Any] | None = None,
@@ -70,6 +71,7 @@ def _build_reasoning(config: dict[str, Any]) -> WizardReasoning:
 # TestNavigationConfigDataModel
 # ===================================================================
 
+
 class TestNavigationConfigDataModel:
     """Unit tests for NavigationConfig.from_dict()."""
 
@@ -89,36 +91,44 @@ class TestNavigationConfigDataModel:
         assert nav.restart.keywords == DEFAULT_RESTART_KEYWORDS
 
     def test_partial_config_overrides_specified_only(self) -> None:
-        nav = NavigationConfig.from_dict({
-            "back": {"keywords": ["undo", "go back"]},
-        })
+        nav = NavigationConfig.from_dict(
+            {
+                "back": {"keywords": ["undo", "go back"]},
+            }
+        )
         assert nav.back.keywords == ("undo", "go back")
         # skip and restart keep defaults
         assert nav.skip.keywords == DEFAULT_SKIP_KEYWORDS
         assert nav.restart.keywords == DEFAULT_RESTART_KEYWORDS
 
     def test_full_config(self) -> None:
-        nav = NavigationConfig.from_dict({
-            "back": {"keywords": ["b"]},
-            "skip": {"keywords": ["s", "next"]},
-            "restart": {"keywords": ["r"]},
-        })
+        nav = NavigationConfig.from_dict(
+            {
+                "back": {"keywords": ["b"]},
+                "skip": {"keywords": ["s", "next"]},
+                "restart": {"keywords": ["r"]},
+            }
+        )
         assert nav.back.keywords == ("b",)
         assert nav.skip.keywords == ("s", "next")
         assert nav.restart.keywords == ("r",)
 
     def test_enabled_false_parsed(self) -> None:
-        nav = NavigationConfig.from_dict({
-            "skip": {"enabled": False},
-        })
+        nav = NavigationConfig.from_dict(
+            {
+                "skip": {"enabled": False},
+            }
+        )
         assert nav.skip.enabled is False
         # Keywords still default when not specified
         assert nav.skip.keywords == DEFAULT_SKIP_KEYWORDS
 
     def test_keywords_normalised_to_lowercase(self) -> None:
-        nav = NavigationConfig.from_dict({
-            "back": {"keywords": ["BACK", "Go Back", "PREVIOUS"]},
-        })
+        nav = NavigationConfig.from_dict(
+            {
+                "back": {"keywords": ["BACK", "Go Back", "PREVIOUS"]},
+            }
+        )
         assert nav.back.keywords == ("back", "go back", "previous")
 
     def test_none_data_returns_defaults(self) -> None:
@@ -136,37 +146,30 @@ class TestNavigationConfigDataModel:
 # TestNavigationConfigDefaults — backward compatibility
 # ===================================================================
 
+
 class TestNavigationConfigDefaults:
     """Verify that with no navigation config the original keywords work."""
 
     @pytest.mark.asyncio
-    async def test_default_back_keywords(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_default_back_keywords(self, conversation_manager: ConversationManager) -> None:
         config = _make_two_stage_config()
         reasoning = _build_reasoning(config)
 
         for keyword in ("back", "go back", "previous"):
             state = WizardState(current_stage="start", history=["start"])
-            result = await reasoning._handle_navigation(
-                keyword, state, conversation_manager, None
-            )
+            result = await reasoning._handle_navigation(keyword, state, conversation_manager, None)
             # At start with single history entry, back cannot go further
             # so we get a response (not None)
             assert result is not None, f"Expected response for '{keyword}'"
 
     @pytest.mark.asyncio
-    async def test_default_skip_keywords(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_default_skip_keywords(self, conversation_manager: ConversationManager) -> None:
         config = _make_two_stage_config()
         reasoning = _build_reasoning(config)
 
         for keyword in ("skip", "skip this", "use default", "use defaults"):
             state = WizardState(current_stage="start")
-            result = await reasoning._handle_navigation(
-                keyword, state, conversation_manager, None
-            )
+            result = await reasoning._handle_navigation(keyword, state, conversation_manager, None)
             # can_skip=True so skip advances FSM and generates response
             assert result is not None, f"Expected response for skip keyword '{keyword}'"
 
@@ -179,9 +182,7 @@ class TestNavigationConfigDefaults:
 
         for keyword in ("restart", "start over"):
             state = WizardState(current_stage="start")
-            result = await reasoning._handle_navigation(
-                keyword, state, conversation_manager, None
-            )
+            result = await reasoning._handle_navigation(keyword, state, conversation_manager, None)
             assert result is not None, f"Expected response for '{keyword}'"
 
     @pytest.mark.asyncio
@@ -202,6 +203,7 @@ class TestNavigationConfigDefaults:
 # TestNavigationConfigCustomKeywords — wizard-level customisation
 # ===================================================================
 
+
 class TestNavigationConfigCustomKeywords:
     """Test wizard-level navigation keyword customisation."""
 
@@ -209,61 +211,55 @@ class TestNavigationConfigCustomKeywords:
     async def test_custom_back_replaces_defaults(
         self, conversation_manager: ConversationManager
     ) -> None:
-        config = _make_two_stage_config(settings={
-            "navigation": {
-                "back": {"keywords": ["undo", "go back"]},
-            },
-        })
+        config = _make_two_stage_config(
+            settings={
+                "navigation": {
+                    "back": {"keywords": ["undo", "go back"]},
+                },
+            }
+        )
         reasoning = _build_reasoning(config)
 
         # "undo" should now work
         state = WizardState(current_stage="start", history=["start"])
-        result = await reasoning._handle_navigation(
-            "undo", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("undo", state, conversation_manager, None)
         assert result is not None  # back handled (can't go further)
 
         # "previous" (old default) should no longer work
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "previous", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("previous", state, conversation_manager, None)
         assert result is None  # Not recognised as navigation
 
     @pytest.mark.asyncio
-    async def test_custom_skip_keywords(
-        self, conversation_manager: ConversationManager
-    ) -> None:
-        config = _make_two_stage_config(settings={
-            "navigation": {
-                "skip": {"keywords": ["next", "pass"]},
-            },
-        })
+    async def test_custom_skip_keywords(self, conversation_manager: ConversationManager) -> None:
+        config = _make_two_stage_config(
+            settings={
+                "navigation": {
+                    "skip": {"keywords": ["next", "pass"]},
+                },
+            }
+        )
         reasoning = _build_reasoning(config)
 
         # "next" should skip
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "next", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("next", state, conversation_manager, None)
         assert result is not None  # skip advances FSM and generates response
 
         # "skip" (old default) should not work
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert result is None  # Not a nav command — falls through
 
     @pytest.mark.asyncio
-    async def test_custom_restart_keywords(
-        self, conversation_manager: ConversationManager
-    ) -> None:
-        config = _make_two_stage_config(settings={
-            "navigation": {
-                "restart": {"keywords": ["begin again"]},
-            },
-        })
+    async def test_custom_restart_keywords(self, conversation_manager: ConversationManager) -> None:
+        config = _make_two_stage_config(
+            settings={
+                "navigation": {
+                    "restart": {"keywords": ["begin again"]},
+                },
+            }
+        )
         reasoning = _build_reasoning(config)
 
         state = WizardState(current_stage="start")
@@ -274,9 +270,7 @@ class TestNavigationConfigCustomKeywords:
 
         # "restart" should no longer work
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "restart", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("restart", state, conversation_manager, None)
         assert result is None
 
     @pytest.mark.asyncio
@@ -284,31 +278,30 @@ class TestNavigationConfigCustomKeywords:
         self, conversation_manager: ConversationManager
     ) -> None:
         """Overriding only back should leave skip/restart defaults intact."""
-        config = _make_two_stage_config(settings={
-            "navigation": {
-                "back": {"keywords": ["undo"]},
-            },
-        })
+        config = _make_two_stage_config(
+            settings={
+                "navigation": {
+                    "back": {"keywords": ["undo"]},
+                },
+            }
+        )
         reasoning = _build_reasoning(config)
 
         # skip should still use defaults
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert result is not None  # skip advances FSM and generates response
 
         # restart should still use defaults
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "restart", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("restart", state, conversation_manager, None)
         assert result is not None
 
 
 # ===================================================================
 # TestNavigationConfigStageOverride — per-stage overrides
 # ===================================================================
+
 
 class TestNavigationConfigStageOverride:
     """Test per-stage navigation keyword overrides."""
@@ -339,9 +332,7 @@ class TestNavigationConfigStageOverride:
 
         # "undo" (wizard-level) should NOT work at start stage
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "undo", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("undo", state, conversation_manager, None)
         assert result is None
 
     @pytest.mark.asyncio
@@ -363,9 +354,7 @@ class TestNavigationConfigStageOverride:
 
         # skip should still use wizard-level "next"
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "next", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("next", state, conversation_manager, None)
         assert result is not None  # skip advances FSM and generates response
 
     @pytest.mark.asyncio
@@ -380,17 +369,13 @@ class TestNavigationConfigStageOverride:
         reasoning = _build_reasoning(config)
 
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
         # skip is disabled — message falls through as non-navigation
         assert result is None
 
         # But restart still works (not disabled)
         state = WizardState(current_stage="start")
-        result = await reasoning._handle_navigation(
-            "restart", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("restart", state, conversation_manager, None)
         assert result is not None
 
     @pytest.mark.asyncio
@@ -398,24 +383,25 @@ class TestNavigationConfigStageOverride:
         self, conversation_manager: ConversationManager
     ) -> None:
         """Stages without a navigation key should use wizard-level config."""
-        config = _make_two_stage_config(settings={
-            "navigation": {
-                "back": {"keywords": ["undo"]},
-            },
-        })
+        config = _make_two_stage_config(
+            settings={
+                "navigation": {
+                    "back": {"keywords": ["undo"]},
+                },
+            }
+        )
         # No start_nav — the start stage has no navigation override
         reasoning = _build_reasoning(config)
 
         state = WizardState(current_stage="start", history=["start"])
-        result = await reasoning._handle_navigation(
-            "undo", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("undo", state, conversation_manager, None)
         assert result is not None
 
 
 # ===================================================================
 # TestNavigationConfigBuilder — WizardConfigBuilder integration
 # ===================================================================
+
 
 class TestNavigationConfigBuilder:
     """Test WizardConfigBuilder navigation support."""
@@ -447,10 +433,12 @@ class TestNavigationConfigBuilder:
         d = stage.to_dict()
         assert d["navigation"] == stage_nav
 
-        rebuilt = WizardConfigBuilder.from_dict({
-            "name": "rt-wizard",
-            "stages": [d],
-        })
+        rebuilt = WizardConfigBuilder.from_dict(
+            {
+                "name": "rt-wizard",
+                "stages": [d],
+            }
+        )
         built = rebuilt.build()
         assert built.stages[0].navigation == stage_nav
 
@@ -496,7 +484,10 @@ class TestNavigationConfigBuilder:
         builder = (
             WizardConfigBuilder("assemble-test")
             .add_structured_stage(
-                "start", "Hello", is_start=True, navigation=stage_nav,
+                "start",
+                "Hello",
+                is_start=True,
+                navigation=stage_nav,
             )
             .add_end_stage("done", "Done!")
             .add_transition("start", "done")
@@ -509,6 +500,7 @@ class TestNavigationConfigBuilder:
 # ===================================================================
 # TestSkipAdvancesFSM — skip navigates directly, bypassing extraction
 # ===================================================================
+
 
 class TestSkipAdvancesFSM:
     """Verify that _execute_skip() advances the FSM directly.
@@ -532,55 +524,41 @@ class TestSkipAdvancesFSM:
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start")
 
-        result = await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert result is not None
         assert state.current_stage == "done"
 
     @pytest.mark.asyncio
-    async def test_skip_records_transition(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_skip_records_transition(self, conversation_manager: ConversationManager) -> None:
         """Skip records a navigation_skip transition."""
         config = _make_two_stage_config()
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start")
 
-        await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert len(state.transitions) == 1
         assert state.transitions[0].trigger == "navigation_skip"
         assert state.transitions[0].from_stage == "start"
         assert state.transitions[0].to_stage == "done"
 
     @pytest.mark.asyncio
-    async def test_skip_sets_skipped_flag(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_skip_sets_skipped_flag(self, conversation_manager: ConversationManager) -> None:
         """Skip sets _skipped_{stage} in wizard data."""
         config = _make_two_stage_config()
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start")
 
-        await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert state.data.get("_skipped_start") is True
 
     @pytest.mark.asyncio
-    async def test_skip_updates_history(
-        self, conversation_manager: ConversationManager
-    ) -> None:
+    async def test_skip_updates_history(self, conversation_manager: ConversationManager) -> None:
         """Skip adds the new stage to history."""
         config = _make_two_stage_config()
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start", history=["start"])
 
-        await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert "done" in state.history
 
     @pytest.mark.asyncio
@@ -604,9 +582,7 @@ class TestSkipAdvancesFSM:
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start")
 
-        result = await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert result is not None
         assert state.current_stage == "start"  # Stayed put
 
@@ -632,8 +608,6 @@ class TestSkipAdvancesFSM:
         reasoning = _build_reasoning(config)
         state = WizardState(current_stage="start")
 
-        await reasoning._handle_navigation(
-            "skip", state, conversation_manager, None
-        )
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert state.data.get("budget") == "flexible"
         assert state.data.get("_skipped_start") is True

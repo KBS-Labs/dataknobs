@@ -74,7 +74,7 @@ def _maybe_strict_signature_hint(
         "Wizard-stage-safe sub-strategies should declare a permissive "
         "``**kwargs`` on ``from_config`` so unrelated forwarded keys are "
         "absorbed. See packages/bots/docs/USER_GUIDE.md "
-        "(\"Writing a wizard-stage-safe sub-strategy\")."
+        '("Writing a wizard-stage-safe sub-strategy").'
     )
 
 
@@ -269,10 +269,17 @@ class WizardResponder:
 
         if use_template:
             content, llm_response = await self._resolve_template_content(
-                manager, llm, stage, state, active_template, wizard_snapshot,
+                manager,
+                llm,
+                stage,
+                state,
+                active_template,
+                wizard_snapshot,
             )
-            response = llm_response if llm_response is not None else (
-                self.create_template_response(content)
+            response = (
+                llm_response
+                if llm_response is not None
+                else (self.create_template_response(content))
             )
             self.add_wizard_metadata(response, state, stage)
             if track_render and response_template:
@@ -281,7 +288,10 @@ class WizardResponder:
 
         # ── LLM mode ────────────────────────────────────────────
         enhanced_prompt, stage_tools, strategy = self._prepare_llm_mode(
-            manager, stage, state, tools,
+            manager,
+            stage,
+            state,
+            tools,
         )
 
         logger.debug(
@@ -296,11 +306,19 @@ class WizardResponder:
         tool_restart_requested = False
 
         if strategy:
-            response, tool_completion_requested, tool_completion_summary, tool_restart_requested = (
-                await self._strategy_stage_response(
-                    strategy, manager, enhanced_prompt, stage, state,
-                    stage_tools, metadata=wizard_snapshot,
-                )
+            (
+                response,
+                tool_completion_requested,
+                tool_completion_summary,
+                tool_restart_requested,
+            ) = await self._strategy_stage_response(
+                strategy,
+                manager,
+                enhanced_prompt,
+                stage,
+                state,
+                stage_tools,
+                metadata=wizard_snapshot,
             )
         else:
             # Single LLM call (default behavior)
@@ -366,11 +384,7 @@ class WizardResponder:
         Returns:
             LLM response requesting clarification
         """
-        issue_list = (
-            "\n".join(f"- {e}" for e in issues)
-            if issues
-            else "- Response was ambiguous"
-        )
+        issue_list = "\n".join(f"- {e}" for e in issues) if issues else "- Response was ambiguous"
 
         # Build field groups for structured clarification when configured.
         # Requires at least one group to be defined — exclude_derivable
@@ -382,26 +396,22 @@ class WizardResponder:
             )
             if missing:
                 groups = self._build_clarification_groups(
-                    missing, stage, wizard_state,
+                    missing,
+                    stage,
+                    wizard_state,
                 )
                 if groups:
                     if self._clarification_template:
-                        default_list = "\n".join(
-                            f"- {g['question']}" for g in groups
-                        )
+                        default_list = "\n".join(f"- {g['question']}" for g in groups)
                         issue_list = self._renderer.render_simple(
                             self._clarification_template,
                             {"field_groups": groups},
                             fallback=default_list,
                         )
                     else:
-                        issue_list = "\n".join(
-                            f"- {g['question']}" for g in groups
-                        )
+                        issue_list = "\n".join(f"- {g['question']}" for g in groups)
         suggestions = stage.get("suggestions", [])
-        suggestions_text = (
-            f"\n**Suggestions**: {', '.join(suggestions)}" if suggestions else ""
-        )
+        suggestions_text = f"\n**Suggestions**: {', '.join(suggestions)}" if suggestions else ""
 
         stage_prompt = stage.get("prompt", "Please provide more specific information.")
         clarification_context = None
@@ -425,7 +435,11 @@ class WizardResponder:
                 f"like they did something wrong."
             )
         return await self._complete_with_wizard_context(
-            manager, clarification_context, stage, wizard_state, tools,
+            manager,
+            clarification_context,
+            stage,
+            wizard_state,
+            tools,
         )
 
     async def generate_validation_response(
@@ -471,7 +485,11 @@ class WizardResponder:
                 f"and helpful."
             )
         return await self._complete_with_wizard_context(
-            manager, error_context, stage, wizard_state, tools,
+            manager,
+            error_context,
+            stage,
+            wizard_state,
+            tools,
         )
 
     async def generate_transform_error_response(
@@ -511,7 +529,7 @@ class WizardResponder:
         if error_context is None:
             error_context = (
                 f"## Processing Error\n\n"
-                f'An error occurred while processing the transition from '
+                f"An error occurred while processing the transition from "
                 f'the "{stage_name}" stage:\n\n'
                 f"**Error**: {error}\n\n"
                 f"Please apologize for the issue and let the user know they "
@@ -521,7 +539,11 @@ class WizardResponder:
                 f"Be concise and helpful."
             )
         return await self._complete_with_wizard_context(
-            manager, error_context, stage, wizard_state, tools,
+            manager,
+            error_context,
+            stage,
+            wizard_state,
+            tools,
             include_stage_context=False,
         )
 
@@ -565,13 +587,17 @@ class WizardResponder:
                 f"**Goal**: {stage_prompt}\n\n"
                 f"Please offer the user two options:\n"
                 f"1. Try one more time with clearer instructions\n"
-                f'2. Start the wizard over from the beginning '
+                f"2. Start the wizard over from the beginning "
                 f'(type "restart")\n\n'
                 f"Be empathetic and helpful - acknowledge that the questions "
                 f"might not be clear."
             )
         return await self._complete_with_wizard_context(
-            manager, restart_context, stage, wizard_state, tools,
+            manager,
+            restart_context,
+            stage,
+            wizard_state,
+            tools,
         )
 
     def can_auto_advance(
@@ -733,23 +759,20 @@ class WizardResponder:
             count < max_advances
             and not wizard_state.completed
             and self.can_auto_advance(
-                wizard_state, stage,
+                wizard_state,
+                stage,
                 after_re_extraction=after_re_extraction and count == 0,
             )
         ):
             # Render template of the stage being advanced past
             if not (skip_first_render and count == 0):
-                rendered = self._render_auto_advance_template(
-                    stage, wizard_state
-                )
+                rendered = self._render_auto_advance_template(stage, wizard_state)
                 if rendered:
                     messages.append(rendered)
 
             count += 1
             old_stage_name = wizard_state.current_stage
-            duration_ms = (
-                (time.time() - wizard_state.stage_entry_time) * 1000
-            )
+            duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
             # Install per-step closure so auto-advance transforms see
             # the LLM and a TurnContext, matching _execute_fsm_step.
@@ -777,24 +800,18 @@ class WizardResponder:
             original_factory = active_fsm.get_transform_context_factory()
             active_fsm.set_transform_context_factory(_scoped_factory)
             try:
-                auto_step_result = await active_fsm.step_async(
-                    wizard_state.data
-                )
+                auto_step_result = await active_fsm.step_async(wizard_state.data)
             finally:
                 # Restore the previous factory (the orchestrator's
                 # fallback, installed by WizardReasoning at construction).
                 if original_factory is not None:
-                    active_fsm.set_transform_context_factory(
-                        original_factory
-                    )
+                    active_fsm.set_transform_context_factory(original_factory)
             new_stage_name = active_fsm.current_stage
 
             if new_stage_name == old_stage_name:
                 break
 
-            condition_expr = active_fsm.get_transition_condition(
-                old_stage_name, new_stage_name
-            )
+            condition_expr = active_fsm.get_transition_condition(old_stage_name, new_stage_name)
             transition = create_transition_record(
                 from_stage=old_stage_name,
                 to_stage=new_stage_name,
@@ -869,9 +886,7 @@ class WizardResponder:
             condition,
             scope={
                 "data": data_snapshot,
-                "has": lambda key: field_is_present(
-                    data_snapshot.get(key)
-                ),
+                "has": lambda key: field_is_present(data_snapshot.get(key)),
                 "bank": self._make_bank_accessor(),
                 "artifact": self._get_artifact(),
             },
@@ -976,17 +991,17 @@ class WizardResponder:
                 status = "completed"
             else:
                 status = "pending"
-            stages.append({
-                "name": name,
-                "label": meta.get("label", name),
-                "status": status,
-            })
+            stages.append(
+                {
+                    "name": name,
+                    "label": meta.get("label", name),
+                    "status": status,
+                }
+            )
 
         return stages
 
-    def build_stage_context(
-        self, stage: dict[str, Any], state: WizardState
-    ) -> str:
+    def build_stage_context(self, stage: dict[str, Any], state: WizardState) -> str:
         """Build context prompt for current stage.
 
         Uses custom template if configured, otherwise falls back to
@@ -1037,9 +1052,7 @@ class WizardResponder:
         # Filter to stage-specific tools
         filtered = []
         for tool in tools:
-            tool_name = getattr(tool, "name", None) or getattr(
-                tool, "__name__", None
-            )
+            tool_name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
             if tool_name in stage_tool_names:
                 filtered.append(tool)
 
@@ -1063,13 +1076,13 @@ class WizardResponder:
         """
         active_fsm = self._subflows.get_active_fsm()
         return self._renderer.render_list(
-            suggestions, active_fsm.current_metadata, state,
+            suggestions,
+            active_fsm.current_metadata,
+            state,
         )
 
     @staticmethod
-    def prepend_messages_to_response(
-        response: Any, messages: list[str]
-    ) -> None:
+    def prepend_messages_to_response(response: Any, messages: list[str]) -> None:
         """Prepend collected auto-advance messages to a response.
 
         Modifies the response object in place, inserting message stage
@@ -1102,9 +1115,21 @@ class WizardResponder:
         if msg.endswith("?"):
             return True
         question_starters = (
-            "what ", "which ", "how ", "why ", "should ",
-            "can ", "could ", "would ", "is ", "are ",
-            "do ", "does ", "help", "explain", "tell me",
+            "what ",
+            "which ",
+            "how ",
+            "why ",
+            "should ",
+            "can ",
+            "could ",
+            "would ",
+            "is ",
+            "are ",
+            "do ",
+            "does ",
+            "help",
+            "explain",
+            "tell me",
         )
         return msg.startswith(question_starters)
 
@@ -1149,7 +1174,9 @@ class WizardResponder:
         confirmation_template = stage.get("confirmation_template")
         if confirmation_template:
             return self._render_response_template(
-                confirmation_template, stage, state,
+                confirmation_template,
+                stage,
+                state,
                 extra_context={"new_data_keys": new_data_keys},
             )
 
@@ -1179,7 +1206,9 @@ class WizardResponder:
             )
             response_template = stage.get("response_template", "")
             return self._render_response_template(
-                response_template, stage, state,
+                response_template,
+                stage,
+                state,
             )
         return "Here's what I got:\n" + "\n".join(lines) + "\n\nIs that correct?"
 
@@ -1218,9 +1247,7 @@ class WizardResponder:
             LLM response
         """
         wizard_snapshot = (
-            {"wizard": self._build_wizard_metadata(wizard_state)}
-            if wizard_state
-            else None
+            {"wizard": self._build_wizard_metadata(wizard_state)} if wizard_state else None
         )
         base = manager.system_prompt
         if include_stage_context and wizard_state:
@@ -1267,9 +1294,7 @@ class WizardResponder:
         """
         stage_name = stage.get("name", "unknown")
 
-        extra_context = await self._generate_context_variables(
-            stage, state, llm
-        )
+        extra_context = await self._generate_context_variables(stage, state, llm)
         rendered = self._render_response_template(
             response_template, stage, state, extra_context=extra_context
         )
@@ -1368,7 +1393,10 @@ class WizardResponder:
             merged_extra.update(extra_context)
 
         return self._renderer.render(
-            template_str, stage, state, extra_context=merged_extra,
+            template_str,
+            stage,
+            state,
+            extra_context=merged_extra,
         )
 
     async def _generate_context_variables(
@@ -1411,7 +1439,9 @@ class WizardResponder:
         # Render the prompt template with current state data
         try:
             rendered_prompt = self._renderer.render(
-                prompt_template, stage, state,
+                prompt_template,
+                stage,
+                state,
             )
         except Exception as e:
             logger.warning(
@@ -1452,9 +1482,7 @@ class WizardResponder:
             )
             return {variable_name: fallback} if fallback else {}
 
-    def _render_custom_context(
-        self, stage: dict[str, Any], state: WizardState
-    ) -> str:
+    def _render_custom_context(self, stage: dict[str, Any], state: WizardState) -> str:
         """Render context using custom Jinja2 template.
 
         Args:
@@ -1466,9 +1494,8 @@ class WizardResponder:
         """
         extra_context = {
             "can_skip": self._fsm.can_skip() if self._fsm else False,
-            "can_go_back": (
-                self._fsm.can_go_back() if self._fsm else True
-            ) and len(state.history) > 1,
+            "can_go_back": (self._fsm.can_go_back() if self._fsm else True)
+            and len(state.history) > 1,
         }
 
         return self._renderer.render(
@@ -1479,9 +1506,7 @@ class WizardResponder:
             mixed_mode=True,
         )
 
-    def _build_default_context(
-        self, stage: dict[str, Any], state: WizardState
-    ) -> str:
+    def _build_default_context(self, stage: dict[str, Any], state: WizardState) -> str:
         """Build context using default hardcoded format.
 
         This is the original _build_stage_context() logic, preserved for
@@ -1509,9 +1534,7 @@ class WizardResponder:
 
         # Add collected data context PROMINENTLY before instructions
         if state.data:
-            filtered_data = {
-                k: v for k, v in state.data.items() if not k.startswith("_")
-            }
+            filtered_data = {k: v for k, v in state.data.items() if not k.startswith("_")}
             if filtered_data:
                 lines.append("\n## ALREADY COLLECTED - DO NOT ASK AGAIN")
                 lines.append(
@@ -1533,31 +1556,22 @@ class WizardResponder:
                 max_display = 20
                 records = bank.all()
                 lines.append(f"\n## Collection Progress ({bank_name})")
-                lines.append(
-                    f"{bank.count()} items collected so far:"
-                )
+                lines.append(f"{bank.count()} items collected so far:")
                 for record in records[:max_display]:
                     summary = ", ".join(
-                        f"{v}" for k, v in record.data.items()
-                        if not k.startswith("_")
+                        f"{v}" for k, v in record.data.items() if not k.startswith("_")
                     )
                     lines.append(f"- {summary}")
                 if len(records) > max_display:
-                    lines.append(
-                        f"- ... and {len(records) - max_display} more"
-                    )
+                    lines.append(f"- ... and {len(records) - max_display} more")
                 lines.append("")
 
         # CD-3: Inject compiled artifact snapshot at guided-to-dynamic boundary
         stage_manages_tools = self._stage_manages_tools(stage)
         artifact = self._get_artifact()
         if stage_manages_tools and artifact:
-            has_data = (
-                artifact.fields
-                or any(
-                    bank.count() > 0
-                    for bank in artifact.sections.values()
-                )
+            has_data = artifact.fields or any(
+                bank.count() > 0 for bank in artifact.sections.values()
             )
             if has_data:
                 max_section_display = 20
@@ -1572,21 +1586,14 @@ class WizardResponder:
                         lines.append(f"- {key}: {value}")
                 for section_name, bank in artifact.sections.items():
                     if bank.count() > 0:
-                        lines.append(
-                            f"\n### {section_name} "
-                            f"({bank.count()} records)"
-                        )
+                        lines.append(f"\n### {section_name} ({bank.count()} records)")
                         for record in bank.all()[:max_section_display]:
                             summary = ", ".join(
-                                f"{v}" for k, v in record.data.items()
-                                if not k.startswith("_")
+                                f"{v}" for k, v in record.data.items() if not k.startswith("_")
                             )
                             lines.append(f"- {summary}")
                         if bank.count() > max_section_display:
-                            lines.append(
-                                f"- ... and "
-                                f"{bank.count() - max_section_display} more"
-                            )
+                            lines.append(f"- ... and {bank.count() - max_section_display} more")
                 lines.append("")
 
         if state.completed:
@@ -1601,7 +1608,8 @@ class WizardResponder:
         return "\n".join(lines)
 
     def _resolve_stage_strategy(
-        self, stage: dict[str, Any],
+        self,
+        stage: dict[str, Any],
     ) -> ReasoningStrategy | None:
         """Resolve the reasoning strategy for a wizard stage.
 
@@ -1839,7 +1847,10 @@ class WizardResponder:
             restart_requested).
         """
         completion_signal, restart_signal = self._prepare_strategy_stage(
-            strategy, manager, stage, state,
+            strategy,
+            manager,
+            stage,
+            state,
         )
 
         response = await strategy.generate(
@@ -1851,7 +1862,8 @@ class WizardResponder:
         )
 
         comp_req, comp_summary, restart_req = self._read_lifecycle_signals(
-            completion_signal, restart_signal,
+            completion_signal,
+            restart_signal,
         )
         return response, comp_req, comp_summary, restart_req
 
@@ -1912,13 +1924,16 @@ class WizardResponder:
         # ── Template mode ────────────────────────────────────────
         is_conversation_mode = stage.get("mode") == "conversation"
         is_first_render = state.get_render_count(stage_name) == 0
-        use_template = response_template and (
-            not is_conversation_mode or is_first_render
-        )
+        use_template = response_template and (not is_conversation_mode or is_first_render)
 
         if use_template:
             content, llm_response = await self._resolve_template_content(
-                manager, llm, stage, state, response_template, wizard_snapshot,
+                manager,
+                llm,
+                stage,
+                state,
+                response_template,
+                wizard_snapshot,
             )
             # Propagate LLM metadata (usage, model) when llm_assist fired
             chunk_kwargs: dict[str, Any] = {
@@ -1941,7 +1956,10 @@ class WizardResponder:
 
         # ── LLM mode ────────────────────────────────────────────
         enhanced_prompt, stage_tools, strategy = self._prepare_llm_mode(
-            manager, stage, state, tools,
+            manager,
+            stage,
+            state,
+            tools,
         )
 
         logger.debug(
@@ -1953,8 +1971,14 @@ class WizardResponder:
 
         if strategy:
             async for chunk in self._stream_strategy_stage_response(
-                strategy, manager, enhanced_prompt, stage, state,
-                stage_tools, stream_ctx, metadata=wizard_snapshot,
+                strategy,
+                manager,
+                enhanced_prompt,
+                stage,
+                state,
+                stage_tools,
+                stream_ctx,
+                metadata=wizard_snapshot,
             ):
                 yield chunk
         else:
@@ -2008,7 +2032,10 @@ class WizardResponder:
             :class:`LLMStreamResponse` chunks.
         """
         completion_signal, restart_signal = self._prepare_strategy_stage(
-            strategy, manager, stage, state,
+            strategy,
+            manager,
+            stage,
+            state,
         )
 
         async for chunk in strategy.stream_generate(
@@ -2060,8 +2087,7 @@ class WizardResponder:
         rendered = self._render_response_template(template, stage, state)
         stage_name = stage.get("name", "unknown")
         logger.debug(
-            "Rendered message stage '%s' template during auto-advance "
-            "(%d chars)",
+            "Rendered message stage '%s' template during auto-advance (%d chars)",
             stage_name,
             len(rendered),
         )
@@ -2104,9 +2130,7 @@ class WizardResponder:
         ):
             available_fields = set(wizard_state.data) | effective_missing
             derivable = {
-                rule.target
-                for rule in self._field_derivations
-                if rule.source in available_fields
+                rule.target for rule in self._field_derivations if rule.source in available_fields
             }
             effective_missing -= derivable
 
@@ -2121,20 +2145,24 @@ class WizardResponder:
             group_fields = set(group.get("fields", []))
             overlap = group_fields & effective_missing
             if overlap:
-                result.append({
-                    "fields": sorted(overlap),
-                    "question": group["question"],
-                })
+                result.append(
+                    {
+                        "fields": sorted(overlap),
+                        "question": group["question"],
+                    }
+                )
                 grouped_fields |= overlap
 
         # Ungrouped fields get individual entries from schema description
         for fld in sorted(effective_missing - grouped_fields):
             prop = properties.get(fld, {})
             description = prop.get("description", fld.replace("_", " "))
-            result.append({
-                "fields": [fld],
-                "question": f"What is the {description}?",
-            })
+            result.append(
+                {
+                    "fields": [fld],
+                    "question": f"What is the {description}?",
+                }
+            )
 
         return result
 

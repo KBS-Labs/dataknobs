@@ -259,7 +259,9 @@ class TestRecordResponse:
     async def test_records_correct_response(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
             question_ids=["q1", "q2"],
         )
 
@@ -283,12 +285,17 @@ class TestRecordResponse:
     async def test_records_incorrect_response(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
             question_ids=["q1"],
         )
 
         response = await record_response(
-            data, question_id="q1", response="London", correct=False,
+            data,
+            question_id="q1",
+            response="London",
+            correct=False,
         )
 
         assert response.correct is False
@@ -296,7 +303,9 @@ class TestRecordResponse:
     async def test_tracks_attempt_number(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
             question_ids=["q1"],
         )
 
@@ -316,7 +325,9 @@ class TestFinalizeAssessment:
     async def test_finalizes_with_score(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
             question_ids=["q1", "q2", "q3"],
         )
         await record_response(data, question_id="q1", response="A", correct=True)
@@ -333,7 +344,9 @@ class TestFinalizeAssessment:
     async def test_finalizes_perfect_score(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
             question_ids=["q1", "q2"],
         )
         await record_response(data, question_id="q1", response="A", correct=True)
@@ -346,7 +359,9 @@ class TestFinalizeAssessment:
     async def test_finalizes_empty_session(self) -> None:
         data: dict[str, Any] = {}
         await start_assessment_session(
-            data, assessment_artifact_id="art_001", student_id="s1",
+            data,
+            assessment_artifact_id="art_001",
+            student_id="s1",
         )
 
         session = await finalize_assessment(data)

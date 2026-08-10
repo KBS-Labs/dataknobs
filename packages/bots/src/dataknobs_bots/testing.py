@@ -249,10 +249,7 @@ class WizardConfigBuilder:
             # Prevent accidental override of structural keys set by
             # positional/explicit parameters above.
             reserved = {"name", "prompt", "is_start", "is_end"}
-            safe_fields = {
-                k: v for k, v in extra_fields.items()
-                if k not in reserved
-            }
+            safe_fields = {k: v for k, v in extra_fields.items() if k not in reserved}
             stage.update(safe_fields)
 
         self._current_stage = stage
@@ -291,11 +288,14 @@ class WizardConfigBuilder:
         if self._current_stage is None:
             raise ValueError("field() must be called after stage()")
 
-        schema = self._current_stage.setdefault("schema", {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        })
+        schema = self._current_stage.setdefault(
+            "schema",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        )
         props = schema.setdefault("properties", {})
 
         field_def: dict[str, Any] = {"type": field_type}
@@ -395,9 +395,7 @@ class WizardConfigBuilder:
         self._settings.update(kwargs)
         return self
 
-    def subflow(
-        self, name: str, config: dict[str, Any]
-    ) -> WizardConfigBuilder:
+    def subflow(self, name: str, config: dict[str, Any]) -> WizardConfigBuilder:
         """Register an inline subflow network.
 
         The config should be a wizard config dict (with ``stages``,
@@ -467,8 +465,7 @@ class WizardConfigBuilder:
                 # not a real stage name.
                 if target and target != "_subflow" and target not in stage_names:
                     raise ValueError(
-                        f"Stage {stage['name']!r} has transition to "
-                        f"nonexistent stage {target!r}"
+                        f"Stage {stage['name']!r} has transition to nonexistent stage {target!r}"
                     )
 
 
@@ -836,9 +833,7 @@ class BotTestHarness:
         from .bot.context import BotContext
 
         if bot_config is None and wizard_config is None:
-            raise ValueError(
-                "Either wizard_config or bot_config must be provided"
-            )
+            raise ValueError("Either wizard_config or bot_config must be provided")
 
         # Build extraction results
         extractor: ConfigurableExtractor | None = None
@@ -875,10 +870,7 @@ class BotTestHarness:
             # the top-level and collection_config levels.
             if extraction_results is not None:
                 for stage_def in wizard_cfg.get("stages", []):
-                    if (
-                        stage_def.get("schema")
-                        and stage_def.get("capture_mode") in (None, "auto")
-                    ):
+                    if stage_def.get("schema") and stage_def.get("capture_mode") in (None, "auto"):
                         col = stage_def.get("collection_config") or {}
                         if col.get("capture_mode") in (None, "auto"):
                             stage_def["capture_mode"] = "extract"
@@ -1022,9 +1014,7 @@ class BotTestHarness:
             ``TurnResult`` with response, chunks, and wizard state snapshot.
         """
         chunks: list[str] = []
-        async for chunk in self._bot.stream_chat(
-            message, self._context, **kwargs
-        ):
+        async for chunk in self._bot.stream_chat(message, self._context, **kwargs):
             chunks.append(chunk.delta)
         self._turn_count += 1
 
@@ -1212,9 +1202,7 @@ def inject_providers(
         ```
     """
     if extractor is not None and extraction_provider is not None:
-        raise ValueError(
-            "extractor and extraction_provider are mutually exclusive"
-        )
+        raise ValueError("extractor and extraction_provider are mutually exclusive")
 
     if main_provider is not None:
         bot.llm = main_provider
@@ -1225,8 +1213,7 @@ def inject_providers(
             strategy.set_extractor(extractor)
         else:
             logger.warning(
-                "Bot has no reasoning_strategy.set_extractor — "
-                "skipping extractor injection"
+                "Bot has no reasoning_strategy.set_extractor — skipping extractor injection"
             )
 
     if extraction_provider is not None:
@@ -1239,9 +1226,7 @@ def inject_providers(
         # Also update the actual extractor so subsystem calls use it
         strategy = getattr(bot, "reasoning_strategy", None)
         if strategy is None:
-            logger.warning(
-                "Bot has no reasoning_strategy — skipping extraction provider injection"
-            )
+            logger.warning("Bot has no reasoning_strategy — skipping extraction provider injection")
         elif hasattr(strategy, "set_provider"):
             strategy.set_provider(PROVIDER_ROLE_EXTRACTION, extraction_provider)
         else:
@@ -1249,8 +1234,7 @@ def inject_providers(
             extractor = getattr(strategy, "_extractor", None)
             if extractor is None:
                 logger.warning(
-                    "Reasoning strategy has no _extractor — "
-                    "skipping extraction provider injection"
+                    "Reasoning strategy has no _extractor — skipping extraction provider injection"
                 )
             else:
                 extractor.provider = extraction_provider
@@ -1294,9 +1278,7 @@ def _wire_role_provider(bot: Any, role: str, provider: AsyncLLMProvider) -> None
             and subsystem.set_provider(role, provider)
         ):
             return
-    logger.debug(
-        "Role %r registered in catalog but no subsystem claimed it", role
-    )
+    logger.debug("Role %r registered in catalog but no subsystem claimed it", role)
 
 
 class CaptureReplay:
@@ -1628,11 +1610,9 @@ class ScriptedKnowledgeBase(KnowledgeBase):
         if not filter_metadata or not self._apply_filter:
             return self._records[:k]
         matched = [
-            r for r in self._records
-            if all(
-                r.get("metadata", {}).get(fk) == fv
-                for fk, fv in filter_metadata.items()
-            )
+            r
+            for r in self._records
+            if all(r.get("metadata", {}).get(fk) == fv for fk, fv in filter_metadata.items())
         ]
         return matched[:k]
 

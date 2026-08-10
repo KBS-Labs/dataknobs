@@ -12,6 +12,7 @@ import requests
 # Echo LLM Configuration (for tests that don't need real LLM responses)
 # =============================================================================
 
+
 @pytest.fixture
 def echo_config() -> dict:
     """Provide Echo LLM configuration for tests that don't need real LLM."""
@@ -76,6 +77,7 @@ def bot_config_echo_react(echo_config) -> dict:
 # Ollama Configuration (for tests that need real LLM responses)
 # =============================================================================
 
+
 def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int = 30):
     """Wait for Ollama to be ready.
 
@@ -122,9 +124,7 @@ def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) 
             # Extract model names from the response
             model_names = [m.get("name", "") for m in models]
             # Check if our model is in the list (handle both with and without tag)
-            return any(
-                model_name.startswith(model.split(":")[0]) for model_name in model_names
-            )
+            return any(model_name.startswith(model.split(":")[0]) for model_name in model_names)
     except Exception as e:
         print(f"Error verifying Ollama model: {e}")
         return False

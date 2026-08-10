@@ -157,12 +157,8 @@ async def test_hash_field_selection(db: AsyncMemoryDatabase) -> None:
     checker = DedupChecker(db=db, config=config)
 
     # Same stem, different options
-    await checker.register(
-        {"stem": "What is 2+2?", "options": ["3", "4"]}, record_id="q-1"
-    )
-    result = await checker.check(
-        {"stem": "What is 2+2?", "options": ["5", "6"]}
-    )
+    await checker.register({"stem": "What is 2+2?", "options": ["3", "4"]}, record_id="q-1")
+    result = await checker.check({"stem": "What is 2+2?", "options": ["5", "6"]})
 
     assert result.is_exact_duplicate is True
     assert result.exact_match_id == "q-1"

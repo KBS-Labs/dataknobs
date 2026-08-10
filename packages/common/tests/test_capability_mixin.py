@@ -15,10 +15,12 @@ from dataknobs_common.capabilities import (
 
 
 class _StaticBackend(CapabilityMixin):
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.STREAMING_READS,
-        Capability.KEY_PATTERN_FILTERING,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.STREAMING_READS,
+            Capability.KEY_PATTERN_FILTERING,
+        }
+    )
 
 
 def test_static_backend_supports_declared_capability() -> None:
@@ -34,10 +36,12 @@ def test_static_backend_does_not_support_undeclared_capability() -> None:
 
 
 def test_static_backend_classmethod_returns_full_set() -> None:
-    assert _StaticBackend.supported_capabilities() == frozenset({
-        Capability.STREAMING_READS,
-        Capability.KEY_PATTERN_FILTERING,
-    })
+    assert _StaticBackend.supported_capabilities() == frozenset(
+        {
+            Capability.STREAMING_READS,
+            Capability.KEY_PATTERN_FILTERING,
+        }
+    )
 
 
 def test_static_backend_instance_capabilities_matches_classvar() -> None:
@@ -54,9 +58,11 @@ def test_supports_accepts_raw_string_capability() -> None:
     """
 
     class _CustomBackend(CapabilityMixin):
-        SUPPORTED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset({
-            "custom_feature_x",  # consumer-defined; not in the enum
-        })
+        SUPPORTED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset(
+            {
+                "custom_feature_x",  # consumer-defined; not in the enum
+            }
+        )
 
     backend = _CustomBackend()
     assert backend.supports("custom_feature_x")
@@ -78,9 +84,11 @@ def test_default_mixin_has_empty_capabilities() -> None:
 
 
 class _DynamicBackend(DynamicCapabilityMixin):
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.STREAMING_READS,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.STREAMING_READS,
+        }
+    )
 
     def __init__(self, *, event_bus_configured: bool = False) -> None:
         self._event_bus_configured = event_bus_configured
@@ -112,9 +120,11 @@ def test_dynamic_backend_with_event_bus_gains_emission_capability() -> None:
 
 def test_dynamic_backend_classmethod_returns_base_set_only() -> None:
     """Classmethod query doesn't see instance-dependent capabilities."""
-    assert _DynamicBackend.supported_capabilities() == frozenset({
-        Capability.STREAMING_READS,
-    })
+    assert _DynamicBackend.supported_capabilities() == frozenset(
+        {
+            Capability.STREAMING_READS,
+        }
+    )
 
 
 def test_dynamic_backend_cache_persists_across_calls() -> None:
@@ -174,9 +184,11 @@ class _MultiBaseBackend(DynamicCapabilityMixin, _OtherBase):
     accidentally route kwargs to ``object.__init__``.
     """
 
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.STREAMING_READS,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.STREAMING_READS,
+        }
+    )
 
     def __init__(self, name: str, *, enable_extra: bool = False) -> None:
         super().__init__(name)

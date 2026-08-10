@@ -57,24 +57,16 @@ async def test_postgres_cas_conflict(pg_db: AsyncPostgresDatabase) -> None:
 
     await store.put_document("u1", "preferences", {"theme": "dark"})
     token = await store.document_version("u1", "preferences")
-    await store.put_document(
-        "u1", "preferences", {"theme": "light"}, expected_version=token
-    )
+    await store.put_document("u1", "preferences", {"theme": "light"}, expected_version=token)
     with pytest.raises(ConcurrencyError):
-        await store.put_document(
-            "u1", "preferences", {"theme": "blue"}, expected_version=token
-        )
+        await store.put_document("u1", "preferences", {"theme": "blue"}, expected_version=token)
     await store.close()  # injected db closed by the fixture
 
 
 async def test_postgres_tenant_isolation(pg_db: AsyncPostgresDatabase) -> None:
     cfg = UserStateStoreConfig.from_dict(_CONFIG)
-    t1 = AsyncUserStateStore.from_components(
-        cfg, db=pg_db, tenant=BoundTenantContext("t1", "acme")
-    )
-    t2 = AsyncUserStateStore.from_components(
-        cfg, db=pg_db, tenant=BoundTenantContext("t2", "acme")
-    )
+    t1 = AsyncUserStateStore.from_components(cfg, db=pg_db, tenant=BoundTenantContext("t1", "acme"))
+    t2 = AsyncUserStateStore.from_components(cfg, db=pg_db, tenant=BoundTenantContext("t2", "acme"))
     await t1.add_record("u", "alerts", {"text": "t1"})
     await t2.add_record("u", "alerts", {"text": "t2"})
 

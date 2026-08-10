@@ -35,12 +35,8 @@ def _make_rubric(
                 description="Test criterion",
                 weight=1.0,
                 levels=[
-                    RubricLevel(
-                        id="fail", label="Fail", description="Fail", score=0.0
-                    ),
-                    RubricLevel(
-                        id="pass", label="Pass", description="Pass", score=1.0
-                    ),
+                    RubricLevel(id="fail", label="Fail", description="Fail", score=0.0),
+                    RubricLevel(id="pass", label="Pass", description="Pass", score=1.0),
                 ],
                 scoring_method=ScoringMethod(
                     type=ScoringType.DETERMINISTIC,
@@ -370,9 +366,7 @@ class TestRubricRegistryMetadata:
         legacy_rubric = _make_rubric()
         legacy_rubric.metadata = {"tenant_id": "legacy", "author": "old"}
         legacy_data: dict[str, Any] = legacy_rubric.to_dict()
-        legacy_data["_version_key"] = (
-            f"{legacy_rubric.id}:{legacy_rubric.version}"
-        )
+        legacy_data["_version_key"] = f"{legacy_rubric.id}:{legacy_rubric.version}"
         # Old code: Record(data) — metadata column is empty.
         await db.upsert(legacy_rubric.id, Record(data=legacy_data))
 
@@ -653,22 +647,13 @@ class TestRubricRegistryPagination:
         await registry.register(r3)
 
         assert (
-            await registry.count_for_target(
-                "content", filter_metadata={"tenant_id": "acme"}
-            )
-            == 2
+            await registry.count_for_target("content", filter_metadata={"tenant_id": "acme"}) == 2
         )
         assert (
-            await registry.count_for_target(
-                "content", filter_metadata={"tenant_id": "globex"}
-            )
-            == 1
+            await registry.count_for_target("content", filter_metadata={"tenant_id": "globex"}) == 1
         )
         assert (
-            await registry.count_for_target(
-                "content", filter_metadata={"tenant_id": "none"}
-            )
-            == 0
+            await registry.count_for_target("content", filter_metadata={"tenant_id": "none"}) == 0
         )
 
     async def test_count_for_target_matches_get_for_target_length(
@@ -730,14 +715,8 @@ class TestRubricRegistryPagination:
         await registry.register(r1)
         await registry.register(r2)
 
-        assert (
-            await registry.count_all(filter_metadata={"tenant_id": "acme"})
-            == 1
-        )
-        assert (
-            await registry.count_all(filter_metadata={"tenant_id": "globex"})
-            == 1
-        )
+        assert await registry.count_all(filter_metadata={"tenant_id": "acme"}) == 1
+        assert await registry.count_all(filter_metadata={"tenant_id": "globex"}) == 1
 
     async def test_count_all_matches_list_all_length(self) -> None:
         """count_all(...) and len(list_all(...)) agree for the same shape."""

@@ -42,7 +42,7 @@ class RAGBenchmark:
             f"item_{i}": {
                 "title": f"Item {i}",
                 "description": f"This is a description for item number {i}",
-                "content": f"Content for item {i}. " * 20  # ~20 words per item
+                "content": f"Content for item {i}. " * 20,  # ~20 words per item
             }
             for i in range(size)
         }
@@ -117,21 +117,13 @@ class RAGBenchmark:
         data = self._create_dataset(1000)
         adapter = AsyncDictResourceAdapter(data)
 
-        queries = [
-            "item 250",
-            "item 500",
-            "item 750",
-            "item 900"
-        ]
+        queries = ["item 250", "item 500", "item 750", "item 900"]
 
         times = []
         for _ in range(self.iterations):
             start = time.perf_counter()
             # Execute searches in parallel
-            await asyncio.gather(*[
-                adapter.search(query, k=5)
-                for query in queries
-            ])
+            await asyncio.gather(*[adapter.search(query, k=5) for query in queries])
             end = time.perf_counter()
             times.append(end - start)
 
@@ -152,35 +144,41 @@ class RAGBenchmark:
         print("Running Small Dataset...")
         result = await self.benchmark_dict_adapter_small()
         results.append(result)
-        print(f"  {result.operations_per_second:.0f} ops/sec "
-              f"({result.mean_time * 1000:.3f}ms mean)")
+        print(
+            f"  {result.operations_per_second:.0f} ops/sec ({result.mean_time * 1000:.3f}ms mean)"
+        )
 
         print("Running Medium Dataset...")
         result = await self.benchmark_dict_adapter_medium()
         results.append(result)
-        print(f"  {result.operations_per_second:.0f} ops/sec "
-              f"({result.mean_time * 1000:.3f}ms mean)")
+        print(
+            f"  {result.operations_per_second:.0f} ops/sec ({result.mean_time * 1000:.3f}ms mean)"
+        )
 
         print("Running Large Dataset...")
         result = await self.benchmark_dict_adapter_large()
         results.append(result)
-        print(f"  {result.operations_per_second:.0f} ops/sec "
-              f"({result.mean_time * 1000:.3f}ms mean)")
+        print(
+            f"  {result.operations_per_second:.0f} ops/sec ({result.mean_time * 1000:.3f}ms mean)"
+        )
 
         # K value benchmarks
         print("Running Different K Values...")
         k_results = await self.benchmark_different_k_values()
         results.extend(k_results)
         for result in k_results:
-            print(f"  {result.name}: {result.operations_per_second:.0f} ops/sec "
-                  f"({result.mean_time * 1000:.3f}ms mean)")
+            print(
+                f"  {result.name}: {result.operations_per_second:.0f} ops/sec "
+                f"({result.mean_time * 1000:.3f}ms mean)"
+            )
 
         # Parallel search benchmark
         print("Running Parallel Searches...")
         result = await self.benchmark_parallel_searches()
         results.append(result)
-        print(f"  {result.operations_per_second:.0f} ops/sec "
-              f"({result.mean_time * 1000:.3f}ms mean)")
+        print(
+            f"  {result.operations_per_second:.0f} ops/sec ({result.mean_time * 1000:.3f}ms mean)"
+        )
 
         print()
         print("RAG search benchmarks complete!")

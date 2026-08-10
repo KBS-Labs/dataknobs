@@ -35,9 +35,7 @@ class TestSimpleReasoning:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-simple", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-simple", client_id="test-client")
 
         # Generate response
         response = await bot.chat("Hello", context)
@@ -74,9 +72,7 @@ class TestReActReasoning:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-react-no-tools", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-no-tools", client_id="test-client")
 
         # Should work fine without tools (falls back to simple)
         response = await bot.chat("Hello", context)
@@ -96,9 +92,7 @@ class TestReActReasoning:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-react-verbose", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-verbose", client_id="test-client")
 
         # Should work with verbose output
         response = await bot.chat("Test", context)
@@ -157,9 +151,7 @@ class TestReasoningFactory:
             ],
         }
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(wizard_config, f)
             config_path = f.name
 
@@ -240,9 +232,7 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-completed", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-completed", client_id="test-client")
 
         # LLM responds with text only (no tool calls) on the first iteration
         bot.llm.set_responses([text_response("The answer is 42")])
@@ -278,16 +268,16 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-react-dup", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-dup", client_id="test-client")
 
         # Same tool call twice, then a final text response (post-loop)
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "247 * 39"}),
-            tool_call_response("calculator", {"expression": "247 * 39"}),
-            text_response("The answer is 9633"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "247 * 39"}),
+                tool_call_response("calculator", {"expression": "247 * 39"}),
+                text_response("The answer is 9633"),
+            ]
+        )
 
         response = await bot.chat("What is 247 * 39?", context)
         assert response is not None
@@ -313,15 +303,15 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-dup-trace", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-dup-trace", client_id="test-client")
 
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "2+2"}),
-            tool_call_response("calculator", {"expression": "2+2"}),
-            text_response("4"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "2+2"}),
+                tool_call_response("calculator", {"expression": "2+2"}),
+                text_response("4"),
+            ]
+        )
 
         await bot.chat("What is 2+2?", context)
 
@@ -369,17 +359,17 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-max-iter", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-max-iter", client_id="test-client")
 
         # Different tool calls each iteration so duplicate detection doesn't fire,
         # exhausting max_iterations=2, then a final text response (post-loop)
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "1+1"}),
-            tool_call_response("calculator", {"expression": "2+2"}),
-            text_response("Done"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "1+1"}),
+                tool_call_response("calculator", {"expression": "2+2"}),
+                text_response("Done"),
+            ]
+        )
 
         response = await bot.chat("Keep calculating", context)
         assert response is not None
@@ -420,16 +410,16 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-normal", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-normal", client_id="test-client")
 
         # Two different tool calls, then LLM returns text (no tools) → completed
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "10 * 5"}),
-            tool_call_response("calculator", {"expression": "50 / 2"}),
-            text_response("The final answer is 25"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "10 * 5"}),
+                tool_call_response("calculator", {"expression": "50 / 2"}),
+                text_response("The final answer is 25"),
+            ]
+        )
 
         response = await bot.chat("Calculate 10*5 then halve it", context)
         assert "25" in response
@@ -467,16 +457,16 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-react-diff", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-diff", client_id="test-client")
 
         # Different tool calls each iteration, then a final text response
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "247 * 39"}),
-            tool_call_response("calculator", {"expression": "9633 / 3"}),
-            text_response("The final answer is 3211"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "247 * 39"}),
+                tool_call_response("calculator", {"expression": "9633 / 3"}),
+                text_response("The final answer is 3211"),
+            ]
+        )
 
         response = await bot.chat("Calculate 247*39 then divide by 3", context)
         assert response is not None
@@ -504,14 +494,14 @@ class TestReActLoopBehavior:
 
         bot = await DynaBot.from_config(config)
         bot.tool_registry.register_tool(self._make_calculator_tool())
-        context = BotContext(
-            conversation_id="conv-tool-details", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-tool-details", client_id="test-client")
 
-        bot.llm.set_responses([
-            tool_call_response("calculator", {"expression": "7 * 6"}),
-            text_response("42"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("calculator", {"expression": "7 * 6"}),
+                text_response("42"),
+            ]
+        )
 
         await bot.chat("What is 7*6?", context)
 
@@ -576,14 +566,14 @@ class TestReActExtraContext:
         )
         bot.tool_registry.register_tool(ContextCaptureTool())
 
-        context = BotContext(
-            conversation_id="conv-extra-ctx", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-extra-ctx", client_id="test-client")
 
-        bot.llm.set_responses([
-            tool_call_response("capture", {}),
-            text_response("Done"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("capture", {}),
+                text_response("Done"),
+            ]
+        )
 
         await bot.chat("Capture context", context)
 
@@ -640,9 +630,7 @@ class TestReasoningIntegration:
         # and bot should use default ConversationManager.complete()
         assert bot.reasoning_strategy is None
 
-        context = BotContext(
-            conversation_id="conv-no-reasoning", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-no-reasoning", client_id="test-client")
         response = await bot.chat("Hello", context)
         assert response is not None
 
@@ -657,9 +645,7 @@ class TestReasoningIntegration:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-reasoning-memory", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-reasoning-memory", client_id="test-client")
 
         # Multiple interactions
         await bot.chat("First message", context)
@@ -707,15 +693,15 @@ class TestReasoningIntegration:
 
         bot.tool_registry.register_tool(EchoTool())
 
-        context = BotContext(
-            conversation_id="conv-react-trace", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-trace", client_id="test-client")
 
         # One tool call then completion
-        bot.llm.set_responses([
-            tool_call_response("echo", {"text": "hello"}),
-            text_response("Done"),
-        ])
+        bot.llm.set_responses(
+            [
+                tool_call_response("echo", {"text": "hello"}),
+                text_response("Done"),
+            ]
+        )
 
         response = await bot.chat("Test message", context)
         assert response is not None
@@ -745,9 +731,7 @@ class TestReasoningIntegration:
         bot = await DynaBot.from_config(config)
         assert bot.reasoning_strategy.verbose is True
 
-        context = BotContext(
-            conversation_id="conv-react-verbose", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-react-verbose", client_id="test-client")
 
         # This should generate log messages (not print to stdout)
         # In production, these would go to your logging infrastructure
@@ -782,9 +766,7 @@ class TestReasoningIntegration:
             ],
         }
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(wizard_config, f)
             config_path = f.name
 
@@ -802,9 +784,7 @@ class TestReasoningIntegration:
         assert bot.reasoning_strategy is not None
         assert isinstance(bot.reasoning_strategy, WizardReasoning)
 
-        context = BotContext(
-            conversation_id="conv-wizard", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-wizard", client_id="test-client")
 
         # Generate initial response - should start wizard flow
         response = await bot.chat("Hello", context)
@@ -837,9 +817,7 @@ class TestReasoningIntegration:
             ],
         }
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(wizard_config, f)
             config_path = f.name
 
@@ -854,9 +832,7 @@ class TestReasoningIntegration:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-wizard-persist", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-wizard-persist", client_id="test-client")
 
         # First message - starts at step1
         response1 = await bot.chat("John Doe", context)
@@ -888,9 +864,7 @@ class TestStreamChatWithReasoningStrategy:
         bot = await DynaBot.from_config(config)
         bot.llm.set_responses([text_response("Strategy response")])
 
-        context = BotContext(
-            conversation_id="conv-stream-strategy", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-stream-strategy", client_id="test-client")
 
         chunks: list[LLMStreamResponse] = []
         async for chunk in bot.stream_chat("Hello", context):
@@ -913,9 +887,7 @@ class TestStreamChatWithReasoningStrategy:
         bot = await DynaBot.from_config(config)
         assert bot.reasoning_strategy is None
 
-        context = BotContext(
-            conversation_id="conv-stream-no-strategy", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-stream-no-strategy", client_id="test-client")
 
         chunks = []
         async for chunk in bot.stream_chat("Hello", context):
@@ -941,9 +913,7 @@ class TestStreamChatWithReasoningStrategy:
         bot = await DynaBot.from_config(config)
         bot.llm.set_responses([text_response("Memory check response")])
 
-        context = BotContext(
-            conversation_id="conv-stream-memory", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-stream-memory", client_id="test-client")
 
         async for _ in bot.stream_chat("Test message", context):
             pass

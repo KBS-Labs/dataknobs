@@ -44,25 +44,17 @@ async def test_reingest_one_domain_preserves_others():
 
     # Pre-seed two domains with distinct content.
     await backend.create_kb("domain-a")
-    await backend.put_file(
-        "domain-a", "doc.md", b"# A heading\n\nDomain A body content.\n"
-    )
+    await backend.put_file("domain-a", "doc.md", b"# A heading\n\nDomain A body content.\n")
     await backend.create_kb("domain-b")
-    await backend.put_file(
-        "domain-b", "doc.md", b"# B heading\n\nDomain B body content.\n"
-    )
+    await backend.put_file("domain-b", "doc.md", b"# B heading\n\nDomain B body content.\n")
 
     mgr = KnowledgeIngestionManager(source=backend, destination=kb)
 
     # Ingest domain-a first (the store is empty so the clear
     # is a no-op). Pin its chunk count.
     await mgr.ingest("domain-a", swap_mode=IngestSwapMode.CLEAR_FIRST)
-    domain_a_count_before = await kb.vector_store.count(
-        filter={"domain_id": "domain-a"}
-    )
-    assert domain_a_count_before > 0, (
-        "expected domain-a to have chunks after first ingest"
-    )
+    domain_a_count_before = await kb.vector_store.count(filter={"domain_id": "domain-a"})
+    assert domain_a_count_before > 0, "expected domain-a to have chunks after first ingest"
 
     # Re-ingest domain-b with CLEAR_FIRST. Pre-fix this
     # wipes every domain in the shared store (including domain-a);
@@ -70,15 +62,11 @@ async def test_reingest_one_domain_preserves_others():
     await mgr.ingest("domain-b", swap_mode=IngestSwapMode.CLEAR_FIRST)
 
     # domain-a chunks must survive.
-    domain_a_count_after = await kb.vector_store.count(
-        filter={"domain_id": "domain-a"}
-    )
+    domain_a_count_after = await kb.vector_store.count(filter={"domain_id": "domain-a"})
     assert domain_a_count_after == domain_a_count_before, (
         "Re-ingesting domain-b wiped domain-a chunks "
         f"(expected {domain_a_count_before}, got {domain_a_count_after})"
     )
     # domain-b chunks present.
-    domain_b_count_after = await kb.vector_store.count(
-        filter={"domain_id": "domain-b"}
-    )
+    domain_b_count_after = await kb.vector_store.count(filter={"domain_id": "domain-b"})
     assert domain_b_count_after > 0

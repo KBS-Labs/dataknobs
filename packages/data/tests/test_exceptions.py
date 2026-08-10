@@ -136,6 +136,7 @@ class TestQueryError:
 
     def test_query_error_with_query_object(self):
         """Test query error with query object."""
+
         # Mock query object
         class MockQuery:
             pass
@@ -313,7 +314,7 @@ class TestExceptionHierarchy:
             TransactionError,
             MigrationError,
         ]
-        
+
         for exc_class in exceptions:
             assert issubclass(exc_class, DataknobsDataError)
             assert issubclass(exc_class, Exception)
@@ -327,7 +328,7 @@ class TestExceptionHierarchy:
             (ConcurrencyError, "Locked"),
             (TransactionError, "Failed"),
         ]
-        
+
         for exc_class, *args in test_cases:
             try:
                 raise exc_class(*args)

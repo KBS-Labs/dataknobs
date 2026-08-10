@@ -37,9 +37,7 @@ from _aiohttp_error_stub import (
 
 
 def _provider(session: Any, **config_kwargs: Any) -> OllamaProvider:
-    provider = OllamaProvider(
-        LLMConfig(provider="ollama", model="llama3.2", **config_kwargs)
-    )
+    provider = OllamaProvider(LLMConfig(provider="ollama", model="llama3.2", **config_kwargs))
     provider._session = session
     provider._is_initialized = True
     return provider
@@ -50,21 +48,15 @@ class TestVendorErrorTranslation:
 
     async def test_400_becomes_validation_error(self) -> None:
         err = make_client_response_error(400, "malformed request")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(400, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(400, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(ValidationError) as excinfo:
             await provider.complete("hi")
         assert excinfo.value.__cause__ is err
 
     async def test_429_becomes_rate_limit_error_with_retry_after(self) -> None:
-        err = make_client_response_error(
-            429, "slow down", headers={"retry-after": "4"}
-        )
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
-        )
+        err = make_client_response_error(429, "slow down", headers={"retry-after": "4"})
+        session = FakeSession([FakeSession.responding(FakeResponse(429, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(RateLimitError) as excinfo:
             await provider.complete("hi")
@@ -73,9 +65,7 @@ class TestVendorErrorTranslation:
 
     async def test_401_becomes_operation_error(self) -> None:
         err = make_client_response_error(401, "unauthorized")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(401, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(401, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(OperationError):
             await provider.complete("hi")
@@ -100,18 +90,14 @@ class TestVendorErrorTranslation:
 
     async def test_embed_error_is_translated(self) -> None:
         err = make_client_response_error(429, "slow down")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(429, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(RateLimitError):
             await provider.embed("some text")
 
     async def test_stream_error_is_translated(self) -> None:
         err = make_client_response_error(400, "bad stream")
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(400, raise_exc=err))]
-        )
+        session = FakeSession([FakeSession.responding(FakeResponse(400, raise_exc=err))])
         provider = _provider(session)
         with pytest.raises(ValidationError):
             async for _ in provider.stream_complete("hi"):
@@ -131,12 +117,8 @@ class TestFunctionCallErrorSurfacing:
     _FUNCTIONS = [{"name": "f", "description": "d", "parameters": {}}]
 
     async def test_rate_limit_surfaces_without_second_request(self) -> None:
-        err = make_client_response_error(
-            429, "slow down", headers={"retry-after": "4"}
-        )
-        session = FakeSession(
-            [FakeSession.responding(FakeResponse(429, raise_exc=err))]
-        )
+        err = make_client_response_error(429, "slow down", headers={"retry-after": "4"})
+        session = FakeSession([FakeSession.responding(FakeResponse(429, raise_exc=err))])
         provider = _provider(session)
         with pytest.warns(DeprecationWarning):
             with pytest.raises(RateLimitError) as excinfo:
@@ -150,9 +132,7 @@ class TestFunctionCallErrorSurfacing:
 
     async def test_tools_not_supported_still_falls_back_to_prompt(self) -> None:
         """The genuine "does not support tools" 400 still falls back."""
-        native = FakeSession.responding(
-            FakeResponse(400, text="this model does not support tools")
-        )
+        native = FakeSession.responding(FakeResponse(400, text="this model does not support tools"))
         fallback = FakeSession.responding(
             FakeResponse(
                 200,
@@ -186,9 +166,7 @@ class TestDomainErrorPreserved:
         the better domain error must survive — not get flattened to a generic
         ``ValidationError``.
         """
-        response = FakeResponse(
-            400, text="this model does not support tools"
-        )
+        response = FakeResponse(400, text="this model does not support tools")
         session = FakeSession([FakeSession.responding(response)])
         provider = _provider(session)
         with pytest.raises(ToolsNotSupportedError):

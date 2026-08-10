@@ -46,9 +46,7 @@ def _reset_instantiation_counter() -> Iterator[None]:
 
 def _custom(class_path: str, **extra: object) -> ResourceConfig:
     """A ``custom`` resource config naming *class_path* as its provider."""
-    return ResourceConfig(
-        name="fixture", type="custom", config={"class": class_path, **extra}
-    )
+    return ResourceConfig(name="fixture", type="custom", config={"class": class_path, **extra})
 
 
 @pytest.mark.parametrize("separator", [":", "."], ids=["colon", "dot"])
@@ -61,9 +59,7 @@ def test_a_custom_resource_class_resolves_by_either_separator(
     spelling and not the other depending on which config key it was written
     under. Nothing about a dotted path depends on the subsystem reading it.
     """
-    resource = FSMBuilder()._create_resource(
-        _custom(f"{FIXTURES}{separator}ConformingResource")
-    )
+    resource = FSMBuilder()._create_resource(_custom(f"{FIXTURES}{separator}ConformingResource"))
 
     assert isinstance(resource, fixtures.ConformingResource)
     assert isinstance(resource, IResourceProvider)
@@ -141,9 +137,7 @@ def test_a_provider_that_defines_no_init_is_constructed() -> None:
 def test_a_custom_resource_without_a_class_is_still_a_value_error() -> None:
     """The pre-resolution guard is unchanged by adopting the resolver."""
     with pytest.raises(ValueError, match="requires 'class'"):
-        FSMBuilder()._create_resource(
-            ResourceConfig(name="fixture", type="custom", config={})
-        )
+        FSMBuilder()._create_resource(ResourceConfig(name="fixture", type="custom", config={}))
 
 
 @pytest.mark.parametrize("resource_type", ["llm", "vector_store"])
@@ -159,9 +153,7 @@ def test_a_type_the_builder_cannot_build_reports_it_as_unsupported(
     a module path that no longer exists.
     """
     with pytest.raises(ValueError, match="Unsupported resource type"):
-        FSMBuilder()._create_resource(
-            ResourceConfig(name="fixture", type=resource_type, config={})
-        )
+        FSMBuilder()._create_resource(ResourceConfig(name="fixture", type=resource_type, config={}))
 
 
 @pytest.mark.parametrize(

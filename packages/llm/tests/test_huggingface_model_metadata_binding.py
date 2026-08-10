@@ -91,9 +91,7 @@ class CapturingSession:
 
 def _provider(session: Any = None, **config_kwargs: Any) -> HuggingFaceProvider:
     config_kwargs.setdefault("model", "gpt2")
-    provider = HuggingFaceProvider(
-        LLMConfig(provider="huggingface", **config_kwargs)
-    )
+    provider = HuggingFaceProvider(LLMConfig(provider="huggingface", **config_kwargs))
     if session is not None:
         provider._session = session
         provider._is_initialized = True
@@ -137,14 +135,10 @@ class TestConfigOverrideMatcherSeam:
         # of matcher (the flat branch does no key matching).
         flat = {"context_window": 8192}
         assert (
-            ConfigOverrideSource(flat, match=hf_match_key)
-            .resolve("any/repo")
-            .context_window
+            ConfigOverrideSource(flat, match=hf_match_key).resolve("any/repo").context_window
             == 8192
         )
-        assert (
-            ConfigOverrideSource(flat).resolve("any/repo").context_window == 8192
-        )
+        assert ConfigOverrideSource(flat).resolve("any/repo").context_window == 8192
 
     def test_default_matcher_is_match_family_key(self) -> None:
         # The default keeps every existing adopter (openai/bedrock/ollama/
@@ -197,9 +191,7 @@ class TestCapabilities:
     def test_override_lights_up_vision(self) -> None:
         caps = self._caps(
             "llava-hf/llava-1.5-7b-hf",
-            model_profile_overrides={
-                "capabilities": ["text_generation", "chat", "vision"]
-            },
+            model_profile_overrides={"capabilities": ["text_generation", "chat", "vision"]},
         )
         assert ModelCapability.VISION in caps  # the non-heuristic override path
 
@@ -359,9 +351,7 @@ class TestPricing:
     def test_override_lights_up_pricing(self) -> None:
         provider = _provider(
             model="mistralai/Mistral-7B-Instruct-v0.2",
-            model_profile_overrides={
-                "pricing": {"input_per_mtok": 0.2, "output_per_mtok": 0.6}
-            },
+            model_profile_overrides={"pricing": {"input_per_mtok": 0.2, "output_per_mtok": 0.6}},
         )
         pricing = provider.get_pricing()
         assert pricing is not None
@@ -388,16 +378,12 @@ class TestValidateModel:
 
     async def test_available_true_override_short_circuits_the_probe(self) -> None:
         session = CapturingSession(get_status=404)  # would fail if probed
-        provider = _provider(
-            session, model_profile_overrides={"available": True}
-        )
+        provider = _provider(session, model_profile_overrides={"available": True})
         assert await provider.validate_model() is True
         assert session.get_calls == []  # no HTTP call
 
     async def test_available_false_override_short_circuits_the_probe(self) -> None:
         session = CapturingSession(get_status=200)  # would pass if probed
-        provider = _provider(
-            session, model_profile_overrides={"available": False}
-        )
+        provider = _provider(session, model_profile_overrides={"available": False})
         assert await provider.validate_model() is False
         assert session.get_calls == []

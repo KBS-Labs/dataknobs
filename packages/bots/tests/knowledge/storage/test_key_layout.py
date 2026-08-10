@@ -15,6 +15,7 @@ end-to-end leg that actually writes objects
 LocalStack (``bin/dk up``) and skips when it is unavailable; moto's
 ``mock_aws`` is incompatible with the aioboto3 transport.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -80,25 +81,19 @@ CLASSIFY_CASES: list[tuple[str, KnowledgeKeyKind]] = [
 
 
 @pytest.mark.parametrize("raw_key, expected", CLASSIFY_CASES)
-def test_classify_key_memory(
-    raw_key: str, expected: KnowledgeKeyKind
-) -> None:
+def test_classify_key_memory(raw_key: str, expected: KnowledgeKeyKind) -> None:
     backend = _make_memory_backend()
     assert backend.classify_key(raw_key) == expected
 
 
 @pytest.mark.parametrize("raw_key, expected", CLASSIFY_CASES)
-def test_classify_key_file(
-    raw_key: str, expected: KnowledgeKeyKind, tmp_path: Path
-) -> None:
+def test_classify_key_file(raw_key: str, expected: KnowledgeKeyKind, tmp_path: Path) -> None:
     backend = _make_file_backend(tmp_path)
     assert backend.classify_key(raw_key) == expected
 
 
 @pytest.mark.parametrize("raw_key, expected", CLASSIFY_CASES)
-def test_classify_key_s3(
-    raw_key: str, expected: KnowledgeKeyKind
-) -> None:
+def test_classify_key_s3(raw_key: str, expected: KnowledgeKeyKind) -> None:
     backend = _make_s3_backend()
     assert backend.classify_key(raw_key) == expected
 
@@ -112,17 +107,13 @@ def test_key_pattern_s3_content_all_domains() -> None:
     backend = _make_s3_backend()
     assert backend.key_pattern() == f"{PREFIX}*/content/*"
     # default kind is CONTENT, default domain_id is None — same answer
-    assert (
-        backend.key_pattern(KnowledgeKeyKind.CONTENT)
-        == f"{PREFIX}*/content/*"
-    )
+    assert backend.key_pattern(KnowledgeKeyKind.CONTENT) == f"{PREFIX}*/content/*"
 
 
 def test_key_pattern_s3_content_single_domain() -> None:
     backend = _make_s3_backend()
     assert (
-        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
-        == f"{PREFIX}acme/content/*"
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme") == f"{PREFIX}acme/content/*"
     )
 
 
@@ -136,8 +127,7 @@ def test_key_pattern_file_content_single_domain(tmp_path: Path) -> None:
     backend = _make_file_backend(tmp_path)
     base = str(tmp_path / "kb")
     assert (
-        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
-        == f"{base}/acme/content/**"
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme") == f"{base}/acme/content/**"
     )
 
 
@@ -147,9 +137,7 @@ def test_key_pattern_memory_returns_empty_sentinel() -> None:
     # sentinel is the protocol-symmetry contract.
     assert backend.key_pattern() == ""
     assert backend.key_pattern(KnowledgeKeyKind.METADATA) == ""
-    assert backend.key_pattern(
-        KnowledgeKeyKind.SNAPSHOT, domain_id="acme"
-    ) == ""
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="acme") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -167,14 +155,10 @@ def test_key_pattern_s3_metadata_matches_metadata_key() -> None:
     # The all-domains pattern must equal the single-domain pattern
     # with the wildcard substituted for the domain segment, and that
     # equals what _metadata_key produces for that domain.
-    pattern_acme = backend.key_pattern(
-        KnowledgeKeyKind.METADATA, domain_id="acme"
-    )
+    pattern_acme = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="acme")
     assert pattern_acme == backend._metadata_key("acme")
     # Wildcard pattern is the same shape with * for the domain.
-    assert backend.key_pattern(KnowledgeKeyKind.METADATA) == (
-        f"{PREFIX}*/_metadata.json"
-    )
+    assert backend.key_pattern(KnowledgeKeyKind.METADATA) == (f"{PREFIX}*/_metadata.json")
 
 
 def test_key_pattern_s3_snapshot_matches_snapshot_key() -> None:
@@ -182,16 +166,10 @@ def test_key_pattern_s3_snapshot_matches_snapshot_key() -> None:
     # The snapshot pattern matches the prefix every snapshot key
     # lives under.
     snap_key = backend._snapshot_key("acme", "deadbeef")
-    prefix = (
-        f"{PREFIX}acme/_snapshots/"
-    )  # what the * in the pattern stands in for
+    prefix = f"{PREFIX}acme/_snapshots/"  # what the * in the pattern stands in for
     assert snap_key.startswith(prefix)
-    assert backend.key_pattern(
-        KnowledgeKeyKind.SNAPSHOT, domain_id="acme"
-    ) == f"{prefix}*"
-    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT) == (
-        f"{PREFIX}*/_snapshots/*"
-    )
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="acme") == f"{prefix}*"
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT) == (f"{PREFIX}*/_snapshots/*")
 
 
 def test_key_pattern_file_metadata_matches_metadata_path(
@@ -199,9 +177,7 @@ def test_key_pattern_file_metadata_matches_metadata_path(
 ) -> None:
     backend = _make_file_backend(tmp_path)
     base = str(tmp_path / "kb")
-    pattern_acme = backend.key_pattern(
-        KnowledgeKeyKind.METADATA, domain_id="acme"
-    )
+    pattern_acme = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="acme")
     assert pattern_acme == f"{base}/acme/_metadata.json"
     assert pattern_acme == str(backend._metadata_path("acme"))
 
@@ -214,9 +190,7 @@ def test_key_pattern_file_snapshot_matches_snapshot_path(
     snap_path = backend._snapshot_file("acme", "deadbeef")
     prefix = f"{base}/acme/_snapshots/"
     assert str(snap_path).startswith(prefix)
-    assert backend.key_pattern(
-        KnowledgeKeyKind.SNAPSHOT, domain_id="acme"
-    ) == f"{prefix}*"
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="acme") == f"{prefix}*"
 
 
 # ---------------------------------------------------------------------------
@@ -264,35 +238,20 @@ async def test_feedback_loop_reproduction_s3(s3_kb_config) -> None:
         # Enumerate every object under the domain prefix using the
         # backend's own (aioboto3) session.
         domain_prefix = f"{backend._prefix}acme/"
-        async with backend._session.client(
-            "s3", **backend._client_kwargs
-        ) as s3:
-            response = await s3.list_objects_v2(
-                Bucket=backend._bucket, Prefix=domain_prefix
-            )
+        async with backend._session.client("s3", **backend._client_kwargs) as s3:
+            response = await s3.list_objects_v2(Bucket=backend._bucket, Prefix=domain_prefix)
         keys = [obj["Key"] for obj in response.get("Contents", [])]
         assert keys, "expected at least one key after put_file"
 
-        pattern = backend.key_pattern(
-            KnowledgeKeyKind.CONTENT, domain_id="acme"
-        )
+        pattern = backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
 
-        content_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT
-        ]
-        metadata_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA
-        ]
-        snapshot_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT
-        ]
+        content_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT]
+        metadata_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA]
+        snapshot_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT]
 
-        assert len(content_keys) == 1, (
-            f"expected exactly one CONTENT key; got {content_keys}"
-        )
+        assert len(content_keys) == 1, f"expected exactly one CONTENT key; got {content_keys}"
         assert _glob_match(pattern, content_keys[0]), (
-            f"CONTENT pattern {pattern!r} must match the content key "
-            f"{content_keys[0]!r}"
+            f"CONTENT pattern {pattern!r} must match the content key {content_keys[0]!r}"
         )
         assert metadata_keys, (
             "expected at least one METADATA write during put_file "
@@ -326,34 +285,20 @@ async def test_feedback_loop_reproduction_file(tmp_path: Path) -> None:
         keys = [str(p) for p in domain_root.rglob("*") if p.is_file()]
         assert keys, "expected at least one file after put_file"
 
-        pattern = backend.key_pattern(
-            KnowledgeKeyKind.CONTENT, domain_id="acme"
-        )
+        pattern = backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
 
-        content_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT
-        ]
-        metadata_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA
-        ]
-        snapshot_keys = [
-            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT
-        ]
+        content_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT]
+        metadata_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA]
+        snapshot_keys = [k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT]
 
-        assert len(content_keys) == 1, (
-            f"expected exactly one CONTENT key; got {content_keys}"
-        )
+        assert len(content_keys) == 1, f"expected exactly one CONTENT key; got {content_keys}"
         assert _glob_match(pattern, content_keys[0]), (
-            f"CONTENT pattern {pattern!r} must match the content key "
-            f"{content_keys[0]!r}"
+            f"CONTENT pattern {pattern!r} must match the content key {content_keys[0]!r}"
         )
-        assert metadata_keys, (
-            "expected at least one METADATA write during put_file"
-        )
+        assert metadata_keys, "expected at least one METADATA write during put_file"
         for state_key in metadata_keys + snapshot_keys:
             assert not _glob_match(pattern, state_key), (
-                f"CONTENT pattern {pattern!r} must NOT match state "
-                f"key {state_key!r}"
+                f"CONTENT pattern {pattern!r} must NOT match state key {state_key!r}"
             )
     finally:
         await backend.close()
@@ -377,9 +322,7 @@ async def test_feedback_loop_reproduction_file(tmp_path: Path) -> None:
         ("foo/_metadata.json/extra", KnowledgeKeyKind.UNKNOWN),
     ],
 )
-def test_classify_key_segment_precedence_edges(
-    key: str, expected: KnowledgeKeyKind
-) -> None:
+def test_classify_key_segment_precedence_edges(key: str, expected: KnowledgeKeyKind) -> None:
     """Pins the 'any content/ segment wins' rule explicitly."""
     backend = _make_memory_backend()  # rule is layout-agnostic
     assert backend.classify_key(key) == expected
@@ -412,18 +355,9 @@ def test_each_backend_inherits_mixin_constants(tmp_path: Path) -> None:
         _make_s3_backend(),
     ]
     for backend in backends:
-        assert (
-            backend.METADATA_FILE
-            == KnowledgeResourceBackendMixin.METADATA_FILE
-        )
-        assert (
-            backend.CONTENT_DIR
-            == KnowledgeResourceBackendMixin.CONTENT_DIR
-        )
-        assert (
-            backend.SNAPSHOTS_DIR
-            == KnowledgeResourceBackendMixin.SNAPSHOTS_DIR
-        )
+        assert backend.METADATA_FILE == KnowledgeResourceBackendMixin.METADATA_FILE
+        assert backend.CONTENT_DIR == KnowledgeResourceBackendMixin.CONTENT_DIR
+        assert backend.SNAPSHOTS_DIR == KnowledgeResourceBackendMixin.SNAPSHOTS_DIR
 
 
 # ---------------------------------------------------------------------------

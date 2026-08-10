@@ -26,6 +26,7 @@ from dataknobs_llm import EchoProvider
 # Error-path cleanup tests
 # ---------------------------------------------------------------------------
 
+
 class TestFromConfigErrorCleanup:
     """from_config() closes internally-created provider on build failure."""
 
@@ -100,6 +101,7 @@ class TestFromConfigErrorCleanup:
 # ---------------------------------------------------------------------------
 # Tool resolution — loud failure by default
 # ---------------------------------------------------------------------------
+
 
 class TestToolResolutionFailure:
     """Tool resolution errors raise ConfigurationError by default."""
@@ -208,6 +210,7 @@ class TestToolResolutionFailure:
 # ---------------------------------------------------------------------------
 # Middleware resolution — loud failure by default
 # ---------------------------------------------------------------------------
+
 
 class TestMiddlewareResolutionFailure:
     """Middleware resolution errors raise ConfigurationError by default."""

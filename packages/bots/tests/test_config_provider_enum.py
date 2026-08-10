@@ -36,9 +36,7 @@ def _errors(provider: str) -> list[str]:
     schema was injected, so a bare ``ConfigValidator()`` reports no schema
     errors at all and would make every assertion here vacuously true.
     """
-    result = DynaBotConfigSchema().validate(
-        {"llm": {"provider": provider, "model": "test-model"}}
-    )
+    result = DynaBotConfigSchema().validate({"llm": {"provider": provider, "model": "test-model"}})
     return [e for e in result.errors if "provider" in e]
 
 
@@ -55,9 +53,7 @@ def test_the_harness_reaches_the_enum_check() -> None:
 class TestShippedFamiliesValidate:
     """Every family the registry knows must pass the validator."""
 
-    @pytest.mark.parametrize(
-        "family", sorted(_provider_registry.list_keys())
-    )
+    @pytest.mark.parametrize("family", sorted(_provider_registry.list_keys()))
     def test_registered_family_is_accepted(self, family: str) -> None:
         """Driven off the registry, so a seventh provider cannot drift again."""
         assert _errors(family) == []
@@ -76,9 +72,7 @@ class TestSpellingIsCanonicalized:
     """
 
     @pytest.mark.parametrize("spelling", ["OpenAI", "OPENAI", "openai"])
-    def test_any_spelling_of_a_known_family_is_accepted(
-        self, spelling: str
-    ) -> None:
+    def test_any_spelling_of_a_known_family_is_accepted(self, spelling: str) -> None:
         assert _errors(spelling) == []
 
 
@@ -145,9 +139,7 @@ class TestUnknownRegistryFailsOpenLoudly:
 
         assert [e for e in result.errors if "kind" in e] == []
 
-    def test_the_miss_is_logged_at_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_the_miss_is_logged_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """DEBUG would make a misspelled ``enum_registry`` silent.
 
         The failure guarded against is a typo that disables checking for a

@@ -37,9 +37,7 @@ from dataknobs_llm.llm.model_profile import (
 class _Model:
     """Minimal live-API model object: ``id`` + two optional ceiling columns."""
 
-    def __init__(
-        self, model_id: str, out: int | None = None, inp: int | None = None
-    ) -> None:
+    def __init__(self, model_id: str, out: int | None = None, inp: int | None = None) -> None:
         self.id = model_id
         self.out = out
         self.inp = inp
@@ -47,9 +45,7 @@ class _Model:
 
 def _extractor(model_obj: _Model) -> ModelProfile:
     """Project a ``_Model`` into a two-ceiling partial profile."""
-    return ModelProfile(
-        max_output_tokens=model_obj.out, context_window=model_obj.inp
-    )
+    return ModelProfile(max_output_tokens=model_obj.out, context_window=model_obj.inp)
 
 
 def _lister(
@@ -117,9 +113,7 @@ class TestResolve:
         """A dated request resolves against a bare family cache key."""
         src, _ = _source([_Model("claude-sonnet-5", out=200000)])
         await src.force_refresh()
-        assert (
-            src.resolve("claude-sonnet-5-20261231").max_output_tokens == 200000
-        )
+        assert src.resolve("claude-sonnet-5-20261231").max_output_tokens == 200000
 
     async def test_per_facet_input_only_entry(self) -> None:
         """A model reporting only its input window contributes input, not output.
@@ -237,9 +231,7 @@ class TestNonDegradation:
     async def test_outage_bounded_to_one_attempt_per_ttl(self) -> None:
         """The timer re-arms before the poll, so an outage cannot busy-retry."""
         calls: list[int] = []
-        src = LiveApiSource(
-            _lister([], calls=calls, raises=True), _extractor, ttl=3600.0
-        )
+        src = LiveApiSource(_lister([], calls=calls, raises=True), _extractor, ttl=3600.0)
         await src.refresh_if_stale()
         await src.refresh_if_stale()
         assert len(calls) == 1  # second call sees a fresh (armed) timer

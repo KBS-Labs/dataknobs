@@ -142,14 +142,10 @@ async def test_cas_document_rejects_stale_writer() -> None:
         token = await store.document_version("u1", "preferences")
 
         # First writer wins with the token.
-        await store.put_document(
-            "u1", "preferences", {"theme": "light"}, expected_version=token
-        )
+        await store.put_document("u1", "preferences", {"theme": "light"}, expected_version=token)
         # Second writer holds the now-stale token → conflict.
         with pytest.raises(ConcurrencyError):
-            await store.put_document(
-                "u1", "preferences", {"theme": "blue"}, expected_version=token
-            )
+            await store.put_document("u1", "preferences", {"theme": "blue"}, expected_version=token)
     finally:
         await store.close()
 
@@ -164,7 +160,10 @@ async def test_cas_collection_rejects_stale_writer() -> None:
         )
         with pytest.raises(ConcurrencyError):
             await store.update_record(
-                "u1", "alerts", record_id, {"text": "v3"},
+                "u1",
+                "alerts",
+                record_id,
+                {"text": "v3"},
                 expected_version=token,
             )
     finally:
@@ -208,13 +207,9 @@ def test_sync_round_trip() -> None:
         assert [r.get_value("text") for r in store.query("u1", "alerts")] == ["a"]
 
         token = store.document_version("u1", "preferences")
-        store.put_document(
-            "u1", "preferences", {"theme": "light"}, expected_version=token
-        )
+        store.put_document("u1", "preferences", {"theme": "light"}, expected_version=token)
         with pytest.raises(ConcurrencyError):
-            store.put_document(
-                "u1", "preferences", {"theme": "x"}, expected_version=token
-            )
+            store.put_document("u1", "preferences", {"theme": "x"}, expected_version=token)
         assert store.clear("u1") == 2
     finally:
         store.close()
@@ -281,9 +276,7 @@ async def test_owned_db_is_closed() -> None:
 
     async_backends.register("closable_memory_test", _ClosableMemoryDB)
     try:
-        store = await AsyncUserStateStore.from_config(
-            _config(backend="closable_memory_test")
-        )
+        store = await AsyncUserStateStore.from_config(_config(backend="closable_memory_test"))
         assert store._owns_db is True
         db = store._db
         assert isinstance(db, _ClosableMemoryDB)
@@ -307,12 +300,8 @@ def test_from_components_requires_db() -> None:
 async def test_tenant_isolation_over_shared_backend() -> None:
     db = AsyncMemoryDatabase()
     cfg = UserStateStoreConfig.from_dict(_config())
-    t1 = AsyncUserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
-    t2 = AsyncUserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t2", "acme")
-    )
+    t1 = AsyncUserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
+    t2 = AsyncUserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t2", "acme"))
     # Same user id, same section, different tenants → disjoint state.
     await t1.put_document("u", "preferences", {"theme": "dark"})
     await t2.put_document("u", "preferences", {"theme": "light"})
@@ -330,9 +319,7 @@ async def test_admin_explicit_tenant_filter_crosses_tenants() -> None:
 
     db = AsyncMemoryDatabase()
     cfg = UserStateStoreConfig.from_dict(_config())
-    t1 = AsyncUserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
+    t1 = AsyncUserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
     admin = AsyncUserStateStore.from_components(
         cfg, db=db, tenant=BoundTenantContext("admin", "acme")
     )
@@ -393,15 +380,11 @@ async def test_user_id_opacity() -> None:
         await store.add_record(opaque, "alerts", {"text": "mine"})
         await store.add_record(other, "alerts", {"text": "theirs"})
 
-        assert (await store.get_document(opaque, "preferences")).get_value(
-            "theme"
-        ) == "dark"
+        assert (await store.get_document(opaque, "preferences")).get_value("theme") == "dark"
         rows = await store.query(opaque, "alerts")
         assert [r.get_value("text") for r in rows] == ["mine"]
         # The two opaque ids derive distinct document ids (no collision).
-        assert store._doc_id(opaque, "preferences") != store._doc_id(
-            other, "preferences"
-        )
+        assert store._doc_id(opaque, "preferences") != store._doc_id(other, "preferences")
     finally:
         await store.close()
 
@@ -476,9 +459,7 @@ def test_config_roundtrip() -> None:
     cfg = UserStateStoreConfig.from_dict(_config())
     assert_structured_config_roundtrip(cfg)
     assert_structured_config_roundtrip(
-        UserStateSectionSpec(
-            name="p", kind=SectionKind.COLLECTION, sensitivity=Sensitivity.PUBLIC
-        )
+        UserStateSectionSpec(name="p", kind=SectionKind.COLLECTION, sensitivity=Sensitivity.PUBLIC)
     )
 
 
@@ -531,9 +512,7 @@ def test_sync_store_rejects_injected_event_bus() -> None:
     cfg = UserStateStoreConfig.from_dict(_config())
 
     with pytest.raises(ConfigurationError):
-        UserStateStore.from_components(
-            cfg, db=SyncMemoryDatabase(), event_bus=InMemoryEventBus()
-        )
+        UserStateStore.from_components(cfg, db=SyncMemoryDatabase(), event_bus=InMemoryEventBus())
 
 
 def test_sync_store_local_callbacks_still_fire() -> None:

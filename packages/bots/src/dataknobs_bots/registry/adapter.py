@@ -46,9 +46,7 @@ def _registration_to_columns(
         "status": reg.status,
         "created_at": reg.created_at.isoformat() if reg.created_at else None,
         "updated_at": reg.updated_at.isoformat() if reg.updated_at else None,
-        "last_accessed_at": (
-            reg.last_accessed_at.isoformat() if reg.last_accessed_at else None
-        ),
+        "last_accessed_at": (reg.last_accessed_at.isoformat() if reg.last_accessed_at else None),
     }
     metadata = dict(reg.metadata or {})
     return data, metadata
@@ -150,9 +148,7 @@ class DataKnobsRegistryAdapter:
     def _require_store(self) -> AsyncKeyedRecordStore[Registration]:
         # Runtime guard that survives `python -O` (unlike `assert`).
         if self._store is None:
-            raise RuntimeError(
-                "Adapter not initialized; call initialize() first"
-            )
+            raise RuntimeError("Adapter not initialized; call initialize() first")
         return self._store
 
     @classmethod
@@ -500,9 +496,7 @@ class DataKnobsRegistryAdapter:
         shape of "count active bots" without forcing callers to spell
         out the status filter.
         """
-        return await self.count_all(
-            status="active", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="active", filter_metadata=filter_metadata)
 
     async def count_inactive(
         self,
@@ -513,9 +507,7 @@ class DataKnobsRegistryAdapter:
 
         Symmetric counterpart to :meth:`count`.
         """
-        return await self.count_all(
-            status="inactive", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="inactive", filter_metadata=filter_metadata)
 
     async def stream(
         self,

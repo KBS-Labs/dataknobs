@@ -83,6 +83,7 @@ subscriptions: ``<subsystem>:<operation>:<phase>`` — e.g.
 the convention is forward-compatible across every adopting
 strategy without protocol-level coupling.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -145,9 +146,11 @@ class LifecycleHooks(CapabilityMixin):
     priority-tagged callbacks, or EventBus fan-out.
     """
 
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.CALLBACK_REGISTRY,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.CALLBACK_REGISTRY,
+        }
+    )
 
     _TOPIC_TURN_START = "turn_start"
     _TOPIC_TURN_END = "turn_end"
@@ -294,14 +297,17 @@ class LifecycleHooks(CapabilityMixin):
            async hook implementations.
         """
         if inspect.iscoroutinefunction(callback):
+
             async def async_wrapped(event: dict[str, Any]) -> None:
                 if event.get("stage") == stage:
                     await callback(event)  # type: ignore[misc]
+
             return async_wrapped
 
         def sync_wrapped(event: dict[str, Any]) -> None:
             if event.get("stage") == stage:
                 callback(event)
+
         return sync_wrapped
 
     # ── Config-driven loading ─────────────────────────────────────

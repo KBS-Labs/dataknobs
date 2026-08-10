@@ -214,10 +214,12 @@ class TestCapturingProvider:
     def echo_provider(self):
         """EchoProvider with scripted responses."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            text_response("First response"),
-            text_response("Second response"),
-        ])
+        provider.set_responses(
+            [
+                text_response("First response"),
+                text_response("Second response"),
+            ]
+        )
         return provider
 
     @pytest.mark.asyncio()
@@ -338,9 +340,7 @@ class TestCapturingProvider:
     async def test_tool_call_response_captured(self):
         """Tool call responses are captured with tool_calls in the response dict."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            tool_call_response("search", {"query": "test"})
-        ])
+        provider.set_responses([tool_call_response("search", {"query": "test"})])
 
         capturing = CapturingProvider(provider)
         response = await capturing.complete("search for test", tools=["search"])

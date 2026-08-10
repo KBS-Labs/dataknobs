@@ -174,17 +174,88 @@ class ResultPipeline:
 
 # Stopwords for query relevance -- lightweight set covering the most
 # common English function words.
-_QUERY_STOPWORDS: frozenset[str] = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "about", "between",
-    "through", "during", "before", "after", "and", "but", "or", "not",
-    "no", "if", "then", "than", "so", "that", "this", "it", "its",
-    "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
-    "what", "which", "who", "how", "when", "where", "why",
-    "tell", "show", "give", "know", "want", "need", "like",
-})
+_QUERY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "about",
+        "between",
+        "through",
+        "during",
+        "before",
+        "after",
+        "and",
+        "but",
+        "or",
+        "not",
+        "no",
+        "if",
+        "then",
+        "than",
+        "so",
+        "that",
+        "this",
+        "it",
+        "its",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "she",
+        "they",
+        "what",
+        "which",
+        "who",
+        "how",
+        "when",
+        "where",
+        "why",
+        "tell",
+        "show",
+        "give",
+        "know",
+        "want",
+        "need",
+        "like",
+    }
+)
 
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -246,9 +317,7 @@ class CrossSourceNormalizer:
         elif self.strategy == "rank":
             normalized = self._normalize_rank(normalized, by_source)
         else:
-            raise StrategyUnavailable(
-                f"Unknown normalization strategy: {self.strategy!r}"
-            )
+            raise StrategyUnavailable(f"Unknown normalization strategy: {self.strategy!r}")
 
         return normalized
 
@@ -547,14 +616,16 @@ def _annotate_clusters(
             meta["cluster_id"] = -1
             meta["cluster_label"] = "unclustered"
             meta["cluster_size"] = 1
-        out.append(SourceResult(
-            content=r.content,
-            source_id=r.source_id,
-            source_name=r.source_name,
-            source_type=r.source_type,
-            relevance=r.relevance,
-            metadata=meta,
-        ))
+        out.append(
+            SourceResult(
+                content=r.content,
+                source_id=r.source_id,
+                source_name=r.source_name,
+                source_type=r.source_type,
+                relevance=r.relevance,
+                metadata=meta,
+            )
+        )
     return out
 
 
@@ -600,7 +671,9 @@ class TermOverlapClusterer:
                 sim[j][i] = jaccard
 
         assignments = agglomerative_cluster(
-            sim, self.similarity_threshold, self.min_cluster_size,
+            sim,
+            self.similarity_threshold,
+            self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, tokens)
 
@@ -678,7 +751,9 @@ class TfidfClusterer:
                 sim[j][i] = cs
 
         assignments = agglomerative_cluster(
-            sim, self.similarity_threshold, self.min_cluster_size,
+            sim,
+            self.similarity_threshold,
+            self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, sig_tokens)
 
@@ -734,7 +809,9 @@ class EmbeddingClusterer:
                 sim[j][i] = cs
 
         assignments = agglomerative_cluster(
-            sim, self.similarity_threshold, self.min_cluster_size,
+            sim,
+            self.similarity_threshold,
+            self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, sig_tokens)
 
@@ -780,7 +857,8 @@ class QueryClusterScorer:
 
         if self.embed_fn is not None:
             cluster_scores = await self._score_with_embeddings(
-                clusters, user_message,
+                clusters,
+                user_message,
             )
         else:
             cluster_scores = self._score_with_terms(clusters, user_message)
@@ -911,10 +989,12 @@ def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
     rel_threshold = config.get("relative_threshold")
     if rel_threshold is not None:
         min_results = config.get("min_results", 3)
-        stages.append(RelativeRelevanceFilter(
-            threshold=float(rel_threshold),
-            min_results=int(min_results),
-        ))
+        stages.append(
+            RelativeRelevanceFilter(
+                threshold=float(rel_threshold),
+                min_results=int(min_results),
+            )
+        )
 
     # Query relevance ranker
     rerank_weight = config.get("query_rerank_weight")
@@ -927,7 +1007,9 @@ def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
         cluster_min = int(config.get("cluster_min_size", 2))
         cluster_thresh = float(config.get("cluster_threshold", 0.7))
         cluster_chain = _build_cluster_chain(
-            cluster_cfg, cluster_min, cluster_thresh,
+            cluster_cfg,
+            cluster_min,
+            cluster_thresh,
         )
         if cluster_chain is not None:
             stages.append(cluster_chain)

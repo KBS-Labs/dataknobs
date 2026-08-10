@@ -62,7 +62,7 @@ class ResourceAdapterBase:
             "name": self._name,
             "type": "async" if self.is_async() else "sync",
             "class": self.__class__.__name__,
-            **self._metadata
+            **self._metadata,
         }
 
     def __repr__(self) -> str:
@@ -82,10 +82,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
 
     @abstractmethod
     def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the resource.
 
@@ -101,11 +98,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
 
     @abstractmethod
     def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform a search query against the resource.
 
@@ -121,10 +114,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
         pass
 
     def batch_get_values(
-        self,
-        keys: List[str],
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, keys: List[str], default: Any = None, context: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Retrieve multiple values by keys.
 
@@ -153,10 +143,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
 
     @abstractmethod
     async def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the resource (async).
 
@@ -172,11 +159,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
 
     @abstractmethod
     async def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform a search query against the resource (async).
 
@@ -192,10 +175,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
         pass
 
     async def batch_get_values(
-        self,
-        keys: List[str],
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, keys: List[str], default: Any = None, context: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Retrieve multiple values by keys (async).
 
@@ -211,6 +191,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
             Dictionary mapping keys to their values
         """
         import asyncio
+
         tasks = [self.get_value(key, default, context) for key in keys]
         values = await asyncio.gather(*tasks)
         return dict(zip(keys, values, strict=True))
@@ -228,9 +209,7 @@ class BaseSearchLogic:
 
     @staticmethod
     def format_search_result(
-        item: Any,
-        score: float | None = None,
-        metadata: Dict[str, Any] | None = None
+        item: Any, score: float | None = None, metadata: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Format a search result into a standardized dictionary.
 
@@ -269,7 +248,7 @@ class BaseSearchLogic:
     def filter_results(
         results: List[Dict[str, Any]],
         filters: Dict[str, Any] | None = None,
-        min_score: float | None = None
+        min_score: float | None = None,
     ) -> List[Dict[str, Any]]:
         """Filter search results based on criteria.
 
@@ -291,7 +270,8 @@ class BaseSearchLogic:
         if filters:
             for key, value in filters.items():
                 filtered = [
-                    r for r in filtered
+                    r
+                    for r in filtered
                     if r.get(key) == value or r.get("metadata", {}).get(key) == value
                 ]
 
@@ -299,8 +279,7 @@ class BaseSearchLogic:
 
     @staticmethod
     def deduplicate_results(
-        results: List[Dict[str, Any]],
-        key: str = "content"
+        results: List[Dict[str, Any]], key: str = "content"
     ) -> List[Dict[str, Any]]:
         """Remove duplicate results based on a key.
 

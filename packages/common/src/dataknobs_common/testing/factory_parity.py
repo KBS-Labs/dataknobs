@@ -93,8 +93,7 @@ def assert_dataclass_config_matches_ctor(
     config_fields = {f.name for f in dataclasses.fields(config_cls)}
     sig = inspect.signature(target_cls.__init__)
     accepts_var_kwargs = any(
-        p.kind is inspect.Parameter.VAR_KEYWORD
-        for p in sig.parameters.values()
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     )
     ctor_params = {
         name
@@ -110,9 +109,7 @@ def assert_dataclass_config_matches_ctor(
         # mixin's ``_components`` channel (``WizardReasoning`` is the
         # reference adopter). None of these are expected on the config
         # dataclass.
-        and name
-        not in {"self", "config", "_components", "_forwarded_components"}
-        | ignore_params
+        and name not in {"self", "config", "_components", "_forwarded_components"} | ignore_params
     }
     missing_in_config = ctor_params - config_fields
     # When the ctor accepts ``**kwargs`` (the
@@ -120,9 +117,7 @@ def assert_dataclass_config_matches_ctor(
     # accepted by construction — the variadic forwards into
     # ``from_dict`` for field projection. Drift in the
     # ctor-missing-field direction is structurally impossible.
-    missing_in_ctor: set[str] = (
-        set() if accepts_var_kwargs else config_fields - ctor_params
-    )
+    missing_in_ctor: set[str] = set() if accepts_var_kwargs else config_fields - ctor_params
     failures: list[str] = []
     if missing_in_config:
         failures.append(
@@ -178,9 +173,7 @@ def assert_factory_kwargs_match_ctor(
     try:
         src = textwrap.dedent(inspect.getsource(factory))
     except (OSError, TypeError) as e:
-        raise AssertionError(
-            f"Cannot read source of factory {factory!r}: {e}"
-        ) from e
+        raise AssertionError(f"Cannot read source of factory {factory!r}: {e}") from e
     tree = ast.parse(src)
 
     factory_kwargs: set[str] = set()
@@ -221,8 +214,7 @@ def assert_factory_kwargs_match_ctor(
 
     sig = inspect.signature(target_cls.__init__)
     accepts_var_kwargs = any(
-        p.kind is inspect.Parameter.VAR_KEYWORD
-        for p in sig.parameters.values()
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     )
     ctor_params = {
         name
@@ -238,9 +230,7 @@ def assert_factory_kwargs_match_ctor(
     # missing-from-factory direction stays meaningful only when the
     # factory hand-rolls calls; ``from_config`` delegation covers
     # that orthogonally.
-    unknown_in_factory: set[str] = (
-        set() if accepts_var_kwargs else factory_kwargs - ctor_params
-    )
+    unknown_in_factory: set[str] = set() if accepts_var_kwargs else factory_kwargs - ctor_params
     missing_in_factory = (
         ctor_params
         - factory_kwargs
@@ -294,9 +284,7 @@ def assert_ctor_reads_documented_keys(
     try:
         src = textwrap.dedent(inspect.getsource(target_cls.__init__))
     except (OSError, TypeError) as e:
-        raise AssertionError(
-            f"Cannot read source of {target_cls.__name__}.__init__: {e}"
-        ) from e
+        raise AssertionError(f"Cannot read source of {target_cls.__name__}.__init__: {e}") from e
     tree = ast.parse(src)
 
     read_keys: set[str] = set()
@@ -320,10 +308,7 @@ def assert_ctor_reads_documented_keys(
             and node.value.id == config_param
         ):
             slice_node = node.slice
-            if (
-                isinstance(slice_node, ast.Constant)
-                and isinstance(slice_node.value, str)
-            ):
+            if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, str):
                 read_keys.add(slice_node.value)
         # ``config.pop("X", ...)`` — same effect as get for documentation purposes
         elif (
@@ -408,9 +393,7 @@ def assert_config_attribute_access_matches_dataclass(
         )
 
     valid = (
-        {f.name for f in dataclasses.fields(config_cls)}
-        | set(dir(config_cls))
-        | set(ignore_attrs)
+        {f.name for f in dataclasses.fields(config_cls)} | set(dir(config_cls)) | set(ignore_attrs)
     )
 
     # ``(cls.__name__, attr) -> {absolute file linenos}`` for every
@@ -444,9 +427,7 @@ def assert_config_attribute_access_matches_dataclass(
                 and node.attr not in valid
             ):
                 abs_lineno = node.lineno + start_line - 1
-                gaps.setdefault((cls.__name__, node.attr), set()).add(
-                    abs_lineno
-                )
+                gaps.setdefault((cls.__name__, node.attr), set()).add(abs_lineno)
 
     if gaps:
         rendered = sorted(
@@ -462,9 +443,7 @@ def assert_config_attribute_access_matches_dataclass(
         )
 
 
-def _override_calls_attr(
-    consumer_cls: type, method_name: str, attr_name: str
-) -> bool:
+def _override_calls_attr(consumer_cls: type, method_name: str, attr_name: str) -> bool:
     """True if the ``method_name`` override *calls* ``....attr_name(...)``.
 
     Reads the source of the ``method_name`` entry in
@@ -573,10 +552,7 @@ def assert_structured_config_consumer(
             f"{consumer_cls.__name__} does not declare CONFIG_CLS "
             "(required by StructuredConfigConsumer)."
         )
-    if not (
-        isinstance(config_cls, type)
-        and issubclass(config_cls, StructuredConfig)
-    ):
+    if not (isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig)):
         raise AssertionError(
             f"{consumer_cls.__name__}.CONFIG_CLS is {config_cls!r}, "
             "not a StructuredConfig subclass."
@@ -594,9 +570,7 @@ def assert_structured_config_consumer(
     # and shadows it, construction never runs the typed-config dispatch.
     if "__init__" not in consumer_cls.__dict__:
         if consumer_cls.__init__ is not StructuredConfigConsumer.__init__:
-            resolved = getattr(
-                consumer_cls.__init__, "__qualname__", consumer_cls.__init__
-            )
+            resolved = getattr(consumer_cls.__init__, "__qualname__", consumer_cls.__init__)
             raise AssertionError(
                 f"{consumer_cls.__name__}: StructuredConfigConsumer must "
                 "precede other bases so its __init__ is the construction "
@@ -617,9 +591,7 @@ def assert_structured_config_consumer(
     #   * a ``sync`` ``from_config`` override must route through
     #     ``_coerce_config``, the same rule the default sync path follows.
     if "from_config_async" in consumer_cls.__dict__:
-        if not _override_calls_attr(
-            consumer_cls, "from_config_async", "_coerce_config"
-        ):
+        if not _override_calls_attr(consumer_cls, "from_config_async", "_coerce_config"):
             raise AssertionError(
                 f"{consumer_cls.__name__}.from_config_async does not route "
                 "through _coerce_config; it must use the same typed-config "
@@ -630,18 +602,14 @@ def assert_structured_config_consumer(
         if isinstance(raw_from_config, (classmethod, staticmethod)):
             raw_from_config = raw_from_config.__func__
         if inspect.iscoroutinefunction(raw_from_config):
-            if not _override_calls_attr(
-                consumer_cls, "from_config", "from_config_async"
-            ):
+            if not _override_calls_attr(consumer_cls, "from_config", "from_config_async"):
                 raise AssertionError(
                     f"{consumer_cls.__name__}.from_config is async but does "
                     "not delegate to from_config_async; an async from_config "
                     "override must delegate to from_config_async so the "
                     "typed-config guard and the _ainit lifecycle both run."
                 )
-        elif not _override_calls_attr(
-            consumer_cls, "from_config", "_coerce_config"
-        ):
+        elif not _override_calls_attr(consumer_cls, "from_config", "_coerce_config"):
             raise AssertionError(
                 f"{consumer_cls.__name__}.from_config override does not route "
                 "through _coerce_config; a sync from_config override must use "
@@ -664,9 +632,7 @@ def assert_structured_config_consumer(
         try:
             hook_sig = inspect.signature(hook)
         except (TypeError, ValueError) as e:
-            raise AssertionError(
-                f"Cannot inspect {consumer_cls.__name__}.{hook_name}: {e}"
-            ) from e
+            raise AssertionError(f"Cannot inspect {consumer_cls.__name__}.{hook_name}: {e}") from e
         unsafe = [
             name
             for name, p in hook_sig.parameters.items()
@@ -677,8 +643,7 @@ def assert_structured_config_consumer(
                 inspect.Parameter.VAR_POSITIONAL,
             )
             and (
-                p.kind is not inspect.Parameter.KEYWORD_ONLY
-                or p.default is inspect.Parameter.empty
+                p.kind is not inspect.Parameter.KEYWORD_ONLY or p.default is inspect.Parameter.empty
             )
         ]
         if unsafe:

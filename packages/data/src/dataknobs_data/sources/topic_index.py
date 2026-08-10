@@ -31,23 +31,129 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ------------------------------------------------------------------
 
-DEFAULT_HEADING_STOPWORDS: frozenset[str] = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will",
-    "would", "could", "should", "may", "might", "can", "shall",
-    "of", "in", "to", "for", "with", "on", "at", "by", "from",
-    "as", "into", "about", "between", "through", "during", "after",
-    "before", "above", "below", "up", "down", "out", "off", "over",
-    "under", "again", "further", "then", "once", "and", "but", "or",
-    "nor", "not", "so", "yet", "both", "each", "few", "more",
-    "most", "other", "some", "such", "no", "only", "own", "same",
-    "than", "too", "very", "just", "if", "when", "where", "how",
-    "what", "which", "who", "whom", "this", "that", "these", "those",
-    "i", "me", "my", "we", "our", "you", "your", "he", "him",
-    "his", "she", "her", "it", "its", "they", "them", "their",
-    "all", "any", "every", "tell", "show", "give", "get", "list",
-    "describe", "explain", "find", "look", "want", "need",
-})
+DEFAULT_HEADING_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "shall",
+        "of",
+        "in",
+        "to",
+        "for",
+        "with",
+        "on",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "about",
+        "between",
+        "through",
+        "during",
+        "after",
+        "before",
+        "above",
+        "below",
+        "up",
+        "down",
+        "out",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "not",
+        "so",
+        "yet",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "only",
+        "own",
+        "same",
+        "than",
+        "too",
+        "very",
+        "just",
+        "if",
+        "when",
+        "where",
+        "how",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "all",
+        "any",
+        "every",
+        "tell",
+        "show",
+        "give",
+        "get",
+        "list",
+        "describe",
+        "explain",
+        "find",
+        "look",
+        "want",
+        "need",
+    }
+)
 """Default stopwords filtered from queries during heading matching."""
 
 DEFAULT_MIN_WORD_LENGTH: int = 2
@@ -254,7 +360,9 @@ def build_heading_tree(
         if len(headings) != len(levels):
             logger.warning(
                 "Chunk %s has mismatched headings/levels lengths (%d vs %d), skipping",
-                chunk.source_id, len(headings), len(levels),
+                chunk.source_id,
+                len(headings),
+                len(levels),
             )
             root.chunk_ids.append(chunk.source_id)
             continue
@@ -416,10 +524,7 @@ def extract_query_words(
         Lowercased significant words.
     """
     words = re.findall(r"[a-z0-9]+", query.lower())
-    return [
-        w for w in words
-        if w not in stopwords and len(w) >= min_word_length
-    ]
+    return [w for w in words if w not in stopwords and len(w) >= min_word_length]
 
 
 # ------------------------------------------------------------------
@@ -442,10 +547,7 @@ def _select_expansion_nodes(
             # Find leaves within the depth-bounded subtree
             bounded = node.descendants_to_depth(max_expansion_depth)
             bounded_ids = {id(n) for n in bounded}
-            return [
-                n for n in bounded
-                if not any(id(c) in bounded_ids for c in n.children)
-            ]
+            return [n for n in bounded if not any(id(c) in bounded_ids for c in n.children)]
         return node.leaves()
 
     # subtree (default)

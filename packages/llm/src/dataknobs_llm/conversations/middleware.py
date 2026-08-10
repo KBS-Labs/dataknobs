@@ -227,9 +227,7 @@ class ConversationMiddleware(ABC):
 
     @abstractmethod
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Process messages before sending to LLM.
 
@@ -254,9 +252,7 @@ class ConversationMiddleware(ABC):
 
     @abstractmethod
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Process response from LLM.
 
@@ -308,14 +304,11 @@ class LoggingMiddleware(ConversationMiddleware):
         self.logger = logger or logging.getLogger(__name__)
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Log request details before sending to LLM."""
         self.logger.info(
-            f"Conversation {state.conversation_id} - "
-            f"Sending {len(messages)} messages to LLM"
+            f"Conversation {state.conversation_id} - Sending {len(messages)} messages to LLM"
         )
         self.logger.debug(
             f"Conversation {state.conversation_id} - "
@@ -324,9 +317,7 @@ class LoggingMiddleware(ConversationMiddleware):
         return messages
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Log response details after receiving from LLM."""
         content_length = len(response.content) if response.content else 0
@@ -337,8 +328,7 @@ class LoggingMiddleware(ConversationMiddleware):
         )
         if response.usage:
             self.logger.debug(
-                f"Conversation {state.conversation_id} - "
-                f"Token usage: {response.usage}"
+                f"Conversation {state.conversation_id} - Token usage: {response.usage}"
             )
         return response
 
@@ -364,10 +354,7 @@ class ContentFilterMiddleware(ConversationMiddleware):
     """
 
     def __init__(
-        self,
-        filter_words: List[str],
-        replacement: str = "[FILTERED]",
-        case_sensitive: bool = True
+        self, filter_words: List[str], replacement: str = "[FILTERED]", case_sensitive: bool = True
     ):
         """Initialize content filter middleware.
 
@@ -381,17 +368,13 @@ class ContentFilterMiddleware(ConversationMiddleware):
         self.case_sensitive = case_sensitive
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Pass through requests without filtering."""
         return messages
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Filter inappropriate content from response."""
         content = response.content
@@ -638,14 +621,8 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
                 msg,
                 content=new_content,
                 metadata=dict(msg.metadata),
-                tool_calls=(
-                    list(msg.tool_calls) if msg.tool_calls is not None else None
-                ),
-                function_call=(
-                    dict(msg.function_call)
-                    if msg.function_call is not None
-                    else None
-                ),
+                tool_calls=(list(msg.tool_calls) if msg.tool_calls is not None else None),
+                function_call=(dict(msg.function_call) if msg.function_call is not None else None),
             )
 
         return apply_history_redactions(
@@ -703,7 +680,7 @@ class ValidationMiddleware(ConversationMiddleware):
         prompt_builder: AsyncPromptBuilder,
         validation_prompt: str,
         auto_retry: bool = False,
-        retry_limit: int = 3
+        retry_limit: int = 3,
     ):
         """Initialize validation middleware.
 
@@ -721,17 +698,13 @@ class ValidationMiddleware(ConversationMiddleware):
         self.retry_limit = retry_limit
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Pass through requests without validation."""
         return messages
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Validate response by calling LLM with validation prompt."""
         # Render validation prompt with response content
@@ -739,14 +712,11 @@ class ValidationMiddleware(ConversationMiddleware):
             self.validation_prompt,
             index=0,
             params={"response": response.content},
-            include_rag=False  # Don't need RAG for validation
+            include_rag=False,  # Don't need RAG for validation
         )
 
         # Create message and call LLM to get validation judgment
-        validation_message = LLMMessage(
-            role="user",
-            content=validation_prompt_result.content
-        )
+        validation_message = LLMMessage(role="user", content=validation_prompt_result.content)
         validation_response = await self.llm.complete([validation_message])
 
         # Check if LLM says response is valid
@@ -764,9 +734,7 @@ class ValidationMiddleware(ConversationMiddleware):
                 # at the ConversationManager level. This just marks the failure.
                 response.metadata["retry_requested"] = True
             else:
-                raise ValueError(
-                    f"Response failed validation: {validation_response.content}"
-                )
+                raise ValueError(f"Response failed validation: {validation_response.content}")
 
         return response
 
@@ -813,7 +781,7 @@ class MetadataMiddleware(ConversationMiddleware):
         request_metadata: Dict[str, Any] | None = None,
         response_metadata: Dict[str, Any] | None = None,
         request_metadata_fn: Callable[..., Dict[str, Any]] | None = None,
-        response_metadata_fn: Callable[..., Dict[str, Any]] | None = None
+        response_metadata_fn: Callable[..., Dict[str, Any]] | None = None,
     ):
         """Initialize metadata middleware.
 
@@ -829,9 +797,7 @@ class MetadataMiddleware(ConversationMiddleware):
         self.response_metadata_fn = response_metadata_fn
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Add metadata to request messages."""
         # Collect metadata to add
@@ -852,9 +818,7 @@ class MetadataMiddleware(ConversationMiddleware):
         return messages
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Add metadata to response."""
         # Collect metadata to add
@@ -912,7 +876,7 @@ class RateLimitMiddleware(ConversationMiddleware):
         max_requests: int,
         window_seconds: int = 60,
         scope: str = "conversation",  # "conversation" or "client_id"
-        key_fn: Callable[[ConversationState], str] | None = None
+        key_fn: Callable[[ConversationState], str] | None = None,
     ):
         """Initialize rate limiting middleware.
 
@@ -950,9 +914,7 @@ class RateLimitMiddleware(ConversationMiddleware):
             return state.conversation_id
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        state: ConversationState
+        self, messages: List[LLMMessage], state: ConversationState
     ) -> List[LLMMessage]:
         """Check rate limit before allowing request through."""
         key = self._get_rate_limit_key(state)
@@ -984,9 +946,7 @@ class RateLimitMiddleware(ConversationMiddleware):
         return messages
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        state: ConversationState
+        self, response: LLMResponse, state: ConversationState
     ) -> LLMResponse:
         """Add rate limit info to response metadata."""
         key = self._get_rate_limit_key(state)
@@ -1023,11 +983,11 @@ class RateLimitMiddleware(ConversationMiddleware):
         """
         status = await self._limiter.get_status(key)
         return {
-            'current_count': status.current_count,
-            'max_requests': status.limit,
-            'remaining': status.remaining,
-            'window_seconds': self.window_seconds,
-            'next_reset': status.reset_after,
+            "current_count": status.current_count,
+            "max_requests": status.limit,
+            "remaining": status.remaining,
+            "window_seconds": self.window_seconds,
+            "next_reset": status.reset_after,
         }
 
     async def reset(self, key: str | None = None) -> None:

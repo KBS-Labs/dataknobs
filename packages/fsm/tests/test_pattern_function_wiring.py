@@ -131,9 +131,7 @@ def test_fileprocessor_passthrough_has_no_dead_end() -> None:
     for name, state in states.items():
         if state.is_end_state():
             continue
-        assert state.outgoing_arcs, (
-            f"non-end state {name!r} has no outgoing arc (dead-end)"
-        )
+        assert state.outgoing_arcs, f"non-end state {name!r} has no outgoing arc (dead-end)"
 
 
 def test_fileprocessor_transform_state_references_function() -> None:

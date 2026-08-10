@@ -68,9 +68,7 @@ def make_openai_response(
     """Build a minimal object with the OpenAI response attribute shape."""
     message = types.SimpleNamespace(content=content, function_call=None)
     choice = types.SimpleNamespace(message=message, finish_reason=finish_reason)
-    usage = types.SimpleNamespace(
-        prompt_tokens=5, completion_tokens=7, total_tokens=12
-    )
+    usage = types.SimpleNamespace(prompt_tokens=5, completion_tokens=7, total_tokens=12)
     return types.SimpleNamespace(choices=[choice], model=model, usage=usage)
 
 
@@ -128,9 +126,7 @@ class TestAnthropicAdaptResponse:
         assert parsed.finish_reason == "tool_calls"
 
     def test_unmapped_stop_reason_passes_through(self) -> None:
-        response = make_anthropic_response(
-            [{"type": "text", "text": "hi"}], stop_reason="refusal"
-        )
+        response = make_anthropic_response([{"type": "text", "text": "hi"}], stop_reason="refusal")
         parsed = AnthropicAdapter().adapt_response(response)
         assert parsed.finish_reason == "refusal"
         # No normalization happened → no raw stashed.
@@ -141,9 +137,7 @@ class TestAnthropicStreamTruncation:
     """The Anthropic streaming final chunk carries the truncation flag."""
 
     async def test_stream_final_chunk_truncated(self) -> None:
-        provider = AnthropicProvider(
-            LLMConfig(provider="anthropic", model="claude-3-sonnet")
-        )
+        provider = AnthropicProvider(LLMConfig(provider="anthropic", model="claude-3-sonnet"))
 
         class _StreamCtx:
             async def __aenter__(self) -> Self:
@@ -197,9 +191,7 @@ class TestOpenAIAdaptResponse:
         assert parsed.truncated is False
 
     def test_tool_calls_not_truncated(self) -> None:
-        parsed = OpenAIAdapter().adapt_response(
-            make_openai_response(finish_reason="tool_calls")
-        )
+        parsed = OpenAIAdapter().adapt_response(make_openai_response(finish_reason="tool_calls"))
         assert parsed.truncated is False
 
 
@@ -291,9 +283,7 @@ class TestBedrockAdaptResponse:
             {
                 "output": {
                     "message": {
-                        "content": [
-                            {"toolUse": {"toolUseId": "t1", "name": "s", "input": {}}}
-                        ]
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": "s", "input": {}}}]
                     }
                 },
                 "stopReason": "tool_use",
@@ -342,9 +332,7 @@ class TestOllamaThinkTagReconstruction:
         # The whole point of the flag: it must survive the rebuild.
         assert result.truncated is True
 
-    def test_truncated_tool_call_survives_and_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_truncated_tool_call_survives_and_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         response = LLMResponse(
             content="<think>plan</think>",
             model="deepseek-r1",
@@ -356,8 +344,7 @@ class TestOllamaThinkTagReconstruction:
             result = self._provider()._analyze_response(response)
         assert result.truncated is True
         assert any(
-            "mid tool-call" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            "mid tool-call" in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
 
 
@@ -373,9 +360,7 @@ class TestAnthropicFunctionCallTruncation:
     """
 
     def _provider_returning(self, response: object) -> AnthropicProvider:
-        provider = AnthropicProvider(
-            LLMConfig(provider="anthropic", model="claude-3-sonnet")
-        )
+        provider = AnthropicProvider(LLMConfig(provider="anthropic", model="claude-3-sonnet"))
 
         class _Client:
             def __init__(self) -> None:
@@ -410,8 +395,7 @@ class TestAnthropicFunctionCallTruncation:
         assert result.function_call == {"name": "submit", "arguments": {}}
         # The dangerous truncated tool-call turn warned.
         assert any(
-            "mid tool-call" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            "mid tool-call" in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
 
 
@@ -426,15 +410,12 @@ class TestTruncationWarning:
     def _provider(self) -> EchoProvider:
         return EchoProvider(LLMConfig(provider="echo", model="echo-model"))
 
-    def test_truncated_tool_call_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_truncated_tool_call_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         resp = tool_call_response("submit", {"x": 1}, truncated=True)
         with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
             self._provider()._analyze_response(resp)
         assert any(
-            "mid tool-call" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            "mid tool-call" in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
 
     def test_truncated_text_only_is_info_not_warning(
@@ -445,19 +426,14 @@ class TestTruncationWarning:
             self._provider()._analyze_response(resp)
         assert not any(r.levelno == logging.WARNING for r in caplog.records)
         assert any(
-            "truncated" in r.message.lower() and r.levelno == logging.INFO
-            for r in caplog.records
+            "truncated" in r.message.lower() and r.levelno == logging.INFO for r in caplog.records
         )
 
-    def test_not_truncated_no_log(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_not_truncated_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
         resp = tool_call_response("submit", {"x": 1})
         with caplog.at_level(logging.INFO, logger="dataknobs_llm.llm.base"):
             self._provider()._analyze_response(resp)
-        assert not any(
-            "truncated" in r.message.lower() for r in caplog.records
-        )
+        assert not any("truncated" in r.message.lower() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

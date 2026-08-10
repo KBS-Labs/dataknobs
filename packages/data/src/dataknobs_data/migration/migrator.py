@@ -1,5 +1,4 @@
-"""Enhanced data migrator with streaming support.
-"""
+"""Enhanced data migrator with streaming support."""
 
 from __future__ import annotations
 
@@ -73,9 +72,7 @@ class MigrationProgressAccountant:
     def on_record_skip(self, record: Record) -> None:
         self._progress.record_skip("Already present in target", record.id)
 
-    def on_record_failure(
-        self, record: Record | None, error: Exception, local_index: int
-    ) -> bool:
+    def on_record_failure(self, record: Record | None, error: Exception, local_index: int) -> bool:
         record_id = record.id if record is not None else None
         self._progress.record_failure(str(error), record_id, error)
         if self._on_error and self._on_error(error, record):
@@ -85,7 +82,7 @@ class MigrationProgressAccountant:
 
 class Migrator:
     """Data migration orchestrator with streaming support.
-    
+
     Provides memory-efficient migration between databases using streaming,
     with support for transformations, progress tracking, and parallel processing.
     """
@@ -190,12 +187,12 @@ class Migrator:
         transform: Transformer | Migration | None = None,
         query: Query | None = None,
         config: StreamConfig | None = None,
-        on_progress: Callable[[MigrationProgress], None] | None = None
+        on_progress: Callable[[MigrationProgress], None] | None = None,
     ) -> MigrationProgress:
         """Stream-based migration for memory efficiency.
-        
+
         Never loads full dataset into memory.
-        
+
         Args:
             source: Source database with streaming support
             target: Target database with streaming support
@@ -203,7 +200,7 @@ class Migrator:
             query: Optional query to filter source records
             config: Streaming configuration
             on_progress: Optional callback for progress updates
-            
+
         Returns:
             MigrationProgress with final statistics
         """
@@ -245,10 +242,14 @@ class Migrator:
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
-                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
+                        progress.record_failure(
+                            str(e), record.id if hasattr(record, "id") else None, e
+                        )
                         continue
                     else:
-                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
+                        progress.record_failure(
+                            str(e), record.id if hasattr(record, "id") else None, e
+                        )
                         raise
 
         # Stream from source through transformation to target
@@ -307,17 +308,17 @@ class Migrator:
             """Migrate a single partition."""
             query = Query().filter(partition_field, "=", partition_id)
             return self.migrate_stream(
-                source, target, transform, query,
+                source,
+                target,
+                transform,
+                query,
                 config=StreamConfig(on_conflict=on_conflict),
             )
 
         total_progress = MigrationProgress().start()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=partitions) as executor:
-            futures = [
-                executor.submit(migrate_partition, i)
-                for i in range(partitions)
-            ]
+            futures = [executor.submit(migrate_partition, i) for i in range(partitions)]
 
             for future in concurrent.futures.as_completed(futures):
                 partition_progress = future.result()
@@ -336,10 +337,10 @@ class Migrator:
         transform: Transformer | Migration | None = None,
         query: Query | None = None,
         config: StreamConfig | None = None,
-        on_progress: Callable[[MigrationProgress], None] | None = None
+        on_progress: Callable[[MigrationProgress], None] | None = None,
     ) -> MigrationProgress:
         """Async stream-based migration.
-        
+
         Args:
             source: Async source database
             target: Async target database
@@ -347,7 +348,7 @@ class Migrator:
             query: Optional query to filter source records
             config: Streaming configuration
             on_progress: Optional callback for progress updates
-            
+
         Returns:
             MigrationProgress with final statistics
         """
@@ -388,10 +389,14 @@ class Migrator:
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
-                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
+                        progress.record_failure(
+                            str(e), record.id if hasattr(record, "id") else None, e
+                        )
                         continue
                     else:
-                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
+                        progress.record_failure(
+                            str(e), record.id if hasattr(record, "id") else None, e
+                        )
                         raise
 
         # Stream from source through transformation to target
@@ -465,9 +470,7 @@ class Migrator:
         # Only offer the native ``create_batch`` fast-path for INSERT when it is
         # atomic on raise; otherwise ``None`` forces per-record ``create`` so the
         # fallback never re-writes a non-atomic bulk verb's partial success.
-        insert_batch_func = (
-            target.create_batch if target._insert_batch_atomic() else None
-        )
+        insert_batch_func = target.create_batch if target._insert_batch_atomic() else None
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             on_conflict,
             insert_batch_func=insert_batch_func,
@@ -488,7 +491,7 @@ class Migrator:
         source: SyncDatabase,
         target: SyncDatabase,
         query: Query | None = None,
-        sample_size: int | None = None
+        sample_size: int | None = None,
     ) -> tuple[bool, list[str]]:
         """Validate that migration was successful.
 
@@ -518,9 +521,7 @@ class Migrator:
         target_count = len(target_records)
 
         if source_count != target_count:
-            issues.append(
-                f"Record count mismatch: source={source_count}, target={target_count}"
-            )
+            issues.append(f"Record count mismatch: source={source_count}, target={target_count}")
 
         # Sample validation
         if sample_size:

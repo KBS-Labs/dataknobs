@@ -304,9 +304,7 @@ class PackResolutionError(ConfigurationError):
     be honoured).
     """
 
-    def __init__(
-        self, message: str, *, reason: PackResolutionReason, **context: Any
-    ) -> None:
+    def __init__(self, message: str, *, reason: PackResolutionReason, **context: Any) -> None:
         # Normalized for the same reason as ``PackWarning.code``: a plain
         # string stays acceptable, but an unrecognized one is a typo, not a
         # new vocabulary member, and this is the only public constructor

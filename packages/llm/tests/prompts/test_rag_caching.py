@@ -24,9 +24,9 @@ class TestRAGMetadataCapture:
                             "adapter_name": "docs",
                             "query": "test query",
                             "k": 3,
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
@@ -39,20 +39,15 @@ class TestRAGMetadataCapture:
                 {"content": "Result 1", "score": 0.9},
                 {"content": "Result 2", "score": 0.8},
             ],
-            name="docs"
+            name="docs",
         )
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": adapter}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render with metadata capture
         import asyncio
-        result = asyncio.run(builder.render_system_prompt(
-            "test",
-            return_rag_metadata=True
-        ))
+
+        result = asyncio.run(builder.render_system_prompt("test", return_rag_metadata=True))
 
         # Verify metadata was captured
         assert result.rag_metadata is not None
@@ -79,9 +74,9 @@ class TestRAGMetadataCapture:
                             "adapter_name": "docs",
                             "query": "test query",
                             "k": 3,
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
@@ -94,19 +89,13 @@ class TestRAGMetadataCapture:
                 {"content": "Result 1", "score": 0.9},
                 {"content": "Result 2", "score": 0.8},
             ],
-            name="docs"
+            name="docs",
         )
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": adapter}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render with metadata capture
-        result = builder.render_system_prompt(
-            "test",
-            return_rag_metadata=True
-        )
+        result = builder.render_system_prompt("test", return_rag_metadata=True)
 
         # Verify metadata was captured
         assert result.rag_metadata is not None
@@ -131,23 +120,17 @@ class TestRAGMetadataCapture:
                         {
                             "adapter_name": "docs",
                             "query": "test query",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result 1"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Result 1"}], name="docs")
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": adapter}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render without requesting metadata
         result = builder.render_system_prompt("test")
@@ -162,36 +145,27 @@ class TestRAGMetadataCapture:
                 "test": {
                     "template": "Docs: {{DOCS}}\nExamples: {{EXAMPLES}}",
                     "rag_configs": [
-                        {
-                            "adapter_name": "docs",
-                            "query": "documentation",
-                            "placeholder": "DOCS"
-                        },
+                        {"adapter_name": "docs", "query": "documentation", "placeholder": "DOCS"},
                         {
                             "adapter_name": "examples",
                             "query": "code examples",
-                            "placeholder": "EXAMPLES"
-                        }
-                    ]
+                            "placeholder": "EXAMPLES",
+                        },
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
 
-        docs_adapter = InMemoryAdapter(
-            search_results=[{"content": "Doc 1"}],
-            name="docs"
-        )
+        docs_adapter = InMemoryAdapter(search_results=[{"content": "Doc 1"}], name="docs")
 
         examples_adapter = InMemoryAdapter(
-            search_results=[{"content": "Example 1"}],
-            name="examples"
+            search_results=[{"content": "Example 1"}], name="examples"
         )
 
         builder = PromptBuilder(
-            library=library,
-            adapters={"docs": docs_adapter, "examples": examples_adapter}
+            library=library, adapters={"docs": docs_adapter, "examples": examples_adapter}
         )
 
         result = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -217,23 +191,17 @@ class TestRAGCacheReuse:
                         {
                             "adapter_name": "docs",
                             "query": "test query",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Original result"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Original result"}], name="docs")
 
-        builder = PromptBuilder(
-            library=library,
-            adapters={"docs": adapter}
-        )
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # First render - captures metadata
         result1 = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -243,10 +211,7 @@ class TestRAGCacheReuse:
         assert adapter.search_count == 1
 
         # Second render - reuses cached RAG
-        result2 = builder.render_system_prompt(
-            "test",
-            cached_rag=result1.rag_metadata
-        )
+        result2 = builder.render_system_prompt("test", cached_rag=result1.rag_metadata)
 
         # Verify search was NOT called again
         assert adapter.search_count == 1
@@ -267,23 +232,17 @@ class TestRAGCacheReuse:
                         {
                             "adapter_name": "docs",
                             "query": "test query",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAsyncAdapter(
-            search_results=[{"content": "Original result"}],
-            name="docs"
-        )
+        adapter = InMemoryAsyncAdapter(search_results=[{"content": "Original result"}], name="docs")
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": adapter}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
 
         import asyncio
 
@@ -296,10 +255,7 @@ class TestRAGCacheReuse:
             assert adapter.search_count == 1
 
             # Second render - reuses cached RAG
-            result2 = await builder.render_system_prompt(
-                "test",
-                cached_rag=result1.rag_metadata
-            )
+            result2 = await builder.render_system_prompt("test", cached_rag=result1.rag_metadata)
 
             # Verify search was NOT called again
             assert adapter.search_count == 1
@@ -319,21 +275,14 @@ class TestRAGCacheReuse:
                 "test": {
                     "template": "{{RAG_CONTENT}}",
                     "rag_configs": [
-                        {
-                            "adapter_name": "docs",
-                            "query": "test",
-                            "placeholder": "RAG_CONTENT"
-                        }
-                    ]
+                        {"adapter_name": "docs", "query": "test", "placeholder": "RAG_CONTENT"}
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
@@ -342,9 +291,7 @@ class TestRAGCacheReuse:
 
         # Second render with cache and metadata request
         result2 = builder.render_system_prompt(
-            "test",
-            cached_rag=result1.rag_metadata,
-            return_rag_metadata=True
+            "test", cached_rag=result1.rag_metadata, return_rag_metadata=True
         )
 
         # Verify metadata was passed through
@@ -365,18 +312,15 @@ class TestRAGCacheMatchingLogic:
                         {
                             "adapter_name": "docs",
                             "query": "python decorators",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
@@ -399,18 +343,15 @@ class TestRAGCacheMatchingLogic:
                         {
                             "adapter_name": "docs",
                             "query": "python decorators",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
@@ -426,31 +367,34 @@ class TestRAGCacheMatchingLogic:
 
     def test_different_queries_produce_different_hashes(self):
         """Test that different queries produce different hashes."""
-        library = ConfigPromptLibrary({
-            "system": {
-                "test1": {
-                    "template": "{{RAG_CONTENT}}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "python decorators",
-                        "placeholder": "RAG_CONTENT"
-                    }]
-                },
-                "test2": {
-                    "template": "{{RAG_CONTENT}}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "javascript promises",
-                        "placeholder": "RAG_CONTENT"
-                    }]
+        library = ConfigPromptLibrary(
+            {
+                "system": {
+                    "test1": {
+                        "template": "{{RAG_CONTENT}}",
+                        "rag_configs": [
+                            {
+                                "adapter_name": "docs",
+                                "query": "python decorators",
+                                "placeholder": "RAG_CONTENT",
+                            }
+                        ],
+                    },
+                    "test2": {
+                        "template": "{{RAG_CONTENT}}",
+                        "rag_configs": [
+                            {
+                                "adapter_name": "docs",
+                                "query": "javascript promises",
+                                "placeholder": "RAG_CONTENT",
+                            }
+                        ],
+                    },
                 }
             }
-        })
-
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
         )
+
+        adapter = InMemoryAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
@@ -475,20 +419,16 @@ class TestRAGCacheMatchingLogic:
                             "query": "test",
                             "placeholder": "RAG_CONTENT",
                             "header": "# Documentation\n",
-                            "item_template": "- {{content}}\n"
+                            "item_template": "- {{content}}\n",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
         adapter = InMemoryAdapter(
-            search_results=[
-                {"content": "Item 1"},
-                {"content": "Item 2"}
-            ],
-            name="docs"
+            search_results=[{"content": "Item 1"}, {"content": "Item 2"}], name="docs"
         )
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
@@ -518,33 +458,26 @@ class TestRAGCachingWithParameters:
                         {
                             "adapter_name": "docs",
                             "query": "{{language}} documentation",
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
-        )
+        adapter = InMemoryAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render with python
         result1 = builder.render_system_prompt(
-            "test",
-            params={"language": "python"},
-            return_rag_metadata=True
+            "test", params={"language": "python"}, return_rag_metadata=True
         )
 
         # Render with javascript
         result2 = builder.render_system_prompt(
-            "test",
-            params={"language": "javascript"},
-            return_rag_metadata=True
+            "test", params={"language": "javascript"}, return_rag_metadata=True
         )
 
         # Verify queries are different after substitution

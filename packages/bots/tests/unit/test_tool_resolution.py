@@ -311,9 +311,7 @@ class TestToolResolution:
         _SideEffectyNonTool.reset()
 
         tool_config = {
-            "class": (
-                dotted_path(_SideEffectyNonTool)
-            ),
+            "class": (dotted_path(_SideEffectyNonTool)),
             "params": {},
         }
 

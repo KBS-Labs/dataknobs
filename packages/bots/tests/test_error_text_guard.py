@@ -45,6 +45,4 @@ _ALLOWED = {
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(
-        _SRC, error_names=_RENDERED, ignore=_ALLOWED
-    )
+    assert_no_broad_except_in_error_text(_SRC, error_names=_RENDERED, ignore=_ALLOWED)

@@ -117,7 +117,9 @@ def test_consumer_does_not_let_a_warning_shadow_the_verdict():
     package is also dirty.
     """
     lines = CONSUMER.read_text(encoding="utf-8").splitlines()
-    branches = [ln.strip() for ln in lines if "HASH_WARNING" in ln and re.match(r"^\s*(el)?if ", ln)]
+    branches = [
+        ln.strip() for ln in lines if "HASH_WARNING" in ln and re.match(r"^\s*(el)?if ", ln)
+    ]
     assert branches, (
         f"{CONSUMER.name} no longer branches on HASH_WARNING at all — if the "
         "variable was renamed, update this guard rather than deleting it"
@@ -418,9 +420,7 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
         )
         for kind, spec in idioms:
             referenced = (
-                set(re.findall(spec, code))
-                if kind == "regex"
-                else _case_arm_names(code, spec)
+                set(re.findall(spec, code)) if kind == "regex" else _case_arm_names(code, spec)
             )
             assert referenced, (
                 f"{name}: the {kind} idiom {spec!r} matches nothing, so this "
@@ -470,8 +470,7 @@ def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path):
     probe = [".quality-artifacts/kept.json", ".quality-artifacts/dropped.xml"]
 
     assert _excluded_by_gitignore(tmp_path, probe) == [".quality-artifacts/dropped.xml"], (
-        "with --no-index, check-ignore must report the tracked-and-ignored file "
-        "and only that one"
+        "with --no-index, check-ignore must report the tracked-and-ignored file and only that one"
     )
     assert _excluded_by_gitignore(tmp_path, probe, no_index=False) == [], (
         "without --no-index, check-ignore reports nothing for tracked paths — "
@@ -511,7 +510,9 @@ def test_the_committed_style_artifact_is_a_result_and_not_an_accident():
             f"captured as the result:\n{raw[:400]}"
         ) from exc
 
-    assert isinstance(findings, list), f"{artifact.name} holds {type(findings).__name__}, not a list"
+    assert isinstance(findings, list), (
+        f"{artifact.name} holds {type(findings).__name__}, not a list"
+    )
 
     unreadable = sorted(
         {
@@ -568,9 +569,7 @@ def test_the_merge_driver_gitattributes_names_is_actually_defined():
     )
 
     setup = GIT_SETUP.read_text(encoding="utf-8")
-    undefined = sorted(
-        driver for driver in named if f'"merge.{driver}.driver"' not in setup
-    )
+    undefined = sorted(driver for driver in named if f'"merge.{driver}.driver"' not in setup)
     assert not undefined, (
         f"{GITATTRIBUTES.name} uses merge drivers {undefined} that "
         f"{GIT_SETUP.name} never configures. Git falls back to a text merge "
@@ -730,9 +729,7 @@ def test_the_recorded_hashes_describe_the_tree_that_was_checked() -> None:
         "as the first, with no names under it."
     )
     variable = captured.group(1)
-    tested = re.findall(
-        r'\[\s*"\$' + re.escape(variable) + r'"\s*-(?:eq|ne)\s*(\d+)', region
-    )
+    tested = re.findall(r'\[\s*"\$' + re.escape(variable) + r'"\s*-(?:eq|ne)\s*(\d+)', region)
     assert len(set(tested)) > 1, (
         f"{GATE.name} captures the re-check's exit code into ${variable} and "
         f"then tests it against {sorted(set(tested))} — one outcome, so the "
@@ -759,14 +756,10 @@ def test_the_gate_refuses_to_sign_over_an_empty_digest_set() -> None:
     """
     lines = _gate_lines()
 
-    first_hash = _first_matching(
-        lines, lambda ln: "package-hashes.py" in ln and "compute" in ln
-    )
+    first_hash = _first_matching(lines, lambda ln: "package-hashes.py" in ln and "compute" in ln)
     assert first_hash > 0, "nothing computes content hashes; re-point this guard"
 
-    refusal = _first_matching(
-        lines, lambda ln: re.search(r'=\s*"\{\}"\s*\]', ln) is not None
-    )
+    refusal = _first_matching(lines, lambda ln: re.search(r'=\s*"\{\}"\s*\]', ln) is not None)
     assert refusal > first_hash, (
         "nothing in the gate compares a hash document against the empty "
         f"fallback after computing it at line {first_hash}. Without that, a "
@@ -774,9 +767,7 @@ def test_the_gate_refuses_to_sign_over_an_empty_digest_set() -> None:
         "comparison passes because there is nothing in it."
     )
 
-    guarded = _last_matching(
-        lines[:refusal], lambda ln: 'EMIT_ARTIFACTS" = "yes"' in ln
-    )
+    guarded = _last_matching(lines[:refusal], lambda ln: 'EMIT_ARTIFACTS" = "yes"' in ln)
     assert guarded > first_hash, (
         f"the empty-digest refusal at line {refusal} is not inside an "
         "--emit-artifacts branch, so it would also abort the diagnostics tier, "

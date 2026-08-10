@@ -134,9 +134,7 @@ def expand_value_in_message(
     cfg = config or _DEFAULT_CONFIG
 
     if cfg.expand_direction != "right":
-        raise NotImplementedError(
-            f"expand_direction={cfg.expand_direction!r} is not yet supported"
-        )
+        raise NotImplementedError(f"expand_direction={cfg.expand_direction!r} is not yet supported")
 
     msg_lower = message.lower()
     val_lower = value.lower().strip()
@@ -158,8 +156,8 @@ def expand_value_in_message(
             continue
 
         # Use original-case message for output, lowercase for matching
-        original_value = message[pos:pos + len(val_lower)]
-        after_original = message[pos + len(val_lower):]
+        original_value = message[pos : pos + len(val_lower)]
+        after_original = message[pos + len(val_lower) :]
         expanded_right = _expand_right(after_original, stopwords, cfg)
 
         candidate = (original_value + expanded_right).strip()
@@ -213,10 +211,7 @@ def _expand_right(
 
         # Check for field-boundary patterns (look ahead)
         remaining = " ".join(words[i:]).lower()
-        is_boundary = any(
-            remaining.startswith(pat)
-            for pat in config.field_boundary_patterns
-        )
+        is_boundary = any(remaining.startswith(pat) for pat in config.field_boundary_patterns)
 
         if is_boundary:
             break

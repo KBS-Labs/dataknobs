@@ -39,36 +39,38 @@ def build_initial_tasks(
         stage_tasks = stage_meta.get("tasks", [])
         for task_def in stage_tasks:
             if task_def.get("id"):  # Only add if id is defined
-                tasks.append(WizardTask(
-                    id=task_def.get("id"),
-                    description=task_def.get("description", task_def.get("id", "")),
-                    status="pending",
-                    stage=stage_name,
-                    required=task_def.get("required", True),
-                    depends_on=task_def.get("depends_on", []),
-                    completed_by=task_def.get("completed_by"),
-                    field_name=task_def.get("field_name"),
-                    tool_name=task_def.get("tool_name"),
-                ))
+                tasks.append(
+                    WizardTask(
+                        id=task_def.get("id"),
+                        description=task_def.get("description", task_def.get("id", "")),
+                        status="pending",
+                        stage=stage_name,
+                        required=task_def.get("required", True),
+                        depends_on=task_def.get("depends_on", []),
+                        completed_by=task_def.get("completed_by"),
+                        field_name=task_def.get("field_name"),
+                        tool_name=task_def.get("tool_name"),
+                    )
+                )
 
         # Global tasks (only need to add once)
         if not global_tasks_added:
             global_tasks = stage_meta.get("_global_tasks", [])
             for task_def in global_tasks:
                 if task_def.get("id"):  # Only add if id is defined
-                    tasks.append(WizardTask(
-                        id=task_def.get("id"),
-                        description=task_def.get(
-                            "description", task_def.get("id", "")
-                        ),
-                        status="pending",
-                        stage=None,  # Global task
-                        required=task_def.get("required", True),
-                        depends_on=task_def.get("depends_on", []),
-                        completed_by=task_def.get("completed_by"),
-                        field_name=task_def.get("field_name"),
-                        tool_name=task_def.get("tool_name"),
-                    ))
+                    tasks.append(
+                        WizardTask(
+                            id=task_def.get("id"),
+                            description=task_def.get("description", task_def.get("id", "")),
+                            status="pending",
+                            stage=None,  # Global task
+                            required=task_def.get("required", True),
+                            depends_on=task_def.get("depends_on", []),
+                            completed_by=task_def.get("completed_by"),
+                            field_name=task_def.get("field_name"),
+                            tool_name=task_def.get("tool_name"),
+                        )
+                    )
             if global_tasks:
                 global_tasks_added = True
 
@@ -76,7 +78,8 @@ def build_initial_tasks(
 
 
 def update_field_tasks(
-    state: WizardState, extracted_data: dict[str, Any],
+    state: WizardState,
+    extracted_data: dict[str, Any],
 ) -> None:
     """Mark field-extraction tasks as complete when fields are collected.
 
@@ -97,7 +100,9 @@ def update_field_tasks(
 
 
 def update_tool_tasks(
-    state: WizardState, tool_name: str, success: bool,
+    state: WizardState,
+    tool_name: str,
+    success: bool,
 ) -> None:
     """Mark tool-result tasks as complete when tools succeed.
 
@@ -129,10 +134,6 @@ def update_stage_exit_tasks(state: WizardState, stage: str) -> None:
         stage: The stage being exited.
     """
     for task in state.tasks.tasks:
-        if (
-            task.completed_by == "stage_exit"
-            and task.stage == stage
-            and task.status == "pending"
-        ):
+        if task.completed_by == "stage_exit" and task.stage == stage and task.status == "pending":
             state.tasks.complete_task(task.id)
             logger.debug("Task %s completed via stage exit", task.id)

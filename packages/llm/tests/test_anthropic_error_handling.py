@@ -131,12 +131,8 @@ class _RaisingStreamClient:
         return _StreamCtx(outcome)
 
 
-def _provider(
-    model: str, client: Any, **config_kwargs: Any
-) -> AnthropicProvider:
-    provider = AnthropicProvider(
-        LLMConfig(provider="anthropic", model=model, **config_kwargs)
-    )
+def _provider(model: str, client: Any, **config_kwargs: Any) -> AnthropicProvider:
+    provider = AnthropicProvider(LLMConfig(provider="anthropic", model=model, **config_kwargs))
     provider._client = client
     provider._is_initialized = True
     return provider
@@ -185,17 +181,13 @@ class TestVendorErrorTranslation:
         assert isinstance(excinfo.value.__cause__, anthropic.RateLimitError)
 
     async def test_401_becomes_operation_error(self) -> None:
-        client = _RaisingClient(
-            [_status_error(anthropic.AuthenticationError, 401, "bad key")]
-        )
+        client = _RaisingClient([_status_error(anthropic.AuthenticationError, 401, "bad key")])
         provider = _provider("claude-3-haiku", client)
         with pytest.raises(OperationError):
             await provider.complete("hi")
 
     async def test_connection_error_becomes_operation_error(self) -> None:
-        client = _RaisingClient(
-            [anthropic.APIConnectionError(request=_request())]
-        )
+        client = _RaisingClient([anthropic.APIConnectionError(request=_request())])
         provider = _provider("claude-3-haiku", client)
         with pytest.raises(OperationError):
             await provider.complete("hi")
@@ -335,9 +327,7 @@ class TestFunctionCallErrorHandling:
         assert len(client.calls) == 1
 
     async def test_auth_error_propagates_without_fallback(self) -> None:
-        client = _RaisingClient(
-            [_status_error(anthropic.AuthenticationError, 401, "bad key")]
-        )
+        client = _RaisingClient([_status_error(anthropic.AuthenticationError, 401, "bad key")])
         provider = _provider("claude-3-haiku", client)
         messages = [LLMMessage(role="user", content="weather?")]
         with pytest.raises(OperationError):
@@ -359,9 +349,7 @@ class TestFunctionCallErrorHandling:
         # fallback's self.complete() issues the second create → success.
         client = _RaisingClient(
             [
-                _status_error(
-                    anthropic.BadRequestError, 400, "tools: not supported"
-                ),
+                _status_error(anthropic.BadRequestError, 400, "tools: not supported"),
                 None,
             ]
         )

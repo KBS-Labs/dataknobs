@@ -203,9 +203,7 @@ def _read_records(path: str) -> dict[str, dict[str, Any]]:
             if "exit_code" not in record:
                 raise SystemExit(f"{path}:{number}: {name!r} has no 'exit_code'")
 
-            entry: dict[str, Any] = {
-                "status": "pass" if record["exit_code"] == 0 else "fail"
-            }
+            entry: dict[str, Any] = {"status": "pass" if record["exit_code"] == 0 else "fail"}
             for field in CHECK_FIELD_ORDER:
                 if field in record:
                     entry[field] = record.pop(field)
@@ -362,9 +360,7 @@ def render(
         # as verdict() — reported, not raised, not dropped — with the rows going
         # out ungrouped, which is the most the document supports.
         lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(
-            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
-        )
+        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
         return lines
 
     if mode != "pr":
@@ -379,9 +375,7 @@ def render(
         lines.append(_row("Tests:", TEST_WIDTH, palette.verdict(combined)))
     elif unit.get("skipped") and integration.get("skipped"):
         lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(
-            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
-        )
+        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
     elif package_tests_skipped:
         # No package suite ran, so "Unit Tests: PASSED" would be green for work
         # not done. The workspace guards did run, and their status is what the
@@ -396,9 +390,7 @@ def render(
         )
     else:
         lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(
-            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
-        )
+        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
     return lines
 
 

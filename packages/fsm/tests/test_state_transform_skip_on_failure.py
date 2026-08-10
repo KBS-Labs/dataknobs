@@ -77,15 +77,11 @@ def _recovery_config() -> dict:
                     {
                         "name": "cleanup",
                         "run_on_failure": True,
-                        "functions": {
-                            "transform": {"type": "registered", "name": "spy_cleanup"}
-                        },
+                        "functions": {"transform": {"type": "registered", "name": "spy_cleanup"}},
                     },
                     {
                         "name": "extra",
-                        "functions": {
-                            "transform": {"type": "registered", "name": "spy_extra"}
-                        },
+                        "functions": {"transform": {"type": "registered", "name": "spy_extra"}},
                     },
                     {"name": "done", "is_end": True},
                 ],
@@ -110,7 +106,6 @@ def test_sync_recovery_state_runs_normal_downstream_skipped() -> None:
             "spy_extra": _spy("extra", calls),
         },
     ) as fsm:
-
         result = fsm.process({"id": "1"})
 
         assert result["success"] is False, "a failed record must report failure"
@@ -181,7 +176,6 @@ def test_sync_within_state_second_transform_skipped_after_raise() -> None:
         _within_state_config(),
         custom_functions={"boom": _boom, "spy_second": _spy("second", calls)},
     ) as fsm:
-
         result = fsm.process({"id": "1"})
 
         assert result["success"] is False
@@ -218,10 +212,7 @@ def _subnetwork_failure_config() -> FSMConfig:
     test can assert whether it ran. A default ``PushArc`` uses COPY isolation, so
     the sub-network executes in a fresh context with its own ``failed_states``.
     """
-    raise_code = (
-        "def transform(data, context):\n"
-        "    raise RuntimeError('sub transform exploded')\n"
-    )
+    raise_code = "def transform(data, context):\n    raise RuntimeError('sub transform exploded')\n"
     after_code = (
         "def transform(data, context):\n"
         "    context.variables['after_ran'] = True\n"
@@ -322,7 +313,6 @@ def test_sync_clean_record_runs_all_transforms() -> None:
             "spy_extra": _spy("extra", calls),
         },
     ) as fsm:
-
         result = fsm.process({"id": "1"})
 
         assert result["success"] is True

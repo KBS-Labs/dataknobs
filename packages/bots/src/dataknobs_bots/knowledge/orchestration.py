@@ -247,8 +247,7 @@ class IngestOrchestrator:
             )
         if ingestion_manager is None and manager_resolver is None:
             raise ValueError(
-                "IngestOrchestrator: one of ingestion_manager= or "
-                "manager_resolver= is required."
+                "IngestOrchestrator: one of ingestion_manager= or manager_resolver= is required."
             )
         if lock is not None and lock_config is not None:
             raise ValueError(
@@ -293,9 +292,7 @@ class IngestOrchestrator:
         """Subscribe to the trigger topic. Idempotent."""
         if self._subscription is not None:
             return
-        self._subscription = await self._event_bus.subscribe(
-            self._topic, self._handle_trigger
-        )
+        self._subscription = await self._event_bus.subscribe(self._topic, self._handle_trigger)
         logger.info("IngestOrchestrator subscribed to %s", self._topic)
 
     async def stop(self) -> None:
@@ -334,8 +331,7 @@ class IngestOrchestrator:
         domain_id = payload.get("domain_id")
         if not domain_id:
             logger.warning(
-                "IngestOrchestrator received trigger without domain_id; "
-                "skipping (event_id=%s)",
+                "IngestOrchestrator received trigger without domain_id; skipping (event_id=%s)",
                 event.event_id,
             )
             return
@@ -370,8 +366,7 @@ class IngestOrchestrator:
             manager = await self._resolve_manager(tenant_id, domain_id)
             if manager is None:
                 logger.info(
-                    "Trigger key %r: no manager to classify; proceeding "
-                    "(event_id=%s)",
+                    "Trigger key %r: no manager to classify; proceeding (event_id=%s)",
                     key,
                     event.event_id,
                 )
@@ -379,8 +374,7 @@ class IngestOrchestrator:
                 kind = manager.source.classify_key(key)
                 if kind is not KnowledgeKeyKind.CONTENT:
                     logger.info(
-                        "Trigger key %r classified %s (not content); "
-                        "skipping ingest (event_id=%s)",
+                        "Trigger key %r classified %s (not content); skipping ingest (event_id=%s)",
                         key,
                         kind.value,
                         event.event_id,
@@ -404,8 +398,7 @@ class IngestOrchestrator:
         async with self._lock.hold(lock_key) as acquired:
             if not acquired:
                 logger.warning(
-                    "IngestOrchestrator could not acquire lock for "
-                    "domain=%s; skipping trigger",
+                    "IngestOrchestrator could not acquire lock for domain=%s; skipping trigger",
                     domain_id,
                 )
                 return
@@ -415,9 +408,7 @@ class IngestOrchestrator:
                 # lock, the common keyless path). Either way the resolver
                 # runs at most once per event.
                 if manager is None:
-                    manager = await self._resolve_manager(
-                        tenant_id, domain_id
-                    )
+                    manager = await self._resolve_manager(tenant_id, domain_id)
                 if manager is None:
                     # Only reachable via a resolver returning None — the
                     # exactly-one-of constructor invariant guarantees the
@@ -432,18 +423,14 @@ class IngestOrchestrator:
                     )
                     return
                 if since_version:
-                    result = await manager.ingest_changes(
-                        domain_id, since_version
-                    )
+                    result = await manager.ingest_changes(domain_id, since_version)
                 elif force_full:
                     result = await manager.ingest(
                         domain_id,
                         swap_mode=IngestSwapMode.CLEAR_FIRST,
                     )
                 else:
-                    result = await manager.ingest_if_changed(
-                        domain_id, last_version=last_version
-                    )
+                    result = await manager.ingest_if_changed(domain_id, last_version=last_version)
                     # Only the default path can yield None
                     # (ingest_changes / ingest always return a result).
                     if result is None:
@@ -460,8 +447,7 @@ class IngestOrchestrator:
                     )
             except Exception:
                 logger.exception(
-                    "IngestOrchestrator failed to process trigger for "
-                    "domain=%s tenant=%s",
+                    "IngestOrchestrator failed to process trigger for domain=%s tenant=%s",
                     domain_id,
                     tenant_id,
                 )
@@ -487,9 +473,7 @@ class IngestOrchestrator:
         idempotent and to cache, so resolving outside the lock is safe.
         """
         if self._manager_resolver is not None:
-            return await self._manager_resolver(
-                tenant_id=tenant_id, domain_id=domain_id
-            )
+            return await self._manager_resolver(tenant_id=tenant_id, domain_id=domain_id)
         return self._manager
 
 

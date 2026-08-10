@@ -352,6 +352,6 @@ def test_nothing_else_in_the_workspace_passes_the_flag():
         if "--emit-artifacts" in line and not line.lstrip().startswith("#")
     ]
 
-    assert not offenders, (
-        "only bin/dk may ask for artifacts:\n" + "\n".join(f"  - {o}" for o in offenders)
+    assert not offenders, "only bin/dk may ask for artifacts:\n" + "\n".join(
+        f"  - {o}" for o in offenders
     )

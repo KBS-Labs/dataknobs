@@ -9,6 +9,7 @@ capability advertisement, and the consumer-facing escape hatches
 The pre-substrate public surface (registration / triggering / clear
 / from_config) is covered by ``test_lifecycle_hooks.py``.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -81,13 +82,18 @@ async def test_consumer_can_swap_ordering_via_registry() -> None:
 
     # Register via the registry directly so we can pass priority.
     hooks.registry.register(
-        "turn_start", lambda _: seen.append("default"),
+        "turn_start",
+        lambda _: seen.append("default"),
     )
     hooks.registry.register(
-        "turn_start", lambda _: seen.append("low"), priority=-10,
+        "turn_start",
+        lambda _: seen.append("low"),
+        priority=-10,
     )
     hooks.registry.register(
-        "turn_start", lambda _: seen.append("high"), priority=10,
+        "turn_start",
+        lambda _: seen.append("high"),
+        priority=10,
     )
     await hooks.trigger_turn_start(_evt())
     assert seen == ["low", "default", "high"]

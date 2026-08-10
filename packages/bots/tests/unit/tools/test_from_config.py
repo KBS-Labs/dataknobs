@@ -16,17 +16,13 @@ class TestResolveCallable:
     """Tests for resolve_callable()."""
 
     def test_colon_separator(self) -> None:
-        result = resolve_callable(
-            "dataknobs_bots.tools.config_tools:ListTemplatesTool"
-        )
+        result = resolve_callable("dataknobs_bots.tools.config_tools:ListTemplatesTool")
         from dataknobs_bots.tools.config_tools import ListTemplatesTool
 
         assert result is ListTemplatesTool
 
     def test_dot_separator_fallback(self) -> None:
-        result = resolve_callable(
-            "dataknobs_bots.tools.config_tools.ListTemplatesTool"
-        )
+        result = resolve_callable("dataknobs_bots.tools.config_tools.ListTemplatesTool")
         from dataknobs_bots.tools.config_tools import ListTemplatesTool
 
         assert result is ListTemplatesTool
@@ -59,22 +55,16 @@ class TestListTemplatesToolFromConfig:
             "variables": [],
             "structure": {"bot": {"llm": {"provider": "echo"}}},
         }
-        (tmp_path / "test_template.yaml").write_text(
-            yaml.dump(template), encoding="utf-8"
-        )
+        (tmp_path / "test_template.yaml").write_text(yaml.dump(template), encoding="utf-8")
 
-        tool = ListTemplatesTool.from_config(
-            {"template_dir": str(tmp_path)}
-        )
+        tool = ListTemplatesTool.from_config({"template_dir": str(tmp_path)})
         assert tool.name == "list_templates"
         assert tool._registry is not None
 
     def test_from_config_missing_dir(self) -> None:
         from dataknobs_bots.tools.config_tools import ListTemplatesTool
 
-        tool = ListTemplatesTool.from_config(
-            {"template_dir": "/nonexistent/path"}
-        )
+        tool = ListTemplatesTool.from_config({"template_dir": "/nonexistent/path"})
         assert tool.name == "list_templates"
 
 
@@ -84,9 +74,7 @@ class TestGetTemplateDetailsToolFromConfig:
     def test_from_config(self, tmp_path: Path) -> None:
         from dataknobs_bots.tools.config_tools import GetTemplateDetailsTool
 
-        tool = GetTemplateDetailsTool.from_config(
-            {"template_dir": str(tmp_path)}
-        )
+        tool = GetTemplateDetailsTool.from_config({"template_dir": str(tmp_path)})
         assert tool.name == "get_template_details"
 
 
@@ -139,9 +127,7 @@ class TestSaveConfigToolFromConfig:
     def test_from_config_minimal(self, tmp_path: Path) -> None:
         from dataknobs_bots.tools.config_tools import SaveConfigTool
 
-        tool = SaveConfigTool.from_config(
-            {"config_dir": str(tmp_path)}
-        )
+        tool = SaveConfigTool.from_config({"config_dir": str(tmp_path)})
         assert tool.name == "save_config"
         assert tool._draft_manager.output_dir == tmp_path
         assert tool._on_save is None
@@ -151,9 +137,7 @@ class TestSaveConfigToolFromConfig:
     def test_from_config_with_portable(self, tmp_path: Path) -> None:
         from dataknobs_bots.tools.config_tools import SaveConfigTool
 
-        tool = SaveConfigTool.from_config(
-            {"config_dir": str(tmp_path), "portable": True}
-        )
+        tool = SaveConfigTool.from_config({"config_dir": str(tmp_path), "portable": True})
         assert tool._portable is True
 
 

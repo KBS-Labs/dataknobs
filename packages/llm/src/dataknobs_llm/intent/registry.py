@@ -17,6 +17,7 @@ Unlike the other three (which read the discriminator from a
 of :meth:`PluginRegistry.create` — :func:`create_intent_classifier`
 passes ``key=name`` directly. No ``config_key`` is configured.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

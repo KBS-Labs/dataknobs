@@ -51,9 +51,15 @@ import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ToolCall,
-    LLMAdapter, normalize_llm_config
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    AsyncLLMProvider,
+    ModelCapability,
+    ToolCall,
+    LLMAdapter,
+    normalize_llm_config,
 )
 from ..model_profile import (
     BundledResourceSource,
@@ -78,12 +84,21 @@ logger = logging.getLogger(__name__)
 #: only by the last-resort heuristic (:func:`_openai_heuristic`) — a model listed
 #: in the bundled resource resolves its capabilities from there.
 _TOOL_CAPABLE_FAMILIES: tuple[str, ...] = (
-    "gpt", "o1", "o3", "o4",
+    "gpt",
+    "o1",
+    "o3",
+    "o4",
 )
 
 #: OpenAI model-id substrings that carry vision (multimodal input).
 _VISION_CAPABLE_FAMILIES: tuple[str, ...] = (
-    "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "vision",
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5",
+    "o1",
+    "o3",
+    "o4",
+    "vision",
 )
 
 
@@ -127,9 +142,7 @@ def _openai_heuristic(model: str) -> ModelProfile:
 _OPENAI_RESOURCE_SOURCE = BundledResourceSource.from_resource(
     "dataknobs_llm.llm.providers", "data/openai_models.yaml"
 )
-_OPENAI_HEURISTIC_SOURCE = CallableModelMetadataSource(
-    "heuristic", _openai_heuristic
-)
+_OPENAI_HEURISTIC_SOURCE = CallableModelMetadataSource("heuristic", _openai_heuristic)
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -160,18 +173,18 @@ class OpenAIAdapter(LLMAdapter):
         adapted = []
         for msg in messages:
             message: Dict[str, Any] = {
-                'role': msg.role,
-                'content': msg.content,
+                "role": msg.role,
+                "content": msg.content,
             }
             if msg.name:
-                message['name'] = msg.name
+                message["name"] = msg.name
             if msg.function_call:
-                message['function_call'] = msg.function_call
+                message["function_call"] = msg.function_call
             # Include tool_call_id on tool result messages so OpenAI can
             # pair results with the specific tool invocation.
-            if msg.role == 'tool':
+            if msg.role == "tool":
                 if msg.tool_call_id:
-                    message['tool_call_id'] = msg.tool_call_id
+                    message["tool_call_id"] = msg.tool_call_id
                 elif msg.name:
                     # Fallback for backward compat with messages stored
                     # before tool_call_id was available.
@@ -180,23 +193,23 @@ class OpenAIAdapter(LLMAdapter):
                         "falling back to name. OpenAI may reject this.",
                         msg.name,
                     )
-                    message['tool_call_id'] = msg.name
+                    message["tool_call_id"] = msg.name
                 else:
                     logger.warning(
                         "Tool result message has no tool_call_id or name; "
                         "using 'unknown'. OpenAI will likely reject this.",
                     )
-                    message['tool_call_id'] = 'unknown'
+                    message["tool_call_id"] = "unknown"
             # Include tool_calls on assistant messages so the model
             # retains structured memory of what it called.
-            if msg.tool_calls and msg.role == 'assistant':
-                message['tool_calls'] = [
+            if msg.tool_calls and msg.role == "assistant":
+                message["tool_calls"] = [
                     {
-                        'id': tc.id or '',
-                        'type': 'function',
-                        'function': {
-                            'name': tc.name,
-                            'arguments': (
+                        "id": tc.id or "",
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": (
                                 tc.parameters
                                 if isinstance(tc.parameters, str)
                                 else json.dumps(tc.parameters)
@@ -214,45 +227,53 @@ class OpenAIAdapter(LLMAdapter):
         message = choice.message
 
         return LLMResponse(
-            content=message.content or '',
+            content=message.content or "",
             model=response.model,
             finish_reason=choice.finish_reason,
             # OpenAI signals a token-budget cut-off with finish_reason
             # 'length' — the same silent-truncation hazard as Anthropic's
             # 'max_tokens' (see LLMResponse.truncated).
-            truncated=choice.finish_reason == 'length',
+            truncated=choice.finish_reason == "length",
             usage={
-                'prompt_tokens': response.usage.prompt_tokens,
-                'completion_tokens': response.usage.completion_tokens,
-                'total_tokens': response.usage.total_tokens
-            } if response.usage else None,
-            function_call=message.function_call if hasattr(message, 'function_call') else None
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            if response.usage
+            else None,
+            function_call=message.function_call if hasattr(message, "function_call") else None,
         )
 
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
         """Convert config to OpenAI parameters."""
         gen = config.generation_params()
         params: Dict[str, Any] = {
-            'model': config.model,
+            "model": config.model,
         }
         # Map canonical names to OpenAI names (most are 1:1)
-        for key in ('temperature', 'top_p', 'frequency_penalty',
-                    'presence_penalty', 'max_tokens', 'seed'):
+        for key in (
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "max_tokens",
+            "seed",
+        ):
             if key in gen:
                 params[key] = gen[key]
         # OpenAI uses 'stop' instead of 'stop_sequences'
-        if 'stop_sequences' in gen:
-            params['stop'] = gen['stop_sequences']
+        if "stop_sequences" in gen:
+            params["stop"] = gen["stop_sequences"]
         if config.logit_bias:
-            params['logit_bias'] = config.logit_bias
+            params["logit_bias"] = config.logit_bias
         if config.user_id:
-            params['user'] = config.user_id
-        if config.response_format == 'json':
-            params['response_format'] = {'type': 'json_object'}
+            params["user"] = config.user_id
+        if config.response_format == "json":
+            params["response_format"] = {"type": "json_object"}
         if config.functions:
-            params['functions'] = config.functions
+            params["functions"] = config.functions
         if config.function_call:
-            params['function_call'] = config.function_call
+            params["function_call"] = config.function_call
 
         return params
 
@@ -379,7 +400,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: AsyncPromptBuilder | None = None
+        prompt_builder: AsyncPromptBuilder | None = None,
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -391,18 +412,18 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         try:
             import openai
 
-            api_key = self.config.api_key or os.environ.get('OPENAI_API_KEY')
+            api_key = self.config.api_key or os.environ.get("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OpenAI API key not provided")
 
             self._client = openai.AsyncOpenAI(
-                api_key=api_key,
-                base_url=self.config.api_base,
-                timeout=self.config.timeout
+                api_key=api_key, base_url=self.config.api_base, timeout=self.config.timeout
             )
             self._is_initialized = True
         except ImportError as e:
-            raise ImportError("openai package not installed. Install with: pip install openai") from e
+            raise ImportError(
+                "openai package not installed. Install with: pip install openai"
+            ) from e
 
     async def _close_client(self) -> None:
         """Close the OpenAI client."""
@@ -438,9 +459,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return LayeredModelProfileResolver(
             [
-                ConfigOverrideSource(
-                    getattr(config, "model_profile_overrides", None)
-                ),
+                ConfigOverrideSource(getattr(config, "model_profile_overrides", None)),
                 _OPENAI_RESOURCE_SOURCE,
                 _OPENAI_HEURISTIC_SOURCE,
             ]
@@ -471,9 +490,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         reasoning-family drop. An unknown model resolves an all-permissive profile,
         so this is a pass-through for it (the historical behavior).
         """
-        shaped_config, wire_extra, constraints = self._shape_request_params(
-            config, extra
-        )
+        shaped_config, wire_extra, constraints = self._shape_request_params(config, extra)
         wire = self.adapter.adapt_config(shaped_config)
         wire.update(wire_extra)
         return self._apply_param_remaps(wire, constraints.param_remaps)
@@ -509,9 +526,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
             return None
         status = getattr(exc, "status_code", None)
         response = getattr(exc, "response", None)
-        retry_after = self._retry_after_from_headers(
-            getattr(response, "headers", None)
-        )
+        retry_after = self._retry_after_from_headers(getattr(response, "headers", None))
         return self._dataknobs_error_for_status(
             status,
             str(exc),
@@ -524,7 +539,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion.
 
@@ -543,11 +558,11 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Convert string to message list
         if isinstance(messages, str):
-            messages = [LLMMessage(role='user', content=messages)]
+            messages = [LLMMessage(role="user", content=messages)]
 
         # Add system prompt if configured
-        if runtime_config.system_prompt and messages[0].role != 'system':
-            messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
+        if runtime_config.system_prompt and messages[0].role != "system":
+            messages.insert(0, LLMMessage(role="system", content=runtime_config.system_prompt))
 
         # Adapt messages and config (drops rejected params, clamps max_tokens,
         # applies the family's wire-param remaps — no-op for permissive models).
@@ -560,10 +575,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Make API call
         response = await self._call_api(
-            lambda: self._client.chat.completions.create(
-                messages=adapted_messages,
-                **params
-            )
+            lambda: self._client.chat.completions.create(messages=adapted_messages, **params)
         )
 
         return self._analyze_response(self.adapter.adapt_response(response))
@@ -573,7 +585,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion.
 
@@ -592,17 +604,17 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Convert string to message list
         if isinstance(messages, str):
-            messages = [LLMMessage(role='user', content=messages)]
+            messages = [LLMMessage(role="user", content=messages)]
 
         # Add system prompt if configured
-        if runtime_config.system_prompt and messages[0].role != 'system':
-            messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
+        if runtime_config.system_prompt and messages[0].role != "system":
+            messages.insert(0, LLMMessage(role="system", content=runtime_config.system_prompt))
 
         # Adapt messages and config (drops rejected params, clamps max_tokens,
         # applies the family's wire-param remaps — no-op for permissive models).
         adapted_messages = self.adapter.adapt_messages(messages)
         params = self._build_api_kwargs(runtime_config, kwargs)
-        params['stream'] = True
+        params["stream"] = True
 
         # Handle tools if provided
         if tools:
@@ -610,10 +622,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Stream API call
         stream = await self._call_api(
-            lambda: self._client.chat.completions.create(
-                messages=adapted_messages,
-                **params
-            )
+            lambda: self._client.chat.completions.create(messages=adapted_messages, **params)
         )
 
         # Accumulate tool call deltas across chunks. OpenAI sends them
@@ -659,9 +668,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     accumulated_tool_calls = [
                         ToolCall(
                             name=acc["name"],
-                            parameters=json.loads(acc["arguments"])
-                            if acc["arguments"]
-                            else {},
+                            parameters=json.loads(acc["arguments"]) if acc["arguments"] else {},
                             id=acc["id"] or None,
                         )
                         for _, acc in sorted(tool_call_accumulators.items())
@@ -671,7 +678,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     delta=content,
                     is_final=finish_reason is not None,
                     finish_reason=finish_reason,
-                    truncated=finish_reason == 'length',
+                    truncated=finish_reason == "length",
                     tool_calls=accumulated_tool_calls,
                     model=runtime_config.model if finish_reason is not None else None,
                 )
@@ -680,9 +687,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 yield chunk_resp
 
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings."""
         if not self._is_initialized:
@@ -696,8 +701,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         response = await self._call_api(
             lambda: self._client.embeddings.create(
-                input=texts,
-                model=self.config.model or 'text-embedding-ada-002'
+                input=texts, model=self.config.model or "text-embedding-ada-002"
             )
         )
 
@@ -705,33 +709,31 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """Execute function calling."""
-        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "function_call() is deprecated, use complete(tools=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self._is_initialized:
             await self.initialize()
 
         # Add system prompt if configured
-        if self.config.system_prompt and messages[0].role != 'system':
-            messages.insert(0, LLMMessage(role='system', content=self.config.system_prompt))
+        if self.config.system_prompt and messages[0].role != "system":
+            messages.insert(0, LLMMessage(role="system", content=self.config.system_prompt))
 
         # Adapt messages and config (drops rejected params, clamps max_tokens,
         # applies the family's wire-param remaps — no-op for permissive models).
         adapted_messages = self.adapter.adapt_messages(messages)
         params = self._build_api_kwargs(self.config, kwargs)
-        params['functions'] = functions
-        params['function_call'] = kwargs.get('function_call', 'auto')
+        params["functions"] = functions
+        params["function_call"] = kwargs.get("function_call", "auto")
 
         # Make API call
         response = await self._call_api(
-            lambda: self._client.chat.completions.create(
-                messages=adapted_messages,
-                **params
-            )
+            lambda: self._client.chat.completions.create(messages=adapted_messages, **params)
         )
 
         return self._analyze_response(self.adapter.adapt_response(response))

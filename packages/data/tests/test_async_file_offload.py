@@ -93,9 +93,7 @@ async def test_upsert_batch_does_not_block(db: AsyncFileDatabase) -> None:
     with assert_no_blocking():
         # Insert + overwrite in one batch; the single load/save must stay off
         # the event loop.
-        await db.upsert_batch(
-            [Record({"name": "a", "value": 2}, id="a"), _record("b", 3)]
-        )
+        await db.upsert_batch([Record({"name": "a", "value": 2}, id="a"), _record("b", 3)])
 
 
 @requires_blockbuster

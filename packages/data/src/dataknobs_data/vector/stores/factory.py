@@ -73,14 +73,10 @@ class VectorStoreFactory(FactoryBase):
             match = re.search(r"pip install ([\w-]+)", str(e))
             if match:
                 package = match.group(1)
-                raise ValueError(
-                    f"{backend_type.capitalize()} backend requires {package}"
-                ) from e
+                raise ValueError(f"{backend_type.capitalize()} backend requires {package}") from e
             else:
                 # Fallback if pattern doesn't match
-                raise ValueError(
-                    f"Backend '{backend_type}' has missing dependencies"
-                ) from e
+                raise ValueError(f"Backend '{backend_type}' has missing dependencies") from e
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.

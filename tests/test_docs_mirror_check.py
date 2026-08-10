@@ -113,9 +113,7 @@ def test_clean_mirror_passes(tree):
     _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
     res = mod.Result()
-    mod.check_mirror(
-        {"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res
-    )
+    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
     assert res.ok
 
 
@@ -124,9 +122,7 @@ def test_mirror_drift_is_detected(tree):
     _w(pkg / "API_REFERENCE.md", "# API\n\nthe source truth\n")
     _w(site / "api-reference.md", "# API\n\na hand-edited divergence\n")
     res = mod.Result()
-    mod.check_mirror(
-        {"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res
-    )
+    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
     assert not res.ok
     assert any("mirror drift" in e for e in res.errors)
 
@@ -138,9 +134,7 @@ def test_mirror_with_fenced_link_example_stays_in_sync(tree):
     _w(pkg / "API_REFERENCE.md", body)
     _w(site / "api-reference.md", body.replace("REAL_DOC.md", "real-doc.md"))
     res = mod.Result()
-    mod.check_mirror(
-        {"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res
-    )
+    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
     assert res.ok, res.errors
 
 
@@ -149,9 +143,7 @@ def test_mirror_flagged_when_site_is_symlink(tree):
     _w(pkg / "API_REFERENCE.md", "# API\n")
     (site / "api-reference.md").symlink_to(pkg / "API_REFERENCE.md")
     res = mod.Result()
-    mod.check_mirror(
-        {"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res
-    )
+    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
     assert not res.ok
     assert any("is a symlink" in e for e in res.errors)
 

@@ -86,27 +86,19 @@ class TestPostgresLockConfig:
         )
         assert cfg.connection_string == "postgresql://u:p@h:5433/db"
 
-    def test_database_url_env_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(
-            "DATABASE_URL", "postgresql://u:p@env-h:6000/env-db"
-        )
+    def test_database_url_env_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@env-h:6000/env-db")
         cfg = PostgresLockConfig.from_dict({})
         assert cfg.connection_string == "postgresql://u:p@env-h:6000/env-db"
 
-    def test_postgres_env_vars_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_postgres_env_vars_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("POSTGRES_HOST", "env-h")
         monkeypatch.setenv("POSTGRES_PORT", "5678")
         monkeypatch.setenv("POSTGRES_DB", "env-db")
         monkeypatch.setenv("POSTGRES_USER", "env-u")
         monkeypatch.setenv("POSTGRES_PASSWORD", "env-p")
         cfg = PostgresLockConfig.from_dict({})
-        assert cfg.connection_string == (
-            "postgresql://env-u:env-p@env-h:5678/env-db"
-        )
+        assert cfg.connection_string == ("postgresql://env-u:env-p@env-h:5678/env-db")
 
     def test_asyncpg_dialect_prefix_normalized(self) -> None:
         cfg = PostgresLockConfig.from_dict(
@@ -121,15 +113,11 @@ class TestPostgresLockConfig:
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
         """Backend-routing keys (``"backend"``) in the same dict are tolerated."""
-        cfg = PostgresLockConfig.from_dict(
-            {"backend": "postgres", "connection_string": self.DSN}
-        )
+        cfg = PostgresLockConfig.from_dict({"backend": "postgres", "connection_string": self.DSN})
         assert cfg.connection_string == self.DSN
 
     def test_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            PostgresLockConfig(connection_string=self.DSN)
-        )
+        assert_structured_config_roundtrip(PostgresLockConfig(connection_string=self.DSN))
 
     def test_connection_string_redacted_from_repr(self) -> None:
         """The DSN embeds the password; ``repr`` masks it, ``to_dict`` keeps it."""
@@ -165,9 +153,7 @@ class TestPostgresAdvisoryLockConstructionShapes:
         assert lock.config.connection_string == self.DSN
 
     def test_dict_config(self) -> None:
-        lock = PostgresAdvisoryLock(
-            config={"connection_string": self.DSN}
-        )
+        lock = PostgresAdvisoryLock(config={"connection_string": self.DSN})
         assert lock.config.connection_string == self.DSN
 
     def test_dict_config_individual_keys(self) -> None:
@@ -188,9 +174,7 @@ class TestPostgresAdvisoryLockConstructionShapes:
         assert lock.config is cfg
 
     def test_from_config_dict(self) -> None:
-        lock = PostgresAdvisoryLock.from_config(
-            {"connection_string": self.DSN}
-        )
+        lock = PostgresAdvisoryLock.from_config({"connection_string": self.DSN})
         assert lock.config.connection_string == self.DSN
 
     def test_from_config_typed(self) -> None:

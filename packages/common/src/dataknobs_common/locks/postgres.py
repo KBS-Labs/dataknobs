@@ -191,9 +191,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         unsigned = int.from_bytes(digest, "big", signed=False)
         return unsigned - (1 << 63)  # → signed 64-bit, stable forever
 
-    async def acquire(
-        self, key: str, *, timeout: float | None = None
-    ) -> bool:
+    async def acquire(self, key: str, *, timeout: float | None = None) -> bool:
         """Acquire ``key`` cross-replica. See :meth:`DistributedLock.acquire`.
 
         Opens a dedicated session connection and takes a session-level
@@ -217,17 +215,11 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
                 await conn.execute("SELECT pg_advisory_lock($1)", lock_id)
                 got = True
             else:
-                got = bool(
-                    await conn.fetchval(
-                        "SELECT pg_try_advisory_lock($1)", lock_id
-                    )
-                )
+                got = bool(await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_id))
                 if not got:
                     try:
                         await asyncio.wait_for(
-                            conn.execute(
-                                "SELECT pg_advisory_lock($1)", lock_id
-                            ),
+                            conn.execute("SELECT pg_advisory_lock($1)", lock_id),
                             timeout,
                         )
                         got = True
@@ -262,9 +254,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         if conn is None:
             return
         try:
-            await conn.execute(
-                "SELECT pg_advisory_unlock($1)", self._key_to_bigint(key)
-            )
+            await conn.execute("SELECT pg_advisory_unlock($1)", self._key_to_bigint(key))
         except Exception:
             logger.warning(
                 "pg_advisory_unlock failed for key=%s; closing the "
@@ -275,9 +265,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         finally:
             await conn.close()
 
-    def hold(
-        self, key: str, *, timeout: float | None = None
-    ) -> AbstractAsyncContextManager[bool]:
+    def hold(self, key: str, *, timeout: float | None = None) -> AbstractAsyncContextManager[bool]:
         """Async CM wrapping acquire/release. See the protocol."""
         return _hold(self, key, timeout)
 

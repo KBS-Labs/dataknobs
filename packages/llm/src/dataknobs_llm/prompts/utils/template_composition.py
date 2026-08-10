@@ -63,10 +63,7 @@ class TemplateComposer:
         self._config_cache: Dict[str, Dict[str, Any]] = {}
 
     def compose_template(
-        self,
-        template: str,
-        sections: Dict[str, str] | None = None,
-        prompt_name: str | None = None
+        self, template: str, sections: Dict[str, str] | None = None, prompt_name: str | None = None
     ) -> str:
         r"""Compose a template by replacing section placeholders.
 
@@ -118,9 +115,7 @@ class TemplateComposer:
         return composed
 
     def get_sections_for_prompt(
-        self,
-        prompt_name: str,
-        prompt_config: Dict[str, Any]
+        self, prompt_name: str, prompt_config: Dict[str, Any]
     ) -> Dict[str, str]:
         """Get all sections for a prompt, including inherited sections.
 
@@ -142,17 +137,10 @@ class TemplateComposer:
         # Track visited prompts to detect circular inheritance
         visited = set()
 
-        return self._get_sections_recursive(
-            prompt_name,
-            prompt_config,
-            visited
-        )
+        return self._get_sections_recursive(prompt_name, prompt_config, visited)
 
     def _get_sections_recursive(
-        self,
-        prompt_name: str,
-        prompt_config: Dict[str, Any],
-        visited: set
+        self, prompt_name: str, prompt_config: Dict[str, Any], visited: set
     ) -> Dict[str, str]:
         """Recursively resolve sections with inheritance.
 
@@ -204,13 +192,11 @@ class TemplateComposer:
                 base_sections = self._get_sections_recursive(
                     extends,
                     base_config,
-                    visited.copy()  # Copy to avoid affecting sibling branches
+                    visited.copy(),  # Copy to avoid affecting sibling branches
                 )
                 all_sections.update(base_sections)
             else:
-                logger.warning(
-                    f"Cannot find base template '{extends}' for '{prompt_name}'"
-                )
+                logger.warning(f"Cannot find base template '{extends}' for '{prompt_name}'")
 
         # Overlay this prompt's sections (overrides base)
         prompt_sections = prompt_config.get("sections", {})
@@ -219,9 +205,7 @@ class TemplateComposer:
         return all_sections
 
     def merge_prompt_configs(
-        self,
-        base_config: Dict[str, Any],
-        derived_config: Dict[str, Any]
+        self, base_config: Dict[str, Any], derived_config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Merge derived prompt config with base config.
 
@@ -261,14 +245,14 @@ class TemplateComposer:
         if "sections" in base_config or "sections" in derived_config:
             merged["sections"] = {
                 **base_config.get("sections", {}),
-                **derived_config.get("sections", {})
+                **derived_config.get("sections", {}),
             }
 
         # 2. Merge defaults (child overrides parent)
         if "defaults" in base_config or "defaults" in derived_config:
             merged["defaults"] = {
                 **base_config.get("defaults", {}),
-                **derived_config.get("defaults", {})
+                **derived_config.get("defaults", {}),
             }
 
         # 3. Merge validation (child overrides parent completely)
@@ -315,7 +299,7 @@ class TemplateComposer:
         if "metadata" in base_config or "metadata" in derived_config:
             merged["metadata"] = {
                 **base_config.get("metadata", {}),
-                **derived_config.get("metadata", {})
+                **derived_config.get("metadata", {}),
             }
 
         # 7. Copy extends field if present
@@ -325,9 +309,7 @@ class TemplateComposer:
         return merged
 
     def resolve_inheritance(
-        self,
-        prompt_name: str,
-        prompt_config: Dict[str, Any]
+        self, prompt_name: str, prompt_config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Fully resolve a prompt's inheritance chain.
 
@@ -377,8 +359,7 @@ class TemplateComposer:
             # Get base config from library
             if not self.library:
                 logger.warning(
-                    f"Cannot resolve inheritance for '{current_name}': "
-                    f"no library provided"
+                    f"Cannot resolve inheritance for '{current_name}': no library provided"
                 )
                 break
 
@@ -396,9 +377,7 @@ class TemplateComposer:
                     pass
 
             if not base_config:
-                logger.warning(
-                    f"Cannot find base template '{base_name}' for '{current_name}'"
-                )
+                logger.warning(f"Cannot find base template '{base_name}' for '{current_name}'")
                 break
 
             # Add to chain

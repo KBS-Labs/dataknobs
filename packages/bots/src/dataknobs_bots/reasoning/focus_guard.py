@@ -282,11 +282,7 @@ class FocusGuard:
                 collected = collected[:5] + [f"...and {len(collected) - 5} more"]
             collected_str = ", ".join(collected)
 
-        required_str = (
-            ", ".join(context.required_fields)
-            if context.required_fields
-            else ""
-        )
+        required_str = ", ".join(context.required_fields) if context.required_fields else ""
 
         # Try library resolution
         if self._prompt_resolver is not None:
@@ -389,9 +385,7 @@ class FocusGuard:
         task_matches = 0
         if context.current_task:
             task_words = context.current_task.lower().split()
-            task_matches = sum(
-                1 for word in task_words if word in text_lower and len(word) > 3
-            )
+            task_matches = sum(1 for word in task_words if word in text_lower and len(word) > 3)
 
         # Calculate drift severity
         total_on_topic = len(on_topic_found) + goal_matches + task_matches
@@ -412,9 +406,7 @@ class FocusGuard:
             )
 
         if total_off_topic > total_on_topic:
-            severity = (total_off_topic - total_on_topic) / (
-                total_off_topic + total_on_topic
-            )
+            severity = (total_off_topic - total_on_topic) / (total_off_topic + total_on_topic)
             return FocusEvaluation(
                 is_drifting=severity > self.drift_threshold,
                 drift_severity=severity,
@@ -510,7 +502,9 @@ class FocusGuard:
 
     @classmethod
     def from_config(
-        cls, config: dict[str, Any], **kwargs: Any,
+        cls,
+        config: dict[str, Any],
+        **kwargs: Any,
     ) -> FocusGuard:
         """Create FocusGuard from configuration.
 

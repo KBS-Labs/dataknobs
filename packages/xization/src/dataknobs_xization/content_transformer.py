@@ -69,7 +69,9 @@ class ContentTransformer:
         self.base_heading_level = base_heading_level
         self.include_field_labels = include_field_labels
         self.code_block_fields = set(code_block_fields or ["example", "code", "snippet"])
-        self.list_fields = set(list_fields or ["items", "steps", "objectives", "symptoms", "solutions"])
+        self.list_fields = set(
+            list_fields or ["items", "steps", "objectives", "symptoms", "solutions"]
+        )
         self.schemas: dict[str, dict[str, Any]] = {}
 
     def register_schema(self, name: str, schema: dict[str, Any]) -> None:
@@ -143,9 +145,7 @@ class ContentTransformer:
                 logger.warning("schema parameter is ignored for HTML format")
             return self.transform_html(content, title=title)
         else:
-            raise ValueError(
-                f"Unsupported format: {format}. Use 'json', 'yaml', 'csv', or 'html'."
-            )
+            raise ValueError(f"Unsupported format: {format}. Use 'json', 'yaml', 'csv', or 'html'.")
 
     def transform_json(
         self,
@@ -211,7 +211,9 @@ class ContentTransformer:
         try:
             import yaml
         except ImportError:
-            raise ImportError("PyYAML is required for YAML transformation. Install with: pip install pyyaml") from None
+            raise ImportError(
+                "PyYAML is required for YAML transformation. Install with: pip install pyyaml"
+            ) from None
 
         if isinstance(content, (str, Path)) and Path(content).exists():
             with open(content, encoding="utf-8") as f:
@@ -335,10 +337,7 @@ class ContentTransformer:
             # vs a single item dict (values are primitive)
             if all(isinstance(v, dict) for v in data.values()):
                 title_field = schema.get("title_field", "name")
-                data = [
-                    {title_field: key, **value}
-                    for key, value in data.items()
-                ]
+                data = [{title_field: key, **value} for key, value in data.items()]
                 logger.debug(f"Normalized dict-keyed data to list format with {len(data)} items")
 
         items = data if isinstance(data, list) else [data]
@@ -524,7 +523,7 @@ class ContentTransformer:
         # Handle camelCase
         result = []
         for i, char in enumerate(words):
-            if char.isupper() and i > 0 and words[i-1].islower():
+            if char.isupper() and i > 0 and words[i - 1].islower():
                 result.append(" ")
             result.append(char)
 

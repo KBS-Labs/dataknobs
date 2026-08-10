@@ -17,9 +17,7 @@ import pytest
 from dataknobs_bots.reasoning.wizard_fsm import WizardFSM
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-_EXAMPLE_DIR = (
-    Path(__file__).parent.parent / "examples" / "configs" / "wizards"
-)
+_EXAMPLE_DIR = Path(__file__).parent.parent / "examples" / "configs" / "wizards"
 
 
 def _example_wizards() -> list[Path]:
@@ -31,9 +29,7 @@ def test_example_dir_is_populated() -> None:
     assert _example_wizards(), f"No example wizards found in {_EXAMPLE_DIR}"
 
 
-@pytest.mark.parametrize(
-    "config_path", _example_wizards(), ids=lambda p: p.name
-)
+@pytest.mark.parametrize("config_path", _example_wizards(), ids=lambda p: p.name)
 def test_example_wizard_loads(config_path: Path) -> None:
     """Each example loads end-to-end without raising."""
     fsm = WizardConfigLoader().load(config_path)

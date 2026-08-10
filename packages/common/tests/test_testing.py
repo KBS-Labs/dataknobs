@@ -51,9 +51,7 @@ class TestServiceAvailability:
 
     def test_is_ollama_model_usable_returns_bool(self):
         """is_ollama_model_usable returns a boolean."""
-        result = is_ollama_model_usable(
-            "nonexistent-model-xyz", timeout=5.0
-        )
+        result = is_ollama_model_usable("nonexistent-model-xyz", timeout=5.0)
         assert isinstance(result, bool)
 
     def test_is_ollama_model_usable_false_for_nonexistent_model(self):
@@ -65,15 +63,11 @@ class TestServiceAvailability:
         presence. Independent of whether Ollama is running — an unreachable
         server, an HTTP error, or an empty body all resolve to False.
         """
-        assert (
-            is_ollama_model_usable("nonexistent-model-xyz", timeout=5.0) is False
-        )
+        assert is_ollama_model_usable("nonexistent-model-xyz", timeout=5.0) is False
 
     def test_is_ollama_model_usable_false_when_unreachable(self):
         """An unreachable Ollama endpoint resolves to False, not an error."""
-        result = is_ollama_model_usable(
-            "any-model", host="localhost", port=65432, timeout=2.0
-        )
+        result = is_ollama_model_usable("any-model", host="localhost", port=65432, timeout=2.0)
         assert result is False
 
     def test_is_faiss_available_returns_bool(self):
@@ -132,9 +126,7 @@ class TestServiceProbeHostResolution:
             def close(self) -> None:
                 pass
 
-        monkeypatch.setattr(
-            socket, "socket", lambda *_a, **_k: _AddrCapturingSocket()
-        )
+        monkeypatch.setattr(socket, "socket", lambda *_a, **_k: _AddrCapturingSocket())
         return captured
 
     def test_probe_resolves_docker_host_inside_container(self, monkeypatch):

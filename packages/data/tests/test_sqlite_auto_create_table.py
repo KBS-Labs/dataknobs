@@ -19,11 +19,13 @@ class TestSyncSQLiteAutoCreateTable:
     def test_disabled_raises_when_table_missing(self, tmp_path):
         """auto_create_table=False raises clearly when table is absent."""
         path = str(tmp_path / "missing.db")
-        db = SyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = SyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             db.connect()
 
@@ -34,11 +36,13 @@ class TestSyncSQLiteAutoCreateTable:
         bootstrap.connect()
         bootstrap.close()
 
-        db = SyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = SyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         db.connect()
         record_id = db.create(Record({"x": 1}))
         assert record_id
@@ -47,11 +51,13 @@ class TestSyncSQLiteAutoCreateTable:
     def test_string_false_coerced(self, tmp_path):
         """YAML/env-delivered 'false' string is correctly coerced."""
         path = str(tmp_path / "string.db")
-        db = SyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": "false",
-        })
+        db = SyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": "false",
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             db.connect()
 
@@ -70,11 +76,13 @@ class TestAsyncSQLiteAutoCreateTable:
     async def test_disabled_raises_when_table_missing(self, tmp_path):
         """auto_create_table=False raises clearly when table is absent."""
         path = str(tmp_path / "missing_async.db")
-        db = AsyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = AsyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             await db.connect()
 
@@ -86,11 +94,13 @@ class TestAsyncSQLiteAutoCreateTable:
         await bootstrap.connect()
         await bootstrap.close()
 
-        db = AsyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = AsyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         await db.connect()
         record_id = await db.create(Record({"x": 1}))
         assert record_id
@@ -100,10 +110,12 @@ class TestAsyncSQLiteAutoCreateTable:
     async def test_string_false_coerced(self, tmp_path):
         """YAML/env-delivered 'false' string is correctly coerced."""
         path = str(tmp_path / "string_async.db")
-        db = AsyncSQLiteDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": "false",
-        })
+        db = AsyncSQLiteDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": "false",
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             await db.connect()

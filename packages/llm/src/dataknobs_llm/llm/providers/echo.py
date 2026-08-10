@@ -11,9 +11,13 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
-    normalize_llm_config
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    AsyncLLMProvider,
+    ModelCapability,
+    normalize_llm_config,
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -146,15 +150,13 @@ class EchoProvider(AsyncLLMProvider):
         super().__init__(llm_config, prompt_builder=prompt_builder)
 
         # Echo-specific configuration from options
-        self.echo_prefix = llm_config.options.get('echo_prefix', 'Echo: ')
-        self.embedding_dim = llm_config.options.get('embedding_dim', 768)
-        self.mock_tokens = llm_config.options.get('mock_tokens', True)
-        self.stream_delay = llm_config.options.get('stream_delay', 0.0)  # seconds per char
+        self.echo_prefix = llm_config.options.get("echo_prefix", "Echo: ")
+        self.embedding_dim = llm_config.options.get("embedding_dim", 768)
+        self.mock_tokens = llm_config.options.get("mock_tokens", True)
+        self.stream_delay = llm_config.options.get("stream_delay", 0.0)  # seconds per char
 
         # Scripted response state
-        self._response_queue: List[Union[str, LLMResponse, ErrorResponse]] = list(
-            responses or []
-        )
+        self._response_queue: List[Union[str, LLMResponse, ErrorResponse]] = list(responses or [])
         self._response_fn: ResponseFunction | None = response_fn
         # Per-call latency (seconds). 0.0 = no delay. Simulates provider
         # response latency so tests can exercise timeout/deadline paths
@@ -165,11 +167,11 @@ class EchoProvider(AsyncLLMProvider):
         ] = []
         self._call_history: List[Dict[str, Any]] = []
         self._embed_history: List[Dict[str, Any]] = []
-        self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
+        self._cycle_responses: bool = llm_config.options.get("cycle_responses", False)
         self._init_count: int = 0
         self._close_count: int = 0
         self._strict_tools: bool = strict_tools
-        self._strict: bool = strict or llm_config.options.get('strict', False)
+        self._strict: bool = strict or llm_config.options.get("strict", False)
 
         # Instance tracking
         EchoProvider._last_instance = self
@@ -198,9 +200,7 @@ class EchoProvider(AsyncLLMProvider):
         self._cycle_responses = cycle
         return self
 
-    def add_response(
-        self, response: Union[str, LLMResponse, ErrorResponse]
-    ) -> EchoProvider:
+    def add_response(self, response: Union[str, LLMResponse, ErrorResponse]) -> EchoProvider:
         """Add a single response to the queue.
 
         Args:
@@ -520,13 +520,15 @@ class EchoProvider(AsyncLLMProvider):
 
         return LLMResponse(
             content=content,
-            model=runtime_config.model or 'echo-model',
-            finish_reason='stop',
+            model=runtime_config.model or "echo-model",
+            finish_reason="stop",
             usage={
-                'prompt_tokens': prompt_tokens,
-                'completion_tokens': completion_tokens,
-                'total_tokens': prompt_tokens + completion_tokens
-            } if self.mock_tokens else None
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+            if self.mock_tokens
+            else None,
         )
 
     def _get_user_content(self, messages: List[LLMMessage]) -> str:
@@ -538,8 +540,8 @@ class EchoProvider(AsyncLLMProvider):
         Returns:
             Concatenated user message content
         """
-        user_messages = [msg.content for msg in messages if msg.role == 'user']
-        return ' '.join(user_messages)
+        user_messages = [msg.content for msg in messages if msg.role == "user"]
+        return " ".join(user_messages)
 
     def _generate_embedding(self, text: str) -> List[float]:
         """Generate deterministic embedding vector from text.
@@ -556,7 +558,7 @@ class EchoProvider(AsyncLLMProvider):
             Embedding vector of size self.embedding_dim
         """
         # Create hash of the text
-        hash_obj = hashlib.sha256(text.encode('utf-8'))
+        hash_obj = hashlib.sha256(text.encode("utf-8"))
         hash_bytes = hash_obj.digest()
 
         # Generate embedding by repeatedly hashing
@@ -574,7 +576,7 @@ class EchoProvider(AsyncLLMProvider):
             # Rehash for next batch of values
             current_hash = hashlib.sha256(current_hash).digest()
 
-        return embedding[:self.embedding_dim]
+        return embedding[: self.embedding_dim]
 
     def _count_tokens(self, text: str) -> int:
         """Mock token counting (simple character-based estimate).
@@ -630,7 +632,7 @@ class EchoProvider(AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> LLMResponse:
         """Echo back the input messages or return scripted response.
 
@@ -658,7 +660,7 @@ class EchoProvider(AsyncLLMProvider):
 
         # Convert to message list
         if isinstance(messages, str):
-            messages = [LLMMessage(role='user', content=messages)]
+            messages = [LLMMessage(role="user", content=messages)]
 
         # Simulate provider response latency (0.0 = no delay).
         delay = self._resolve_delay_seconds(messages)
@@ -670,41 +672,45 @@ class EchoProvider(AsyncLLMProvider):
             response = self._resolve_response(messages, runtime_config)
         except Exception:
             # Record the failed call before re-raising
-            self._call_history.append({
-                'messages': messages,
-                'response': None,
-                'config_overrides': config_overrides,
-                'tools': tools,
-                'kwargs': kwargs,
-                'error': True,
-            })
+            self._call_history.append(
+                {
+                    "messages": messages,
+                    "response": None,
+                    "config_overrides": config_overrides,
+                    "tools": tools,
+                    "kwargs": kwargs,
+                    "error": True,
+                }
+            )
             raise
 
         if response is None and self._strict:
             from dataknobs_llm.exceptions import ResponseQueueExhaustedError
 
-            self._call_history.append({
-                'messages': messages,
-                'response': None,
-                'config_overrides': config_overrides,
-                'tools': tools,
-                'kwargs': kwargs,
-                'error': True,
-            })
+            self._call_history.append(
+                {
+                    "messages": messages,
+                    "response": None,
+                    "config_overrides": config_overrides,
+                    "tools": tools,
+                    "kwargs": kwargs,
+                    "error": True,
+                }
+            )
             raise ResponseQueueExhaustedError(
                 call_count=len(self._call_history),
             )
 
         if response is None:
             # Fall back to default echo behavior
-            user_messages = [msg for msg in messages if msg.role == 'user']
+            user_messages = [msg for msg in messages if msg.role == "user"]
             if user_messages:
                 content = self.echo_prefix + user_messages[-1].content
             else:
                 content = self.echo_prefix + "(no user message)"
 
             # Add system prompt if configured and in echo
-            if runtime_config.system_prompt and runtime_config.options.get('echo_system', False):
+            if runtime_config.system_prompt and runtime_config.options.get("echo_system", False):
                 content = f"[System: {runtime_config.system_prompt}]\n{content}"
 
             # Mock token usage
@@ -713,23 +719,21 @@ class EchoProvider(AsyncLLMProvider):
 
             response = LLMResponse(
                 content=content,
-                model=runtime_config.model or 'echo-model',
-                finish_reason='stop',
+                model=runtime_config.model or "echo-model",
+                finish_reason="stop",
                 usage={
-                    'prompt_tokens': prompt_tokens,
-                    'completion_tokens': completion_tokens,
-                    'total_tokens': prompt_tokens + completion_tokens
-                } if self.mock_tokens else None
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+                if self.mock_tokens
+                else None,
             )
 
         response = self._analyze_response(response)
 
         # Validate tool_calls vs tools consistency
-        if (
-            self._strict_tools
-            and getattr(response, "tool_calls", None)
-            and not tools
-        ):
+        if self._strict_tools and getattr(response, "tool_calls", None) and not tools:
             raise ValueError(
                 "EchoProvider returned a response with tool_calls but no "
                 "tools were provided to complete(). Real LLM providers only "
@@ -741,13 +745,15 @@ class EchoProvider(AsyncLLMProvider):
             )
 
         # Record the call
-        self._call_history.append({
-            'messages': messages,
-            'response': response,
-            'config_overrides': config_overrides,
-            'tools': tools,
-            'kwargs': kwargs,
-        })
+        self._call_history.append(
+            {
+                "messages": messages,
+                "response": response,
+                "config_overrides": config_overrides,
+                "tools": tools,
+                "kwargs": kwargs,
+            }
+        )
 
         return response
 
@@ -756,7 +762,7 @@ class EchoProvider(AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream echo response character by character.
 
@@ -793,7 +799,7 @@ class EchoProvider(AsyncLLMProvider):
 
         # Stream character by character
         for i, char in enumerate(response.content):
-            is_final = (i == len(response.content) - 1)
+            is_final = i == len(response.content) - 1
 
             yield LLMStreamResponse(
                 delta=char,
@@ -808,12 +814,11 @@ class EchoProvider(AsyncLLMProvider):
             # Optional delay for realistic streaming
             if self.stream_delay > 0:
                 import asyncio
+
                 await asyncio.sleep(self.stream_delay)
 
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs: Any
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Generate deterministic mock embeddings.
 
@@ -835,10 +840,7 @@ class EchoProvider(AsyncLLMProvider):
             return [self._generate_embedding(text) for text in texts]
 
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs: Any
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Mock function calling with deterministic response.
 
@@ -850,41 +852,45 @@ class EchoProvider(AsyncLLMProvider):
         Returns:
             Response with mock function call
         """
-        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "function_call() is deprecated, use complete(tools=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self._is_initialized:
             await self.initialize()
 
         # Get last user message
-        user_messages = [msg for msg in messages if msg.role == 'user']
+        user_messages = [msg for msg in messages if msg.role == "user"]
         user_content = user_messages[-1].content if user_messages else ""
 
         # Mock function call: use first function with mock arguments
         if functions:
             first_func = functions[0]
-            func_name = first_func.get('name', 'unknown_function')
+            func_name = first_func.get("name", "unknown_function")
 
             # Generate mock arguments based on parameters schema
-            params = first_func.get('parameters', {})
-            properties = params.get('properties', {})
+            params = first_func.get("parameters", {})
+            properties = params.get("properties", {})
 
             mock_args = {}
             for param_name, param_schema in properties.items():
-                param_type = param_schema.get('type', 'string')
+                param_type = param_schema.get("type", "string")
 
                 # Generate mock value based on type
-                if param_type == 'string':
+                if param_type == "string":
                     mock_args[param_name] = f"mock_{param_name}_from_echo"
-                elif param_type == 'number' or param_type == 'integer':
+                elif param_type == "number" or param_type == "integer":
                     # Use hash to generate deterministic number
                     hash_val = int(hashlib.md5(user_content.encode()).hexdigest()[:8], 16)
                     mock_args[param_name] = hash_val % 100
-                elif param_type == 'boolean':
+                elif param_type == "boolean":
                     # Deterministic boolean based on hash
                     hash_val = int(hashlib.md5(user_content.encode()).hexdigest()[:2], 16)
                     mock_args[param_name] = hash_val % 2 == 0
-                elif param_type == 'array':
+                elif param_type == "array":
                     mock_args[param_name] = ["mock_item_1", "mock_item_2"]
-                elif param_type == 'object':
+                elif param_type == "object":
                     mock_args[param_name] = {"mock_key": "mock_value"}
                 else:
                     mock_args[param_name] = None
@@ -897,17 +903,16 @@ class EchoProvider(AsyncLLMProvider):
 
             return LLMResponse(
                 content=content,
-                model=self.config.model or 'echo-model',
-                finish_reason='function_call',
+                model=self.config.model or "echo-model",
+                finish_reason="function_call",
                 usage={
-                    'prompt_tokens': prompt_tokens,
-                    'completion_tokens': completion_tokens,
-                    'total_tokens': prompt_tokens + completion_tokens
-                } if self.mock_tokens else None,
-                function_call={
-                    'name': func_name,
-                    'arguments': mock_args
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
                 }
+                if self.mock_tokens
+                else None,
+                function_call={"name": func_name, "arguments": mock_args},
             )
         else:
             # No functions provided, just echo

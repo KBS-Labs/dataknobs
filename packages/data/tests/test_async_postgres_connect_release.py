@@ -27,25 +27,28 @@ async def test_connect_releases_holder_when_table_setup_fails():
     await _pool_manager.close_all()
     baseline = _pool_manager.get_pool_count()
 
-    db = AsyncPostgresDatabase({
-        "host": "localhost",
-        "port": 5432,
-        "database": "test_db",
-        "user": "test_user",
-        "password": "test_pass",
-        "table": "test_table",
-    })
+    db = AsyncPostgresDatabase(
+        {
+            "host": "localhost",
+            "port": 5432,
+            "database": "test_db",
+            "user": "test_user",
+            "password": "test_pass",
+            "table": "test_table",
+        }
+    )
 
     fake_pool = AsyncMock()  # stands in for the asyncpg pool (no server)
 
     async def fake_create_pool(cfg):
         return fake_pool
 
-    with patch(
-        "dataknobs_data.backends.postgres.create_asyncpg_pool",
-        new=fake_create_pool,
-    ), patch.object(
-        db, "_ensure_table", side_effect=RuntimeError("table setup failed")
+    with (
+        patch(
+            "dataknobs_data.backends.postgres.create_asyncpg_pool",
+            new=fake_create_pool,
+        ),
+        patch.object(db, "_ensure_table", side_effect=RuntimeError("table setup failed")),
     ):
         with pytest.raises(RuntimeError, match="table setup failed"):
             await db.connect()

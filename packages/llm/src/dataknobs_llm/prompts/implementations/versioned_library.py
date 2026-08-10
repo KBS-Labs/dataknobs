@@ -345,10 +345,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
     # ===== AbstractPromptLibrary Implementation =====
 
     def get_system_prompt(
-        self,
-        name: str,
-        version: str = "latest",
-        **kwargs: Any
+        self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a system prompt template.
 
@@ -385,10 +382,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         return self._version_to_template(prompt_version)
 
     def get_user_prompt(
-        self,
-        name: str,
-        version: str = "latest",
-        **kwargs: Any
+        self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a user prompt template.
 
@@ -463,11 +457,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
 
         return sorted(names)
 
-    def get_message_index(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> MessageIndex | None:
+    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Get a message index.
 
         Note: Message indexes are not versioned in this implementation.
@@ -494,11 +484,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
             return self.base_library.list_message_indexes()
         return []
 
-    def get_rag_config(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> RAGConfig | None:
+    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Get a RAG configuration.
 
         Note: RAG configs are not versioned in this implementation.
@@ -516,10 +502,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         return None
 
     def get_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str = "user",
-        **kwargs: Any
+        self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
     ) -> List[RAGConfig]:
         """Get RAG configurations for a prompt.
 
@@ -568,7 +551,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
                 "created_at": version.created_at.isoformat(),
                 "tags": version.tags,
                 "status": version.status.value,
-            }
+            },
         }
 
         if version.validation:

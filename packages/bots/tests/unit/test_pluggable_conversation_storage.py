@@ -37,9 +37,7 @@ class InMemoryTestStorage(ConversationStorage):
     async def save_conversation(self, state: ConversationState) -> None:
         self._conversations[state.conversation_id] = state
 
-    async def load_conversation(
-        self, conversation_id: str
-    ) -> ConversationState | None:
+    async def load_conversation(self, conversation_id: str) -> ConversationState | None:
         return self._conversations.get(conversation_id)
 
     async def delete_conversation(self, conversation_id: str) -> bool:
@@ -152,9 +150,7 @@ async def test_invalid_storage_class_attr_not_found() -> None:
     config = (
         DynaBotConfigBuilder()
         .set_llm(provider="echo", model="echo-test")
-        .set_conversation_storage_class(
-            "dataknobs_llm.conversations:NonExistentClass"
-        )
+        .set_conversation_storage_class("dataknobs_llm.conversations:NonExistentClass")
         .build()
     )
     with pytest.raises(DottedPathError):
@@ -167,9 +163,7 @@ async def test_invalid_storage_class_not_callable() -> None:
     config = (
         DynaBotConfigBuilder()
         .set_llm(provider="echo", model="echo-test")
-        .set_conversation_storage_class(
-            "dataknobs_llm.conversations.storage:SCHEMA_VERSION"
-        )
+        .set_conversation_storage_class("dataknobs_llm.conversations.storage:SCHEMA_VERSION")
         .build()
     )
     with pytest.raises(DottedPathError, match="not callable"):

@@ -72,9 +72,7 @@ class TestSharedDatabaseCollision:
         return storage
 
     @pytest.mark.asyncio
-    async def test_load_steps_does_not_crash(
-        self, shared_storage: UnifiedDatabaseStorage
-    ) -> None:
+    async def test_load_steps_does_not_crash(self, shared_storage: UnifiedDatabaseStorage) -> None:
         """load_steps() KeyError when history records in same DB."""
         exec_id = "exec-1"
         await shared_storage.save_history(_make_history(exec_id))
@@ -207,9 +205,7 @@ class TestBackwardCompat:
         history_db = AsyncMemoryDatabase()
         steps_db = AsyncMemoryDatabase()
         config = _make_config()
-        storage = UnifiedDatabaseStorage(
-            config, database=history_db, steps_database=steps_db
-        )
+        storage = UnifiedDatabaseStorage(config, database=history_db, steps_database=steps_db)
         await storage.initialize()
 
         exec_id = "exec-1"
@@ -252,28 +248,28 @@ class TestBackwardCompat:
 
         for record in all_records:
             data = dict(record.data)
-            data.pop('record_type', None)  # Strip discriminator
+            data.pop("record_type", None)  # Strip discriminator
             legacy = Record(data)
             await db.upsert(legacy)
 
         # Verify record_type is gone
         reloaded = await db.search(Query())
         for r in reloaded:
-            assert r.get_value('record_type') is None
+            assert r.get_value("record_type") is None
 
         # Both legacy records are retrievable via the EXISTS filter
-        loaded_history = await storage.load_history('exec-legacy')
+        loaded_history = await storage.load_history("exec-legacy")
         assert loaded_history is not None
-        assert loaded_history.fsm_name == 'test_fsm'
+        assert loaded_history.fsm_name == "test_fsm"
 
-        steps = await storage.load_steps('exec-legacy')
+        steps = await storage.load_steps("exec-legacy")
         assert len(steps) == 1
-        assert steps[0].step_id == 'step-legacy'
+        assert steps[0].step_id == "step-legacy"
 
         # query_histories also finds legacy history
         results = await storage.query_histories({})
         assert len(results) == 1
-        assert results[0]['id'] == 'exec-legacy'
+        assert results[0]["id"] == "exec-legacy"
 
     @pytest.mark.asyncio
     async def test_in_memory_storage_still_works(self) -> None:

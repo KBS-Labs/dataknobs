@@ -34,25 +34,26 @@ class DataValidator(ITransformFunction):
     def transform(self, data: Any, context: FunctionContext) -> Any:
         """Validate data structure and content."""
         # Check required fields
-        required_fields = ['id', 'timestamp', 'value']
+        required_fields = ["id", "timestamp", "value"]
         for field in required_fields:
             if field not in data:
                 raise ValueError(f"Missing required field: {field}")
 
         # Validate data types
-        if not isinstance(data['id'], (int, str)):
+        if not isinstance(data["id"], (int, str)):
             raise ValueError("ID must be int or string")
 
-        if not isinstance(data['value'], (int, float)):
+        if not isinstance(data["value"], (int, float)):
             raise ValueError("Value must be numeric")
 
         # Add validation flag
-        data['validated'] = True
-        if context and 'timestamp' in context.metadata:
-            data['validation_timestamp'] = context.metadata['timestamp']
+        data["validated"] = True
+        if context and "timestamp" in context.metadata:
+            data["validation_timestamp"] = context.metadata["timestamp"]
         else:
             import time
-            data['validation_timestamp'] = time.time()
+
+            data["validation_timestamp"] = time.time()
 
         return data
 
@@ -71,39 +72,40 @@ class DataEnricher(ITransformFunction):
     def transform(self, data: Any, context: FunctionContext) -> Any:
         """Add computed fields and metadata."""
         # Access properties resource if available
-        if 'properties' in context.resources:
-            props = context.resources['properties']
-            data['enrichment_source'] = props.get('source', 'unknown')
+        if "properties" in context.resources:
+            props = context.resources["properties"]
+            data["enrichment_source"] = props.get("source", "unknown")
 
             # Track processing stats
-            count = props.get('processed_count', 0)
-            props.set('processed_count', count + 1)
+            count = props.get("processed_count", 0)
+            props.set("processed_count", count + 1)
 
         # Add computed fields
-        data['value_squared'] = data['value'] ** 2
-        data['value_multiplied'] = data['value'] * self.multiplier
-        data['value_category'] = self._categorize_value(data['value'])
+        data["value_squared"] = data["value"] ** 2
+        data["value_multiplied"] = data["value"] * self.multiplier
+        data["value_category"] = self._categorize_value(data["value"])
 
         # Add processing metadata
-        data['enriched'] = True
-        if context and 'timestamp' in context.metadata:
-            data['enrichment_timestamp'] = context.metadata['timestamp']
+        data["enriched"] = True
+        if context and "timestamp" in context.metadata:
+            data["enrichment_timestamp"] = context.metadata["timestamp"]
         else:
             import time
-            data['enrichment_timestamp'] = time.time()
+
+            data["enrichment_timestamp"] = time.time()
 
         return data
 
     def _categorize_value(self, value: float) -> str:
         """Categorize value into ranges."""
         if value < 0:
-            return 'negative'
+            return "negative"
         elif value < 10:
-            return 'low'
+            return "low"
         elif value < 100:
-            return 'medium'
+            return "medium"
         else:
-            return 'high'
+            return "high"
 
     def get_transform_description(self) -> str:
         """Get description of this transformation."""
@@ -122,32 +124,33 @@ class DataAggregator(ITransformFunction):
             records = [data]
 
         # Calculate aggregations
-        total = sum(r.get('value', 0) for r in records)
+        total = sum(r.get("value", 0) for r in records)
         count = len(records)
         avg = total / count if count > 0 else 0
 
         # Find min/max
-        values = [r.get('value', 0) for r in records]
+        values = [r.get("value", 0) for r in records]
         min_val = min(values) if values else 0
         max_val = max(values) if values else 0
 
         # Create aggregation result
         result = {
-            'type': 'aggregation',
-            'count': count,
-            'total': total,
-            'average': avg,
-            'min': min_val,
-            'max': max_val,
-            'records': records
+            "type": "aggregation",
+            "count": count,
+            "total": total,
+            "average": avg,
+            "min": min_val,
+            "max": max_val,
+            "records": records,
         }
 
         # Add timestamp
-        if context and 'timestamp' in context.metadata:
-            result['aggregation_timestamp'] = context.metadata['timestamp']
+        if context and "timestamp" in context.metadata:
+            result["aggregation_timestamp"] = context.metadata["timestamp"]
         else:
             import time
-            result['aggregation_timestamp'] = time.time()
+
+            result["aggregation_timestamp"] = time.time()
 
         return result
 
@@ -164,9 +167,9 @@ def create_simple_pipeline_fsm() -> FSM:
 
     # Register custom functions
     func_manager = FunctionManager()
-    func_manager.register_function('validate', DataValidator())
-    func_manager.register_function('enrich', DataEnricher(multiplier=3))
-    func_manager.register_function('aggregate', DataAggregator())
+    func_manager.register_function("validate", DataValidator())
+    func_manager.register_function("enrich", DataEnricher(multiplier=3))
+    func_manager.register_function("aggregate", DataAggregator())
 
     # Set function manager
     fsm.function_manager = func_manager
@@ -204,14 +207,14 @@ def create_sample_data(file_path: Path, num_records: int = 20):
 
     for i in range(num_records):
         record = {
-            'id': i,
-            'timestamp': (base_time + timedelta(seconds=i)).isoformat(),
-            'value': random.uniform(-10, 150),
-            'source': random.choice(['sensor_a', 'sensor_b', 'sensor_c'])
+            "id": i,
+            "timestamp": (base_time + timedelta(seconds=i)).isoformat(),
+            "value": random.uniform(-10, 150),
+            "source": random.choice(["sensor_a", "sensor_b", "sensor_c"]),
         }
         records.append(record)
 
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         json.dump(records, f, indent=2)
 
     return records
@@ -232,13 +235,9 @@ def run_simple_pipeline_example():
 
     # Add properties resource for tracking
     props_resource = PropertiesResource(
-        name='properties',
-        initial_properties={
-            'source': 'example_pipeline',
-            'processed_count': 0
-        }
+        name="properties", initial_properties={"source": "example_pipeline", "processed_count": 0}
     )
-    resource_manager.register_provider('properties', props_resource)
+    resource_manager.register_provider("properties", props_resource)
     fsm.resource_manager = resource_manager
     print("   Resources configured\n")
 
@@ -249,9 +248,9 @@ def run_simple_pipeline_example():
 
     # Test data
     test_records = [
-        {'id': 1, 'timestamp': '2024-01-01', 'value': 25.0},
-        {'id': 2, 'timestamp': '2024-01-02', 'value': 50.0},
-        {'id': 3, 'timestamp': '2024-01-03', 'value': 75.0}
+        {"id": 1, "timestamp": "2024-01-01", "value": 25.0},
+        {"id": 2, "timestamp": "2024-01-02", "value": 50.0},
+        {"id": 3, "timestamp": "2024-01-03", "value": 75.0},
     ]
 
     results = []
@@ -259,8 +258,8 @@ def run_simple_pipeline_example():
         context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
 
         # Acquire resources
-        props_handle = resource_manager.acquire('properties', f'record_{record["id"]}')
-        context.resources = {'properties': props_handle}
+        props_handle = resource_manager.acquire("properties", f"record_{record['id']}")
+        context.resources = {"properties": props_handle}
 
         try:
             success, result = fsm.get_sync_bridge().run(engine.execute(context, record))
@@ -271,7 +270,7 @@ def run_simple_pipeline_example():
             print(f"   Error processing record {record['id']}: {e}")
         finally:
             # Release resources
-            resource_manager.release('properties', props_handle)
+            resource_manager.release("properties", props_handle)
 
     # Stop the shared bridge thread now that all records are processed.
     fsm.close()
@@ -283,9 +282,9 @@ def run_simple_pipeline_example():
         sample = results[0]
         print(f"\n4. Sample Result:")
         print(f"   Original value: {test_records[0]['value']}")
-        if 'validated' in sample:
+        if "validated" in sample:
             print(f"   Validated: {sample.get('validated')}")
-        if 'value_category' in sample:
+        if "value_category" in sample:
             print(f"   Category: {sample.get('value_category')}")
 
     print("\n=== Example Complete ===")

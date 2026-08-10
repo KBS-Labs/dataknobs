@@ -272,7 +272,8 @@ class TestSaveToCatalogAutoFinalize:
     async def test_save_returns_resolved_entry_name(self) -> None:
         """SaveToCatalogTool returns the resolved entry name."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         artifact = _make_artifact(
             recipe_name="Chocolate Cake",

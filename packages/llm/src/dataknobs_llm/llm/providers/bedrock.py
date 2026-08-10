@@ -126,7 +126,12 @@ _REGION_PREFIXES: tuple[str, ...] = ("us.", "eu.", "apac.", "us-gov.")
 # opt-in ``ListFoundationModels`` availability source is separate; see
 # :meth:`BedrockProvider.validate_model`).
 _VENDOR_PREFIXES: tuple[str, ...] = (
-    "amazon.", "anthropic.", "meta.", "mistral.", "cohere.", "ai21.",
+    "amazon.",
+    "anthropic.",
+    "meta.",
+    "mistral.",
+    "cohere.",
+    "ai21.",
 )
 
 # Non-Claude family-id substrings that carry vision (multimodal input).
@@ -134,8 +139,12 @@ _VENDOR_PREFIXES: tuple[str, ...] = (
 # in ``bedrock_models.yaml`` resolves its capabilities from that resource, and
 # Claude vision comes from the shared Claude capability source.
 _VISION_FAMILIES: tuple[str, ...] = (
-    "nova-lite", "nova-pro", "nova-premier",
-    "llama3-2-11b", "llama3-2-90b", "pixtral",
+    "nova-lite",
+    "nova-pro",
+    "nova-premier",
+    "llama3-2-11b",
+    "llama3-2-90b",
+    "pixtral",
 )
 
 
@@ -148,7 +157,7 @@ def _canonical_model_id(model: str) -> str:
     """
     for prefix in _REGION_PREFIXES:
         if model.startswith(prefix):
-            return model[len(prefix):]
+            return model[len(prefix) :]
     return model
 
 
@@ -170,10 +179,7 @@ def _bedrock_heuristic(model: str) -> ModelProfile:
     """
     model_lower = _canonical_model_id(model.lower())
     available = model_lower.startswith(_VENDOR_PREFIXES) or None
-    if any(
-        token in model_lower
-        for token in ("titan-embed", "cohere.embed", "-embed-")
-    ):
+    if any(token in model_lower for token in ("titan-embed", "cohere.embed", "-embed-")):
         return ModelProfile(
             capabilities=frozenset({ModelCapability.EMBEDDINGS}),
             available=available,
@@ -186,9 +192,7 @@ def _bedrock_heuristic(model: str) -> ModelProfile:
     }
     if any(token in model_lower for token in _VISION_FAMILIES):
         capabilities.add(ModelCapability.VISION)
-    return ModelProfile(
-        capabilities=frozenset(capabilities), available=available
-    )
+    return ModelProfile(capabilities=frozenset(capabilities), available=available)
 
 
 def _bedrock_availability_extractor(summary: dict[str, Any]) -> ModelProfile:
@@ -228,9 +232,7 @@ _BEDROCK_RESOURCE_SOURCE = BundledResourceSource.from_resource(
     "data/bedrock_models.yaml",
     name="bedrock_resource",
 )
-_BEDROCK_HEURISTIC_SOURCE = CallableModelMetadataSource(
-    "bedrock_heuristic", _bedrock_heuristic
-)
+_BEDROCK_HEURISTIC_SOURCE = CallableModelMetadataSource("bedrock_heuristic", _bedrock_heuristic)
 
 
 class BedrockConverseAdapter(LLMAdapter):
@@ -279,17 +281,21 @@ class BedrockConverseAdapter(LLMAdapter):
                 if msg.content:
                     content_blocks.append({"text": msg.content})
                 for tc in msg.tool_calls:
-                    content_blocks.append({
-                        "toolUse": {
-                            "toolUseId": tc.id or tc.name,
-                            "name": tc.name,
-                            "input": tc.parameters,
+                    content_blocks.append(
+                        {
+                            "toolUse": {
+                                "toolUseId": tc.id or tc.name,
+                                "name": tc.name,
+                                "input": tc.parameters,
+                            }
                         }
-                    })
-                converse_messages.append({
-                    "role": "assistant",
-                    "content": content_blocks,
-                })
+                    )
+                converse_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content_blocks,
+                    }
+                )
             elif msg.role == "tool":
                 # Converse expects tool results as user messages with
                 # toolResult content blocks paired by toolUseId.
@@ -313,15 +319,19 @@ class BedrockConverseAdapter(LLMAdapter):
                 ):
                     last["content"].append(result_block)
                 else:
-                    converse_messages.append({
-                        "role": "user",
-                        "content": [result_block],
-                    })
+                    converse_messages.append(
+                        {
+                            "role": "user",
+                            "content": [result_block],
+                        }
+                    )
             else:
-                converse_messages.append({
-                    "role": msg.role,
-                    "content": [{"text": msg.content}],
-                })
+                converse_messages.append(
+                    {
+                        "role": msg.role,
+                        "content": [{"text": msg.content}],
+                    }
+                )
 
         return system_blocks, converse_messages
 
@@ -360,17 +370,13 @@ class BedrockConverseAdapter(LLMAdapter):
                 "toolSpec": {
                     "name": tool.name,
                     "description": tool.description,
-                    "inputSchema": {
-                        "json": tool.schema if hasattr(tool, "schema") else {}
-                    },
+                    "inputSchema": {"json": tool.schema if hasattr(tool, "schema") else {}},
                 }
             }
             for tool in tools
         ]
 
-    def adapt_raw_functions(
-        self, functions: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def adapt_raw_functions(self, functions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert raw function dicts to Converse ``toolSpec`` entries.
 
         Used by the deprecated :meth:`BedrockProvider.function_call` which
@@ -382,20 +388,21 @@ class BedrockConverseAdapter(LLMAdapter):
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
                     "inputSchema": {
-                        "json": func.get("parameters", {
-                            "type": "object",
-                            "properties": {},
-                            "required": [],
-                        })
+                        "json": func.get(
+                            "parameters",
+                            {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                            },
+                        )
                     },
                 }
             }
             for func in functions
         ]
 
-    def adapt_response(
-        self, response: dict[str, Any], model: str | None = None
-    ) -> LLMResponse:
+    def adapt_response(self, response: dict[str, Any], model: str | None = None) -> LLMResponse:
         """Parse a Converse response dict into an ``LLMResponse``.
 
         Args:
@@ -420,11 +427,13 @@ class BedrockConverseAdapter(LLMAdapter):
             elif "toolUse" in block:
                 tool_use = block["toolUse"]
                 tool_input = tool_use.get("input")
-                tool_calls.append(ToolCall(
-                    name=tool_use.get("name", ""),
-                    parameters=tool_input if isinstance(tool_input, dict) else {},
-                    id=tool_use.get("toolUseId"),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        name=tool_use.get("name", ""),
+                        parameters=tool_input if isinstance(tool_input, dict) else {},
+                        id=tool_use.get("toolUseId"),
+                    )
+                )
 
         usage_raw = response.get("usage") or {}
         usage: dict[str, int] | None = None
@@ -463,9 +472,7 @@ class BedrockConverseAdapter(LLMAdapter):
 _COHERE_DEFAULT_INPUT_TYPE = "search_document"
 
 
-def _bool_option(
-    options: dict[str, Any] | None, key: str, default: bool
-) -> bool:
+def _bool_option(options: dict[str, Any] | None, key: str, default: bool) -> bool:
     """Read a boolean ``options`` value, parsing strings correctly.
 
     ``bool("False")`` is ``True`` in Python (any non-empty string is truthy),
@@ -500,8 +507,7 @@ def _numeric_option(
         return cast(raw)
     except (TypeError, ValueError) as exc:
         raise ConfigurationError(
-            f"Bedrock option {key!r} must be {cast.__name__}-coercible, "
-            f"got {raw!r}"
+            f"Bedrock option {key!r} must be {cast.__name__}-coercible, got {raw!r}"
         ) from exc
 
 
@@ -539,9 +545,7 @@ async def _embed_titan(
         if dimensions:
             body["dimensions"] = dimensions
         async with semaphore:
-            result = await client.invoke_model(
-                modelId=model, body=json.dumps(body)
-            )
+            result = await client.invoke_model(modelId=model, body=json.dumps(body))
             raw = await result["body"].read()
         parsed = json.loads(raw)
         return parsed["embedding"]
@@ -564,9 +568,7 @@ async def _embed_cohere(
     defaults to :data:`_COHERE_DEFAULT_INPUT_TYPE` and is overridable via
     ``options["input_type"]`` (e.g. ``"search_query"`` at query time).
     """
-    input_type = (config.options or {}).get(
-        "input_type", _COHERE_DEFAULT_INPUT_TYPE
-    )
+    input_type = (config.options or {}).get("input_type", _COHERE_DEFAULT_INPUT_TYPE)
     body = {"texts": texts, "input_type": input_type}
     result = await client.invoke_model(modelId=model, body=json.dumps(body))
     raw = await result["body"].read()
@@ -652,18 +654,14 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # to unavailable — a fact only the live cache can assert, and one the
         # per-facet resolver merge cannot express.
         self._availability_source: LiveApiSource | None = None
-        if _bool_option(
-            self.config.options, "model_availability_live", False
-        ):
+        if _bool_option(self.config.options, "model_availability_live", False):
             self._availability_source = LiveApiSource(
                 self.list_foundation_models,
                 _bedrock_availability_extractor,
                 name="live_availability",
                 enabled=True,
                 model_id=_bedrock_summary_model_id,
-                ttl=_numeric_option(
-                    self.config.options, "model_availability_ttl", 3600.0, float
-                ),
+                ttl=_numeric_option(self.config.options, "model_availability_ttl", 3600.0, float),
                 refresh_timeout=_numeric_option(
                     self.config.options,
                     "model_availability_refresh_timeout",
@@ -708,9 +706,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         nothing to close here.
         """
 
-    def _client_kwargs(
-        self, *, read_timeout: float | None = None
-    ) -> dict[str, Any]:
+    def _client_kwargs(self, *, read_timeout: float | None = None) -> dict[str, Any]:
         """Per-client kwargs for a ``bedrock-runtime`` client from the session.
 
         Delegates to the shared
@@ -743,9 +739,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         defaults to ``None`` (boto's 60s default), which is a sane
         silence/stall detector independent of the generation budget.
         """
-        return _numeric_option(
-            self.config.options, "stream_read_timeout", None, float
-        )
+        return _numeric_option(self.config.options, "stream_read_timeout", None, float)
 
     @staticmethod
     def _guardrail_config(config: LLMConfig) -> dict[str, Any] | None:
@@ -805,9 +799,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         else:
             msg_list = list(messages)
 
-        shaped_config, wire_extra, constraints = self._shape_request_params(
-            runtime_config, extra
-        )
+        shaped_config, wire_extra, constraints = self._shape_request_params(runtime_config, extra)
 
         # NOTE: system_prompt / guardrail read the *unshaped* ``runtime_config``,
         # not ``shaped_config``. This is intentional and byte-identical: shaping
@@ -845,9 +837,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         request.update(wire_extra)
         return request
 
-    def _profile_resolver(
-        self, config: LLMConfig
-    ) -> LayeredModelProfileResolver:
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
         """Compose the Bedrock model-profile resolver for *config*.
 
         Precedence (highest first): config override → the Bedrock bundled
@@ -872,9 +862,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return LayeredModelProfileResolver(
             [
-                ConfigOverrideSource(
-                    getattr(config, "model_profile_overrides", None)
-                ),
+                ConfigOverrideSource(getattr(config, "model_profile_overrides", None)),
                 _BEDROCK_RESOURCE_SOURCE,
                 CLAUDE_RESOURCE_PROFILE_SOURCE,
                 CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE,
@@ -944,9 +932,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return _canonical_model_id(config.model)
 
-    def _cost_for(
-        self, model: str, usage: dict[str, int] | None
-    ) -> float | None:
+    def _cost_for(self, model: str, usage: dict[str, int] | None) -> float | None:
         """Provider-side USD cost from resolved per-Mtok pricing (post-adapt).
 
         Keeps :class:`BedrockConverseAdapter` pure/I-O-free (it cannot resolve a
@@ -961,9 +947,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         if not usage:
             return None
-        return self.estimate_cost(
-            LLMResponse(content="", model=model, usage=usage), model=model
-        )
+        return self.estimate_cost(LLMResponse(content="", model=model, usage=usage), model=model)
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw botocore error into a dataknobs exception.
@@ -1023,9 +1007,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             await self.initialize()
 
         runtime_config = self._get_runtime_config(config_overrides)
-        request = self._build_converse_request(
-            messages, runtime_config, tools, extra=kwargs
-        )
+        request = self._build_converse_request(messages, runtime_config, tools, extra=kwargs)
 
         start = time.perf_counter()
         async with self._session.client(
@@ -1043,8 +1025,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         parsed.cost_usd = self._cost_for(runtime_config.model, parsed.usage)
         result = self._analyze_response(parsed)
         logger.debug(
-            "Bedrock converse complete (model=%s, finish=%s, tokens=%s, "
-            "latency_ms=%d)",
+            "Bedrock converse complete (model=%s, finish=%s, tokens=%s, latency_ms=%d)",
             runtime_config.model,
             result.finish_reason,
             (result.usage or {}).get("total_tokens"),
@@ -1079,13 +1060,9 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             await self.initialize()
 
         runtime_config = self._get_runtime_config(config_overrides)
-        request = self._build_converse_request(
-            messages, runtime_config, tools, extra=kwargs
-        )
+        request = self._build_converse_request(messages, runtime_config, tools, extra=kwargs)
 
-        logger.debug(
-            "Bedrock converse_stream start (model=%s)", runtime_config.model
-        )
+        logger.debug("Bedrock converse_stream start (model=%s)", runtime_config.model)
         stream_start = time.perf_counter()
         async with self._session.client(
             "bedrock-runtime",
@@ -1121,13 +1098,9 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     idx = block.get("contentBlockIndex", 0)
                     delta = block.get("delta", {})
                     if "text" in delta:
-                        yield LLMStreamResponse(
-                            delta=delta["text"], is_final=False
-                        )
+                        yield LLMStreamResponse(delta=delta["text"], is_final=False)
                     elif "toolUse" in delta and idx in tool_accumulators:
-                        tool_accumulators[idx]["input"] += delta[
-                            "toolUse"
-                        ].get("input", "")
+                        tool_accumulators[idx]["input"] += delta["toolUse"].get("input", "")
                 elif "messageStop" in event:
                     stop_reason = event["messageStop"].get("stopReason")
                 elif "metadata" in event:
@@ -1135,9 +1108,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     if usage_raw:
                         usage = {
                             "prompt_tokens": usage_raw.get("inputTokens", 0),
-                            "completion_tokens": usage_raw.get(
-                                "outputTokens", 0
-                            ),
+                            "completion_tokens": usage_raw.get("outputTokens", 0),
                             "total_tokens": usage_raw.get("totalTokens", 0),
                         }
 
@@ -1146,17 +1117,14 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 tool_calls = [
                     ToolCall(
                         name=acc["name"],
-                        parameters=(
-                            json.loads(acc["input"]) if acc["input"] else {}
-                        ),
+                        parameters=(json.loads(acc["input"]) if acc["input"] else {}),
                         id=acc["id"],
                     )
                     for _, acc in sorted(tool_accumulators.items())
                 ]
 
             logger.debug(
-                "Bedrock converse_stream done (model=%s, finish=%s, "
-                "tokens=%s, latency_ms=%d)",
+                "Bedrock converse_stream done (model=%s, finish=%s, tokens=%s, latency_ms=%d)",
                 runtime_config.model,
                 stop_reason,
                 (usage or {}).get("total_tokens"),
@@ -1279,12 +1247,8 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             await self.initialize()
 
         runtime_config = self._get_runtime_config(None)
-        request = self._build_converse_request(
-            messages, runtime_config, None, extra=kwargs
-        )
-        request["toolConfig"] = {
-            "tools": self.adapter.adapt_raw_functions(functions)
-        }
+        request = self._build_converse_request(messages, runtime_config, None, extra=kwargs)
+        request["toolConfig"] = {"tools": self.adapter.adapt_raw_functions(functions)}
 
         async with self._session.client(
             "bedrock-runtime",
@@ -1295,9 +1259,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             except Exception as exc:
                 self._raise_translated(exc)
 
-        parsed = self.adapter.adapt_response(
-            response, model=runtime_config.model
-        )
+        parsed = self.adapter.adapt_response(response, model=runtime_config.model)
         # Stamp cost post-adapt from the resolved per-Mtok pricing, like complete().
         parsed.cost_usd = self._cost_for(runtime_config.model, parsed.usage)
 
@@ -1305,6 +1267,4 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # through the shared _analyze_response choke point, so a truncated
         # tool-call turn on this path fires the truncation warning — exactly
         # like complete().
-        return self._analyze_response(
-            self._attach_legacy_function_call(parsed)
-        )
+        return self._analyze_response(self._attach_legacy_function_call(parsed))

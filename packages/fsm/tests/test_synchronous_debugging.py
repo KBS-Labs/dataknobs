@@ -1,12 +1,7 @@
 """Test synchronous debugging functionality for FSMs."""
 
 import pytest
-from dataknobs_fsm import (
-    AdvancedFSM,
-    FSMDebugger,
-    StepResult,
-    create_advanced_fsm
-)
+from dataknobs_fsm import AdvancedFSM, FSMDebugger, StepResult, create_advanced_fsm
 
 
 def test_synchronous_context_creation():
@@ -22,19 +17,15 @@ def test_synchronous_context_creation():
                 "states": [
                     {"name": "start", "is_start": True},
                     {"name": "process"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
-                "arcs": [
-                    {"from": "start", "to": "process"},
-                    {"from": "process", "to": "end"}
-                ]
+                "arcs": [{"from": "start", "to": "process"}, {"from": "process", "to": "end"}],
             }
-        ]
+        ],
     }
 
     # Create FSM
     with create_advanced_fsm(config) as fsm:
-
         # Create context synchronously
         context = fsm.create_context({"value": 42})
 
@@ -55,22 +46,14 @@ def test_execute_step_sync():
                 "states": [
                     {"name": "start", "is_start": True},
                     {"name": "process"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
                 "arcs": [
-                    {
-                        "from": "start",
-                        "to": "process",
-                        "name": "begin_processing"
-                    },
-                    {
-                        "from": "process",
-                        "to": "end",
-                        "name": "finish"
-                    }
-                ]
+                    {"from": "start", "to": "process", "name": "begin_processing"},
+                    {"from": "process", "to": "end", "name": "finish"},
+                ],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:
@@ -109,15 +92,15 @@ def test_fsm_debugger():
                     {"name": "start", "is_start": True},
                     {"name": "validate"},
                     {"name": "process"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
                 "arcs": [
                     {"from": "start", "to": "validate"},
                     {"from": "validate", "to": "process"},
-                    {"from": "process", "to": "end"}
-                ]
+                    {"from": "process", "to": "end"},
+                ],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:
@@ -160,20 +143,19 @@ def test_breakpoints():
                     {"name": "step1"},
                     {"name": "step2"},
                     {"name": "step3"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
                 "arcs": [
                     {"from": "start", "to": "step1"},
                     {"from": "step1", "to": "step2"},
                     {"from": "step2", "to": "step3"},
-                    {"from": "step3", "to": "end"}
-                ]
+                    {"from": "step3", "to": "end"},
+                ],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:
-
         # Add breakpoint at step2
         fsm.add_breakpoint("step2")
 
@@ -205,18 +187,14 @@ def test_trace_execution_sync():
                 "states": [
                     {"name": "start", "is_start": True},
                     {"name": "process"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
-                "arcs": [
-                    {"from": "start", "to": "process"},
-                    {"from": "process", "to": "end"}
-                ]
+                "arcs": [{"from": "start", "to": "process"}, {"from": "process", "to": "end"}],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:
-
         # Execute with tracing
         trace = fsm.trace_execution_sync({"value": 100})
 
@@ -239,18 +217,14 @@ def test_profile_execution_sync():
                 "states": [
                     {"name": "start", "is_start": True},
                     {"name": "process"},
-                    {"name": "end", "is_end": True}
+                    {"name": "end", "is_end": True},
                 ],
-                "arcs": [
-                    {"from": "start", "to": "process"},
-                    {"from": "process", "to": "end"}
-                ]
+                "arcs": [{"from": "start", "to": "process"}, {"from": "process", "to": "end"}],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:
-
         # Execute with profiling
         profile = fsm.profile_execution_sync({"value": 100})
 
@@ -270,15 +244,10 @@ def test_context_helper_methods():
         "networks": [
             {
                 "name": "main",
-                "states": [
-                    {"name": "start", "is_start": True},
-                    {"name": "end", "is_end": True}
-                ],
-                "arcs": [
-                    {"from": "start", "to": "end"}
-                ]
+                "states": [{"name": "start", "is_start": True}, {"name": "end", "is_end": True}],
+                "arcs": [{"from": "start", "to": "end"}],
             }
-        ]
+        ],
     }
 
     with create_advanced_fsm(config) as fsm:

@@ -132,8 +132,6 @@ async def test_connect_reuses_the_shared_warmed_session(bus: SqsEventBus) -> Non
     the session it holds is the same cached object the factory returns for
     the bus's config.
     """
-    warmed = await create_aioboto3_session(
-        bus._aws_session_config(), warm_service="sqs"
-    )
+    warmed = await create_aioboto3_session(bus._aws_session_config(), warm_service="sqs")
     await bus.connect()
     assert bus._session is warmed

@@ -8,9 +8,13 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
-    normalize_llm_config
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    AsyncLLMProvider,
+    ModelCapability,
+    normalize_llm_config,
 )
 from ..model_profile import (
     CallableModelMetadataSource,
@@ -170,25 +174,25 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: AsyncPromptBuilder | None = None
+        prompt_builder: AsyncPromptBuilder | None = None,
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
         super().__init__(llm_config, prompt_builder=prompt_builder)
-        self.base_url = llm_config.api_base or 'https://api-inference.huggingface.co/models'
+        self.base_url = llm_config.api_base or "https://api-inference.huggingface.co/models"
 
     async def initialize(self) -> None:
         """Initialize HuggingFace client."""
         try:
             import aiohttp
 
-            api_key = self.config.api_key or os.environ.get('HUGGINGFACE_API_KEY')
+            api_key = self.config.api_key or os.environ.get("HUGGINGFACE_API_KEY")
             if not api_key:
                 raise ValueError("HuggingFace API key not provided")
 
             self._session = aiohttp.ClientSession(
-                headers={'Authorization': f'Bearer {api_key}'},
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout),
             )
             self._is_initialized = True
         except ImportError as e:
@@ -199,7 +203,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
     async def _close_client(self) -> None:
         """Close the aiohttp session."""
-        if hasattr(self, '_session') and self._session:
+        if hasattr(self, "_session") and self._session:
             await self._session.close()
             await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
@@ -220,9 +224,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         except Exception:
             return False
 
-    def _profile_resolver(
-        self, config: LLMConfig
-    ) -> LayeredModelProfileResolver:
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
         """Compose the HuggingFace model-profile resolver for *config*.
 
         Two sources only — the leanest of the provider bindings. Precedence
@@ -265,13 +267,10 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         raise ``... from exc``.
         """
         import aiohttp
+
         if isinstance(exc, aiohttp.ClientResponseError):
-            retry_after = self._retry_after_from_headers(
-                getattr(exc, "headers", None)
-            )
-            return self._dataknobs_error_for_status(
-                exc.status, str(exc), retry_after=retry_after
-            )
+            retry_after = self._retry_after_from_headers(getattr(exc, "headers", None))
+            return self._dataknobs_error_for_status(exc.status, str(exc), retry_after=retry_after)
         if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
             return self._dataknobs_error_for_status(None, str(exc))
         return None
@@ -298,13 +297,13 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         shaped_config, _, constraints = self._shape_request_params(runtime_config)
         gen = shaped_config.generation_params()
         parameters: Dict[str, Any] = {
-            'max_new_tokens': gen.get('max_tokens', _HF_DEFAULT_MAX_NEW_TOKENS),
-            'return_full_text': False,
+            "max_new_tokens": gen.get("max_tokens", _HF_DEFAULT_MAX_NEW_TOKENS),
+            "return_full_text": False,
         }
-        if 'temperature' in gen:
-            parameters['temperature'] = gen['temperature']
-        if 'top_p' in gen:
-            parameters['top_p'] = gen['top_p']
+        if "temperature" in gen:
+            parameters["temperature"] = gen["temperature"]
+        if "top_p" in gen:
+            parameters["top_p"] = gen["top_p"]
         return self._apply_param_remaps(parameters, constraints.param_remaps)
 
     async def complete(
@@ -312,7 +311,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion.
 
@@ -326,6 +325,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         if tools:
             from ...exceptions import ToolsNotSupportedError
+
             raise ToolsNotSupportedError(
                 model=self.config.model,
                 suggestion="HuggingFace Inference API does not support tool calling.",
@@ -346,8 +346,8 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # Make API call
         url = f"{self.base_url}/{runtime_config.model}"
         payload = {
-            'inputs': prompt,
-            'parameters': self._build_hf_parameters(runtime_config),
+            "inputs": prompt,
+            "parameters": self._build_hf_parameters(runtime_config),
         }
 
         try:
@@ -359,7 +359,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Parse response
         if isinstance(data, list) and len(data) > 0:
-            text = data[0].get('generated_text', '')
+            text = data[0].get("generated_text", "")
         else:
             text = str(data)
 
@@ -367,18 +367,16 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # (finish_reason is hardcoded 'stop'), so truncation cannot be
         # detected here — LLMResponse.truncated stays False. If a caller needs
         # it, request `details=True` and parse `details.finish_reason`.
-        return self._analyze_response(LLMResponse(
-            content=text,
-            model=runtime_config.model,
-            finish_reason='stop'
-        ))
+        return self._analyze_response(
+            LLMResponse(content=text, model=runtime_config.model, finish_reason="stop")
+        )
 
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """HuggingFace Inference API doesn't support streaming.
 
@@ -403,9 +401,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         )
 
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings."""
         if not self._is_initialized:
@@ -418,7 +414,7 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
             single = False
 
         url = f"{self.base_url}/{self.config.model}"
-        payload = {'inputs': texts}
+        payload = {"inputs": texts}
 
         try:
             async with self._session.post(url, json=payload) as response:
@@ -430,23 +426,24 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """HuggingFace doesn't have native function calling."""
-        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "function_call() is deprecated, use complete(tools=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         raise NotImplementedError("Function calling not supported for HuggingFace models")
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""
         prompt = ""
         for msg in messages:
-            if msg.role == 'system':
+            if msg.role == "system":
                 prompt += f"{msg.content}\n\n"
-            elif msg.role == 'user':
+            elif msg.role == "user":
                 prompt += f"User: {msg.content}\n"
-            elif msg.role == 'assistant':
+            elif msg.role == "assistant":
                 prompt += f"Assistant: {msg.content}\n"
         return prompt

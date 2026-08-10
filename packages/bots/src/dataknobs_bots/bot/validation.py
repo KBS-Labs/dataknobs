@@ -229,9 +229,14 @@ def validate_bot_capabilities(
         if resource_name:
             try:
                 resolved = environment.get_resource(resource_type, resource_name)
-                warnings.extend(_validate_resource_capabilities(
-                    main_reqs, resource_name, resolved, "Main LLM",
-                ))
+                warnings.extend(
+                    _validate_resource_capabilities(
+                        main_reqs,
+                        resource_name,
+                        resolved,
+                        "Main LLM",
+                    )
+                )
             except KeyError:
                 warnings.append(
                     f"LLM resource '{resource_name}' not found in environment "
@@ -250,9 +255,14 @@ def validate_bot_capabilities(
             resource_type = extraction_config.get("type", "llm_providers")
             try:
                 resolved = environment.get_resource(resource_type, resource_name)
-                warnings.extend(_validate_resource_capabilities(
-                    extraction_reqs, resource_name, resolved, "Extraction LLM",
-                ))
+                warnings.extend(
+                    _validate_resource_capabilities(
+                        extraction_reqs,
+                        resource_name,
+                        resolved,
+                        "Extraction LLM",
+                    )
+                )
             except KeyError:
                 warnings.append(
                     f"Extraction LLM resource '{resource_name}' not found in "
@@ -265,12 +275,14 @@ def validate_bot_capabilities(
                 "model": extraction_config.get("model", ""),
                 "capabilities": extraction_config.get("capabilities"),
             }
-            warnings.extend(_validate_resource_capabilities(
-                extraction_reqs,
-                f"inline:{extraction_config.get('model', 'unknown')}",
-                inline_resolved,
-                "Extraction LLM",
-            ))
+            warnings.extend(
+                _validate_resource_capabilities(
+                    extraction_reqs,
+                    f"inline:{extraction_config.get('model', 'unknown')}",
+                    inline_resolved,
+                    "Extraction LLM",
+                )
+            )
         # If no extraction_config at all, skip — the wizard strategy will
         # handle extraction with its own defaults
 

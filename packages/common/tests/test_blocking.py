@@ -80,9 +80,7 @@ async def test_raises_runtime_error_when_detector_missing(
 ) -> None:
     """Without blockbuster the context manager fails loudly rather than
     silently passing without detection."""
-    monkeypatch.setattr(
-        blocking_module, "is_blockbuster_available", lambda: False
-    )
+    monkeypatch.setattr(blocking_module, "is_blockbuster_available", lambda: False)
     with pytest.raises(RuntimeError, match="blockbuster"):
         with assert_no_blocking():
             pass

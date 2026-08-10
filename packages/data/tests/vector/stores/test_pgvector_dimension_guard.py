@@ -41,8 +41,7 @@ except ImportError:
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -90,9 +89,7 @@ async def pg_table_name(
     async def _drop() -> None:
         conn = await asyncpg.connect(_get_test_connection_string())
         try:
-            await conn.execute(
-                f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE"
-            )
+            await conn.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE")
         finally:
             await conn.close()
 
@@ -163,9 +160,7 @@ async def test_pgvector_matching_dimension_initializes_cleanly(
 
 @pytest.mark.parametrize("_m", [pytest.param(None, marks=_pgvector_marks)])
 @pytest.mark.asyncio
-async def test_pgvector_atttypmod_decodes_to_vector_dimension(
-    _m: None, pg_table_name: str
-) -> None:
+async def test_pgvector_atttypmod_decodes_to_vector_dimension(_m: None, pg_table_name: str) -> None:
     """Pin the ``atttypmod`` -> dimension decode empirically.
 
     pgvector stores ``vector(N)`` dimensionality in ``atttypmod``

@@ -38,9 +38,7 @@ async def _populate(backend: InMemoryKnowledgeBackend) -> None:
     await backend.initialize()
     await backend.create_kb("d1")
     await backend.put_file("d1", "docs/topic.md", b"# Topic\n\nHello.\n")
-    await backend.put_file(
-        "d1", "docs/sidenote.md", b"# Sidenote\n\nIgnore me.\n"
-    )
+    await backend.put_file("d1", "docs/sidenote.md", b"# Sidenote\n\nIgnore me.\n")
 
 
 def _make_progress_capture() -> tuple[list[tuple[str, int]], Any]:
@@ -92,9 +90,7 @@ async def test_ingest_respects_patterns_through_manager() -> None:
         f"Expected 1 file (sidenote.md excluded); got {result.files_processed} "
         f"with captured paths={paths}"
     )
-    assert any("topic.md" in p for p in paths), (
-        f"topic.md must be ingested; captured paths={paths}"
-    )
+    assert any("topic.md" in p for p in paths), f"topic.md must be ingested; captured paths={paths}"
     assert not any("sidenote.md" in p for p in paths), (
         f"sidenote.md must be excluded; captured paths={paths}"
     )
@@ -135,9 +131,7 @@ async def test_ingestion_manager_preserves_event_bus() -> None:
 
     await bus.subscribe(INGEST_DOMAIN_END, handler)
 
-    manager = KnowledgeIngestionManager(
-        source=backend, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=backend, destination=rag, event_bus=bus)
     await manager.ingest("d1")
 
     # Give the bus a moment to deliver
@@ -215,9 +209,7 @@ async def test_ingestion_manager_threads_domain_id_into_chunk_metadata() -> None
     stored_metadata = vector_store.metadata_store  # type: ignore[attr-defined]
     assert stored_metadata, "Expected chunks to have been stored"
     for chunk_id, meta in stored_metadata.items():
-        assert meta.get("domain_id") == "d1", (
-            f"chunk {chunk_id} missing domain_id; got meta={meta}"
-        )
+        assert meta.get("domain_id") == "d1", f"chunk {chunk_id} missing domain_id; got meta={meta}"
 
 
 @pytest.mark.asyncio
@@ -235,9 +227,7 @@ async def test_ingestion_result_reports_files_skipped() -> None:
     await backend.put_file(
         "d1",
         "_metadata/knowledge_base.json",
-        json.dumps({"name": "d1", "exclude_patterns": ["docs/skip.md"]}).encode(
-            "utf-8"
-        ),
+        json.dumps({"name": "d1", "exclude_patterns": ["docs/skip.md"]}).encode("utf-8"),
     )
 
     rag = await _make_kb()
@@ -259,9 +249,7 @@ async def test_ingest_from_backend_accepts_extra_metadata() -> None:
     await _populate(backend)
 
     rag = await _make_kb()
-    await rag.ingest_from_backend(
-        backend, "d1", extra_metadata={"tenant": "acme", "env": "prod"}
-    )
+    await rag.ingest_from_backend(backend, "d1", extra_metadata={"tenant": "acme", "env": "prod"})
 
     stored_metadata = rag.vector_store.metadata_store  # type: ignore[attr-defined]
     assert stored_metadata
@@ -291,9 +279,7 @@ async def test_ingestion_manager_publishes_failure_event() -> None:
 
     await bus.subscribe(INGEST_DOMAIN_END, handler)
 
-    manager = KnowledgeIngestionManager(
-        source=backend, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=backend, destination=rag, event_bus=bus)
 
     # Force a failure by stubbing the destination's ingest path.
     async def _boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:

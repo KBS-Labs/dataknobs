@@ -27,7 +27,6 @@ from dataknobs_bots.prompts.focus import FOCUS_PROMPT_KEYS
 
 
 class TestAllBotsPromptKeys:
-
     def test_total_key_count(self) -> None:
         """Total keys equals the sum of all module key counts."""
         expected = (
@@ -64,7 +63,6 @@ class TestAllBotsPromptKeys:
 
 
 class TestGetDefaultPromptLibrary:
-
     def test_returns_config_prompt_library(self) -> None:
         library = get_default_prompt_library()
         assert isinstance(library, ConfigPromptLibrary)
@@ -111,7 +109,6 @@ class TestGetDefaultPromptLibrary:
 
 
 class TestGetFullPromptLibrary:
-
     def test_returns_composite_prompt_library(self) -> None:
         library = get_full_prompt_library()
         assert isinstance(library, CompositePromptLibrary)

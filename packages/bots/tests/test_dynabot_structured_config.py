@@ -57,6 +57,7 @@ async def _make_storage() -> DataknobsConversationStorage:
 # DynaBotConfig — typed config
 # ---------------------------------------------------------------------------
 
+
 class TestDynaBotConfig:
     """The typed top-level config snapshot."""
 
@@ -100,9 +101,7 @@ class TestDynaBotConfig:
         assert isinstance(cfg.reasoning, dict)
 
     def test_unknown_keys_ignored(self) -> None:
-        cfg = DynaBotConfig.from_dict(
-            {"llm": {"provider": "echo"}, "not_a_field": "dropped"}
-        )
+        cfg = DynaBotConfig.from_dict({"llm": {"provider": "echo"}, "not_a_field": "dropped"})
         assert not hasattr(cfg, "not_a_field")
 
     def test_roundtrip(self) -> None:
@@ -125,9 +124,7 @@ class TestDynaBotConfig:
             DynaBotConfig(tool_timeout=-1.0)
 
     def test_post_init_rejects_negative_tool_loop_timeout(self) -> None:
-        with pytest.raises(
-            ValueError, match="tool_loop_timeout must be non-negative"
-        ):
+        with pytest.raises(ValueError, match="tool_loop_timeout must be non-negative"):
             DynaBotConfig(tool_loop_timeout=-1.0)
 
 
@@ -135,18 +132,18 @@ class TestDynaBotConfig:
 # Parity guard
 # ---------------------------------------------------------------------------
 
+
 class TestParityGuard:
     """DynaBot satisfies the structured-config consumer contract."""
 
     def test_consumer_parity(self) -> None:
-        assert_structured_config_consumer(
-            DynaBot, ignore_params=_PREBUILT_CTOR_PARAMS
-        )
+        assert_structured_config_consumer(DynaBot, ignore_params=_PREBUILT_CTOR_PARAMS)
 
 
 # ---------------------------------------------------------------------------
 # Dual-input constructor — the back-compat guarantee (write-first discipline)
 # ---------------------------------------------------------------------------
+
 
 class TestDualInputConstructor:
     """The pre-built collaborator shape must keep working verbatim."""
@@ -288,6 +285,7 @@ class TestDualInputConstructor:
 # from_components — additive canonical alias of the pre-built shape
 # ---------------------------------------------------------------------------
 
+
 class TestFromComponents:
     @pytest.mark.asyncio
     async def test_adopts_prebuilt_collaborators(self) -> None:
@@ -312,15 +310,14 @@ class TestFromComponents:
         """``from_components`` shares the pre-built collaborator contract:
         a built bot needs both a prompt builder and conversation storage."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        with pytest.raises(
-            TypeError, match="prompt_builder and conversation_storage"
-        ):
+        with pytest.raises(TypeError, match="prompt_builder and conversation_storage"):
             DynaBot.from_components(llm=provider)
 
 
 # ---------------------------------------------------------------------------
 # Config-driven lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestConfigDrivenLifecycle:
     @pytest.mark.asyncio
@@ -361,17 +358,13 @@ class TestConfigDrivenLifecycle:
         from dataknobs_common.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="'llm' section"):
-            await DynaBot.from_config(
-                {"conversation_storage": {"backend": "memory"}}
-            )
+            await DynaBot.from_config({"conversation_storage": {"backend": "memory"}})
 
     @pytest.mark.asyncio
     async def test_from_config_injected_llm_not_owned(self) -> None:
         shared = EchoProvider({"provider": "echo", "model": "test"})
         await shared.initialize()
-        bot = await DynaBot.from_config(
-            {"conversation_storage": {"backend": "memory"}}, llm=shared
-        )
+        bot = await DynaBot.from_config({"conversation_storage": {"backend": "memory"}}, llm=shared)
         assert bot.llm is shared
         assert bot._owns_llm is False
         # bot.close() must not close a caller-owned provider.

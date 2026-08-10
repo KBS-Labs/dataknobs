@@ -60,10 +60,7 @@ def sample_data():
         "id": "test-123",
         "name": "Test Item",
         "value": 42,
-        "metadata": {
-            "created": "2024-01-01",
-            "source": "test"
-        }
+        "metadata": {"created": "2024-01-01", "source": "test"},
     }
 
 

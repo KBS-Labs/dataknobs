@@ -407,9 +407,7 @@ class TestInMemoryBackendMetadata:
     async def test_register_persists_metadata(self, backend):
         await backend.initialize()
 
-        reg = await backend.register(
-            "alpha", {"llm": {}}, metadata={"tenant_id": "acme"}
-        )
+        reg = await backend.register("alpha", {"llm": {}}, metadata={"tenant_id": "acme"})
 
         assert reg.metadata == {"tenant_id": "acme"}
         fetched = await backend.get("alpha")
@@ -500,19 +498,11 @@ class TestInMemoryBackendMetadata:
     @pytest.mark.asyncio
     async def test_filter_metadata_multi_key_is_and(self, backend):
         await backend.initialize()
-        await backend.register(
-            "a", {}, metadata={"tenant_id": "t1", "tier": "gold"}
-        )
-        await backend.register(
-            "b", {}, metadata={"tenant_id": "t1", "tier": "silver"}
-        )
-        await backend.register(
-            "c", {}, metadata={"tenant_id": "t2", "tier": "gold"}
-        )
+        await backend.register("a", {}, metadata={"tenant_id": "t1", "tier": "gold"})
+        await backend.register("b", {}, metadata={"tenant_id": "t1", "tier": "silver"})
+        await backend.register("c", {}, metadata={"tenant_id": "t2", "tier": "gold"})
 
-        result = await backend.list_active(
-            filter_metadata={"tenant_id": "t1", "tier": "gold"}
-        )
+        result = await backend.list_active(filter_metadata={"tenant_id": "t1", "tier": "gold"})
         assert {r.bot_id for r in result} == {"a"}
 
 
@@ -566,14 +556,12 @@ class TestInMemoryBackendSurfaceCompletion:
     @pytest.mark.asyncio
     async def test_list_inactive_filter_metadata(self, backend):
         await backend.initialize()
+        await backend.register("a", {}, status="inactive", metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, status="inactive", metadata={"tenant_id": "t2"})
         await backend.register(
-            "a", {}, status="inactive", metadata={"tenant_id": "t1"}
-        )
-        await backend.register(
-            "b", {}, status="inactive", metadata={"tenant_id": "t2"}
-        )
-        await backend.register(
-            "c", {}, metadata={"tenant_id": "t1"}  # active — excluded
+            "c",
+            {},
+            metadata={"tenant_id": "t1"},  # active — excluded
         )
 
         regs = await backend.list_inactive(filter_metadata={"tenant_id": "t1"})
@@ -607,9 +595,7 @@ class TestInMemoryBackendSurfaceCompletion:
         await backend.register("a", {}, metadata={"priority": 1})
         await backend.register("b", {}, metadata={"priority": 2})
 
-        regs = await backend.list_all(
-            sort=[SortSpec("metadata.priority", SortOrder.ASC)]
-        )
+        regs = await backend.list_all(sort=[SortSpec("metadata.priority", SortOrder.ASC)])
         assert [r.bot_id for r in regs] == ["a", "b", "c"]
 
     @pytest.mark.asyncio
@@ -618,9 +604,7 @@ class TestInMemoryBackendSurfaceCompletion:
         for i in range(5):
             await backend.register(f"bot-{i}", {})
 
-        regs = await backend.list_active(
-            sort=[SortSpec("bot_id", SortOrder.ASC)], limit=2
-        )
+        regs = await backend.list_active(sort=[SortSpec("bot_id", SortOrder.ASC)], limit=2)
         assert [r.bot_id for r in regs] == ["bot-0", "bot-1"]
 
     @pytest.mark.asyncio
@@ -629,9 +613,7 @@ class TestInMemoryBackendSurfaceCompletion:
         for i in range(5):
             await backend.register(f"bot-{i}", {})
 
-        regs = await backend.list_active(
-            sort=[SortSpec("bot_id", SortOrder.ASC)], offset=2
-        )
+        regs = await backend.list_active(sort=[SortSpec("bot_id", SortOrder.ASC)], offset=2)
         assert [r.bot_id for r in regs] == ["bot-2", "bot-3", "bot-4"]
 
     @pytest.mark.asyncio
@@ -650,9 +632,7 @@ class TestInMemoryBackendSurfaceCompletion:
     async def test_pagination_combines_with_filter_metadata(self, backend):
         await backend.initialize()
         for i in range(6):
-            await backend.register(
-                f"bot-{i}", {}, metadata={"tenant_id": "t1" if i < 3 else "t2"}
-            )
+            await backend.register(f"bot-{i}", {}, metadata={"tenant_id": "t1" if i < 3 else "t2"})
 
         regs = await backend.list_active(
             filter_metadata={"tenant_id": "t1"},
@@ -701,23 +681,11 @@ class TestInMemoryBackendSurfaceCompletion:
     async def test_count_all_combines_status_and_filter_metadata(self, backend):
         await backend.initialize()
         await backend.register("a", {}, metadata={"tenant_id": "t1"})
-        await backend.register(
-            "b", {}, status="inactive", metadata={"tenant_id": "t1"}
-        )
+        await backend.register("b", {}, status="inactive", metadata={"tenant_id": "t1"})
         await backend.register("c", {}, metadata={"tenant_id": "t2"})
 
-        assert (
-            await backend.count_all(
-                status="active", filter_metadata={"tenant_id": "t1"}
-            )
-            == 1
-        )
-        assert (
-            await backend.count_all(
-                status="inactive", filter_metadata={"tenant_id": "t1"}
-            )
-            == 1
-        )
+        assert await backend.count_all(status="active", filter_metadata={"tenant_id": "t1"}) == 1
+        assert await backend.count_all(status="inactive", filter_metadata={"tenant_id": "t1"}) == 1
 
     @pytest.mark.asyncio
     async def test_stream_yields_all_matching(self, backend):

@@ -48,21 +48,25 @@ class TestPoolConfigNoEnsureDatabase:
         assert not hasattr(config, "ensure_database")
 
     def test_from_dict_with_connection_string(self) -> None:
-        config = PostgresPoolConfig.from_dict({
-            "connection_string": "postgresql://user:pass@host:5432/mydb",
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "connection_string": "postgresql://user:pass@host:5432/mydb",
+            }
+        )
         assert config.database == "mydb"
         assert config.host == "host"
         assert config.port == 5432
 
     def test_from_dict_preserves_fields(self) -> None:
-        config = PostgresPoolConfig.from_dict({
-            "host": "dbhost",
-            "port": 5433,
-            "database": "mydb",
-            "user": "admin",
-            "password": "secret",
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "host": "dbhost",
+                "port": 5433,
+                "database": "mydb",
+                "user": "admin",
+                "password": "secret",
+            }
+        )
         assert config.host == "dbhost"
         assert config.port == 5433
         assert config.database == "mydb"
@@ -73,26 +77,32 @@ class TestPoolConfigNoEnsureDatabase:
 class TestValidateDatabaseName:
     """Tests for database name validation."""
 
-    @pytest.mark.parametrize("name", [
-        "mydb",
-        "my_database",
-        "DB123",
-        "_private",
-        "a",
-        "test_db_001",
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "mydb",
+            "my_database",
+            "DB123",
+            "_private",
+            "a",
+            "test_db_001",
+        ],
+    )
     def test_valid_names(self, name: str) -> None:
         validate_database_name(name)  # Should not raise
 
-    @pytest.mark.parametrize("name,reason", [
-        ("my-db", "hyphens"),
-        ("my db", "spaces"),
-        ("123db", "starts with digit"),
-        ('"; DROP TABLE users; --', "SQL injection"),
-        ("my.db", "dots"),
-        ("", "empty string — fails ^[a-zA-Z_] anchor"),
-        ("my/db", "slashes"),
-    ])
+    @pytest.mark.parametrize(
+        "name,reason",
+        [
+            ("my-db", "hyphens"),
+            ("my db", "spaces"),
+            ("123db", "starts with digit"),
+            ('"; DROP TABLE users; --', "SQL injection"),
+            ("my.db", "dots"),
+            ("", "empty string — fails ^[a-zA-Z_] anchor"),
+            ("my/db", "slashes"),
+        ],
+    )
     def test_invalid_names(self, name: str, reason: str) -> None:
         with pytest.raises(ConfigurationError, match="Invalid database name"):
             validate_database_name(name)
@@ -103,20 +113,24 @@ class TestParsePostgresConfigEnsureDatabase:
 
     def test_default_true(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
-            "host": "localhost",
-            "database": "mydb",
-        })
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
+            {
+                "host": "localhost",
+                "database": "mydb",
+            }
+        )
         assert ensure_db is True
         assert "ensure_database" not in conn_config
 
     def test_explicit_false(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
-            "host": "localhost",
-            "database": "mydb",
-            "ensure_database": False,
-        })
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
+            {
+                "host": "localhost",
+                "database": "mydb",
+                "ensure_database": False,
+            }
+        )
         assert ensure_db is False
         assert "ensure_database" not in conn_config
 
@@ -124,26 +138,31 @@ class TestParsePostgresConfigEnsureDatabase:
 class TestParsePostgresConfigBoolCoercion:
     """Tests that ensure_database string values are coerced correctly (A1)."""
 
-    @pytest.mark.parametrize("value,expected", [
-        (True, True),
-        (False, False),
-        ("true", True),
-        ("True", True),
-        ("TRUE", True),
-        ("1", True),
-        ("yes", True),
-        ("false", False),
-        ("False", False),
-        ("0", False),
-        ("no", False),
-        ("", False),
-        ("anything_else", True),  # blocklist: only explicit falsy strings return False
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("True", True),
+            ("TRUE", True),
+            ("1", True),
+            ("yes", True),
+            ("false", False),
+            ("False", False),
+            ("0", False),
+            ("no", False),
+            ("", False),
+            ("anything_else", True),  # blocklist: only explicit falsy strings return False
+        ],
+    )
     def test_bool_coercion(self, value: bool | str, expected: bool) -> None:
         mixin = PostgresBaseConfig()
-        _, _, _, ensure_db, _ = mixin._parse_postgres_config({
-            "ensure_database": value,
-        })
+        _, _, _, ensure_db, _ = mixin._parse_postgres_config(
+            {
+                "ensure_database": value,
+            }
+        )
         assert ensure_db is expected
 
 
@@ -152,9 +171,11 @@ class TestParsePostgresConfigConnectionString:
 
     def test_normalizes_connection_string_into_individual_keys(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, _, _ = mixin._parse_postgres_config({
-            "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-        })
+        _, _, conn_config, _, _ = mixin._parse_postgres_config(
+            {
+                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
+            }
+        )
         assert conn_config["host"] == "dbhost"
         assert conn_config["port"] == 5433
         assert conn_config["database"] == "mydb"
@@ -173,27 +194,33 @@ class TestParsePostgresConfigConnectionString:
         reusing a shared URL for the other fields.
         """
         mixin = PostgresBaseConfig()
-        _, _, conn_config, _, _ = mixin._parse_postgres_config({
-            "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-            "database": "override_db",
-        })
+        _, _, conn_config, _, _ = mixin._parse_postgres_config(
+            {
+                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
+                "database": "override_db",
+            }
+        )
         assert conn_config["database"] == "override_db"  # individual key wins
         assert conn_config["host"] == "dbhost"  # from connection_string
 
     def test_connection_string_with_ensure_database(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
-            "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-            "ensure_database": False,
-        })
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
+            {
+                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
+                "ensure_database": False,
+            }
+        )
         assert ensure_db is False
         assert conn_config["database"] == "mydb"
 
     def test_connection_string_default_ensure_database_true(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
-            "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-        })
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
+            {
+                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
+            }
+        )
         assert ensure_db is True
         assert conn_config["database"] == "mydb"
 
@@ -212,9 +239,7 @@ class TestIsInvalidCatalogError:
         import psycopg2
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
-        exc = psycopg2.OperationalError(
-            'FATAL:  database "dk_nonexistent" does not exist\n'
-        )
+        exc = psycopg2.OperationalError('FATAL:  database "dk_nonexistent" does not exist\n')
         # pgcode is None for manually-constructed OperationalError (matches
         # real behavior — psycopg2 doesn't set pgcode on connection failures)
         assert getattr(exc, "pgcode", None) is None
@@ -226,8 +251,7 @@ class TestIsInvalidCatalogError:
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
         exc = psycopg2.OperationalError(
-            "connection to server at \"localhost\" (127.0.0.1), port 5432 "
-            "failed: Connection refused"
+            'connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused'
         )
         assert SyncPostgresDatabase._is_invalid_catalog_error(exc) is False
 
@@ -236,9 +260,7 @@ class TestIsInvalidCatalogError:
         import psycopg2
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
-        exc = psycopg2.OperationalError(
-            'FATAL:  password authentication failed for user "baduser"'
-        )
+        exc = psycopg2.OperationalError('FATAL:  password authentication failed for user "baduser"')
         assert SyncPostgresDatabase._is_invalid_catalog_error(exc) is False
 
     def test_rejects_non_operational_error(self) -> None:

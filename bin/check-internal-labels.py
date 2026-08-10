@@ -80,10 +80,12 @@ DEFAULT_GLOBS = ("packages/*/src", "packages/*/tests")
 #: itself need explaining.  The allowlist entry is dead under the current
 #: suffix rule -- a ``.txt`` is not scanned -- and is kept so that widening the
 #: scope to data files does not silently make this file fail its own check.
-SELF_DESCRIBING = frozenset({
-    "bin/check-internal-labels.py",
-    "bin/internal-label-allowlist.txt",
-})
+SELF_DESCRIBING = frozenset(
+    {
+        "bin/check-internal-labels.py",
+        "bin/internal-label-allowlist.txt",
+    }
+)
 
 
 def _declared(command: list[str], what: str) -> list[str]:
@@ -94,9 +96,7 @@ def _declared(command: list[str], what: str) -> list[str]:
     with nothing in it, and this check announces success by printing a tick --
     so degrading to a partial scan would print that tick over unread code.
     """
-    result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, check=True
-    )
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=True)
     names = result.stdout.split()
     if not names:
         msg = f"{what} named nothing: {' '.join(command)}"
@@ -115,6 +115,7 @@ def _extra_roots() -> list[Path]:
         "shell lint targets",
     )
     return [ROOT / name for name in (*workspace, *shell)]
+
 
 # Unambiguous tracker-label classes only.
 LABEL_PATTERN = re.compile(
@@ -195,8 +196,7 @@ def load_allowlist() -> list[tuple[str, str]]:
         parts = line.split("\t")
         if len(parts) < 2:
             print(
-                f"WARNING: malformed allowlist line (need path<TAB>substring"
-                f"<TAB>reason): {raw!r}",
+                f"WARNING: malformed allowlist line (need path<TAB>substring<TAB>reason): {raw!r}",
                 file=sys.stderr,
             )
             continue
@@ -226,10 +226,7 @@ def iter_target_files(args: list[str]) -> list[Path]:
                 files.update(f.resolve() for f in p.rglob("*.py"))
     else:
         roots = [
-            root_dir
-            for glob in DEFAULT_GLOBS
-            for root_dir in ROOT.glob(glob)
-            if root_dir.is_dir()
+            root_dir for glob in DEFAULT_GLOBS for root_dir in ROOT.glob(glob) if root_dir.is_dir()
         ]
         for root_dir in roots:
             files.update(f.resolve() for f in root_dir.rglob("*.py"))
@@ -241,9 +238,7 @@ def iter_target_files(args: list[str]) -> list[Path]:
     return sorted(files)
 
 
-def is_allowlisted(
-    rel_path: str, line: str, allowlist: list[tuple[str, str]]
-) -> bool:
+def is_allowlisted(rel_path: str, line: str, allowlist: list[tuple[str, str]]) -> bool:
     """A hit is suppressed iff its file matches an allowlist path AND the
     offending line contains that entry's exact substring.
     """
@@ -283,9 +278,7 @@ def main() -> int:
                 continue
             if is_allowlisted(rel_path, line, allowlist):
                 continue
-            findings.append(
-                (package_of(rel_path), lineno, match.group(0), rel_path)
-            )
+            findings.append((package_of(rel_path), lineno, match.group(0), rel_path))
 
     if not findings:
         print("    ✓ No internal-tracking-label leakage found")

@@ -124,9 +124,7 @@ class TestAsyncLLMResourceInit:
 
     def test_custom_endpoint(self):
         """Test that custom endpoint overrides default."""
-        resource = AsyncLLMResource(
-            "test-llm", provider="ollama", endpoint="http://custom:8080"
-        )
+        resource = AsyncLLMResource("test-llm", provider="ollama", endpoint="http://custom:8080")
         assert resource.endpoint == "http://custom:8080"
 
     def test_is_instance_of_llm_resource(self):
@@ -214,13 +212,15 @@ class TestAsyncLLMResourceGenerate:
     @pytest.mark.asyncio
     async def test_generate_records_usage(self):
         """Test that generate returns token usage from the provider."""
-        echo = _make_echo_provider(responses=[
-            LLMResponse(
-                content="response text",
-                model="echo-test",
-                usage={"prompt_tokens": 10, "completion_tokens": 20},
-            ),
-        ])
+        echo = _make_echo_provider(
+            responses=[
+                LLMResponse(
+                    content="response text",
+                    model="echo-test",
+                    usage={"prompt_tokens": 10, "completion_tokens": 20},
+                ),
+            ]
+        )
         resource = _make_resource(provider=echo)
 
         result = await resource.generate(prompt="Test")
@@ -244,9 +244,11 @@ class TestAsyncLLMResourceGenerate:
     @pytest.mark.asyncio
     async def test_generate_releases_session_on_error(self):
         """Test that session is released even when provider raises."""
-        echo = _make_echo_provider(responses=[
-            ErrorResponse(RuntimeError("provider error")),
-        ])
+        echo = _make_echo_provider(
+            responses=[
+                ErrorResponse(RuntimeError("provider error")),
+            ]
+        )
         resource = _make_resource(provider=echo)
 
         with pytest.raises(RuntimeError, match="provider error"):

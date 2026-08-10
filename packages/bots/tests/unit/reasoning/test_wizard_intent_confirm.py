@@ -6,6 +6,7 @@ expands ``intent_confirm:`` into ``mode: conversation`` +
 ``transitions``. There is NO new runtime dispatch — all runtime
 behavior goes through existing wizard paths.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -31,18 +32,20 @@ def _wizard_with_intent_confirm(**extra: Any) -> dict[str, Any]:
                     # a non-existent contract.
                     "proposal_template": "Use ASRM?",
                     "intents": {
-                        "accept":  {"target": "accepted"},
+                        "accept": {"target": "accepted"},
                         "decline": {"target": "declined"},
                     },
                     **extra,
                 },
             },
             {
-                "name": "accepted", "is_end": True,
+                "name": "accepted",
+                "is_end": True,
                 "response_template": "Activated.",
             },
             {
-                "name": "declined", "is_end": True,
+                "name": "declined",
+                "is_end": True,
                 "response_template": "Skipped.",
             },
         ],
@@ -97,9 +100,7 @@ async def test_decline_keyword_routes_to_decline_target() -> None:
 @pytest.mark.asyncio
 async def test_per_intent_keyword_override_used_over_default() -> None:
     config = _wizard_with_intent_confirm()
-    config["stages"][0]["intent_confirm"]["intents"]["accept"]["keywords"] = (
-        ["affirm"]
-    )
+    config["stages"][0]["intent_confirm"]["intents"]["accept"]["keywords"] = ["affirm"]
     async with await BotTestHarness.create(wizard_config=config) as harness:
         await harness.greet()
         await harness.chat("affirm")
@@ -117,7 +118,7 @@ async def test_extract_field_captures_payload_via_llm_fallback() -> None:
 
     config = _wizard_with_intent_confirm(
         intents={
-            "accept":      {"target": "accepted"},
+            "accept": {"target": "accepted"},
             "alternative": {
                 "target": "declined",
                 "extract": "framework_name",
@@ -279,8 +280,7 @@ def test_load_rejects_reserved_intent_name() -> None:
 
 
 @pytest.mark.asyncio
-async def test_per_intent_llm_fallback_promotes_classifier_to_composite(
-) -> None:
+async def test_per_intent_llm_fallback_promotes_classifier_to_composite() -> None:
     """Setting ``llm_fallback: true`` on a single intent (no
     block-level flag) MUST promote the whole stage's classifier to a
     composite chain — the documented USER_GUIDE behavior. Pre-fix the
@@ -290,11 +290,11 @@ async def test_per_intent_llm_fallback_promotes_classifier_to_composite(
 
     config = _wizard_with_intent_confirm(
         intents={
-            "accept":      {"target": "accepted"},
+            "accept": {"target": "accepted"},
             "alternative": {
                 "target": "declined",
                 "extract": "framework_name",
-                "llm_fallback": True,   # ← per-intent only
+                "llm_fallback": True,  # ← per-intent only
             },
         },
         # NO block-level llm_fallback
@@ -321,7 +321,7 @@ def test_per_intent_llm_fallback_visible_in_synthesized_classifier() -> None:
 
     config = _wizard_with_intent_confirm(
         intents={
-            "accept":      {"target": "accepted"},
+            "accept": {"target": "accepted"},
             "alternative": {
                 "target": "declined",
                 "extract": "framework_name",
@@ -330,10 +330,7 @@ def test_per_intent_llm_fallback_visible_in_synthesized_classifier() -> None:
         },
     )
     fsm = WizardConfigLoader().load_from_dict(config)
-    assert (
-        fsm.stages["propose"]["intent_detection"]["classifier"]
-        == "composite"
-    )
+    assert fsm.stages["propose"]["intent_detection"]["classifier"] == "composite"
 
 
 # ---------------------------------------------------------------------------
@@ -360,8 +357,7 @@ def test_intent_confirm_block_removed_after_synthesis() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_synthesis_expands_to_conversation_mode_template_intent_detection(
-) -> None:
+def test_synthesis_expands_to_conversation_mode_template_intent_detection() -> None:
     """The synthesizer expands intent_confirm to existing wizard
     primitives — zero new runtime branches. Pinning the synthesis
     documents the expansion shape.
@@ -384,13 +380,11 @@ def test_synthesis_expands_to_conversation_mode_template_intent_detection(
     assert propose_meta["schema"] == {
         "type": "object",
         "properties": {
-            "accept":  {"type": "boolean"},
+            "accept": {"type": "boolean"},
             "decline": {"type": "boolean"},
         },
     }
-    targets = {
-        t["target"]: t["condition"] for t in propose_meta["transitions"]
-    }
+    targets = {t["target"]: t["condition"] for t in propose_meta["transitions"]}
     assert targets["accepted"] == "data.get('accept') == True"
     assert targets["declined"] == "data.get('decline') == True"
 

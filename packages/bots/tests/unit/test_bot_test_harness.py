@@ -129,16 +129,12 @@ class TestWizardConfigBuilder:
     def test_validation_no_start_stage(self) -> None:
         """Build raises when no start stage is defined."""
         with pytest.raises(ValueError, match="start stage"):
-            WizardConfigBuilder("test").stage(
-                "end", is_end=True, prompt="Done"
-            ).build()
+            WizardConfigBuilder("test").stage("end", is_end=True, prompt="Done").build()
 
     def test_validation_no_end_stage(self) -> None:
         """Build raises when no end stage is defined."""
         with pytest.raises(ValueError, match="end stage"):
-            WizardConfigBuilder("test").stage(
-                "start", is_start=True, prompt="Hi"
-            ).build()
+            WizardConfigBuilder("test").stage("start", is_start=True, prompt="Hi").build()
 
     def test_validation_invalid_transition_target(self) -> None:
         """Build raises when transition references nonexistent stage."""
@@ -379,9 +375,11 @@ class TestInjectProvidersExtractor:
         }
         bot = await DynaBot.from_config(bot_config)
 
-        ext = ConfigurableExtractor(results=[
-            SimpleExtractionResult(data={"name": "Alice"}, confidence=0.9),
-        ])
+        ext = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(data={"name": "Alice"}, confidence=0.9),
+            ]
+        )
         inject_providers(bot, extractor=ext)
 
         assert bot.reasoning_strategy.extractor is ext

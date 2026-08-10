@@ -88,6 +88,7 @@ async def _make_kb(
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestRAGChunkerInjection:
     """Test that RAGKnowledgeBase uses the chunker abstraction."""
 

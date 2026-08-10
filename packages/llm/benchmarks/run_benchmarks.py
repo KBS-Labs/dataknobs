@@ -25,6 +25,7 @@ from .rag_benchmark import RAGBenchmark
 
 try:
     from .conversation_benchmark import ConversationBenchmark
+
     CONVERSATION_AVAILABLE = True
 except ImportError:
     ConversationBenchmark = None
@@ -55,25 +56,23 @@ def format_markdown_report(results: List[BenchmarkResult], title: str = "Benchma
     for result in results:
         lines.append(result.format_table_row())
 
-    lines.extend([
-        "",
-        "## Detailed Results",
-        ""
-    ])
+    lines.extend(["", "## Detailed Results", ""])
 
     for result in results:
-        lines.extend([
-            f"### {result.name}",
-            "",
-            f"- **Iterations**: {result.iterations}",
-            f"- **Throughput**: {result.operations_per_second:.0f} ops/sec",
-            f"- **Mean**: {result.mean_time * 1000:.3f}ms",
-            f"- **Median**: {result.median_time * 1000:.3f}ms",
-            f"- **Std Dev**: {result.std_dev * 1000:.3f}ms",
-            f"- **Min**: {result.min_time * 1000:.3f}ms",
-            f"- **Max**: {result.max_time * 1000:.3f}ms",
-            ""
-        ])
+        lines.extend(
+            [
+                f"### {result.name}",
+                "",
+                f"- **Iterations**: {result.iterations}",
+                f"- **Throughput**: {result.operations_per_second:.0f} ops/sec",
+                f"- **Mean**: {result.mean_time * 1000:.3f}ms",
+                f"- **Median**: {result.median_time * 1000:.3f}ms",
+                f"- **Std Dev**: {result.std_dev * 1000:.3f}ms",
+                f"- **Min**: {result.min_time * 1000:.3f}ms",
+                f"- **Max**: {result.max_time * 1000:.3f}ms",
+                "",
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -97,13 +96,13 @@ def save_json_results(results: List[BenchmarkResult], filepath: str):
                 "std_dev": r.std_dev,
                 "min_time": r.min_time,
                 "max_time": r.max_time,
-                "operations_per_second": r.operations_per_second
+                "operations_per_second": r.operations_per_second,
             }
             for r in results
-        ]
+        ],
     }
 
-    with open(filepath, 'w') as f:
+    with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
 
     print(f"\nResults saved to {filepath}")
@@ -116,33 +115,17 @@ def main():
         "--iterations",
         type=int,
         default=1000,
-        help="Number of iterations per benchmark (default: 1000)"
+        help="Number of iterations per benchmark (default: 1000)",
     )
     parser.add_argument(
-        "--prompts",
-        action="store_true",
-        help="Run only prompt rendering benchmarks"
+        "--prompts", action="store_true", help="Run only prompt rendering benchmarks"
     )
+    parser.add_argument("--rag", action="store_true", help="Run only RAG search benchmarks")
     parser.add_argument(
-        "--rag",
-        action="store_true",
-        help="Run only RAG search benchmarks"
+        "--conversations", action="store_true", help="Run only conversation benchmarks"
     )
-    parser.add_argument(
-        "--conversations",
-        action="store_true",
-        help="Run only conversation benchmarks"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        help="Save results to markdown file"
-    )
-    parser.add_argument(
-        "--json",
-        type=str,
-        help="Save results to JSON file"
-    )
+    parser.add_argument("--output", type=str, help="Save results to markdown file")
+    parser.add_argument("--json", type=str, help="Save results to JSON file")
 
     args = parser.parse_args()
 
@@ -206,14 +189,16 @@ def main():
     print(f"{'Benchmark':<50} {'Ops/Sec':>10} {'Mean (ms)':>10}")
     print("-" * 70)
     for result in all_results:
-        print(f"{result.name:<50} {result.operations_per_second:>10.0f} {result.mean_time * 1000:>10.2f}")
+        print(
+            f"{result.name:<50} {result.operations_per_second:>10.0f} {result.mean_time * 1000:>10.2f}"
+        )
 
     print()
 
     # Save results if requested
     if args.output:
         report = format_markdown_report(all_results)
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             f.write(report)
         print(f"Markdown report saved to {args.output}")
 

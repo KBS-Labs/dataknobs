@@ -157,6 +157,7 @@ class TestConfigBindingResolverBasics:
     def test_resolve_missing_resource(self, resolver):
         """Test error when resource not in environment."""
         from dataknobs_config.environment_config import ResourceNotFoundError
+
         with pytest.raises(ResourceNotFoundError, match="not found"):
             resolver.resolve("databases", "nonexistent")
 
@@ -287,9 +288,7 @@ class TestAsyncResolution:
         assert db1 is db2
 
     @pytest.mark.asyncio
-    async def test_resolve_async_prefers_from_config_async(
-        self, env_config
-    ) -> None:
+    async def test_resolve_async_prefers_from_config_async(self, env_config) -> None:
         """A StructuredConfigConsumer target builds via from_config_async.
 
         The consumer's ``_ainit`` (async-only) runs, and the typed config
@@ -512,11 +511,7 @@ class TestSubstitutionProvenance:
     def _payload():
         return {
             "name": "test",
-            "resources": {
-                "databases": {
-                    "main": {"backend": "postgres", "password": "${PROV_PW}"}
-                }
-            },
+            "resources": {"databases": {"main": {"backend": "postgres", "password": "${PROV_PW}"}}},
         }
 
     def test_substituted_environment_is_not_substituted_again(self):
@@ -534,11 +529,7 @@ class TestSubstitutionProvenance:
         """
         env = EnvironmentConfig(
             name="test",
-            resources={
-                "databases": {
-                    "main": {"backend": "postgres", "password": "${PROV_PW}"}
-                }
-            },
+            resources={"databases": {"main": {"backend": "postgres", "password": "${PROV_PW}"}}},
         )
 
         built = self._resolve_through_factory(env)
@@ -546,18 +537,14 @@ class TestSubstitutionProvenance:
         assert built["password"] == self.SECRET
 
     def test_opt_out_environment_is_still_substituted(self):
-        env = EnvironmentConfig.from_dict(
-            self._payload(), substitute_vars=False
-        )
+        env = EnvironmentConfig.from_dict(self._payload(), substitute_vars=False)
 
         built = self._resolve_through_factory(env)
 
         assert built["password"] == self.SECRET
 
     def test_resolve_env_vars_false_leaves_refs_intact(self):
-        env = EnvironmentConfig.from_dict(
-            self._payload(), substitute_vars=False
-        )
+        env = EnvironmentConfig.from_dict(self._payload(), substitute_vars=False)
         built: dict = {}
 
         def factory(**config):
@@ -583,15 +570,12 @@ class TestSubstitutionProvenance:
         Whether overrides should be substituted at all is a separate
         question (199-FU2); this pins the behaviour they have always had.
         """
-        env = EnvironmentConfig.from_dict(
-            self._payload(), substitute_vars=substitute_vars
-        )
+        env = EnvironmentConfig.from_dict(self._payload(), substitute_vars=substitute_vars)
 
         built = self._resolve_through_factory(env, password="${PROV_PW}")
 
         assert built["password"] == self.SECRET, (
-            f"override expanded the wrong number of times with "
-            f"substitute_vars={substitute_vars}"
+            f"override expanded the wrong number of times with substitute_vars={substitute_vars}"
         )
 
     def test_overrides_are_not_substituted_when_disabled(self):

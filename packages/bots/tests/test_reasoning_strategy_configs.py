@@ -71,9 +71,7 @@ class TestSimpleReasoningConfig:
             cfg.greeting_template = "nope"  # type: ignore[misc]
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
-        cfg = SimpleReasoningConfig.from_dict(
-            {"greeting_template": "hello", "bogus": 1}
-        )
+        cfg = SimpleReasoningConfig.from_dict({"greeting_template": "hello", "bogus": 1})
         assert cfg.greeting_template == "hello"
 
 
@@ -113,9 +111,7 @@ class TestGroundedReasoningConfig:
         cfg = GroundedReasoningConfig(
             intent=GroundedIntentConfig(mode="static", num_queries=2),
             retrieval=GroundedRetrievalConfig(top_k=10, deduplicate=False),
-            synthesis=GroundedSynthesisConfig(
-                style="hybrid", require_citations=False
-            ),
+            synthesis=GroundedSynthesisConfig(style="hybrid", require_citations=False),
             result_processing=GroundedResultProcessingConfig(
                 normalize_strategy="min_max", min_results=2
             ),
@@ -165,9 +161,7 @@ class TestGroundedReasoningConfig:
     def test_legacy_query_generation_alias(self) -> None:
         # The legacy ``query_generation`` key maps to ``intent`` when
         # ``intent`` is absent.
-        cfg = GroundedReasoningConfig.from_dict(
-            {"query_generation": {"num_queries": 9}}
-        )
+        cfg = GroundedReasoningConfig.from_dict({"query_generation": {"num_queries": 9}})
         assert cfg.intent.num_queries == 9
         # The alias property still mirrors intent.
         assert cfg.query_generation is cfg.intent
@@ -185,16 +179,10 @@ class TestGroundedReasoningConfig:
         # An empty/None ``result_processing`` must default to None (pipeline
         # disabled), not a default-constructed config.
         assert (
-            GroundedReasoningConfig.from_dict(
-                {"result_processing": {}}
-            ).result_processing
-            is None
+            GroundedReasoningConfig.from_dict({"result_processing": {}}).result_processing is None
         )
         assert (
-            GroundedReasoningConfig.from_dict(
-                {"result_processing": None}
-            ).result_processing
-            is None
+            GroundedReasoningConfig.from_dict({"result_processing": None}).result_processing is None
         )
         assert GroundedReasoningConfig.from_dict({}).result_processing is None
 
@@ -250,12 +238,8 @@ class TestHybridReasoningConfig:
         assert cfg.grounded.intent.mode == "static"
         assert cfg.grounded.retrieval.top_k == 10
 
-    def test_from_dict_react_defaults_when_absent(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"
-        ):
+    def test_from_dict_react_defaults_when_absent(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"):
             cfg = HybridReasoningConfig.from_dict({"grounded": {}})
         assert cfg.react_max_iterations == 5
         assert cfg.react_verbose is False
@@ -263,16 +247,10 @@ class TestHybridReasoningConfig:
         # Both grounded and hybrid default ``store_provenance`` to True, so the
         # provenance-mismatch warning must stay silent on the defaults path. A
         # future default shift that introduced a spurious warning would trip here.
-        assert not [
-            rec for rec in caplog.records if "store_provenance" in rec.message
-        ]
+        assert not [rec for rec in caplog.records if "store_provenance" in rec.message]
 
-    def test_provenance_mismatch_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"
-        ):
+    def test_provenance_mismatch_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"):
             HybridReasoningConfig(
                 grounded=GroundedReasoningConfig(store_provenance=True),
                 store_provenance=False,
@@ -282,16 +260,10 @@ class TestHybridReasoningConfig:
             for rec in caplog.records
         )
 
-    def test_matching_provenance_does_not_warn(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"
-        ):
+    def test_matching_provenance_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"):
             HybridReasoningConfig(
                 grounded=GroundedReasoningConfig(store_provenance=True),
                 store_provenance=True,
             )
-        assert not [
-            rec for rec in caplog.records if "store_provenance" in rec.message
-        ]
+        assert not [rec for rec in caplog.records if "store_provenance" in rec.message]

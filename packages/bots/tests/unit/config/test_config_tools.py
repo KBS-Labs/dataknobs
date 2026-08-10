@@ -98,9 +98,7 @@ def _basic_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuilder:
             wizard_data.get("llm_provider", "ollama"),
             model=wizard_data.get("llm_model", "llama3.2"),
         )
-        .set_conversation_storage(
-            wizard_data.get("storage_backend", "memory")
-        )
+        .set_conversation_storage(wizard_data.get("storage_backend", "memory"))
     )
     if "system_prompt" in wizard_data:
         builder.set_system_prompt(content=wizard_data["system_prompt"])
@@ -115,14 +113,15 @@ def _portable_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuild
             wizard_data.get("llm_provider", "ollama"),
             model=wizard_data.get("llm_model", "llama3.2"),
         )
-        .set_conversation_storage(
-            wizard_data.get("storage_backend", "memory")
-        )
+        .set_conversation_storage(wizard_data.get("storage_backend", "memory"))
     )
     if wizard_data.get("domain_id"):
-        builder.set_custom_section("domain", {
-            "id": wizard_data["domain_id"],
-        })
+        builder.set_custom_section(
+            "domain",
+            {
+                "id": wizard_data["domain_id"],
+            },
+        )
     return builder
 
 
@@ -141,18 +140,14 @@ class TestListTemplatesTool:
     @pytest.mark.asyncio
     async def test_list_with_tags(self) -> None:
         tool = ListTemplatesTool(template_registry=_make_registry())
-        result = await tool.execute_with_context(
-            _make_context(), tags=["rag"]
-        )
+        result = await tool.execute_with_context(_make_context(), tags=["rag"])
         assert result["count"] == 1
         assert result["templates"][0]["name"] == "advanced"
 
     @pytest.mark.asyncio
     async def test_list_empty_tag_match(self) -> None:
         tool = ListTemplatesTool(template_registry=_make_registry())
-        result = await tool.execute_with_context(
-            _make_context(), tags=["nonexistent"]
-        )
+        result = await tool.execute_with_context(_make_context(), tags=["nonexistent"])
         assert result["count"] == 0
 
     @pytest.mark.asyncio
@@ -168,9 +163,7 @@ class TestGetTemplateDetailsTool:
     @pytest.mark.asyncio
     async def test_get_existing(self) -> None:
         tool = GetTemplateDetailsTool(template_registry=_make_registry())
-        result = await tool.execute_with_context(
-            _make_context(), template_name="basic"
-        )
+        result = await tool.execute_with_context(_make_context(), template_name="basic")
         assert result["name"] == "basic"
         assert result["description"] == "Basic bot"
         assert len(result["variables"]) == 1
@@ -179,9 +172,7 @@ class TestGetTemplateDetailsTool:
     @pytest.mark.asyncio
     async def test_get_nonexistent(self) -> None:
         tool = GetTemplateDetailsTool(template_registry=_make_registry())
-        result = await tool.execute_with_context(
-            _make_context(), template_name="missing"
-        )
+        result = await tool.execute_with_context(_make_context(), template_name="missing")
         assert "error" in result
         assert "available" in result
 
@@ -198,18 +189,14 @@ class TestPreviewConfigTool:
     @pytest.mark.asyncio
     async def test_preview_summary(self) -> None:
         tool = PreviewConfigTool(builder_factory=_basic_builder_factory)
-        context = _make_context(
-            {"llm_provider": "ollama", "llm_model": "llama3.2"}
-        )
+        context = _make_context({"llm_provider": "ollama", "llm_model": "llama3.2"})
         result = await tool.execute_with_context(context, format="summary")
         assert "sections" in result
 
     @pytest.mark.asyncio
     async def test_preview_full(self) -> None:
         tool = PreviewConfigTool(builder_factory=_basic_builder_factory)
-        context = _make_context(
-            {"llm_provider": "ollama", "storage_backend": "memory"}
-        )
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
         result = await tool.execute_with_context(context, format="full")
         assert "config" in result
         assert result["config"]["llm"]["provider"] == "ollama"
@@ -217,9 +204,7 @@ class TestPreviewConfigTool:
     @pytest.mark.asyncio
     async def test_preview_yaml(self) -> None:
         tool = PreviewConfigTool(builder_factory=_basic_builder_factory)
-        context = _make_context(
-            {"llm_provider": "openai", "storage_backend": "sqlite"}
-        )
+        context = _make_context({"llm_provider": "openai", "storage_backend": "sqlite"})
         result = await tool.execute_with_context(context, format="yaml")
         assert "yaml" in result
         parsed = yaml.safe_load(result["yaml"])
@@ -248,12 +233,8 @@ class TestValidateConfigTool:
     @pytest.mark.asyncio
     async def test_valid_config(self) -> None:
         validator = ConfigValidator()
-        tool = ValidateConfigTool(
-            validator=validator, builder_factory=_basic_builder_factory
-        )
-        context = _make_context(
-            {"llm_provider": "ollama", "storage_backend": "memory"}
-        )
+        tool = ValidateConfigTool(validator=validator, builder_factory=_basic_builder_factory)
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
         result = await tool.execute_with_context(context)
         assert result["valid"] is True
 
@@ -327,9 +308,7 @@ class TestSaveConfigTool:
         assert (tmp_path / "test-bot.yaml").exists()
 
     @pytest.mark.asyncio
-    async def test_save_with_draft_does_not_block_event_loop(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_save_with_draft_does_not_block_event_loop(self, tmp_path: Path) -> None:
         """The draft-finalize path must also run off the event loop.
 
         When a draft exists, ``execute_with_context`` finalizes it (read /
@@ -406,9 +385,7 @@ class TestSaveConfigTool:
         assert saved_args[0][0] == "cb-bot"
 
     @pytest.mark.asyncio
-    async def test_save_rejects_path_traversal_name(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_save_rejects_path_traversal_name(self, tmp_path: Path) -> None:
         """A config name with a path separator is rejected, not written.
 
         ``config_name`` flows from an LLM tool argument and ``domain_id`` from
@@ -424,12 +401,8 @@ class TestSaveConfigTool:
             draft_manager=manager,
             builder_factory=_basic_builder_factory,
         )
-        context = _make_context(
-            {"llm_provider": "ollama", "storage_backend": "memory"}
-        )
-        result = await tool.execute_with_context(
-            context, config_name="../escape"
-        )
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
+        result = await tool.execute_with_context(context, config_name="../escape")
         assert result["success"] is False
         assert "Invalid config name" in result["error"]
         # Nothing was written outside the output directory.
@@ -449,9 +422,7 @@ class TestSaveConfigTool:
             draft_manager=manager,
             builder_factory=_basic_builder_factory,
         )
-        context = _make_context(
-            {"llm_provider": "ollama", "storage_backend": "memory"}
-        )
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
         result = await tool.execute_with_context(context)
         assert result["success"] is False
 
@@ -462,12 +433,8 @@ class TestSaveConfigTool:
             draft_manager=manager,
             builder_factory=_basic_builder_factory,
         )
-        context = _make_context(
-            {"llm_provider": "ollama", "storage_backend": "memory"}
-        )
-        result = await tool.execute_with_context(
-            context, config_name="explicit-name"
-        )
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
+        result = await tool.execute_with_context(context, config_name="explicit-name")
         assert result["success"] is True
         assert result["config_name"] == "explicit-name"
         assert (tmp_path / "explicit-name.yaml").exists()
@@ -544,9 +511,7 @@ class TestListAvailableToolsTool:
             {"name": "weather", "description": "Weather", "category": "info"},
         ]
         tool = ListAvailableToolsTool(available_tools=catalog)
-        result = await tool.execute_with_context(
-            _make_context(), category="info"
-        )
+        result = await tool.execute_with_context(_make_context(), category="info")
         assert result["count"] == 2
         names = [t["name"] for t in result["tools"]]
         assert "search" in names
@@ -560,9 +525,7 @@ class TestListAvailableToolsTool:
             {"name": "search", "description": "Search", "category": "Info"},
         ]
         tool = ListAvailableToolsTool(available_tools=catalog)
-        result = await tool.execute_with_context(
-            _make_context(), category="info"
-        )
+        result = await tool.execute_with_context(_make_context(), category="info")
         assert result["count"] == 1
 
     @pytest.mark.asyncio

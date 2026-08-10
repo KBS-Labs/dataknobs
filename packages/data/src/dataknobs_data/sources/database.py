@@ -141,7 +141,8 @@ class DatabaseSource(GroundedSource):
             prop: dict[str, Any] = {
                 "type": json_type,
                 "description": field_schema.metadata.get(
-                    "description", f"Filter on {field_name}",
+                    "description",
+                    f"Filter on {field_name}",
                 ),
             }
 
@@ -208,14 +209,16 @@ class DatabaseSource(GroundedSource):
             content = str(data.get(self._content_field, ""))
             record_id = str(record.id) if hasattr(record, "id") and record.id else ""
             relevance = self._score_record(data, intent.text_queries)
-            results.append(SourceResult(
-                content=content,
-                source_id=record_id,
-                source_name=self._name,
-                source_type="database",
-                relevance=relevance,
-                metadata=data,
-            ))
+            results.append(
+                SourceResult(
+                    content=content,
+                    source_id=record_id,
+                    source_name=self._name,
+                    source_type="database",
+                    relevance=relevance,
+                    metadata=data,
+                )
+            )
 
         results.sort(key=lambda r: r.relevance, reverse=True)
         return results
@@ -244,7 +247,8 @@ class DatabaseSource(GroundedSource):
             except Exception:
                 logger.warning(
                     "Database query failed for source '%s'",
-                    self._name, exc_info=True,
+                    self._name,
+                    exc_info=True,
                 )
                 return []
 
@@ -265,9 +269,11 @@ class DatabaseSource(GroundedSource):
                     batch = await self._db.search(q)
                 except Exception:
                     logger.warning(
-                        "Database text search failed for source '%s' "
-                        "(query=%r, field=%s)",
-                        self._name, tq, text_field, exc_info=True,
+                        "Database text search failed for source '%s' (query=%r, field=%s)",
+                        self._name,
+                        tq,
+                        text_field,
+                        exc_info=True,
                     )
                     continue
                 for r in batch:
@@ -289,7 +295,8 @@ class DatabaseSource(GroundedSource):
     # ------------------------------------------------------------------
 
     def _build_structural_filters(
-        self, intent: RetrievalIntent,
+        self,
+        intent: RetrievalIntent,
     ) -> list[Filter]:
         """Build structural (non-text-search) filters from intent.
 

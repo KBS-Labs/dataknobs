@@ -50,9 +50,7 @@ logger = logging.getLogger(__name__)
 # Type aliases for hook callbacks
 StageCallback = Callable[[str, dict[str, Any]], Union[Awaitable[None], None]]
 CompleteCallback = Callable[[dict[str, Any]], Union[Awaitable[None], None]]
-ErrorCallback = Callable[
-    [str, dict[str, Any], Exception], Union[Awaitable[None], None]
-]
+ErrorCallback = Callable[[str, dict[str, Any], Exception], Union[Awaitable[None], None]]
 
 # Re-export so existing consumers can ``from dataknobs_bots.reasoning.wizard_hooks
 # import TurnHookCallback`` without learning the new module path.
@@ -200,11 +198,7 @@ class WizardHooks:
                 return None
 
         def stage_of(hook_config: dict[str, Any] | str) -> str | None:
-            return (
-                hook_config.get("stage")
-                if isinstance(hook_config, dict)
-                else None
-            )
+            return hook_config.get("stage") if isinstance(hook_config, dict) else None
 
         for key, register, staged in (
             ("on_enter", hooks.on_enter, True),
@@ -283,15 +277,11 @@ class WizardHooks:
             )
 
         if not func_ref:
-            raise ConfigurationError(
-                f"Wizard hook entry names no function: {hook_config!r}"
-            )
+            raise ConfigurationError(f"Wizard hook entry names no function: {hook_config!r}")
 
         return resolve_function(func_ref)
 
-    def on_enter(
-        self, callback: StageCallback, stage: str | None = None
-    ) -> "WizardHooks":
+    def on_enter(self, callback: StageCallback, stage: str | None = None) -> "WizardHooks":
         """Register a callback for stage entry.
 
         The callback is invoked when entering a stage, before
@@ -313,9 +303,7 @@ class WizardHooks:
         self._enter_hooks.append(_HookRegistration(callback=callback, stage=stage))
         return self
 
-    def on_exit(
-        self, callback: StageCallback, stage: str | None = None
-    ) -> "WizardHooks":
+    def on_exit(self, callback: StageCallback, stage: str | None = None) -> "WizardHooks":
         """Register a callback for stage exit.
 
         The callback is invoked when leaving a stage, after
@@ -483,7 +471,9 @@ class WizardHooks:
             raise
 
     async def _handle_error_from_event(
-        self, event: dict[str, Any], error: Exception,
+        self,
+        event: dict[str, Any],
+        error: Exception,
     ) -> None:
         """Bridge an event-shaped failure back into the legacy
         ``on_error`` fan-out, which expects ``(stage, data, error)``.
@@ -586,9 +576,7 @@ class WizardHooks:
                 await self._handle_error("_restart", {}, e)
                 raise
 
-    async def _invoke_callback(
-        self, callback: Callable[..., Any], *args: Any
-    ) -> None:
+    async def _invoke_callback(self, callback: Callable[..., Any], *args: Any) -> None:
         """Invoke a callback, handling both sync and async.
 
         Args:
@@ -599,9 +587,7 @@ class WizardHooks:
         if asyncio.iscoroutine(result):
             await result
 
-    async def _handle_error(
-        self, stage: str, data: dict[str, Any], error: Exception
-    ) -> None:
+    async def _handle_error(self, stage: str, data: dict[str, Any], error: Exception) -> None:
         """Invoke error hooks for an exception.
 
         Args:

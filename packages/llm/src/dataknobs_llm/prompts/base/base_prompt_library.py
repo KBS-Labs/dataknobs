@@ -28,11 +28,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
     the actual prompt loading logic.
     """
 
-    def __init__(
-        self,
-        enable_cache: bool = True,
-        metadata: dict[str, Any] | None = None
-    ):
+    def __init__(self, enable_cache: bool = True, metadata: dict[str, Any] | None = None):
         """Initialize the base prompt library.
 
         Args:
@@ -80,7 +76,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         return {
             "class": self.__class__.__name__,
             "cache_enabled": self._enable_cache,
-            **self._metadata
+            **self._metadata,
         }
 
     # ===== Cache Helpers =====
@@ -178,9 +174,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             self._rag_config_cache[name] = config
 
     def _get_cached_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str
+        self, prompt_name: str, prompt_type: str
     ) -> list[RAGConfig] | None:
         """Get prompt RAG configs from cache if caching is enabled.
 
@@ -196,10 +190,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         return self._prompt_rag_cache.get((prompt_name, prompt_type))
 
     def _cache_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str,
-        configs: list[RAGConfig]
+        self, prompt_name: str, prompt_type: str, configs: list[RAGConfig]
     ) -> None:
         """Cache prompt RAG configurations if caching is enabled.
 
@@ -233,8 +224,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         if not isinstance(data, dict):
             raise ValueError(
-                f"Invalid validation config: expected dict or ValidationConfig, "
-                f"got {type(data)}"
+                f"Invalid validation config: expected dict or ValidationConfig, got {type(data)}"
             )
 
         # Parse level
@@ -251,9 +241,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         optional_params = data.get("optional_params", [])
 
         return ValidationConfig(
-            level=level,
-            required_params=required_params,
-            optional_params=optional_params
+            level=level, required_params=required_params, optional_params=optional_params
         )
 
     def _parse_rag_config(self, data: dict[str, Any]) -> RAGConfig:
@@ -346,9 +334,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         return template
 
-    def _apply_optional_fields(
-        self, template: PromptTemplateDict, data: dict[str, Any]
-    ) -> None:
+    def _apply_optional_fields(self, template: PromptTemplateDict, data: dict[str, Any]) -> None:
         """Copy optional fields from parsed data into a PromptTemplateDict.
 
         This is the single location where optional PromptTemplateDict fields
@@ -361,8 +347,12 @@ class BasePromptLibrary(AbstractPromptLibrary):
         """
         # Simple pass-through fields
         passthrough_fields = (
-            "defaults", "metadata", "template_mode", "template_syntax",
-            "sections", "rag_config_refs",
+            "defaults",
+            "metadata",
+            "template_mode",
+            "template_syntax",
+            "sections",
+            "rag_config_refs",
         )
         for field_name in passthrough_fields:
             if field_name in data:
@@ -374,69 +364,47 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         if "rag_configs" in data:
             template["rag_configs"] = [
-                self._parse_rag_config(rag_data)
-                for rag_data in data["rag_configs"]
+                self._parse_rag_config(rag_data) for rag_data in data["rag_configs"]
             ]
 
     # ===== Abstract Methods (must be implemented by subclasses) =====
 
-    def get_system_prompt(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> PromptTemplateDict | None:
+    def get_system_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
         """Retrieve a system prompt template by name.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_system_prompt()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement get_system_prompt()")
 
     def list_system_prompts(self) -> list[str]:
         """List all available system prompt names.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement list_system_prompts()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement list_system_prompts()")
 
     def get_user_prompt(
-        self,
-        name: str,
-        index: int = 0,
-        **kwargs: Any
+        self, name: str, index: int = 0, **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Retrieve a user prompt template by name and index.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_user_prompt()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement get_user_prompt()")
 
     def list_user_prompts(self) -> list[str]:
         """List available user prompts.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement list_user_prompts()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement list_user_prompts()")
 
-    def get_message_index(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> MessageIndex | None:
+    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Retrieve a message index by name.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_message_index()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement get_message_index()")
 
     def list_message_indexes(self) -> list[str]:
         """List all available message index names.
@@ -447,25 +415,15 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement list_message_indexes()"
         )
 
-    def get_rag_config(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> RAGConfig | None:
+    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Retrieve a standalone RAG configuration by name.
 
         Subclasses must implement this method.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_rag_config()"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement get_rag_config()")
 
     def get_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str = "user",
-        index: int = 0,
-        **kwargs: Any
+        self, prompt_name: str, prompt_type: str = "user", index: int = 0, **kwargs: Any
     ) -> list[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
 

@@ -124,9 +124,7 @@ class TestReasoningComponentsForwarding:
             await bot_none.close()
 
         # Empty dict — explicit no-forwarding.
-        bot_empty = await DynaBot.from_config(
-            _BASE_CAPTURE_CONFIG, reasoning_components={}
-        )
+        bot_empty = await DynaBot.from_config(_BASE_CAPTURE_CONFIG, reasoning_components={})
         try:
             strategy = bot_empty.reasoning_strategy
             assert isinstance(strategy, _ComponentCaptureStrategy)
@@ -143,9 +141,7 @@ class TestReasoningComponentsForwarding:
             "conversation_storage": {"backend": "memory"},
             "reasoning": {"strategy": "simple"},
         }
-        bot = await DynaBot.from_config(
-            config, reasoning_components={"nonsense_key": "x"}
-        )
+        bot = await DynaBot.from_config(config, reasoning_components={"nonsense_key": "x"})
         try:
             # Construction succeeded; the unknown key was absorbed.
             assert bot.reasoning_strategy is not None
@@ -157,9 +153,7 @@ class TestReasoningComponentsForwarding:
         "managed_name",
         ["knowledge_base", "prompt_resolver", "prompt_envelope"],
     )
-    async def test_collision_with_bot_managed_name_raises(
-        self, managed_name: str
-    ) -> None:
+    async def test_collision_with_bot_managed_name_raises(self, managed_name: str) -> None:
         config: dict[str, Any] = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -222,14 +216,14 @@ class TestReActExtraContextEndToEnd:
         )
         try:
             bot.tool_registry.register_tool(ContextCaptureTool())
-            context = BotContext(
-                conversation_id="conv-extra-ctx", client_id="test-client"
-            )
+            context = BotContext(conversation_id="conv-extra-ctx", client_id="test-client")
 
-            bot.llm.set_responses([
-                tool_call_response("capture", {}),
-                text_response("Done"),
-            ])
+            bot.llm.set_responses(
+                [
+                    tool_call_response("capture", {}),
+                    text_response("Done"),
+                ]
+            )
 
             await bot.chat("Capture context", context)
 
