@@ -170,7 +170,14 @@ line-length = 100
 # Include/exclude patterns
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 extend-include = ["*.ipynb"]
-src = ["packages/*/src", "packages/*/tests"]
+# Where a first-party module name resolves from. The package trees answer for
+# code under packages/; the last two answer for the code that belongs to no
+# package and is now linted alongside it -- `.` so a `tests.` import resolves,
+# `src` for the workspace shim. Without them isort classified both as
+# third-party, which passes today only because `pytest` happens to sort before
+# `tests`: the misgrouping is invisible until an import lands on the other side
+# of that accident, and then it is an I001 arguing for the wrong layout.
+src = ["packages/*/src", "packages/*/tests", ".", "src"]
 
 [tool.ruff.lint]
 # Rule selection
@@ -257,7 +264,15 @@ ignore = [
     "SIM105", # Use contextlib.suppress - not always clearer
     "SIM108", # Use ternary operator instead of if-else-block
     "SIM113", # Use enumerate for index variable
-    "SIM115", # Use context manager for opening files - not practical for locks
+    # SIM115 was declined here with the reason "not practical for locks", and
+    # that reason is true -- of one file: data's file backend holds a lock handle
+    # open across the critical section it protects, which is exactly the shape
+    # the rule cannot tell from a leak. Thirteen files in all own a handle past
+    # the expression that opens it. Declining repo-wide to accommodate them turned
+    # the check off for everything else, and a leaked handle in bin/package-hashes.py
+    # then had to be found by reading the file. Moved to per-file-ignores below,
+    # one entry per file with its own reason, so a fourteenth has to argue for
+    # itself instead of arriving under a waiver written for something else.
     "SIM117", # Use single with statement with multiple contexts
     
     # Complexity metrics - already configured
@@ -345,14 +360,34 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # --config <root>, so the suppressions must also live here). See .claude/rules/async-transport.md.
 "packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # queue-drain poll; asyncio.sleep does not block the loop (style lint, not an I/O defect). Idiomatic Queue.join()/task_done() migration tracked separately
 "packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # one-time ingest-setup path resolution (cwd + existence checks); setup-time, not a per-record hot path
-"packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]  # cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call
+"packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240", "SIM115"]  # ASYNC240: cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call. SIM115: handle stored on self.file_handle by open(), released by the paired close()
 "tests/test_package_interop.py" = ["F401"]  # an import smoke test: the import IS the assertion, so "unused" is the subject rather than a defect
+# SIM115 — the thirteen files that own a handle past the expression that opens
+# it, which is the one shape the rule cannot distinguish from a leak. Scoped here
+# rather than declined repo-wide (see the note beside SIM117 above). Each was
+# read before being listed; a fourteenth needs its own line and its own reason.
+"packages/data/src/dataknobs_data/backends/file.py" = ["SIM115"]  # the case the global waiver was written for: a lock handle held open across the critical section it protects (msvcrt.locking on its fileno), plus a NamedTemporaryFile used for its path
+"packages/data/tests/test_cross_backend_integration.py" = ["SIM115"]  # NamedTemporaryFile kept on the fixture for the test's lifetime
+"packages/data/examples/vector_multi_backend.py" = ["SIM115"]  # NamedTemporaryFile(delete=False) opened for its name; closed on the next line
+"packages/fsm/docs/active/enhanced_process_stream.py" = ["SIM115"]  # lazily-opened CSV accumulator held across calls via nonlocal (the file_utils.py shape, in a doc example)
+"packages/fsm/src/dataknobs_fsm/resources/filesystem.py" = ["SIM115"]  # NamedTemporaryFile handed to a caller as a managed resource; the pool closes it
+"packages/fsm/src/dataknobs_fsm/streaming/file_stream.py" = ["SIM115"]  # handle stored on self._file_handle for the stream's lifetime, closed by close()
+"packages/fsm/src/dataknobs_fsm/utils/file_utils.py" = ["SIM115"]  # lazily-opened CSV accumulator held across write_csv() calls via nonlocal
+"packages/fsm/src/dataknobs_fsm/utils/streaming_file_utils.py" = ["SIM115"]  # same self._file_handle streaming-writer shape as file_stream.py
+"packages/fsm/tests/test_database_storage_factory.py" = ["SIM115"]  # NamedTemporaryFile(delete=False) opened for its path; closed on the next line
+"packages/utils/src/dataknobs_utils/json_utils.py" = ["SIM115"]  # ownership switches on the argument type: opened here only when passed a path, and then closed here
+"packages/utils/src/dataknobs_utils/xml_utils.py" = ["SIM115"]  # handle must outlive the expression because mmap borrows its fileno()
+"packages/xization/src/dataknobs_xization/ingestion/source.py" = ["SIM115"]  # handle crosses a thread boundary to a generator that finalizes it
 
 [tool.ruff.lint.isort]
 # Configure import sorting
 combine-as-imports = true
 force-wrap-aliases = true
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+# `dataknobs_workspace` and `tests` are first-party too: the workspace shim and
+# the guard suite that checks the toolchain. Named explicitly rather than left to
+# `src` resolution because that only fires for a directory ruff can see from the
+# file being checked, and these are imported from every package tree as well.
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization", "dataknobs_workspace", "tests"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention

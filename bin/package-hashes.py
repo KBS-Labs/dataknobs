@@ -234,7 +234,8 @@ def _is_quality_input(path: Path) -> bool:
     if path.suffix:
         return False
     try:
-        first = path.open("rb").readline()
+        with path.open("rb") as handle:
+            first = handle.readline()
     except OSError:
         return False
     return first.startswith(b"#!") and b"sh" in first

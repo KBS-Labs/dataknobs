@@ -33,8 +33,6 @@ import re
 import subprocess
 from functools import cache
 
-import pytest
-
 from tests._workspace import ROOT, load_bin_module, tracked_shell_files
 
 #: ``source``/``.`` whose operand is fixed at authoring time — no ``$``, no
@@ -534,11 +532,15 @@ def test_attach_does_not_consume_a_following_flag_as_the_deploy_root(tmp_path):
     )
 
 
-@pytest.mark.skipif(
-    not LINT_SHELL.is_file(), reason="lint-shell.sh does not exist yet"
-)
 def test_no_baseline_script_is_already_clean():
     """The ratchet. A deferred script that reaches zero must be promoted.
+
+    Carried a ``skipif(not LINT_SHELL.is_file())`` from the round that wrote it,
+    which could not be true of any committed state and so only described how the
+    file looked mid-authoring. Removed rather than kept as insurance: the
+    condition it guarded is asserted directly by
+    ``test_the_shell_lint_exists_and_is_executable``, and a skip reports as a
+    pass while that assertion reports as a failure.
 
     Without this the baseline is a list nobody revisits: a script cleaned as a
     side effect of unrelated work stays deferred forever, and the next change to

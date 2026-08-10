@@ -481,11 +481,11 @@ class TestPostgresAsyncIntegration:
     async def test_async_search_preserves_record_id(self, postgres_test_db):
         """``search()`` results carry populated ``record.id``.
 
-        Pre-Item-114 this worked via an explicit
+        This once worked via an explicit
         ``record.storage_id = str(row['id'])`` compensation at the
-        search call site. Post-fix the compensation is removed and
-        ``_row_to_record`` populates the id directly. Pins the
-        post-fix behavior so a regression at either layer is caught.
+        search call site. That compensation is gone and
+        ``_row_to_record`` populates the id directly. Pins the current
+        behavior so a regression at either layer is caught.
         """
         db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         rec_id = f"test-id-search-114-{uuid.uuid4().hex}"
@@ -503,11 +503,11 @@ class TestPostgresAsyncIntegration:
     async def test_async_stream_read_preserves_record_id(self, postgres_test_db):
         """Streamed records carry populated ``record.id``.
 
-        Pre-Item-114 ``stream_read`` was one of four async call sites
-        of ``_row_to_record`` that did NOT compensate with an explicit
-        ``storage_id`` assignment. Post-fix the delegation in
-        ``_row_to_record`` populates the id uniformly across all call
-        sites — pin one of them.
+        ``stream_read`` was once one of four async call sites of
+        ``_row_to_record`` that did NOT compensate with an explicit
+        ``storage_id`` assignment. The delegation in ``_row_to_record``
+        now populates the id uniformly across all call sites — pin one
+        of them.
         """
         db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         run_tag = uuid.uuid4().hex

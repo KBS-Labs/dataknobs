@@ -591,42 +591,36 @@ compute_overall_status() {
     fi
 }
 
-# Determine package glob pattern
+# Reject a package name that names nothing, before any check runs on it.
+#
+# This block used to also build the glob the ruff diagnostics artifact is
+# written over, and that was a second, independent answer to "what does this run
+# check" — decided here, eighty lines before the one that decides what actually
+# gets validated. They disagreed on the workspace-only branch: nothing had
+# changed under packages/, so validate.sh was called with --workspace and
+# checked no package source at all, while this fell through to packages/*/src
+# and pointed ruff at all ten. style-check.json — the artifact a developer opens
+# after a failure — then carried findings from code the run never validated and
+# could not have failed on, presented beside a verdict they did not produce.
+#
+# The scope is derived from the validation decision now (see _ruff_scope at the
+# invocation), so the two cannot disagree. What is left here is input validation,
+# which genuinely belongs before anything runs.
 if [ -n "$PACKAGES" ]; then
-    # Build glob pattern for specific packages
-    PACKAGE_PATTERN=""
+    _named_a_real_package=""
     for pkg in $PACKAGES; do
         if [ -d "packages/$pkg" ]; then
-            if [ -z "$PACKAGE_PATTERN" ]; then
-                PACKAGE_PATTERN="packages/$pkg/src"
-            else
-                PACKAGE_PATTERN="$PACKAGE_PATTERN packages/$pkg/src"
-            fi
+            _named_a_real_package="yes"
         else
             print_warning "Package not found: $pkg"
         fi
     done
-    
-    if [ -z "$PACKAGE_PATTERN" ]; then
+
+    if [ -z "$_named_a_real_package" ]; then
         print_error "No valid packages specified"
         exit 1
     fi
-else
-    PACKAGE_PATTERN="packages/*/src"
 fi
-
-# The code belonging to no package, from the one declaration. This was a fifth
-# answer to "which code do we check", and it feeds the ruff JSON a developer
-# reads after a failure — so without it a bin/ finding reaches validation.log and
-# appears nowhere in the diagnostics artifact, which is the shape that hides a
-# finding rather than reporting it.
-#
-# Invoked rather than sourced: package-discovery.sh sets -u and -o pipefail, and
-# this file sets only -e. Captured into a variable first because errexit applies
-# to a bare assignment but not to a substitution inside an argument list — a
-# failure there would yield an empty string and silently narrow the pattern back.
-_workspace_pattern=$("$SCRIPT_DIR/package-discovery.sh" workspace-targets)
-PACKAGE_PATTERN="$PACKAGE_PATTERN $_workspace_pattern"
 
 # Validate package references
 print_status "Validating package references across codebase..."
@@ -730,17 +724,36 @@ if [ "$SKIP_STYLE" != "yes" ]; then
         # of what a validation phase costs rather than a separate step.
         _check_start=$(date +%s)
         if [ "$PR_MODE" = "yes" ]; then
+            # What the diagnostics artifact is written over: the targets this run
+            # is about to validate, asked for rather than derived a second time.
+            # --print-targets runs no checks; it resolves the same argument string
+            # passed to validate.sh below and prints the list, so the artifact
+            # cannot report on code the run did not check, and cannot omit code it
+            # did. A second construction here is what let the two drift.
+            #
+            # Captured into a variable first: errexit applies to a bare assignment
+            # but not to a substitution inside an argument list, so a failure there
+            # would silently pass ruff an empty target set — which reports no
+            # findings and exits 0, the one result indistinguishable from clean.
+            #
+            # shellcheck disable=SC2086  # VALIDATE_ARGS is an argument list; see below
+            _ruff_scope=$("$SCRIPT_DIR/validate.sh" --print-targets $VALIDATE_ARGS)
+            if [ -z "$_ruff_scope" ]; then
+                print_error "Could not resolve a scope for the style artifact"
+                exit 1
+            fi
+
             # Also generate ruff JSON artifact for diagnostics
             # The word splitting is the point. These variables hold argument *lists* —
             # VALIDATE_ARGS is "$PACKAGES --workspace", TEST_FLAGS and PYTEST_ARGS are
-            # flag strings, PACKAGE_PATTERN is several globs. Quoting one passes the whole
+            # flag strings, _ruff_scope is several paths. Quoting one passes the whole
             # string as a single argument: validate.sh would look for a target literally
             # named "bots --workspace", find nothing, warn, and validate nothing while
             # still reporting success. That is this track's defect exactly, so the waiver
             # is here to stop a future editor "fixing" the finding into a silent failure.
             _ruff_json_rc=0
             # shellcheck disable=SC2086
-            uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || _ruff_json_rc=$?
+            uv run ruff check $_ruff_scope --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || _ruff_json_rc=$?
 
             # `|| true` used to cover both of the ways this goes wrong, and they
             # are not the same way.
