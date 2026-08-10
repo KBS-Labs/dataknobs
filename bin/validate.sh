@@ -370,9 +370,42 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     fi
 done
 
-# 3. Check imports (only for packages)
+# 3. Check formatting
+#
+# The formatter has been configured in pyproject.toml and named in the published
+# docs since the beginning, and until now nothing ran it: 1,128 of 1,471 tracked
+# files were unformatted while the docs told contributors it was the standard.
+# This is the step that makes the declaration true.
+#
+# Always with --config, and no --all-errors branch. The formatter has no
+# equivalent of "show me the suppressed findings too" -- there is one formatted
+# form -- so the two-branch shape the linter carries above would offer a choice
+# between the real answer and a differently-configured one.
+echo -e "\n${BLUE}3. Checking code formatting...${NC}"
+
+for target in "${VALIDATE_TARGETS[@]}"; do
+    echo -e "${YELLOW}  Checking $target...${NC}"
+
+    if [[ "$FIX" == true ]]; then
+        if uv run ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Formatting applied${NC}"
+        else
+            echo -e "${RED}    ✗ Formatter failed${NC}"
+            FAILED=true
+        fi
+    else
+        if uv run ruff format --check "$target" --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Formatting is clean${NC}"
+        else
+            echo -e "${RED}    ✗ Files need formatting — run with -f, or bin/fix.sh${NC}"
+            FAILED=true
+        fi
+    fi
+done
+
+# 4. Check imports (only for packages)
 if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
-    echo -e "\n${BLUE}3. Checking imports...${NC}"
+    echo -e "\n${BLUE}4. Checking imports...${NC}"
     for package in "${VALIDATE_PACKAGES[@]}"; do
         echo -e "${YELLOW}  Checking $package...${NC}"
 
@@ -417,9 +450,9 @@ run_mypy() {
     return "$rc"
 }
 
-# 4. Type checking with mypy (unless quick mode)
+# 5. Type checking with mypy (unless quick mode)
 if [[ "$QUICK" != true ]]; then
-    echo -e "\n${BLUE}4. Running mypy type checking...${NC}"
+    echo -e "\n${BLUE}5. Running mypy type checking...${NC}"
     for target in "${VALIDATE_TARGETS[@]}"; do
         echo -e "${YELLOW}  Checking $target...${NC}"
         
@@ -449,8 +482,8 @@ if [[ "$QUICK" != true ]]; then
     done
 fi
 
-# 5. Check for common issues
-echo -e "\n${BLUE}5. Checking for common issues...${NC}"
+# 6. Check for common issues
+echo -e "\n${BLUE}6. Checking for common issues...${NC}"
 
 # Check for print statements (with exceptions for legitimate uses)
 echo -e "${YELLOW}  Checking for print statements...${NC}"

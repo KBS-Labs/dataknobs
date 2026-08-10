@@ -1,0 +1,22 @@
+# Commits that changed formatting without changing behaviour, so `git blame`
+# can skip past them to the change that actually wrote the line.
+#
+# GitHub reads this file automatically. Locally it does nothing until you point
+# git at it, which is once per clone:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Full 40-character hashes only — git rejects an abbreviated one, and rejects a
+# hash it cannot resolve, so a stale entry here fails loudly rather than
+# quietly ignoring nothing.
+#
+# Add a commit here only if reverting it would change no behaviour. The entry
+# below is not purely mechanical and is listed anyway: alongside the 1,128-file
+# rewrite it moved two `# noqa` directives onto the lines they waive, dropped a
+# `# type: ignore` that was concealing a real return-type mismatch, and
+# corrected two line-numbered suppression entries. Blame on those few lines
+# skips to whoever last wrote them, which is the more useful answer in each
+# case — they changed *because of* the reformat, not on their own merits.
+
+# style: apply the formatter that has been declared since the repository began
+20585a7883cebf88eddbafa73ef024d1ac9fca0a

@@ -27,13 +27,14 @@ Four properties, each an instance of the same sentence:
    and still the reason this property holds.
 3. **A printed path exists.** Advice pointing at a deleted script is a dead end
    discovered by the reader.
-4. **The formatter is contained.** ``ruff format`` is not enforced anywhere:
-   no gate check runs it, so its output is unvalidated by construction.
-   ``bin/fix.sh`` ran it over every target — a 422-file rewrite that nothing
-   would have noticed being reverted — while being the command the gate prints.
-   One explicitly-named opt-in command may run it; a command named ``fix`` may
-   not, because the user asked to fix findings and would receive a repo-wide
-   diff instead.
+4. **The formatter runs where it is checked.** ``ruff format`` used to be
+   enforced nowhere, so the property here was containment: one opt-in command
+   could run it and ``fix`` could not, because a user asking to fix findings
+   would have received a repo-wide diff instead. Now that ``validate.sh``
+   checks formatting, the fault inverts — a command that formats *less* than
+   the check covers reports success and leaves the gate red, which is this
+   file's first paragraph with a different tool in it. Three scripts may run
+   it; a fourth is a target set nobody keeps in step.
 """
 
 from __future__ import annotations
@@ -48,8 +49,10 @@ from tests.test_linter_invocation_resolution import (
     logical_lines,
 )
 
-#: The one command allowed to run the formatter, and where it lives.
-FORMATTER_OWNER = "bin/dk"
+#: The scripts allowed to run the formatter: the check, the command that
+#: repairs what the check reports, and the opt-in named after it. Anything else
+#: is a fourth answer to which code gets formatted.
+FORMATTER_OWNERS = frozenset({"bin/validate.sh", "bin/fix.sh", "bin/dk"})
 
 #: A command being printed rather than run.
 ADVICE_RE = re.compile(r"^\s*(?:echo|printf)\b")
@@ -162,17 +165,26 @@ def test_every_path_named_in_advice_exists():
     )
 
 
-def test_only_one_entry_point_runs_the_formatter():
-    """Formatting is not enforced here, so running it must be asked for by name.
+def test_the_formatter_runs_only_where_it_is_checked_or_asked_for():
+    """Every script running the formatter is one of the three that should.
 
-    No gate check runs ``ruff format`` in any form, which makes its output
-    unvalidated by construction: a reformat is a diff nothing requested and
-    nothing would notice being reverted. That is tolerable behind a command
-    called ``format``, where it is what the user asked for. It is not tolerable
-    inside ``fix``, and it was there — reachable from the tip the gate prints.
+    The previous form of this pinned the formatter to a single opt-in command,
+    on the grounds that nothing validated its output — a reformat was a diff
+    nobody requested and nobody would notice being reverted, which is fine
+    behind a command called ``format`` and not fine inside ``fix``, where it
+    was, reachable from the tip the gate prints.
 
-    If formatting is ever adopted, this test is the place that says so: add the
-    check to validation first, then widen this pin.
+    Adopting the formatter inverts that. There is now a check, so the risk moves
+    from *an unrequested rewrite* to *the fix not reaching what the check
+    flags*: an entry point that formats less than ``validate.sh`` checks reports
+    success and leaves the gate red, which is this file's opening paragraph with
+    a different tool in it. So the three sanctioned owners are the check, its
+    write side, and the named opt-in — and a fourth script running the formatter
+    is a fourth answer to *which code do we format*, the same fault property 2
+    rejects for target sets.
+
+    What this cannot see is whether the three agree on their populations;
+    ``test_toolchain_consistency`` holds that from the other side.
     """
     owners = sorted(
         {
@@ -182,11 +194,12 @@ def test_only_one_entry_point_runs_the_formatter():
         }
     )
 
-    assert owners == [FORMATTER_OWNER], (
+    assert owners == sorted(FORMATTER_OWNERS), (
         f"Scripts running ruff format: {owners or 'none'} — expected exactly "
-        f"[{FORMATTER_OWNER!r}].\nNothing validates formatting, so every other "
-        "caller produces an unrequested diff. Remove it, or adopt formatting as "
-        "a validated check and update this pin."
+        f"{sorted(FORMATTER_OWNERS)}.\nThe formatter belongs in the check, in "
+        "the command that repairs what the check reports, and in the opt-in "
+        "named after it. A fourth caller is a fourth target set nobody keeps in "
+        "step; a missing one is a check with no remedy."
     )
 
 

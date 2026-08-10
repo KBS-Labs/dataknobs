@@ -474,7 +474,7 @@ Each cell names a path, a tier, a ceiling and a reason:
 |---|---|---|
 | `ruff` | `checked` / `deferred` | findings |
 | `mypy` | `strict` / `transitional` / `unchecked` | findings |
-| `format` | `enforced` / `pending` | files the formatter would rewrite |
+| `format` | `enforced` | files the formatter would rewrite |
 
 Two properties make it a ratchet rather than a list of excuses, and both are
 enforced rather than described:
@@ -491,11 +491,11 @@ matching nothing failed, while "241 findings" stayed green at 400. A number
 nobody compares is one that stops being true without anyone finding out.
 
 **A deferred tier is frozen, not unenforced.** Every ceiling currently equals
-what the tree measures, so a `deferred` or `pending` cell is a backlog that
-cannot *grow* — adding an unformatted file under `packages/*/tests`, or a test
-with a new lint finding there, fails the `contract` check even though nothing
-lints that directory yet. That is the ratchet working: the backlog is being
-cleared, and a phase that clears one while another grows it never ends. Write
+what the tree measures, so a `deferred` cell is a backlog that cannot *grow* —
+adding a test with a new lint finding under `packages/*/tests` fails the
+`contract` check even though nothing lints that directory yet. That is the
+ratchet working: the backlog is being cleared, and a phase that clears one
+while another grows it never ends. Write
 new files clean, or clear one of the existing findings in the same cell.
 
 ```bash
@@ -549,9 +549,14 @@ To run linting checks:
 # Check specific package
 uv run bin/validate.sh data
 
-# Auto-fix formatting issues
-uv run ruff format packages/*/src
+# Auto-fix lint findings and formatting
+./bin/fix.sh
 ```
+
+Formatting is checked, not suggested: `bin/validate.sh` fails on a file the
+formatter would rewrite. `./bin/fix.sh` is what repairs it, and `bin/dk format`
+runs the formatter alone. All three read the root `pyproject.toml` and cover
+the same files, so a green `dk format` means a green format check.
 
 ### Type Checking and Python Compatibility
 

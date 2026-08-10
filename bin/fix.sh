@@ -24,7 +24,7 @@ TARGETS=()
 usage() {
     echo "Usage: $0 [OPTIONS] [TARGETS...]"
     echo ""
-    echo "Auto-fix lint findings using ruff"
+    echo "Auto-fix lint findings and formatting using ruff"
     echo ""
     echo "Arguments:"
     echo "  TARGETS               Packages, directories, or files to fix"
@@ -43,8 +43,8 @@ usage() {
     echo "  $0 packages/utils/src                     # Fix specific directory"
     echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Fix specific files"
     echo ""
-    echo "Formatting is not run here and is not enforced by any check. See"
-    echo "'dk format' if you want it."
+    echo "Runs ruff's linter with --fix and then its formatter, which is what"
+    echo "bin/validate.sh checks. Both use the root pyproject.toml."
     exit 0
 }
 
@@ -157,6 +157,16 @@ for target in "${FIX_TARGETS[@]}"; do
         echo -e "${GREEN}✓ Ruff auto-fix completed${NC}"
     else
         echo -e "${YELLOW}⚠ Some issues remain that need manual fixing${NC}"
+    fi
+
+    # The write side of validate.sh's format check. It runs second because the
+    # linter's fixes move code and the formatter then lays it out -- the other
+    # order leaves a file that fails the check this script exists to satisfy.
+    echo -e "${BLUE}Running ruff format...${NC}"
+    if uv run ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
+        echo -e "${GREEN}✓ Formatting applied${NC}"
+    else
+        echo -e "${YELLOW}⚠ The formatter failed on this target${NC}"
     fi
 done
 

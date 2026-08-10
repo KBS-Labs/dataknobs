@@ -176,11 +176,14 @@ lint() {
             echo -e "${RED}✗ Ruff check failed${NC}"
         fi
 
-        # No format check. Nothing in the quality gate runs `ruff format`, so
-        # this asserted a standard the repository does not hold code to — dead
-        # while the bare `ruff` above meant it never ran, and ~400 files of
-        # noise the moment that was fixed. `dk format` is the one command that
-        # formats, and it is opt-in by name.
+        # No format check, though formatting is enforced now — bin/validate.sh
+        # fails on a file the formatter would rewrite. Deliberately not added
+        # here: this command already omits four of validate.sh's six steps, so
+        # it is a partial view by construction and nobody can read a green here
+        # as a green gate. Adding the formatter would make this a fourth answer
+        # to which files get formatted, which is the thing
+        # tests/test_remediation_paths.py pins to three. Run bin/validate.sh for
+        # the verdict and ./bin/fix.sh to repair it.
 
         # Run mypy with workspace configuration
         echo -e "${BLUE}Running mypy...${NC}"

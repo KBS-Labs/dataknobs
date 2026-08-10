@@ -99,7 +99,7 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
   ${BOLD}Fixing Issues:${NC}
     fix              Auto-fix style issues
     fixlint          Try to auto-fix some lint issues
-    format           Format code with black/ruff
+    format           Format code with ruff (checked by validate)
     
   ${BOLD}Diagnostics:${NC}
     diagnose, diag   Analyze last failure
@@ -379,16 +379,25 @@ main() {
                 uv run pylint "$PROJECT_ROOT"/packages/*/src --rcfile="$PROJECT_ROOT/.pylintrc" "$@"
             ;;
         format|fmt)
-            # The only formatter in the repo, and deliberately the only one:
-            # no check anywhere runs `ruff format`, so its output is validated
-            # by nothing and reverting it would be noticed by nothing. That is
-            # fine for a command you type by name and asked for — it is not
-            # fine inside `fix`, where it used to live, so the containment is
-            # pinned by tests/test_remediation_paths.py.
-            echo -e "${YELLOW}Note:${NC} formatting is not enforced by any check —"
-            echo -e "      this rewrites files nothing will ask you to change."
+            # Formatting is checked by bin/validate.sh now, so this is no longer
+            # an unvalidated rewrite — it is the named opt-in for the same
+            # standard, and its target set has to be the checked one.
+            #
+            # It used to run over packages/*/src alone. Against an enforced
+            # check that is a trap rather than a narrower convenience: `dk
+            # format` would report success and validate.sh would still fail on
+            # tests/ or bin/, which is the shape this repository already fixed
+            # once by making `dk fix` delegate rather than keep its own set.
+            # Captured before the command for the reason `style` documents —
+            # errexit reads the enclosing command's status, so a substitution
+            # that fails inside an argument list yields an empty string and
+            # formats the narrower set anyway.
+            format_targets=$(workspace_targets)
+            # SC2086: the word splitting is the point — workspace_targets emits
+            # several target paths and each has to arrive as its own argument.
+            # shellcheck disable=SC2086
             run_from_root "Formatting code" \
-                uv run ruff format "$PROJECT_ROOT"/packages/*/src --config "$PROJECT_ROOT/pyproject.toml" "$@"
+                uv run ruff format "$PROJECT_ROOT"/packages/*/src $format_targets --config "$PROJECT_ROOT/pyproject.toml" "$@"
             ;;
             
         # Diagnostics
