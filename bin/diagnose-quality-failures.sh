@@ -157,9 +157,32 @@ done
 
 SOURCE_DIR="$(resolve_source_dir)"
 
+# A run that started here and never recorded a verdict. run-quality-checks.sh
+# writes this before its first abortable check and removes it when the summary
+# lands, so its presence means the newest thing in this directory is a run whose
+# logs are here and whose verdict is not.
+#
+# Which matters because the summary beside those logs may well be an older run's.
+# The gate cannot clear its directory on entry — the directory holds committed
+# files — so an abort leaves two runs interleaved, and the older half is the half
+# holding the verdict. Without this the tool reads that verdict out as the
+# current one, which for a green previous run means answering "what broke?" with
+# a full set of passing checks.
+ABORTED_AT=""
+if [ -f "$SOURCE_DIR/.run-in-progress" ]; then
+    ABORTED_AT=$(head -n 1 "$SOURCE_DIR/.run-in-progress" 2>/dev/null)
+fi
+
 # Neither tier holds a run. Naming the checker first: it is the cheaper of the
 # two and produces everything this tool reads.
 if [ ! -f "$SOURCE_DIR/quality-summary.json" ]; then
+    if [ -n "$ABORTED_AT" ]; then
+        echo -e "${RED}✗ The last run (started ${ABORTED_AT}) stopped before recording anything.${NC}"
+        echo -e "${YELLOW}  It aborted ahead of the first check — services, package resolution${NC}"
+        echo -e "${YELLOW}  or the style scope. That run printed the reason; any logs it did${NC}"
+        echo -e "${YELLOW}  write are in ${SOURCE_DIR}.${NC}"
+        exit 1
+    fi
     echo -e "${RED}✗ No quality run found to diagnose!${NC}"
     echo -e "${YELLOW}  Run './bin/run-quality-checks.sh' (checks only), or${NC}"
     echo -e "${YELLOW}  './bin/dk pr' if you also need the artifacts CI verifies.${NC}"
@@ -430,6 +453,19 @@ if [ "$STYLE_COUNT" = "0" ]; then
     STYLE_STATUS="pass"
 else
     STYLE_STATUS="fail"
+fi
+
+# Said before the summary rather than after it, and in the words that describe
+# what the reader is about to see. A warning printed under a heading that says
+# "Quality Check Summary" is read as commentary on the summary; this has to be
+# read as a statement about which run it belongs to.
+if [ -n "$ABORTED_AT" ]; then
+    echo ""
+    echo -e "${RED}${BOLD}⚠ The run that started ${ABORTED_AT} never finished.${NC}"
+    echo -e "${YELLOW}  Everything below is from the run before it. Some of the logs in${NC}"
+    echo -e "${YELLOW}  ${SOURCE_DIR}${NC}"
+    echo -e "${YELLOW}  have been overwritten since, so they and this verdict are not the${NC}"
+    echo -e "${YELLOW}  same run. Re-run to get a diagnosis of the current tree.${NC}"
 fi
 
 # Show summary header

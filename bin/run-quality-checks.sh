@@ -321,6 +321,23 @@ if [ "$EMIT_ARTIFACTS" = "no" ]; then
 fi
 mkdir -p "$OUTPUT_DIR"
 
+# A run is in progress from here until it records a verdict. Written before the
+# first thing that can abort one, removed by the summary write at the far end.
+#
+# Seven checks exit ahead of that write, most because the run could not proceed
+# at all — services down, ruff unable to read its targets. The clause above
+# cannot cover it: on the gate path the directory holds committed files, so
+# clearing on entry would delete evidence on behalf of a run that then aborts.
+# What is left instead is the *previous* run's summary sitting beside logs this
+# run has already overwritten, and nothing in the directory says the two are
+# from different runs. A reader takes it for one, and the older half is the
+# half that carries the verdict.
+#
+# So the marker is not a lock and does not protect against concurrent runs. It
+# records one fact — this directory has not been closed out — for the reader
+# that would otherwise have to compare timestamps across files to notice.
+printf '%s\n' "$TIMESTAMP" > "$OUTPUT_DIR/.run-in-progress"
+
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
@@ -1544,6 +1561,11 @@ cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
   }
 }
 EOF
+
+# The run is now readable: a verdict for every check sits beside the logs that
+# produced it. Whatever fails after this point, the summary is this run's, so
+# the marker has nothing left to warn anyone about.
+rm -f "$OUTPUT_DIR/.run-in-progress"
 
 # The signature, and only the signature, is gate-only. It attests rather than
 # records: it is what makes a committed set verifiable, and it enumerates its

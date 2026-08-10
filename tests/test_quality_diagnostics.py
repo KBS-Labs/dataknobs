@@ -59,9 +59,18 @@ def _failing(tool: str = "") -> dict[str, object]:
     return entry
 
 
-def _diagnose(tmp_path: Path, summary: dict[str, object]) -> str:
-    """Run the tool over a synthetic run directory and return what it printed."""
-    (tmp_path / "quality-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+def _diagnose(tmp_path: Path, summary: dict[str, object] | None, started: str = "") -> str:
+    """Run the tool over a synthetic run directory and return what it printed.
+
+    ``started`` writes the in-progress marker, which is how the producer records
+    that a run began and never closed out.
+    """
+    if summary is not None:
+        (tmp_path / "quality-summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+    if started:
+        (tmp_path / ".run-in-progress").write_text(f"{started}\n", encoding="utf-8")
     result = subprocess.run(
         ["bash", str(DIAGNOSE), "--from", str(tmp_path)],
         capture_output=True,
@@ -125,4 +134,95 @@ def test_a_failing_check_with_no_dedicated_remedy_is_still_named(tmp_path):
     assert "shell" in next_steps.lower(), (
         f"{rel(DIAGNOSE)} diagnosed a run that failed shell lint without "
         f"mentioning it in the remedy:\n{next_steps}"
+    )
+
+
+def test_a_run_that_never_finished_is_not_reported_as_the_current_one(tmp_path):
+    """The worst version of a stale read is a green one.
+
+    Seven checks in the gate exit before the summary is written, and the gate
+    cannot clear its output directory on entry — it holds committed files. So an
+    abort leaves the previous run's summary beside logs the aborted run has
+    already overwritten. Ask what broke and the answer is the older run's, which
+    if that one passed is a full set of ticks for a tree that has not been
+    checked.
+
+    The verdict is still shown: those logs are worth reading, and the marker
+    cannot say which of them are new. What must not survive is the impression
+    that it describes the run you just did.
+    """
+    passing = _summary({"unit_tests": _passing(), "shell_lint": _passing()}, "PASS")
+    output = _diagnose(tmp_path, passing, started="2026-08-10T12:34:56Z")
+
+    assert "2026-08-10T12:34:56Z" in output, (
+        f"{rel(DIAGNOSE)} read a run that never finished and said nothing about "
+        f"it:\n{output}"
+    )
+    # Before the summary, not after: under a "Quality Check Summary" heading the
+    # same words read as a note about the summary rather than about which run it
+    # came from.
+    warning = output.find("2026-08-10T12:34:56Z")
+    heading = output.find("Quality Check Summary")
+    assert heading == -1 or warning < heading, (
+        f"{rel(DIAGNOSE)} reported the summary before saying it belongs to an "
+        f"earlier run:\n{output}"
+    )
+
+
+def test_an_aborted_run_with_no_summary_at_all_says_so(tmp_path):
+    """A first-ever run that aborts leaves a marker and nothing else.
+
+    "No quality run found to diagnose" is wrong there and sends the developer to
+    do the thing they just did. One did run; it stopped before it could record
+    anything.
+    """
+    output = _diagnose(tmp_path, None, started="2026-08-10T12:34:56Z")
+
+    assert "2026-08-10T12:34:56Z" in output, (
+        f"{rel(DIAGNOSE)} told a developer no run had happened, over the marker "
+        f"of one that had:\n{output}"
+    )
+
+
+def test_the_marker_brackets_everything_that_can_abort_a_run():
+    """The marker is only worth having if it spans the whole exposed stretch.
+
+    Written after an abort path, that path leaves no marker and the stale
+    summary is read as current — the defect, untouched, for whichever check
+    happens to be first. Removed before the summary is written, every run looks
+    aborted and the warning becomes noise to scroll past, which is the same
+    failure arriving from the other side.
+
+    Structural rather than behavioural: exercising it for real means running the
+    gate from inside the gate's own test suite, and pointing it at the developer's
+    diagnostics directory would destroy the run they are reading.
+    """
+    lines = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8").splitlines()
+
+    def first(predicate) -> int:
+        return next(
+            (n for n, line in enumerate(lines, 1) if predicate(line.strip())),
+            -1,
+        )
+
+    write = first(lambda line: line.startswith("printf") and ".run-in-progress" in line)
+    remove = first(lambda line: line.startswith("rm -f") and ".run-in-progress" in line)
+    summary = first(lambda line: line.startswith("cat >") and "quality-summary.json" in line)
+    aborts = [n for n, line in enumerate(lines, 1) if line.strip() == "exit 1"]
+
+    assert write > 0, "nothing writes the in-progress marker"
+    assert remove > 0, "nothing removes the in-progress marker"
+    assert summary > 0, "the summary write moved; this guard needs its new shape"
+
+    early = [n for n in aborts if n < write]
+    assert not early, (
+        "these lines abort the run before it records that one is in progress, so "
+        f"a stale summary is read as current: {early}. Move the marker write "
+        "above them. (A function *defined* above it but called later is a false "
+        "positive — teach this guard about it rather than moving the write down.)"
+    )
+    assert remove > summary, (
+        f"the marker is removed at line {remove}, before the summary is written "
+        f"at line {summary}. Between the two, an abort leaves a directory that "
+        "looks closed out and holds the previous run's verdict."
     )
