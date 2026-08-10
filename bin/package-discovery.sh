@@ -10,23 +10,44 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Function to discover all packages
 discover_packages() {
-    local packages=()
-    
+    # `dir` and `package_name` declared here rather than left to the loop: this
+    # file is sourced, so a loop variable that is not local is an assignment in
+    # whatever shell sourced it. `for package in ...` is what nine of the
+    # callers do, and `dir` is as common a name as shell has.
+    local packages=() dir package_name
+
     # Find all directories in packages/ that have a pyproject.toml
+    #
+    # `|| return 1` rather than the inherited `set -e`, on every command here
+    # that can fail. Callers capture this function through `$(...)` -- the only
+    # way to read its output -- and bash unsets errexit inside a command
+    # substitution, so a command failing in here aborts nothing. Execution
+    # reaches the echo below, which succeeds, and the caller is handed exit 0
+    # and an empty list. The callers were taught to examine a status; this is
+    # the half that produces one.
     for dir in "$ROOT_DIR"/packages/*/; do
         if [[ -f "$dir/pyproject.toml" ]]; then
-            package_name=$(basename "$dir")
+            package_name=$(basename "$dir") || return 1
             packages+=("$package_name")
         fi
     done
-    
+
     # Return sorted array
     # A read loop, not the mapfile shellcheck suggests: mapfile is bash 4+
     # and these scripts run on the stock macOS bash 3.2.
+    #
+    # Sorted through a captured assignment rather than `done < <(...)`, for the
+    # same reason the callers stopped using one: a process substitution reports
+    # no status anywhere, so a failing sort arrived as a short list. That was
+    # this defect one level down, inside the function the callers were fixed to
+    # interrogate.
+    local sorted_output
+    sorted_output=$(printf '%s\n' "${packages[@]:-}" | sort) || return 1
+
     local sorted=() name
     while IFS= read -r name; do
         [[ -n "$name" ]] && sorted+=("$name")
-    done < <(printf '%s\n' "${packages[@]:-}" | sort)
+    done <<< "$sorted_output"
     echo "${sorted[@]:-}"
 }
 
@@ -59,15 +80,20 @@ workspace_targets() {
 # This reads from pyproject.toml to determine dependencies
 get_packages_in_order() {
     local ordered_packages=()
-    local remaining_packages=() _pkg
+    # `package` and `ordered` for the same reason as the two in the function
+    # above: both name the loops below, and both were the caller's until now.
+    local remaining_packages=() _pkg package ordered
     # Declared on its own line before the assignment: `local x=$(cmd)` reports
     # `local`'s status rather than the command's (SC2155), and the process
     # substitution this replaces reported no status at all. Either way a failing
     # discovery came back as an empty list, and this function's contract -- the
     # dependency order every caller installs in -- has no way to tell that from
     # a workspace with no packages.
+    # `|| return 1` for the same reason, one level up: every caller reaches
+    # this function through `$(get_packages_in_order)` too, so errexit is unset
+    # in its frame as well and a failing capture would not abort it either.
     local discovered
-    discovered=$(discover_packages)
+    discovered=$(discover_packages) || return 1
     while IFS= read -r _pkg; do
         [[ -n "$_pkg" ]] && remaining_packages+=("$_pkg")
     done <<< "${discovered// /$'\n'}"
@@ -130,7 +156,11 @@ get_packages_in_order() {
         fi
     done
     
-    echo "${ordered_packages[@]}"
+    # `:-` as on the two echoes above: bash 3.2 treats an empty array as unset
+    # under `set -u`, so a workspace with no packages died here rather than
+    # reporting that it has none -- which is the answer this whole function
+    # exists to let a caller tell apart from a failure.
+    echo "${ordered_packages[@]:-}"
 }
 
 # Function to check if a package exists
