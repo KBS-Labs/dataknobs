@@ -1,18 +1,29 @@
 """Guard for ``# noqa`` directives that suppress nothing, or suppress everything.
 
-A suppression is a claim that a finding was considered and waived. Three
+A suppression is a claim that a finding was considered and waived. Four
 spellings break that claim, and **not one of them fails anything today**:
 
 * **A payload that is not a code list.** ``# noqa: not calling`` shipped in this
   repository. ruff prints ``warning: Invalid `# noqa` directive`` to *stderr*
   and **exits 0** -- measured on an otherwise-clean file -- so the run stays
   green and the line it was meant to cover is reported normally.
+* **The keyword run into other text.** ``# noqafoo``, ``# noqa2``,
+  ``# noqa_check: F401``. ruff wants end-of-comment, whitespace or ``:`` after
+  the keyword; every other character makes the directive invalid, with a warning
+  worded differently from the one above. Reads as a waiver, suppresses nothing.
 * **A code ruff does not have.** ``# noqa: XYZ999`` is worse, because ruff says
   **nothing at all**: no warning, and ``RUF100`` does not fire either. It has
   the shape of a considered waiver and the effect of a comment.
 * **A blanket ``# noqa``.** ``PGH004`` is exactly this rule and the workspace
   does not select the ``PGH`` family, so nothing enforces it. ``RUF100`` catches
   a blanket directive only once it is *unused*, which is the opposite case.
+
+The first two are one outcome to ruff and two here, because the remedies differ:
+one needs its payload rewritten, the other is not a directive at all. They and
+the blanket case were a single pair of buckets until the parity test below was
+given inputs of the second shape -- at which point it failed, which is the whole
+reason that test drives the real binary instead of trusting this file's model of
+it.
 
 ``RUF100`` covers the fourth spelling -- a well-formed directive for a rule that
 no longer fires -- so that one is left to it rather than duplicated here.
@@ -64,17 +75,36 @@ RUFF = ("uv", "run", "ruff")
 MINIMUM_FILES_SCANNED = 800
 MINIMUM_DIRECTIVES_SCANNED = 40
 
-#: ``noqa`` is case-insensitive and the colon is optional; without it the
-#: directive is blanket. ``sep`` distinguishes the two, and it must be captured
-#: separately: a colon followed by nothing is *invalid* to ruff rather than
-#: blanket, which was verified against the binary rather than assumed.
-NOQA_RE = re.compile(r"#\s*noqa(?P<sep>:)?(?P<payload>[^#\n]*)", re.IGNORECASE)
+#: ``noqa`` is case-insensitive, and everything after it is captured raw rather
+#: than pre-split into colon-and-payload. What follows the keyword decides which
+#: of four states the directive is in, and two of those differ by one character:
+#: the keyword then a space is blanket, the keyword run straight into a letter is
+#: not a directive ruff will read at all. A regex that made the colon optional
+#: and skipped to the payload could not tell them apart, and called the second
+#: one blanket. Verified against the binary rather than assumed.
+#:
+#: Spelled without a leading hash above, deliberately. This module is in its own
+#: scan, and a comment here that spelled a directive would be reported by it --
+#: which is the constraint the module docstring describes, met rather than
+#: exempted. The examples live in docstrings and test inputs, which are strings.
+NOQA_RE = re.compile(r"#\s*noqa(?P<trailer>[^#\n]*)", re.IGNORECASE)
 
 #: A rule code as ruff spells one. Deliberately not anchored to the families
 #: this repo selects: a directive naming a real rule from an unselected family
 #: is a waiver that is merely inactive, which is a policy question rather than
 #: a defect.
 CODE_RE = re.compile(r"^[A-Z]+[0-9]+$")
+
+#: The three unhealthy outcomes, named rather than spelled at each use site: the
+#: parity test has to know which of them ruff warns about, and a literal in both
+#: places is how that pair drifts.
+BLANKET = "blanket"
+UNREADABLE = "unreadable"
+RUN_ON = "run_on"
+
+#: The two ruff refuses to read. Both warn on stderr, both suppress nothing, and
+#: the parity test compares exactly this set against the binary's warnings.
+RUFF_REJECTS = frozenset({UNREADABLE, RUN_ON})
 
 
 def _leading_codes(payload: str) -> list[str]:
@@ -94,12 +124,44 @@ def _leading_codes(payload: str) -> list[str]:
     return codes
 
 
-def directives(source: str) -> list[tuple[int, str | None, list[str]]]:
-    """Every directive in ``source`` as ``(lineno, separator, codes)``.
+def _classify(trailer: str) -> tuple[str, list[str]]:
+    """Which of ruff's four outcomes the text after ``noqa`` produces.
 
-    ``separator`` is ``None`` for a blanket directive, so a caller can tell
-    "wrote no codes" from "wrote something that is not codes" -- ruff treats
-    those as different and only one of them warns.
+    ruff reads the keyword and then requires end-of-comment, whitespace, or
+    ``:``. Every other character -- letter, digit, underscore, hyphen, dot,
+    paren -- makes the whole thing an invalid directive, with a warning worded
+    differently from the unreadable-payload one. Measured across all six against
+    ruff 0.16.1; the split is not inferred from the message text.
+    """
+    if trailer.startswith(":"):
+        codes = _leading_codes(trailer[1:])
+        return ("codes" if codes else UNREADABLE), codes
+    if trailer == "" or trailer[0].isspace():
+        return BLANKET, []
+    return RUN_ON, []
+
+
+def directives(source: str) -> list[tuple[int, str, list[str]]]:
+    """Every directive in ``source`` as ``(lineno, kind, codes)``.
+
+    ``kind`` is one of four, because ruff distinguishes four and collapsing any
+    pair of them loses a defect:
+
+    * ``"codes"`` -- a colon and at least one readable code. The only healthy one.
+    * ``BLANKET`` -- the keyword alone, or followed by whitespace. Valid to ruff,
+      rejected here, because it waives rules nobody has written yet.
+    * ``UNREADABLE`` -- a colon whose payload is not codes (``# noqa: not calling``).
+    * ``RUN_ON`` -- the keyword running into other text (``# noqafoo``).
+
+    ``UNREADABLE`` and ``RUN_ON`` are one outcome to ruff -- both warn, both
+    suppress nothing -- and two here, because the remedy differs: one directive
+    needs its payload rewritten, the other is not a directive at all.
+
+    ``RUN_ON`` is the one this parser did not have. It fell into ``BLANKET``,
+    since the only question asked was whether a colon was present, and so
+    ``# noqafoo`` was reported as suppressing every rule on the line when it
+    suppresses none. It surfaced when the parity test below was given inputs of
+    that shape and disagreed with the binary.
 
     Tokenized rather than scanned line by line, because a line scan reports a
     directive spelling inside a *string* and ruff does not. That divergence is
@@ -115,9 +177,8 @@ def directives(source: str) -> list[tuple[int, str | None, list[str]]]:
         match = NOQA_RE.search(token.string)
         if match is None:
             continue
-        sep = match.group("sep")
-        codes = _leading_codes(match.group("payload")) if sep else []
-        found.append((token.start[0], sep, codes))
+        kind, codes = _classify(match.group("trailer"))
+        found.append((token.start[0], kind, codes))
     return found
 
 
@@ -132,11 +193,11 @@ def _scanned() -> tuple[tuple[str, str], ...]:
 
 
 @cache
-def _all_directives() -> tuple[tuple[str, int, str | None, list[str]], ...]:
+def _all_directives() -> tuple[tuple[str, int, str, list[str]], ...]:
     found = []
     for name, source in _scanned():
         found.extend(
-            (name, lineno, sep, codes) for lineno, sep, codes in directives(source)
+            (name, lineno, kind, codes) for lineno, kind, codes in directives(source)
         )
     return tuple(found)
 
@@ -183,10 +244,35 @@ def test_no_directive_carries_a_payload_ruff_cannot_read():
         f"{name}:{lineno}: `# noqa:` with no rule code — ruff rejects the "
         f"directive, warns on stderr and exits 0, so the finding it was meant "
         f"to waive is reported and nothing fails"
-        for name, lineno, sep, codes in _all_directives()
-        if sep and not codes
+        for name, lineno, kind, _ in _all_directives()
+        if kind == UNREADABLE
     ]
     assert not violations, "Unreadable `# noqa` directives:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
+
+
+def test_no_directive_runs_the_keyword_into_other_text():
+    """``# noqafoo``: reads as a waiver, and ruff will not read it as one.
+
+    Split from the blanket check rather than sharing it. Both arrive with no
+    codes, so a parser that only asked "was there a colon" put them in one
+    bucket and reported this one as blanket -- which is wrong twice over. It
+    does not suppress every rule; it suppresses none. And the advice attached to
+    the blanket message, *name the codes being waived*, is what the author of
+    ``# noqa_check: F401`` was already trying to do.
+
+    ruff's own warning is worded differently from the unreadable-payload one for
+    the same reason, which is where the split came from.
+    """
+    violations = [
+        f"{name}:{lineno}: the `noqa` keyword runs into other text — ruff wants "
+        f"end-of-comment, whitespace or `:` after it, so it reads this as an "
+        f"invalid directive, warns on stderr and suppresses nothing"
+        for name, lineno, kind, _ in _all_directives()
+        if kind == RUN_ON
+    ]
+    assert not violations, "Unread `# noqa` directives:\n" + "\n".join(
         f"  - {v}" for v in violations
     )
 
@@ -194,15 +280,15 @@ def test_no_directive_carries_a_payload_ruff_cannot_read():
 def test_no_directive_is_blanket():
     """``PGH004``'s rule, enforced here because the ``PGH`` family is not selected.
 
-    A blanket directive is the inverse defect of the one above: it suppresses
-    every rule on the line, including ones written years later that nobody
-    considered when it was added.
+    A blanket directive is the inverse defect of the two above: they suppress
+    nothing, this suppresses everything on the line -- including rules written
+    years later that nobody considered when it was added.
     """
     violations = [
         f"{name}:{lineno}: bare `# noqa` suppresses every rule on the line — "
         f"name the codes being waived"
-        for name, lineno, sep, _ in _all_directives()
-        if sep is None
+        for name, lineno, kind, _ in _all_directives()
+        if kind == BLANKET
     ]
     assert not violations, "Blanket `# noqa` directives:\n" + "\n".join(
         f"  - {v}" for v in violations
@@ -210,10 +296,11 @@ def test_no_directive_is_blanket():
 
 
 def test_no_directive_names_a_rule_ruff_does_not_have():
-    """The quietest of the three: ruff reports nothing, and neither does RUF100.
+    """The quietest of the four: ruff reports nothing, and neither does RUF100.
 
     Separate from the payload check because the failure is invisible rather than
-    merely unenforced — a typo'd code reads as a considered waiver forever.
+    merely unenforced — a typo'd code reads as a considered waiver forever. The
+    other three all leave a trace somewhere; this one leaves none.
     """
     if _ruff_missing():
         pytest.skip("uv is not available to resolve ruff")
@@ -266,17 +353,38 @@ def test_the_checks_detect_the_shapes_they_exist_for():
     rejected trailing text would fail the whole repository and be "fixed" by
     deleting this file.
     """
-    rejected = {
+    unreadable = {
         "empty payload": "x = 1  # noqa:",
         "prose payload": "x = 1  # noqa: not calling",
         "prose before any code": "x = 1  # noqa: see F401 above",
     }
-    for label, line in rejected.items():
-        _, sep, codes = directives(line)[0]
-        assert sep and not codes, f"not detected as unreadable: {label}"
+    for label, line in unreadable.items():
+        _, kind, codes = directives(line)[0]
+        assert kind == UNREADABLE and not codes, f"not detected as unreadable: {label}"
 
-    blanket = directives("x = 1  # noqa")[0]
-    assert blanket[1] is None, "a bare `# noqa` was not detected as blanket"
+    # The pair the blanket bucket used to swallow. Separated by exactly one
+    # character, and on opposite sides of ruff's verdict.
+    run_on = {
+        "letter": "x = 1  # noqafoo",
+        "digit": "x = 1  # noqa2",
+        "underscore, with a code list": "x = 1  # noqa_check: F401",
+        "hyphen": "x = 1  # noqa-foo",
+        "dot": "x = 1  # noqa.foo",
+        "paren": "x = 1  # noqa(x)",
+    }
+    for label, line in run_on.items():
+        _, kind, _ = directives(line)[0]
+        assert kind == RUN_ON, f"keyword run-on read as something else: {label}"
+
+    blanket = {
+        "bare": "x = 1  # noqa",
+        "trailing space": "x = 1  # noqa ",
+        "prose after whitespace": "x = 1  # noqa some prose here",
+        "upper case": "x = 1  # NOQA",
+    }
+    for label, line in blanket.items():
+        _, kind, _ = directives(line)[0]
+        assert kind == BLANKET, f"not detected as blanket: {label}"
 
     accepted = {
         "code with em-dash prose": ("x = 1  # noqa: F401 — re-export", ["F401"]),
@@ -288,8 +396,10 @@ def test_the_checks_detect_the_shapes_they_exist_for():
         "upper case": ("x = 1  # NOQA: F401", ["F401"]),
     }
     for label, (line, expected) in accepted.items():
-        _, sep, codes = directives(line)[0]
-        assert sep and codes == expected, f"wrongly rejected or misparsed: {label}"
+        _, kind, codes = directives(line)[0]
+        assert kind == "codes" and codes == expected, (
+            f"wrongly rejected or misparsed: {label}"
+        )
 
     in_a_string = 'BAD = "x = 1  # noqa: not calling"\n'
     assert not directives(in_a_string), (
@@ -326,7 +436,19 @@ def test_the_parser_agrees_with_ruff(tmp_path):
         "x = 9  # noqa: F401 F841",
         "x = 10  #noqa:F401",
         "x = 11  # NOQA: F401",
-        'S = "x = 12  # noqa: not calling"',
+        # The keyword running into other text. ruff reads `noqa` and then
+        # requires end-of-comment, whitespace or `:`; every other character
+        # makes the directive invalid, with a second warning wording. These
+        # look blanket to a reader and are not blanket to ruff.
+        "x = 12  # noqafoo",
+        "x = 13  # noqa2",
+        "x = 14  # noqa_check: F401",
+        "x = 15  # noqa-foo",
+        # Blanket, with prose after the whitespace. The counterpart to the
+        # five above: whitespace terminates the keyword, so this one *is*
+        # blanket and ruff says nothing about it.
+        "x = 16  # noqa some prose here",
+        'S = "x = 17  # noqa: not calling"',
     ]
     probe = tmp_path / "probe.py"
     probe.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -349,8 +471,8 @@ def test_the_parser_agrees_with_ruff(tmp_path):
 
     ours = {
         lineno
-        for lineno, sep, codes in directives(probe.read_text(encoding="utf-8"))
-        if sep and not codes
+        for lineno, kind, _ in directives(probe.read_text(encoding="utf-8"))
+        if kind in RUFF_REJECTS
     }
     assert ours == warned, (
         f"this module's parser and ruff's disagree — ruff rejects lines "
