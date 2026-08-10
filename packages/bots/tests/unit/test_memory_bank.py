@@ -613,15 +613,9 @@ class TestWizardBankIntegration:
         reasoning = _make_wizard_with_banks()
         reasoning._banks["ingredients"].add({"name": "flour"})
 
-        state = reasoning._get_wizard_state.__func__  # noqa: not calling
-        # Test template rendering directly
-        from dataknobs_bots.reasoning.wizard import WizardState
-
-        ws = WizardState(current_stage="review", data={})
-        stage = {"name": "review", "response_template": "test"}
-        # _render_response_template is async, but we can test the
-        # context building via the public API path indirectly
-        # by verifying the bank accessor works in templates
+        # _render_response_template is async and private, so this pins the
+        # part that carries the behaviour — the accessor it places in the
+        # template scope — rendered through the same environment.
         from dataknobs_bots.utils.template_env import create_template_env
 
         env = create_template_env()
