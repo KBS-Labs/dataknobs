@@ -24,8 +24,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+import pytest
 
 from tests._workspace import ROOT, load_bin_module, rel
 
@@ -370,6 +372,68 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
             f"{offender['file']} was named against {breached}, which it is not in"
         )
     assert entry["further_files"] >= 0
+
+
+def test_the_formatter_measurer_refuses_a_file_it_could_not_read() -> None:
+    """A file the formatter cannot open must not be counted as a formatted one.
+
+    ``ruff format --check`` reports an unreadable path as an ordinary result
+    with ``code: "io"`` and exits 2. Under the text parse this measurer used to
+    run, that message carries no ``--> path:line`` — so the file contributed
+    nothing to the tally and the cell holding it measured *lower*, which is the
+    direction a ratchet cannot survive. Zero findings and zero files read are
+    the same report, and the second one is the one that reads as success.
+
+    The same shape as ``measure_ruff``'s decode guard, which was already here:
+    the formatter measurer just had no equivalent because its parse could not
+    fail loudly, only quietly.
+    """
+    contract = _contract()
+    faults = contract_module.measure_format
+
+    try:
+        faults(contract, [PurePosixPath("no/such/path.py")])
+    except SystemExit as exit_:
+        assert "no/such/path.py" in str(exit_), (
+            f"the measurer refused, but did not name the file it could not read: {exit_}"
+        )
+    else:
+        raise AssertionError(
+            "measure_format read a file that does not exist and reported a "
+            "measurement anyway. An unreadable file lowers the cell it belongs "
+            "to, so a broken measurer reads as a cleaner tree."
+        )
+
+
+def test_the_formatter_measurer_refuses_output_it_could_not_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-JSON on stdout means nothing was measured, not that nothing was found.
+
+    The floor under the check above. That one covers a fault ruff reports *in*
+    JSON; this covers ruff not emitting JSON at all — a flag rename, a crash, a
+    wrapper writing to stdout. Both collapse to an empty tally, and an empty
+    tally is indistinguishable from a clean tree at the point it is compared
+    against a ceiling of zero, which is what every ``format`` cell becomes.
+
+    The invocation is replaced rather than the tool, because there is no input
+    that makes a working ruff emit something other than JSON — the fault being
+    driven is ruff not behaving like ruff, so it has to be injected.
+    """
+    completed = subprocess.CompletedProcess(
+        args=["ruff"], returncode=1, stdout="not json", stderr=""
+    )
+    monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
+
+    try:
+        contract_module.measure_format(_contract(), [PurePosixPath("conftest.py")])
+    except SystemExit as exit_:
+        assert "JSON" in str(exit_), f"refused without saying the parse failed: {exit_}"
+    else:
+        raise AssertionError(
+            "measure_format accepted unparseable output and returned a "
+            "measurement, so a broken formatter invocation reads as a clean tree."
+        )
 
 
 def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
