@@ -28,9 +28,14 @@ from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import ResourceConfig
 from dataknobs_fsm.resources.base import IResourceProvider
 
-from tests import _resource_fixtures as fixtures
+import _resource_fixtures as fixtures
 
-FIXTURES = "tests._resource_fixtures"
+# Read off the module rather than written out. These tests hand the resolver a
+# dotted path and then assert the resolved class ``isinstance``-matches the one
+# imported here, so the two names must be the same name — and a literal that
+# disagrees does not fail as a typo, it imports the same file a second time
+# under a second name and produces a second, unrelated class.
+FIXTURES = fixtures.__name__
 
 
 @pytest.fixture(autouse=True)

@@ -421,7 +421,7 @@ class TestMessageStageGenerate:
         # Pre-seed wizard state with user_name so collect_name auto-advances
         # via global auto_advance_filled_stages, then confirmation should
         # auto-advance via its per-stage auto_advance: true.
-        from tests.unit.conftest import set_wizard_state
+        from unit.conftest import set_wizard_state
 
         set_wizard_state(manager, {
             "current_stage": "collect_name",
@@ -511,7 +511,7 @@ class TestMessageStageGenerate:
             auto_advance_filled_stages=True,
         )
 
-        from tests.unit.conftest import set_wizard_state
+        from unit.conftest import set_wizard_state
 
         set_wizard_state(manager, {
             "current_stage": "collect_name",
@@ -592,7 +592,7 @@ class TestMessageStageGenerate:
             auto_advance_filled_stages=True,
         )
 
-        from tests.unit.conftest import set_wizard_state
+        from unit.conftest import set_wizard_state
 
         set_wizard_state(manager, {
             "current_stage": "collect_role",
@@ -673,7 +673,7 @@ class TestMessageStageGenerate:
             auto_advance_filled_stages=True,
         )
 
-        from tests.unit.conftest import set_wizard_state
+        from unit.conftest import set_wizard_state
 
         set_wizard_state(manager, {
             "current_stage": "collect_name",

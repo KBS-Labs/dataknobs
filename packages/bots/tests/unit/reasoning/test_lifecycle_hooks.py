@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_common.exceptions import ConfigurationError
 
@@ -270,7 +271,7 @@ def test_nothing_is_registered_when_any_entry_is_bad() -> None:
         hooks.load_config(
             {
                 "on_turn_start": [
-                    "tests.unit.reasoning.test_lifecycle_hooks:_a_valid_hook",
+                    dotted_path(_a_valid_hook),
                     "not_a_valid_path",
                 ],
             },
@@ -290,7 +291,7 @@ def test_a_dot_separated_path_is_accepted() -> None:
     hooks = LifecycleHooks.from_config(
         {
             "on_turn_start": [
-                "tests.unit.reasoning.test_lifecycle_hooks._a_valid_hook"
+                dotted_path(_a_valid_hook)
             ],
         },
     )

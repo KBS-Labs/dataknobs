@@ -40,7 +40,7 @@ from dataknobs_llm.llm.base import LLMConfig, LLMMessage
 from dataknobs_llm.llm.providers import anthropic as anthropic_module
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
 
-from test_anthropic_param_handling import make_anthropic_response
+from _anthropic_stubs import make_anthropic_response
 
 
 # ---------------------------------------------------------------------------

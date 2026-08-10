@@ -69,6 +69,7 @@ from dataknobs_common.exceptions import (
 
 __all__ = [
     "ClassConstraint",
+    "dotted_path",
     "resolve_callable",
     "resolve_class",
     "resolve_dotted",
@@ -417,3 +418,75 @@ def resolve_optional_callable(
             field_name=field_name,
             owner=owner,
         ) from exc
+
+
+def dotted_path(target: Any) -> str:
+    """Spell *target*'s dotted path, the reference ``resolve_dotted`` reads back.
+
+    The inverse of :func:`resolve_dotted`, for the caller that has the object
+    and needs the string: a test building a config block that names a class, a
+    generator emitting a declaration, an error message quoting the reference a
+    consumer would have to write.
+
+    Args:
+        target: Any object carrying ``__module__`` and ``__qualname__`` — a
+            class or a module-level function.
+
+    Returns:
+        ``"module.path:name"``, the canonical form documented above.
+
+    Raises:
+        ValueError: *target* carries no ``__module__``/``__qualname__``; its
+            module is ``__main__``, which names a different object in every
+            process; its qualname is nested (``Outer.Inner``, or a closure's
+            ``f.<locals>.g``), since ``resolve_dotted`` performs exactly one
+            attribute lookup; or its qualname is a bracketed placeholder rather
+            than a name (``<lambda>``, ``<listcomp>``), which no attribute
+            lookup can resolve at all. Each of those would produce a string
+            this family cannot read back, and failing here names the object
+            while failing at resolution time would name only the string.
+
+            What it does **not** check is that the module is importable under
+            the name it reports. A class whose ``__module__`` was rewritten, or
+            one defined in a module never placed in ``sys.modules`` under that
+            name, is spelled without complaint and fails on read-back.
+
+    Writing the path out by hand instead is the thing worth avoiding. A literal
+    that disagrees with the object does not fail the way a typo does: it names
+    a real module reachable under a second name, so the import succeeds and
+    yields a *second* class object, equal in every respect except identity.
+    Every ``isinstance`` against the locally imported one then fails, and every
+    test that only checks behaviour keeps passing.
+    """
+    module = getattr(target, "__module__", None)
+    qualname = getattr(target, "__qualname__", None)
+    if not module or not qualname:
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: it carries "
+            f"__module__={module!r} and __qualname__={qualname!r}"
+        )
+    if "." in qualname:
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: __qualname__ "
+            f"{qualname!r} is nested, and resolve_dotted performs exactly one "
+            "attribute lookup. Move the target to module scope."
+        )
+    if "<" in qualname:
+        # Reached only by a qualname with no dot in it, since the check above
+        # already took every nested one — which in practice means a lambda
+        # defined at module scope. CPython spells the unnamed with brackets
+        # (`<lambda>`, `<listcomp>`, `<genexpr>`), and a bracketed placeholder
+        # is not a name: no attribute of that spelling exists to look up, so
+        # the dot check cannot stand in for this one.
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: __qualname__ "
+            f"{qualname!r} is not a name — it is what CPython writes for an "
+            "object that never had one. Give it a def and a name at module "
+            "scope."
+        )
+    if module == "__main__":
+        raise ValueError(
+            f"cannot spell a dotted path for {target!r}: it is defined in "
+            "__main__, which no other process can import by that name."
+        )
+    return f"{module}:{qualname}"

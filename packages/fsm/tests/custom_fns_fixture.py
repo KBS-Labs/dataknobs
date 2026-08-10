@@ -1,7 +1,8 @@
 """Importable helper module for config-authored ``custom`` function tests.
 
-A real, importable module (under the test package) referenced by
-``{"type": "custom", "module": "tests.custom_fns_fixture", "name": ...}`` so the
+A real, importable module (this directory is declared an import root by its
+``conftest.py``) referenced by ``{"type": "custom", "module":
+"custom_fns_fixture", "name": ...}`` so the
 custom-function-reference tests exercise the real ``importlib.import_module`` +
 ``getattr`` resolution path with no mocks.
 """

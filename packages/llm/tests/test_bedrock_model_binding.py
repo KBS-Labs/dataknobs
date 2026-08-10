@@ -36,7 +36,7 @@ from dataknobs_llm.llm.providers.bedrock import (
 )
 from dataknobs_llm.tooling import model_limits
 
-from test_bedrock_provider import _StubBedrockClient, _StubSession, _stub_provider
+from _bedrock_stubs import _StubBedrockClient, _StubSession, _stub_provider
 
 
 def _provider(model: str, **config_kwargs: Any) -> BedrockProvider:

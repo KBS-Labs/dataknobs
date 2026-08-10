@@ -6,12 +6,6 @@ proper routing based on validation results.
 """
 
 import pytest
-import sys
-from pathlib import Path
-
-# Add examples directory to path
-examples_dir = Path(__file__).parent.parent / "examples"
-sys.path.insert(0, str(examples_dir))
 
 from data_validation_pipeline import (
     normalize_input,

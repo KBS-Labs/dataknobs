@@ -419,7 +419,7 @@ class TestCustomRegexWorkflow:
 
     def test_custom_pattern_replacement(self):
         """Test custom regex pattern replacements."""
-        from examples.normalize_file_with_regex import create_custom_regex_workflow
+        from normalize_file_with_regex import create_custom_regex_workflow
 
         patterns = {
             r'\b([A-Z]{2,})\b': r'\1',  # Keep acronyms

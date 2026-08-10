@@ -11,6 +11,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Factory Parity Helpers](#factory-parity-helpers)
 - [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
+- [Declaring a Test Import Root](#declaring-a-test-import-root)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
 
@@ -751,6 +752,65 @@ async def test_put_does_not_block(backend):
     with assert_no_blocking():
         await backend.put_file("kb", "doc.md", b"...")
 ```
+
+---
+
+## Declaring a Test Import Root
+
+A test suite that shares scaffolding between modules has to name that
+scaffolding somehow. Under pytest's `prepend` import mode the question never
+comes up: pytest inserts each collected file's directory onto `sys.path` as a
+side effect of collecting it, so a bare `from _stubs import Fake` resolves
+without anyone declaring anything. Under `importlib` pytest does not touch
+`sys.path`, and the same import fails.
+
+That makes the import mode load-bearing for code that never mentions it. Worse,
+in a workspace it is *invocation*-dependent: a package's
+`[tool.pytest.ini_options]` applies when pytest is invoked on that package
+alone, and the root config applies when the invocation names anything else. If
+the two declare different import modes, the same file imports cleanly or not
+depending on how the command was typed.
+
+`declare_import_root` states what was being relied on:
+
+```python
+# packages/<pkg>/tests/conftest.py
+from dataknobs_common.testing import declare_import_root
+
+declare_import_root(__file__)
+```
+
+pytest loads a `conftest.py` before collecting anything beside it, in every
+invocation that reaches that directory, so the declaration holds for
+single-package and whole-workspace runs alike. Pass a file (normally
+`__file__`) and its directory is used; pass a directory and it is used as is.
+The call is idempotent — re-declaring the same root, by any spelling that
+resolves to it, does not grow `sys.path`.
+
+A root that does not exist raises `ValueError`. `sys.path` accepts a
+nonexistent entry without complaint, so a typo'd anchor would otherwise leave
+every import it was meant to enable failing while the declaration itself reads
+as correct.
+
+**This does not make sibling *test* modules importable by design.** It makes a
+directory an import root; importing a collected test module from another
+collected test module still imports it twice, under two names, running its
+module-level code twice — and producing two unrelated copies of every class it
+defines. Put shared scaffolding in a module pytest does not collect (an
+underscore-prefixed name) and import that:
+
+```python
+# packages/<pkg>/tests/_stubs.py   <- not collected
+class FakeTransport: ...
+
+# packages/<pkg>/tests/test_thing.py
+from _stubs import FakeTransport
+```
+
+When the shared thing is a *path* rather than an object — a config block naming
+a class by dotted path — derive it with
+`dotted_path` (see the *Dotted paths* guide) rather than writing
+the module name out, for the same reason.
 
 ---
 

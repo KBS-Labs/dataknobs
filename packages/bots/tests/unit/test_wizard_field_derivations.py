@@ -72,7 +72,7 @@ class TestCustomTransformResolution:
     drifts.
     """
 
-    HERE = "tests.unit.test_wizard_field_derivations"
+    HERE = __name__
 
     def _rule(self, path: str) -> dict[str, Any]:
         return {

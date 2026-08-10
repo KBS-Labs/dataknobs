@@ -131,6 +131,7 @@ from dataknobs_common.exceptions import (
 )
 from dataknobs_common.imports import (
     ClassConstraint,
+    dotted_path,
     resolve_callable,
     resolve_class,
     resolve_dotted,
@@ -321,6 +322,7 @@ __all__ = [
     "ClassConstraint",
     "resolve_callable",
     "resolve_class",
+    "dotted_path",
     "resolve_dotted",
     "resolve_optional_callable",
     # Callbacks

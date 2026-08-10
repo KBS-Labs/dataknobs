@@ -20,6 +20,7 @@ from dataknobs_common.exceptions import (
     DottedPathTypeError,
 )
 from dataknobs_common.imports import (
+    dotted_path,
     resolve_callable,
     resolve_class,
     resolve_dotted,
@@ -507,3 +508,85 @@ def test_a_hostile_dir_cannot_replace_the_error(tmp_path, monkeypatch) -> None:
         resolve_dotted("dk_hostile_dir_fixture:no_such_attribute")
 
     assert excinfo.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# dotted_path — the inverse
+# ---------------------------------------------------------------------------
+
+
+def _a_module_level_function() -> int:
+    return 7
+
+
+class _AModuleLevelClass:
+    class Nested:
+        pass
+
+
+def test_a_dotted_path_round_trips_through_the_resolver() -> None:
+    """The whole point: what this spells, ``resolve_dotted`` reads back."""
+    assert resolve_dotted(dotted_path(_AModuleLevelClass)) is _AModuleLevelClass
+    assert resolve_dotted(dotted_path(_a_module_level_function)) is _a_module_level_function
+
+
+def test_a_dotted_path_uses_the_canonical_separator() -> None:
+    """``module:name``, the form the module docstring tells callers to prefer."""
+    assert dotted_path(_AModuleLevelClass) == f"{HERE}:_AModuleLevelClass"
+
+
+def test_a_nested_qualname_is_refused_rather_than_spelled() -> None:
+    """``resolve_dotted`` performs exactly one attribute lookup.
+
+    Spelling ``module:Outer.Inner`` would produce a string this family cannot
+    read back, so the failure belongs here — where the object is in hand and
+    can be named — rather than at resolution time, where only the string is.
+    """
+    with pytest.raises(ValueError, match="nested"):
+        dotted_path(_AModuleLevelClass.Nested)
+
+
+def test_a_closure_is_refused() -> None:
+    """A local function's qualname carries ``<locals>`` — also unresolvable."""
+
+    def _inner() -> None:  # pragma: no cover - never called
+        pass
+
+    with pytest.raises(ValueError, match="nested"):
+        dotted_path(_inner)
+
+
+#: A genuine module-level lambda, held in a tuple so that assigning one to a
+#: bare name is not what is under test. Its ``__qualname__`` is ``<lambda>`` —
+#: no dot, so the nested-qualname check above does not see it.
+_LAMBDAS = (lambda: 7,)
+
+
+def test_a_module_level_lambda_is_refused() -> None:
+    """``<lambda>`` is not a name, so nothing can look it up.
+
+    It reaches here as the one unresolvable qualname with no dot in it: a
+    closure's ``f.<locals>.g`` is caught as nested, but a lambda defined at
+    module scope is a plain ``<lambda>`` and would be spelled as
+    ``module:<lambda>`` — a string ``resolve_dotted`` raises on, at the far end
+    of whatever generated it.
+    """
+    with pytest.raises(ValueError, match="not a name"):
+        dotted_path(_LAMBDAS[0])
+
+
+def test_an_object_with_no_module_metadata_is_refused() -> None:
+    """An instance carries neither attribute; naming it beats a confusing path."""
+    with pytest.raises(ValueError, match="__qualname__"):
+        dotted_path(_AModuleLevelClass())
+
+
+def test_a_main_module_target_is_refused() -> None:
+    """``__main__`` names a different object in every process that imports it."""
+
+    class _Fake:
+        __module__ = "__main__"
+        __qualname__ = "Whatever"
+
+    with pytest.raises(ValueError, match="__main__"):
+        dotted_path(_Fake)

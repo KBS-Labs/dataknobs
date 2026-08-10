@@ -10,46 +10,13 @@ making "not set" indistinguishable from "explicitly set."
 
 from __future__ import annotations
 
-import pytest
 
 from dataknobs_llm.llm.base import LLMConfig, LLMMessage, ToolCall
 
 
-# ---------------------------------------------------------------------------
-# Reusable test helpers
-# ---------------------------------------------------------------------------
+from _anthropic_stubs import make_anthropic_response
 
 
-def make_anthropic_response(
-    content_blocks: list[dict],
-    model: str = "claude-3",
-    stop_reason: str = "end_turn",
-    input_tokens: int = 10,
-    output_tokens: int = 20,
-) -> object:
-    """Build a fake Anthropic Message-like response object.
-
-    Avoids a hard test dependency on the ``anthropic`` package while
-    faithfully reproducing the attribute-access interface of
-    ``anthropic.types.Message``.
-    """
-    class Block:
-        def __init__(self, **kwargs: object) -> None:
-            self.__dict__.update(kwargs)
-
-    class Usage:
-        def __init__(self) -> None:
-            self.input_tokens = input_tokens
-            self.output_tokens = output_tokens
-
-    class Response:
-        def __init__(self) -> None:
-            self.content = [Block(**b) for b in content_blocks]
-            self.model = model
-            self.stop_reason = stop_reason
-            self.usage = Usage()
-
-    return Response()
 
 
 class FakeTool:

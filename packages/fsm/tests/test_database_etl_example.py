@@ -5,13 +5,7 @@ including COPY mode transaction safety, staging/rollback, and proper routing.
 """
 
 import pytest
-import sys
-from pathlib import Path
 from datetime import datetime, timedelta
-
-# Add examples directory to path
-examples_dir = Path(__file__).parent.parent / "examples"
-sys.path.insert(0, str(examples_dir))
 
 from database_etl import (
     initialize_etl,

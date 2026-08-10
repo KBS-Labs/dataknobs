@@ -9,7 +9,7 @@ to a working transform/validator (not merely that the schema accepts the dict).
 Real constructs only: real library functions
 (``transformers.map_fields`` / ``transformers.FieldMapper`` /
 ``validators.RequiredFieldsValidator`` / ``validators.range_check``), a real
-importable custom module (``tests.custom_fns_fixture``), and the real
+importable custom module (``custom_fns_fixture``), and the real
 builder/loader resolution path. No mocks.
 
 Boundaries pinned here:
@@ -26,6 +26,13 @@ import pytest
 
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.config.loader import ConfigLoader
+
+import custom_fns_fixture
+
+# Read off the module rather than written out. A literal that disagrees
+# does not fail as a typo — it names the same file under a second name, so
+# the import succeeds and yields a second, unrelated set of objects.
+FIXTURE_MODULE = custom_fns_fixture.__name__
 
 
 def _single_state_config(state: dict) -> dict:
@@ -177,7 +184,7 @@ def test_builtin_validator_kwargs_factory_reference_gates() -> None:
 # --------------------------------------------------------------------------- #
 
 def test_custom_function_reference_imports_and_runs() -> None:
-    """``{type: custom, module: "tests.custom_fns_fixture", name: "AddMarker"}``.
+    """``{type: custom, module: "custom_fns_fixture", name: "AddMarker"}``.
 
     The custom class is imported, constructed from ``params``, and run; its marker
     must land on the record.
@@ -187,7 +194,7 @@ def test_custom_function_reference_imports_and_runs() -> None:
             "transforms": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "AddMarker",
                     "params": {"key": "marked", "value": "yes"},
                 }
@@ -215,7 +222,7 @@ def test_custom_plain_function_reference_resolves_through_standard_path() -> Non
             "transforms": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "stamp_processed",
                 }
             ]
@@ -401,7 +408,7 @@ def test_custom_async_transform_is_awaited() -> None:
             "transforms": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "AsyncAddMarker",
                     "params": {"key": "amark", "value": "ok"},
                 }
@@ -428,7 +435,7 @@ def test_custom_async_validator_gates_via_pre_validators() -> None:
             "pre_validators": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "AsyncRequireField",
                     "params": {"field": "needed"},
                 }
@@ -462,7 +469,7 @@ def test_custom_validator_under_validators_phase_merges_result() -> None:
             "validators": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "EnrichViaValidate",
                     "params": {"key": "enriched", "value": "yes"},
                 }
@@ -500,7 +507,7 @@ def test_custom_test_interface_arc_condition_gates_transition() -> None:
                                 "target": "end",
                                 "condition": {
                                     "type": "custom",
-                                    "module": "tests.custom_fns_fixture",
+                                    "module": FIXTURE_MODULE,
                                     "name": "HasField",
                                     "params": {"field": "gate"},
                                 },
@@ -549,7 +556,7 @@ def test_custom_async_test_interface_arc_condition_is_awaited() -> None:
                                 "target": "end",
                                 "condition": {
                                     "type": "custom",
-                                    "module": "tests.custom_fns_fixture",
+                                    "module": FIXTURE_MODULE,
                                     "name": "AsyncHasField",
                                     "params": {"field": "gate"},
                                 },
@@ -602,7 +609,7 @@ def test_custom_missing_name_is_loud() -> None:
             "transforms": [
                 {
                     "type": "custom",
-                    "module": "tests.custom_fns_fixture",
+                    "module": FIXTURE_MODULE,
                     "name": "DoesNotExist",
                 }
             ]

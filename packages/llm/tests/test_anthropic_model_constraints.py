@@ -37,114 +37,13 @@ from dataknobs_llm.llm.providers import anthropic as anthropic_mod
 from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
 from dataknobs_llm.tooling import model_limits
 
-from test_anthropic_param_handling import make_anthropic_response
-
-
-# ---------------------------------------------------------------------------
-# Reusable stand-in for the Anthropic SDK client
-# ---------------------------------------------------------------------------
-
-
-class _ScriptedModel:
-    """A minimal ``anthropic`` ``ModelInfo`` stand-in.
-
-    Carries ``id`` + ``max_tokens`` (the output ceiling) + ``max_input_tokens``
-    (the input/context ceiling). ``max_input_tokens`` defaults to ``None`` so the
-    many existing two-arg constructions keep working; the input-ceiling tests
-    pass it explicitly.
-    """
-
-    def __init__(
-        self,
-        model_id: str,
-        max_tokens: int | None,
-        max_input_tokens: int | None = None,
-    ) -> None:
-        self.id = model_id
-        self.max_tokens = max_tokens
-        self.max_input_tokens = max_input_tokens
-
-
-class _AsyncModelPage:
-    """Async-iterable page mimicking the SDK's ``AsyncPaginator``."""
-
-    def __init__(self, models: list[Any]) -> None:
-        self._it = iter(models)
-
-    def __aiter__(self) -> _AsyncModelPage:
-        return self
-
-    async def __anext__(self) -> Any:
-        try:
-            return next(self._it)
-        except StopIteration:
-            raise StopAsyncIteration from None
-
-
-class _ModelsStub:
-    """Stand-in for ``client.models`` — scripts ``list()`` + tracks calls."""
-
-    def __init__(self) -> None:
-        self.models: list[Any] = []
-        self.list_calls = 0
-        self.raise_on_list = False
-
-    def list(self, **_kwargs: Any) -> _AsyncModelPage:
-        self.list_calls += 1
-        if self.raise_on_list:
-            raise RuntimeError("simulated Models API failure")
-        return _AsyncModelPage(list(self.models))
-
-
-class _SlowModelPage:
-    """Async-iterable page whose first step sleeps — a *hung* Models API."""
-
-    def __init__(self, delay: float) -> None:
-        self._delay = delay
-
-    def __aiter__(self) -> _SlowModelPage:
-        return self
-
-    async def __anext__(self) -> Any:
-        # Block as if the control-plane hung, then end (never yields a model).
-        await asyncio.sleep(self._delay)
-        raise StopAsyncIteration
-
-
-class _SlowModelsStub:
-    """``client.models`` stand-in whose ``list()`` hangs for ``delay`` seconds."""
-
-    def __init__(self, delay: float) -> None:
-        self._delay = delay
-        self.list_calls = 0
-
-    def list(self, **_kwargs: Any) -> _SlowModelPage:
-        self.list_calls += 1
-        return _SlowModelPage(self._delay)
-
-
-class _CaptureAnthropicClient:
-    """Records the kwargs passed to ``messages.create``.
-
-    Minimal stand-in for ``anthropic.AsyncAnthropic`` — a sanctioned SDK
-    stand-in (no dataknobs testing construct returns a real Anthropic
-    request/response). Exercises the real ``AnthropicProvider.complete``
-    wiring (``adapt_messages`` → ``_build_api_kwargs`` → ``messages.create``
-    → ``adapt_response``) without a live API or the ``anthropic`` package. The
-    ``models`` sub-stub scripts the Models-API ``list()`` used by the dynamic
-    ``max_tokens``-ceiling resolution.
-    """
-
-    def __init__(self) -> None:
-        self.captured_kwargs: dict[str, Any] = {}
-        # ``provider._client.messages.create`` → this object's ``create``.
-        self.messages = self
-        # ``provider._client.models.list`` → the scripted models stub.
-        self.models = _ModelsStub()
-
-    async def create(self, **kwargs: Any) -> object:
-        self.captured_kwargs = kwargs
-        return make_anthropic_response([{"type": "text", "text": "ok"}])
+from _anthropic_stubs import (
+    _CaptureAnthropicClient,
+    _ScriptedModel,
+    _SlowModelsStub,
+    _provider_with_capture,
+    make_anthropic_response,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -163,17 +62,6 @@ def _reset_model_limits_cache() -> Any:
     anthropic_mod._DISCOVERED_REJECTED_PARAMS.clear()
 
 
-def _provider_with_capture(
-    model: str, **config_kwargs: Any
-) -> tuple[AnthropicProvider, _CaptureAnthropicClient]:
-    """Build an initialised ``AnthropicProvider`` backed by a capture client."""
-    provider = AnthropicProvider(
-        LLMConfig(provider="anthropic", model=model, **config_kwargs)
-    )
-    client = _CaptureAnthropicClient()
-    provider._client = client
-    provider._is_initialized = True
-    return provider, client
 
 
 # ---------------------------------------------------------------------------

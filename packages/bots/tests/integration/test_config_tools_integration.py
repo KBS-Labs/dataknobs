@@ -16,9 +16,10 @@ import os
 
 import pytest
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.imports import dotted_path
 
 from dataknobs_bots import BotContext, DynaBot
-from tests.fixtures.test_tools import SimpleTestTool, ParameterizedTestTool
+from fixtures.tools import SimpleTestTool, ParameterizedTestTool
 
 
 # =============================================================================
@@ -37,7 +38,7 @@ class TestDirectToolInstantiation:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 }
             ],
@@ -58,7 +59,7 @@ class TestDirectToolInstantiation:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "custom", "multiplier": 3},
                 }
             ],
@@ -82,11 +83,11 @@ class TestDirectToolInstantiation:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "tool2"},
                 },
             ],
@@ -114,7 +115,7 @@ class TestXRefToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "my_tool": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 }
             },
@@ -136,7 +137,7 @@ class TestXRefToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "parameterized": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "xref", "multiplier": 5},
                 }
             },
@@ -161,11 +162,11 @@ class TestXRefToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "tool1": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 "tool2": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "second"},
                 },
             },
@@ -186,7 +187,7 @@ class TestXRefToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "base": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "base", "multiplier": 2},
                 },
                 "alias": {"xref": "xref:tools[base]"},
@@ -216,13 +217,13 @@ class TestMixedToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "defined_tool": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "xref"},
                 }
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 "xref:tools[defined_tool]",
@@ -247,7 +248,7 @@ class TestMixedToolLoading:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "template": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "shared", "multiplier": 1},
                 }
             },
@@ -278,7 +279,7 @@ class TestToolExecutionWithConfig:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "exec", "multiplier": 2},
                 }
             ],
@@ -302,7 +303,7 @@ class TestToolExecutionWithConfig:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "my_tool": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "xref", "multiplier": 3},
                 }
             },
@@ -337,7 +338,7 @@ class TestConfigToolsWithReAct:
             },
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 }
             ],
@@ -375,7 +376,7 @@ class TestConfigToolsWithReAct:
             },
             "tool_definitions": {
                 "agent_tool": {
-                    "class": "tests.fixtures.test_tools.ParameterizedTestTool",
+                    "class": dotted_path(ParameterizedTestTool),
                     "params": {"prefix": "agent"},
                 }
             },
@@ -412,7 +413,7 @@ class TestErrorHandling:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 {
@@ -433,7 +434,7 @@ class TestErrorHandling:
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 },
                 {
@@ -459,7 +460,7 @@ class TestErrorHandling:
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "valid": {
-                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "class": dotted_path(SimpleTestTool),
                     "params": {},
                 }
             },

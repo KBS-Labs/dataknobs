@@ -40,6 +40,12 @@ packages = ["src/dataknobs_config"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Mirrors the root pytest.ini. Only one of the two configurations applies
+# to any given run — this one when pytest is invoked on this package alone,
+# the root when the invocation names anything else — so a value declared in
+# one and not the other makes the argument list decide how modules are
+# imported.
+addopts = ["--import-mode=importlib"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -44,6 +44,31 @@ hook = resolve_optional_callable(
 )  # None when the key was omitted; raises when it is present and wrong
 ```
 
+## Spelling one: `dotted_path`
+
+The inverse, for the caller holding the object and needing the string — a test
+building a config block that names a class, a generator emitting a declaration,
+an error message quoting the reference a consumer would have to write.
+
+```python
+from dataknobs_common import dotted_path, resolve_dotted
+
+dotted_path(AuditLog)                  # "myapp.middleware:AuditLog"
+resolve_dotted(dotted_path(AuditLog))  # AuditLog — the round trip
+```
+
+Prefer it over writing the path out. A hand-written literal that disagrees with
+the object **does not fail the way a typo does**: it names a real module
+reachable under a second name, so the import succeeds and yields a *second*
+class object — identical in every respect except identity. Every `isinstance`
+against the locally imported one then fails, and every assertion that only
+checks behaviour keeps passing, so the defect surfaces far from its cause.
+
+It refuses what `resolve_dotted` could not read back: a nested `__qualname__`
+(`Outer.Inner`, or a closure's `f.<locals>.g`), a `__main__` target, and an
+object carrying no module metadata — an instance rather than its class. Failing
+here names the object; failing at resolution time would name only the string.
+
 ## Separator
 
 `module.path:name` and `module.path.name` are both accepted, everywhere.

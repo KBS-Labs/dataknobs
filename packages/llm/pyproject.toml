@@ -88,8 +88,13 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 # Disable pytest-benchmark during normal test runs; enable explicitly
-# with --benchmark-enable or --benchmark-only
-addopts = ["--benchmark-disable"]
+# with --benchmark-enable or --benchmark-only. The import mode mirrors
+# the root pytest.ini: only one of the two configurations applies to any
+# given run — this one when pytest is invoked on this package alone, the
+# root when the invocation names anything else — so a value declared in
+# one and not the other makes the argument list decide how modules are
+# imported. `asyncio_mode` below is mirrored for the same reason.
+addopts = ["--benchmark-disable", "--import-mode=importlib"]
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests (requires external services)",

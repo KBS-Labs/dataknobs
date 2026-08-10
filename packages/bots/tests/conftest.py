@@ -12,7 +12,18 @@ import pytest
 from dataknobs_bots.reasoning.wizard_fsm import WizardFSM
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_common.registry import PluginRegistry
-from dataknobs_common.testing import assert_no_leaked_bridge_threads
+from dataknobs_common.testing import (
+    assert_no_leaked_bridge_threads,
+    declare_import_root,
+)
+
+# Shared scaffolding here is imported by a name relative to this directory
+# (``fixtures.tools``, ``unit.conftest``). Declared rather than inherited: this
+# directory carried an ``__init__.py`` instead, which made every module below
+# it resolve under the top-level name ``tests`` — a name ``packages/fsm/tests``
+# and the repo's own ``tests/`` both also claimed, so whichever was imported
+# first won and the other two vanished.
+declare_import_root(__file__)
 
 logger = logging.getLogger(__name__)
 

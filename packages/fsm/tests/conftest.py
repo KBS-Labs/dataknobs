@@ -3,19 +3,31 @@
 import pytest
 from collections.abc import Iterator
 from pathlib import Path
-import sys
 
-from dataknobs_common.testing import assert_no_leaked_bridge_threads
+from dataknobs_common.testing import (
+    assert_no_leaked_bridge_threads,
+    declare_import_root,
+)
 
-# Add src and package root to path for testing.
-# Package root is needed so ``from examples.advanced_debugging import ...``
-# resolves when pytest runs from the workspace root.
+# Add src and the examples directory to path for testing.
+#
+# ``examples`` rather than the package root, which is what carried it before:
+# a root exposes every immediate child as a top-level name, and this package's
+# children include ``tests`` — a name the repo's own ``tests/`` already
+# supplies. The two merged into one namespace package whose search order
+# followed ``sys.path``, so a module added here under a name the workspace
+# guards import (``_workspace``) would have shadowed theirs, silently, in
+# exactly the runs those guards exist to protect. The examples directory holds
+# ten modules and no subdirectories, so it has nothing to leak.
 _pkg_root = Path(__file__).parent.parent
-src_path = _pkg_root / "src"
-if src_path not in sys.path:
-    sys.path.insert(0, str(src_path))
-if str(_pkg_root) not in sys.path:
-    sys.path.insert(0, str(_pkg_root))
+declare_import_root(_pkg_root / "src")
+declare_import_root(_pkg_root / "examples")
+
+# This directory too: its shared fixture modules (``_resource_fixtures``,
+# ``custom_fns_fixture``) are imported by bare name. They were reached through
+# the top-level name ``tests`` until an ``__init__.py`` here made that name
+# ambiguous with ``packages/bots/tests`` and the repo's own ``tests/``.
+declare_import_root(__file__)
 
 
 @pytest.fixture(autouse=True)
