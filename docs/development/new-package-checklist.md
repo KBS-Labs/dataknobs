@@ -308,8 +308,8 @@ mkdocs build --strict
 # Run all tests
 uv run pytest packages/<name>/tests/ -v
 
-# Run quality checks
-./bin/run-quality-checks.sh
+# Run quality checks and produce the PR artifacts
+./bin/dk pr
 ```
 
 ### 11. Prepare for First Release
@@ -469,6 +469,6 @@ Quick reference of all steps:
 - [ ] Sync dependencies: `uv sync --all-packages`
 - [ ] Build docs: `mkdocs build --strict`
 - [ ] Run tests: `uv run pytest packages/<name>/tests/ -v`
-- [ ] Run quality checks: `./bin/run-quality-checks.sh`
+- [ ] Run quality checks: `./bin/dk pr`
 - [ ] Test local installation
 - [ ] Create pull request

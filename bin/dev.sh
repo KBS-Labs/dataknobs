@@ -75,9 +75,15 @@ setup() {
     echo -e "${YELLOW}Installing packages in development mode...${NC}"
     "$ROOT_DIR/bin/install-packages.sh" -m dev
     
-    # Install dev dependencies
+    # Install dev dependencies.
+    #
+    # No mypy or ruff here. Nothing under bin/ calls either off PATH — every
+    # invocation goes through `uv run` against the pinned workspace versions —
+    # so installing them into this venv could only put an unpinned pair *first*
+    # on a developer's PATH, by the one route the pinning guard cannot see.
+    # A pinned toolchain that a shell resolves past is not pinned.
     echo -e "${YELLOW}Installing development dependencies...${NC}"
-    uv pip install pytest pytest-cov pytest-mock mypy ruff
+    uv pip install pytest pytest-cov pytest-mock
     
     echo -e "${GREEN}✓ Development environment ready!${NC}"
     echo -e "${CYAN}Activate with: source venv/bin/activate${NC}"

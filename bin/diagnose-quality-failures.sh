@@ -115,14 +115,14 @@ done
 # Check if artifacts directory exists
 if [ ! -d "$ARTIFACTS_DIR" ]; then
     echo -e "${RED}✗ No quality artifacts found!${NC}"
-    echo -e "${YELLOW}  Run './bin/run-quality-checks.sh' first to generate artifacts.${NC}"
+    echo -e "${YELLOW}  Run './bin/dk pr' first to generate artifacts.${NC}"
     exit 1
 fi
 
 # Check if summary exists
 if [ ! -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
     echo -e "${RED}✗ No quality summary found!${NC}"
-    echo -e "${YELLOW}  The quality check may not have completed. Re-run './bin/run-quality-checks.sh'.${NC}"
+    echo -e "${YELLOW}  The quality check may not have completed. Re-run './bin/dk pr'.${NC}"
     exit 1
 fi
 
@@ -463,7 +463,7 @@ if [ "$OVERALL_STATUS" != "PASS" ] && [ "$OVERALL_STATUS" != "PASS_WITH_SKIPS" ]
     fi
     
     echo -e "\n${CYAN}After fixing, re-run quality checks:${NC}"
-    echo "    ./bin/run-quality-checks.sh"
+    echo "    ./bin/dk pr"
 else
     echo -e "${GREEN}✓ All critical checks passed!${NC}"
     

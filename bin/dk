@@ -76,12 +76,12 @@ ${BOLD}${YELLOW}Common Workflows:${NC}
 
 ${BOLD}${BLUE}Detailed Commands:${NC}
 
-  ${BOLD}PR Preparation:${NC}
+  ${BOLD}PR Preparation${NC} (the only commands that write .quality-artifacts/):
     pr, prepare      PR checks (changed packages, parallel, quiet)
     pr --all         PR checks (all packages, parallel)
     pr --full        Legacy PR checks (all packages, sequential, verbose)
-    
-  ${BOLD}Quality Checks:${NC}
+
+  ${BOLD}Quality Checks${NC} (checks only — no artifacts written):
     check [pkg]      Quick check (dev mode)
     checkall         Check all packages
     lint [pkg]       Run linting only
@@ -225,8 +225,12 @@ main() {
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
+            # --emit-artifacts is passed here and by the two commands below, and
+            # nowhere else. `bin/dk pr` is the gate: it is what produces the
+            # evidence CI verifies. run-quality-checks.sh checks; without this
+            # flag it writes nothing under .quality-artifacts/, in any mode.
             run_command "Preparing for PR" \
-                "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
+                "$SCRIPT_DIR/run-quality-checks.sh" --pr --emit-artifacts "$@"
             ;;
         pr-all|prall|pa)
             export TEST_S3=true
@@ -234,7 +238,7 @@ main() {
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
             run_command "Preparing for PR (all packages)" \
-                "$SCRIPT_DIR/run-quality-checks.sh" --all "$@"
+                "$SCRIPT_DIR/run-quality-checks.sh" --all --emit-artifacts "$@"
             ;;
         pr-full|prfull|pf)
             export TEST_S3=true
@@ -242,7 +246,7 @@ main() {
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
             run_command "Preparing for PR (full legacy mode)" \
-                "$SCRIPT_DIR/run-quality-checks.sh" --full "$@"
+                "$SCRIPT_DIR/run-quality-checks.sh" --full --emit-artifacts "$@"
             ;;
             
         # Quality Checks

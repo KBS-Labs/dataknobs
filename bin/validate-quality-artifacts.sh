@@ -107,7 +107,7 @@ VALIDATION_FAILED=0
 print_check "Artifacts directory exists"
 if [ ! -d "$ARTIFACTS_DIR" ]; then
     print_fail "Directory .quality-artifacts/ not found"
-    print_fail "Run: ./bin/run-quality-checks.sh before creating PR"
+    print_fail "Run: ./bin/dk pr before creating PR"
     exit 1
 fi
 print_pass "Found .quality-artifacts/"
@@ -135,7 +135,7 @@ done
 
 if [ $VALIDATION_FAILED -eq 1 ]; then
     echo ""
-    print_fail "Missing required artifacts. Run: ./bin/run-quality-checks.sh"
+    print_fail "Missing required artifacts. Run: ./bin/dk pr"
     exit 1
 fi
 
@@ -184,7 +184,7 @@ if [ -n "$HASH_RESULT" ]; then
         if [ -n "$SCOPES" ]; then
             print_info "Changed workspace scopes: $SCOPES"
         fi
-        print_fail "Please run: ./bin/run-quality-checks.sh"
+        print_fail "Please run: ./bin/dk pr"
         VALIDATION_FAILED=1
     fi
 else
@@ -348,13 +348,13 @@ if [ $VALIDATION_FAILED -eq 0 ]; then
     exit 0
 else
     echo -e "${RED}✗ Validation failed!${NC}"
-    echo -e "${RED}  Please run: ./bin/run-quality-checks.sh${NC}"
+    echo -e "${RED}  Please run: ./bin/dk pr${NC}"
     echo -e "${RED}  Ensure all tests pass before creating a PR.${NC}"
     echo ""
     
     # Output for GitHub Actions
     if [ -n "$GITHUB_ACTIONS" ]; then
-        echo "::error::Quality artifacts validation failed. Run ./bin/run-quality-checks.sh locally."
+        echo "::error::Quality artifacts validation failed. Run ./bin/dk pr locally."
     fi
     
     exit 1

@@ -20,6 +20,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # subshell at the call site would come too late for the glob.
 cd "$PROJECT_ROOT"
 
+# Where the committed artifacts live. Read in exactly one place — the OUTPUT_DIR
+# resolution below — and never written to directly. Every write in this script
+# targets OUTPUT_DIR, which is this directory only when --emit-artifacts is
+# passed. That is what makes "this script checks, it does not produce evidence"
+# a property of the code rather than a claim: a run without the flag cannot
+# reach this path at all, whatever it writes.
+# tests/test_quality_check_roles.py holds both halves.
 ARTIFACTS_DIR="$PROJECT_ROOT/.quality-artifacts"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Wall-clock start, for the durations recorded in quality-summary.json. Whole
@@ -43,6 +50,23 @@ KEEP_SERVICES="false"
 PR_MODE="auto"  # auto, yes, no
 RUN_MODE=""     # pr, all, full (set after argument parsing)
 BASE_REF="main" # Git ref for changed-package detection
+# Whether this run produces the evidence CI verifies. Off unless asked, in every
+# mode, and asked for by `bin/dk pr` alone — the gate. Separated from PR_MODE
+# because that flag answers a different question (how thorough is the run: the
+# per-package unit/integration split, or the quick combined loop), and the two
+# were one value. The consequence was that three of this script's four modes
+# rewrote .quality-artifacts/, including the no-argument default, and the CI
+# comment for a failed gate told a developer to run the artifact-writing form —
+# so the documented remedy for a red gate was the command that rewrites the
+# evidence the gate reads.
+EMIT_ARTIFACTS="no"
+# Set by the failure path so cleanup() leaves a check-only run's logs readable.
+KEEP_OUTPUT_DIR="no"
+# Resolve the output directory, print it, run nothing. Same shape as
+# `validate.sh --print-targets`: it lets a guard ask this script where its
+# writes land without running a check, through the real resolution rather than a
+# reimplementation of it.
+PRINT_OUTPUT_DIR="no"
 
 # Check if we're inside a Docker container
 IN_DOCKER=false
@@ -76,18 +100,26 @@ Usage: $0 [OPTIONS] [PACKAGE...] [-- PYTEST_ARGS]
 
 Run quality checks (linting, style, tests) for DataKnobs packages.
 
+${YELLOW}This script checks; it does not produce evidence.${NC} Every mode writes its
+working output to a temporary directory, removed on exit and kept on failure so
+the logs stay readable. Only --emit-artifacts writes .quality-artifacts/, and
+only ${CYAN}bin/dk pr${NC} passes it. To regenerate the artifacts CI verifies,
+run ${CYAN}bin/dk pr${NC}.
+
 ${YELLOW}Options:${NC}
     -p, --package PACKAGE    Package to check (can be specified multiple times)
                             If not specified, checks all packages
-    --pr                    PR mode (default): Only test changed packages + dependents.
+    --pr                    PR scope (default): Only test changed packages + dependents.
                             Uses parallel execution, quiet output, XML-only coverage.
                             Skips docs build if no docs changed.
-    --all                   All mode: Test all packages with parallel execution
+    --all                   All scope: Test all packages with parallel execution
                             and optimized coverage (no HTML reports)
-    --full                  Full mode: Legacy behavior — all packages, sequential,
+    --full                  Full scope: Legacy behavior — all packages, sequential,
                             verbose output, all coverage reports (HTML + XML + term)
-    --dev                   Dev mode: Run quick checks without artifacts
-                            (combined tests, no artifact pollution)
+    --dev                   Dev mode: Run quick checks (combined tests)
+    --emit-artifacts        Write .quality-artifacts/ (the gate; bin/dk pr passes this).
+                            Not valid with --dev, which runs no step that produces them.
+    --print-output-dir      Print where this invocation's output would go, run nothing
     --base-ref REF          Git ref for change detection (default: main)
     --skip-style            Skip code validation (syntax, ruff, imports, mypy)
     --skip-tests            Skip test execution
@@ -99,20 +131,21 @@ ${YELLOW}Advanced Usage:${NC}
     $0 data -- -xvs --tb=short
 
 ${YELLOW}Examples:${NC}
-    $0 --pr                 # PR mode: Only changed packages (default)
+    $0                      # Check changed packages (default scope; no artifacts)
     $0 --all                # All packages, parallel, optimized
     $0 --full               # Legacy: all packages, sequential, verbose
     $0 --dev data           # Dev mode: Quick checks for data package
-    $0 data config          # Dev mode: Check specific packages (no artifacts)
-    $0 --pr data            # PR mode for data package only
+    $0 data config          # Dev mode: Check specific packages
+    $0 --pr data            # PR scope for data package only
     $0 --skip-style         # Run all checks except style checks
     $0 data -- -x           # Run data package with pytest -x flag
+    bin/dk pr               # The gate: same checks, plus .quality-artifacts/
 
 ${YELLOW}Environment:${NC}
     Running in: $([ "$IN_DOCKER" = true ] && echo "Docker container" || echo "Host system")
     
-${YELLOW}Output:${NC}
-    All artifacts are saved to: .quality-artifacts/
+${YELLOW}Output (--emit-artifacts only):${NC}
+    Artifacts are saved to: .quality-artifacts/
     - environment.json: System information
     - validation.log: Code validation results (syntax, ruff, imports, mypy)
     - style-check.json: Ruff findings (JSON format)
@@ -171,6 +204,14 @@ while [[ $# -gt 0 ]]; do
             PR_MODE="no"
             shift
             ;;
+        --emit-artifacts)
+            EMIT_ARTIFACTS="yes"
+            shift
+            ;;
+        --print-output-dir)
+            PRINT_OUTPUT_DIR="yes"
+            shift
+            ;;
         --skip-style)
             SKIP_STYLE="yes"
             shift
@@ -222,6 +263,36 @@ if [ -z "$RUN_MODE" ]; then
     else
         RUN_MODE="dev"
     fi
+fi
+
+# Dev mode runs the quick combined loop, which executes none of the steps that
+# produce the committed artifacts — no per-package output capture, no coverage
+# combine, no summary. Accepting the flag here would write a directory holding
+# whichever files happened to fall out, which is the shape of a stale artifact
+# set that still passes the signature check. Refuse instead of half-emitting.
+if [ "$EMIT_ARTIFACTS" = "yes" ] && [ "$PR_MODE" != "yes" ]; then
+    print_error "--emit-artifacts is not valid with --dev (or with named packages,"
+    print_error "which imply dev mode). Use: bin/dk pr"
+    exit 2
+fi
+
+# Everything this run writes goes here. The artifacts directory only when the
+# gate asked for it; otherwise a temporary directory removed by cleanup(). Every
+# later write names OUTPUT_DIR, so check-only is enforced by there being no
+# other path to name rather than by remembering to test a flag at each site.
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+    OUTPUT_DIR="$ARTIFACTS_DIR"
+else
+    OUTPUT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dk-quality-checks.XXXXXX")
+fi
+mkdir -p "$OUTPUT_DIR"
+
+if [ "$PRINT_OUTPUT_DIR" = "yes" ]; then
+    printf '%s\n' "$OUTPUT_DIR"
+    # Nothing ran, so nothing is in it. Removed here rather than left to
+    # cleanup(), whose trap is not installed until further down.
+    [ "$EMIT_ARTIFACTS" = "yes" ] || rm -rf "$OUTPUT_DIR"
+    exit 0
 fi
 
 # Changed-package detection (pr mode only, when no explicit packages given)
@@ -384,6 +455,12 @@ set_environment_vars() {
 # leave the service teardown unreferenced *and* the trap naming nothing.
 # shellcheck disable=SC2329
 cleanup() {
+    # A check-only run leaves nothing behind. Gated on the flag rather than on
+    # comparing paths so that no future edit can make this delete the artifacts
+    # the gate just produced.
+    if [ "$EMIT_ARTIFACTS" = "no" ] && [ "$KEEP_OUTPUT_DIR" = "no" ] && [ -n "${OUTPUT_DIR:-}" ]; then
+        rm -rf "$OUTPUT_DIR"
+    fi
     if [ "$IN_DOCKER" = false ]; then
         # Only cleanup if manage-services.sh indicates we started them
         if [ -f "/tmp/.dataknobs_services_started_$$" ]; then
@@ -439,11 +516,6 @@ if [ -n "$PYTEST_ARGS" ]; then
     print_status "Pytest args: $PYTEST_ARGS"
 fi
 echo ""
-
-# Create artifacts directory only in PR mode
-if [ "$PR_MODE" = "yes" ]; then
-    mkdir -p "$ARTIFACTS_DIR"
-fi
 
 # Ensure all packages are installed
 print_status "Ensuring all packages are installed..."
@@ -506,10 +578,10 @@ fi
 # Set environment variables for all checks
 set_environment_vars
 
-# Capture environment information (PR mode only)
-if [ "$PR_MODE" = "yes" ]; then
+# Capture environment information (an artifact, so gate only)
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
     print_status "Capturing environment information..."
-    cat > "$ARTIFACTS_DIR/environment.json" <<EOF
+    cat > "$OUTPUT_DIR/environment.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
   "python_version": "$(uv run python --version 2>&1)",
@@ -624,11 +696,11 @@ fi
 
 # Validate package references
 print_status "Validating package references across codebase..."
-if uv run python "$SCRIPT_DIR/validate-package-references.py" > "$ARTIFACTS_DIR/package-validation.log" 2>&1; then
+if uv run python "$SCRIPT_DIR/validate-package-references.py" > "$OUTPUT_DIR/package-validation.log" 2>&1; then
     print_success "Package references are consistent"
 else
-    print_error "Package validation failed - see $ARTIFACTS_DIR/package-validation.log"
-    cat "$ARTIFACTS_DIR/package-validation.log"
+    print_error "Package validation failed - see $OUTPUT_DIR/package-validation.log"
+    cat "$OUTPUT_DIR/package-validation.log"
     exit 1
 fi
 
@@ -753,7 +825,7 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             # is here to stop a future editor "fixing" the finding into a silent failure.
             _ruff_json_rc=0
             # shellcheck disable=SC2086
-            uv run ruff check $_ruff_scope --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || _ruff_json_rc=$?
+            uv run ruff check $_ruff_scope --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$OUTPUT_DIR/style-check.json" 2>&1 || _ruff_json_rc=$?
 
             # `|| true` used to cover both of the ways this goes wrong, and they
             # are not the same way.
@@ -772,23 +844,23 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             # committed copy; this guards writing one in the first place.
             if [ "$_ruff_json_rc" -gt 1 ]; then
                 print_error "ruff could not produce the style artifact (exit $_ruff_json_rc)"
-                cat "$ARTIFACTS_DIR/style-check.json"
+                cat "$OUTPUT_DIR/style-check.json"
                 exit 1
             fi
-            if grep -q '"code": *"E902"' "$ARTIFACTS_DIR/style-check.json" 2>/dev/null; then
+            if grep -q '"code": *"E902"' "$OUTPUT_DIR/style-check.json" 2>/dev/null; then
                 print_error "ruff could not read its targets — the style check did not run"
-                grep -o '"filename": *"[^"]*"' "$ARTIFACTS_DIR/style-check.json" | head -5
+                grep -o '"filename": *"[^"]*"' "$OUTPUT_DIR/style-check.json" | head -5
                 exit 1
             fi
 
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086
-            if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS > "$ARTIFACTS_DIR/validation.log" 2>&1; then
+            if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS > "$OUTPUT_DIR/validation.log" 2>&1; then
                 print_success "Code validation passed"
             else
                 VALIDATION_STATUS=$?
-                print_error "Code validation failed - see $ARTIFACTS_DIR/validation.log"
-                cat "$ARTIFACTS_DIR/validation.log"
+                print_error "Code validation failed - see $OUTPUT_DIR/validation.log"
+                cat "$OUTPUT_DIR/validation.log"
             fi
         else
             # Dev mode: show output directly
@@ -818,7 +890,7 @@ if [ "$PR_MODE" = "yes" ]; then
         # bin/docs-checks.sh is the single source of truth for the doc-check set.
         # It writes per-check logs (docs-build.log / docs-versions.log /
         # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
-        "$SCRIPT_DIR/docs-checks.sh" --artifacts "$ARTIFACTS_DIR" || true
+        "$SCRIPT_DIR/docs-checks.sh" --artifacts "$OUTPUT_DIR" || true
         # Six fields, in a fixed order: three exit codes then three durations.
         # The durations are measured inside docs-checks.sh because this script
         # invokes it once for all three checks, so timing it here could only
@@ -830,7 +902,7 @@ if [ "$PR_MODE" = "yes" ]; then
         DOCS_CHECK_CODES=$(python3 -c "
 import json
 try:
-    d = json.load(open('$ARTIFACTS_DIR/docs-checks-status.json'))
+    d = json.load(open('$OUTPUT_DIR/docs-checks-status.json'))
     names = ('docs-build', 'docs-versions', 'docs-mirror')
     entries = [d.get(n) or {} for n in names]
     print(*[e.get('exit_code', 1) for e in entries],
@@ -844,7 +916,7 @@ except Exception:
         if [ "$DOCS_STATUS" -eq 0 ] && [ "$DOCS_VERSIONS_STATUS" -eq 0 ] && [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
             print_success "Documentation checks passed (build, versions, mirrors)"
         else
-            print_error "Documentation checks failed - see .quality-artifacts/docs-*.log (details below)"
+            print_error "Documentation checks failed - see $OUTPUT_DIR/docs-*.log (details below)"
         fi
     else
         print_status "Skipping docs checks (no documentation changes detected)"
@@ -860,9 +932,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
     # Workspace-level guards check the root config, every package's config, and
     # bin/ — so they belong to no package, and every test path below is keyed by
-    # package. Named once here because both modes have to run them: a guard the
-    # quick loop skips is one a developer only sees go red at PR time.
-    WORKSPACE_TEST_DIR="$PROJECT_ROOT/tests"
+    # package. Both modes run them: a guard the quick loop skips is one a
+    # developer only sees go red at PR time. Asked for by name (`test.sh
+    # workspace`) rather than by directory, so this script holds no second
+    # answer to where they live.
 
     # The useful part of a pytest output file: the FAILED lines when there are
     # any, otherwise the tail. A run can exit non-zero without producing a
@@ -911,21 +984,21 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ -n "$PYTEST_ARGS" ]; then
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             else
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             fi
 
             # Save coverage artifacts
             if [ -f "coverage.xml" ]; then
-                mv coverage.xml "$ARTIFACTS_DIR/coverage-unit-$pkg.xml"
+                mv coverage.xml "$OUTPUT_DIR/coverage-unit-$pkg.xml"
             fi
             if [ -f "$PROJECT_ROOT/.coverage.unit.$pkg" ]; then
-                mv "$PROJECT_ROOT/.coverage.unit.$pkg" "$ARTIFACTS_DIR/.coverage.unit.$pkg"
+                mv "$PROJECT_ROOT/.coverage.unit.$pkg" "$OUTPUT_DIR/.coverage.unit.$pkg"
             elif [ -f ".coverage" ]; then
-                mv .coverage "$ARTIFACTS_DIR/.coverage.unit.$pkg"
+                mv .coverage "$OUTPUT_DIR/.coverage.unit.$pkg"
             fi
 
             # Unset to avoid leaking
@@ -934,8 +1007,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
                 print_error "Unit tests failed for $pkg"
                 # Show failed test names inline (strip ANSI codes first)
-                if [ -f "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" ]; then
-                    sed 's/\x1b\[[0-9;]*m//g' "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>/dev/null | \
+                if [ -f "$OUTPUT_DIR/unit-test-output-$pkg.txt" ]; then
+                    sed 's/\x1b\[[0-9;]*m//g' "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>/dev/null | \
                         grep -E '^FAILED ' | sed 's/^/    /' || true
                 fi
                 return $test_exit
@@ -1010,41 +1083,38 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             done
         fi
 
-        # Workspace guards (see WORKSPACE_TEST_DIR above). Folded into the unit
-        # status rather than given their own so a failure surfaces through the
-        # existing summary. Exit 5 is "no tests collected", not a failure.
-        if [ -d "$WORKSPACE_TEST_DIR" ]; then
+        # Workspace guards (see the note by TEST_CMD above). Folded into the
+        # unit status rather than given their own so a failure surfaces through
+        # the existing summary. Exit 5 is "no tests collected", not a failure.
+        {
             print_status "Running workspace tests..."
             _guards_start=$(date +%s)
             workspace_exit=0
-            # No $TEST_FLAGS here: those are bin/test.sh flags (--parallel,
-            # --quiet), which test.sh translates into pytest's spelling. This
-            # run calls pytest directly — test.sh takes a package name and
-            # scans packages/*, so it cannot reach this directory — and pytest
-            # exits on an unrecognized argument, which the gate would count as
-            # a failing suite with no failing test. $PYTEST_ARGS is passed
-            # because it is already pytest's own.
-            # --durations=10 names the slowest guards in the output artifact.
-            # WORKSPACE_GUARD_SECONDS is one number for the whole suite, which
-            # says a suite is expensive without saying which part of it is. The
-            # first run with this flag attributed 45 of 54 seconds to one file
-            # re-invoking the shell lint per test, so the flag has already paid
-            # for the line it costs.
+            # Through test.sh, like every other suite the gate runs. This called
+            # pytest directly — test.sh took a package name and scanned
+            # packages/*, so it could not reach a directory belonging to no
+            # package — which left one check the gate performed by a route no
+            # developer command shares, and so one place the two could drift.
+            # test.sh owns the invocation now (see run_workspace_tests there),
+            # including the --durations=10 that names the slowest guards.
+            #
+            # No $TEST_FLAGS: --parallel would hand a guard suite that shells
+            # out to the linters to xdist for no gain, and --quiet would drop
+            # the durations line this captures the output for.
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086
-            uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
-                -p no:cacheprovider --durations=10 $PYTEST_ARGS --color=yes \
-                > "$ARTIFACTS_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
+            $TEST_CMD workspace -- $PYTEST_ARGS \
+                > "$OUTPUT_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
 
             if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
                 UNIT_TEST_STATUS=$workspace_exit
                 print_error "Workspace tests failed"
-                print_test_output_detail "$ARTIFACTS_DIR/unit-test-output-workspace.txt"
+                print_test_output_detail "$OUTPUT_DIR/unit-test-output-workspace.txt"
             else
                 print_success "Workspace tests passed"
             fi
             WORKSPACE_GUARD_SECONDS=$(elapsed_since "$_guards_start")
-        fi
+        }
         UNIT_TEST_SECONDS=$(elapsed_since "$_unit_start")
 
         # Run integration tests (always sequential — shared external services).
@@ -1069,11 +1139,11 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 if [ -n "$PYTEST_ARGS" ]; then
                     # Deliberate word splitting — see the waiver above the ruff call.
                     # shellcheck disable=SC2086
-                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
+                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 else
                     # Deliberate word splitting — see the waiver above the ruff call.
                     # shellcheck disable=SC2086
-                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
+                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 fi
 
                 unset COVERAGE_FILE
@@ -1082,8 +1152,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                     INTEGRATION_TEST_STATUS=$local_exit
                     print_error "Integration tests failed for $pkg"
                     # Show failed test names inline (strip ANSI codes first)
-                    if [ -f "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" ]; then
-                        sed 's/\x1b\[[0-9;]*m//g' "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>/dev/null | \
+                    if [ -f "$OUTPUT_DIR/integration-test-output-$pkg.txt" ]; then
+                        sed 's/\x1b\[[0-9;]*m//g' "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>/dev/null | \
                             grep -E '^FAILED ' | sed 's/^/    /' || true
                     fi
                 else
@@ -1091,12 +1161,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 fi
 
                 if [ -f "coverage.xml" ]; then
-                    mv coverage.xml "$ARTIFACTS_DIR/coverage-integration-$pkg.xml"
+                    mv coverage.xml "$OUTPUT_DIR/coverage-integration-$pkg.xml"
                 fi
                 if [ -f "$PROJECT_ROOT/.coverage.integration.$pkg" ]; then
-                    mv "$PROJECT_ROOT/.coverage.integration.$pkg" "$ARTIFACTS_DIR/.coverage.integration.$pkg"
+                    mv "$PROJECT_ROOT/.coverage.integration.$pkg" "$OUTPUT_DIR/.coverage.integration.$pkg"
                 elif [ -f ".coverage" ]; then
-                    mv .coverage "$ARTIFACTS_DIR/.coverage.integration.$pkg"
+                    mv .coverage "$OUTPUT_DIR/.coverage.integration.$pkg"
                 fi
             fi
         done
@@ -1132,7 +1202,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
             # Collect all FAILED lines from unit and integration output files
             # Strip ANSI codes before matching since pytest uses colored output
-            for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+            for output_file in "$OUTPUT_DIR"/unit-test-output-*.txt "$OUTPUT_DIR"/integration-test-output-*.txt; do
                 if [ -f "$output_file" ]; then
                     detail=$(print_test_output_detail "$output_file")
                     if [ -n "$detail" ]; then
@@ -1150,7 +1220,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
         # Surface skip summary from output files (unique reasons with counts)
         skip_summary=""
-        for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+        for output_file in "$OUTPUT_DIR"/unit-test-output-*.txt "$OUTPUT_DIR"/integration-test-output-*.txt; do
             if [ -f "$output_file" ]; then
                 skips=$(sed 's/\x1b\[[0-9;]*m//g' "$output_file" 2>/dev/null | grep -E '^SKIPPED ' || true)
                 if [ -n "$skips" ]; then
@@ -1177,7 +1247,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # writes to an output file that is only printed when the run fails, so
         # on a green run the number it exists to publish reached nobody.
         warning_summary=""
-        for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+        for output_file in "$OUTPUT_DIR"/unit-test-output-*.txt "$OUTPUT_DIR"/integration-test-output-*.txt; do
             if [ -f "$output_file" ]; then
                 # pytest's warnings summary spells each entry
                 #   "  <file>:<line>: <Category>: <message>"
@@ -1223,32 +1293,18 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                     fi
                 fi
             done
-        else
-            # This shouldn't happen in dev mode (auto-detection), but handle it
-            if [ -n "$PYTEST_ARGS" ]; then
-                # Deliberate word splitting — see the waiver above the ruff call.
-                # shellcheck disable=SC2086
-                $TEST_CMD -- $PYTEST_ARGS
-            else
-                $TEST_CMD
-            fi
-            
-            TEST_STATUS=$?
-            if [ $TEST_STATUS -eq 0 ]; then
-                print_success "All tests passed"
-            else
-                print_error "Some tests failed"
-            fi
-        fi
 
-        # Workspace guards (see WORKSPACE_TEST_DIR above). The loop over
-        # $PACKAGES cannot reach them, and they run in under a second, so the
-        # quick loop carries them too. No artifacts in dev mode.
-        if [ -d "$WORKSPACE_TEST_DIR" ]; then
+            # Workspace guards (see the note by TEST_CMD above). Named here
+            # because the loop above is keyed by package and cannot reach them,
+            # by the same target the PR path uses — one invocation, not two
+            # that have to agree.
+            #
+            # Only on this arm. The other one hands test.sh no target, and a
+            # bare test.sh runs the guards alongside every discovered package,
+            # so naming them again there would run them twice.
             print_status "Running workspace tests..."
             workspace_exit=0
-            uv run pytest "$WORKSPACE_TEST_DIR" --ignore="$WORKSPACE_TEST_DIR/integration" \
-                -p no:cacheprovider -q || workspace_exit=$?
+            $TEST_CMD workspace --quiet || workspace_exit=$?
 
             if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
                 TEST_STATUS=$workspace_exit
@@ -1256,30 +1312,49 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             else
                 print_success "Workspace tests passed"
             fi
+        else
+            # No package named, so test.sh discovers every package — and the
+            # workspace guards with them.
+            if [ -n "$PYTEST_ARGS" ]; then
+                # Deliberate word splitting — see the waiver above the ruff call.
+                # shellcheck disable=SC2086
+                $TEST_CMD -- $PYTEST_ARGS
+            else
+                $TEST_CMD
+            fi
+
+            TEST_STATUS=$?
+            if [ $TEST_STATUS -eq 0 ]; then
+                print_success "All tests passed"
+            else
+                print_error "Some tests failed"
+            fi
         fi
     fi
     
-    # Create test results XML files for CI systems (PR mode only)
-    if [ "$PR_MODE" = "yes" ]; then
-        if [ ! -f "$ARTIFACTS_DIR/unit-test-results.xml" ]; then
-            echo '<?xml version="1.0" encoding="utf-8"?><testsuites></testsuites>' > "$ARTIFACTS_DIR/unit-test-results.xml"
+    # Create test results XML files for CI systems (an artifact, so gate only)
+    if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+        if [ ! -f "$OUTPUT_DIR/unit-test-results.xml" ]; then
+            echo '<?xml version="1.0" encoding="utf-8"?><testsuites></testsuites>' > "$OUTPUT_DIR/unit-test-results.xml"
         fi
-        if [ ! -f "$ARTIFACTS_DIR/integration-test-results.xml" ]; then
-            echo '<?xml version="1.0" encoding="utf-8"?><testsuites></testsuites>' > "$ARTIFACTS_DIR/integration-test-results.xml"
+        if [ ! -f "$OUTPUT_DIR/integration-test-results.xml" ]; then
+            echo '<?xml version="1.0" encoding="utf-8"?><testsuites></testsuites>' > "$OUTPUT_DIR/integration-test-results.xml"
         fi
     fi
 else
     print_status "Skipping tests"
 fi
 
-# Generate coverage.xml (PR mode only)
+# Generate coverage.xml, the summary and the signature — the evidence CI reads,
+# so the gate alone. A check-only run has already produced every verdict these
+# report; what it has not produced is a record of them, which is the point.
 # This must happen before the summary/signature so coverage.xml is included in the signature.
 # The slower per-package coverage reports run afterward.
 COVERAGE_COMBINED=false
-if [ "$PR_MODE" = "yes" ]; then
-    if ls "$ARTIFACTS_DIR"/.coverage.* >/dev/null 2>&1; then
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+    if ls "$OUTPUT_DIR"/.coverage.* >/dev/null 2>&1; then
         print_status "Combining coverage data..."
-        cd "$ARTIFACTS_DIR"
+        cd "$OUTPUT_DIR"
 
         if uv run coverage combine .coverage.* 2>/dev/null; then
             COVERAGE_COMBINED=true
@@ -1308,17 +1383,17 @@ if [ "$PR_MODE" = "yes" ]; then
         fi
 
         cd "$PROJECT_ROOT"
-    elif ls "$ARTIFACTS_DIR"/coverage*.xml >/dev/null 2>&1; then
+    elif ls "$OUTPUT_DIR"/coverage*.xml >/dev/null 2>&1; then
         print_status "Processing coverage XML files..."
-        if [ ! -f "$ARTIFACTS_DIR/coverage.xml" ]; then
-            if [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ]; then
-                cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml"
-            elif [ -f "$ARTIFACTS_DIR/coverage-integration.xml" ]; then
-                cp "$ARTIFACTS_DIR/coverage-integration.xml" "$ARTIFACTS_DIR/coverage.xml"
+        if [ ! -f "$OUTPUT_DIR/coverage.xml" ]; then
+            if [ -f "$OUTPUT_DIR/coverage-unit.xml" ]; then
+                cp "$OUTPUT_DIR/coverage-unit.xml" "$OUTPUT_DIR/coverage.xml"
+            elif [ -f "$OUTPUT_DIR/coverage-integration.xml" ]; then
+                cp "$OUTPUT_DIR/coverage-integration.xml" "$OUTPUT_DIR/coverage.xml"
             fi
         fi
     else
-        echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$ARTIFACTS_DIR/coverage.xml"
+        echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$OUTPUT_DIR/coverage.xml"
     fi
 
     # Read the line-rate out of coverage.xml now and record it in the summary.
@@ -1329,7 +1404,7 @@ if [ "$PR_MODE" = "yes" ]; then
     COVERAGE_PERCENT=$(python3 -c "
 import xml.etree.ElementTree as ET
 try:
-    root = ET.parse('$ARTIFACTS_DIR/coverage.xml').getroot()
+    root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
     print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
 except Exception:
     print('null')
@@ -1360,7 +1435,7 @@ except Exception:
     # below are appended last in every object rather than sitting beside the
     # exit code they belong with. Parsing that file as JSON would remove the
     # constraint; until then, add new fields at the end. Tracked.
-    cat > "$ARTIFACTS_DIR/quality-summary.json" <<EOF
+    cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
   "overall_status": "$OVERALL_STATUS",
@@ -1429,7 +1504,7 @@ except Exception:
 EOF
 
     print_status "Generating artifact signature..."
-    cd "$ARTIFACTS_DIR"
+    cd "$OUTPUT_DIR"
     # Sign exactly the files that get committed, not everything the run left on
     # disk. A `find` over the directory also picked up per-package coverage
     # reports and docs status that are gitignored, so the stored signature named
@@ -1455,7 +1530,7 @@ EOF
     # runs after the summary/signature are already written.
     if [ "$COVERAGE_COMBINED" = true ]; then
         print_status "Generating per-package coverage reports..."
-        cd "$ARTIFACTS_DIR"
+        cd "$OUTPUT_DIR"
 
         # Generate combined HTML report (full mode only — slow)
         if [ "$RUN_MODE" = "full" ]; then
@@ -1464,8 +1539,14 @@ EOF
             fi
         fi
 
-        # Generate terminal report
-        echo "" >> test-coverage-summary.txt
+        # Generate terminal report.
+        #
+        # Truncated first. Every write below appends, and nothing ever reset the
+        # file, so each run added a full report to the end of every previous
+        # one: 95.7 MB by the time anyone looked, for a file whose whole purpose
+        # is to show the current run's coverage. Untracked, so it never reached
+        # CI — it just grew.
+        : > test-coverage-summary.txt
         echo "Combined Coverage Report:" >> test-coverage-summary.txt
         echo "=========================" >> test-coverage-summary.txt
         uv run coverage report >> test-coverage-summary.txt 2>&1 || true
@@ -1491,7 +1572,7 @@ EOF
                 if [ -d "$pkg_dir/src/${src_name}" ]; then
                     # Single coverage report call per package — used for both text and JSON
                     echo -ne "  ${DIM}$pkg_name...${NC} "
-                    coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null || true)
+                    coverage_output=$(uv run coverage report --data-file="$OUTPUT_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null || true)
                     echo -e "${GREEN}done${NC}"
 
                     # Text summary
@@ -1637,9 +1718,11 @@ OVERALL_STATUS=$(compute_overall_status)
 if [ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
     echo ""
     echo -e "${GREEN}✓ All critical checks passed!${NC}"
-    if [ "$PR_MODE" = "yes" ]; then
+    if [ "$EMIT_ARTIFACTS" = "yes" ]; then
         echo -e "${GREEN}  Artifacts saved to: .quality-artifacts/${NC}"
         echo -e "${GREEN}  You can now create your pull request.${NC}"
+    else
+        echo -e "${GREEN}  Checks only — no artifacts written. Run ${CYAN}bin/dk pr${GREEN} to produce them.${NC}"
     fi
     echo ""
     exit 0
@@ -1647,33 +1730,42 @@ else
     echo ""
     echo -e "${RED}✗ Some checks failed!${NC}"
     echo -e "${RED}  Please fix the issues and run this script again.${NC}"
-    
+
+    # The diagnostics below name log files. On a check-only run those live in a
+    # temporary directory cleanup() would delete, so a failing run would print
+    # paths that no longer exist by the time the prompt came back. Kept on
+    # failure only: nothing accumulates on the green path, and this is still
+    # outside .quality-artifacts/, so the G1 property is unaffected.
+    if [ "$EMIT_ARTIFACTS" = "no" ]; then
+        KEEP_OUTPUT_DIR="yes"
+    fi
+
     # Show quick diagnostic info for failures
     echo ""
     echo -e "${YELLOW}Quick Diagnostics:${NC}"
     
     if [ "$PR_MODE" = "yes" ]; then
         # In PR mode, show specific commands to investigate failures
-        if [ "$DOCS_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-build.log" ]; then
+        if [ "$DOCS_STATUS" -ne 0 ] && [ -f "$OUTPUT_DIR/docs-build.log" ]; then
             echo -e "  ${CYAN}Documentation Build Failures:${NC}"
             echo "    View documentation errors:"
-            echo "      cat $ARTIFACTS_DIR/docs-build.log"
+            echo "      cat $OUTPUT_DIR/docs-build.log"
             echo ""
         fi
 
-        if [ "$DOCS_VERSIONS_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-versions.log" ]; then
+        if [ "$DOCS_VERSIONS_STATUS" -ne 0 ] && [ -f "$OUTPUT_DIR/docs-versions.log" ]; then
             echo -e "  ${CYAN}Documentation Version Mismatch:${NC}"
             echo "    View version differences:"
-            echo "      cat $ARTIFACTS_DIR/docs-versions.log"
+            echo "      cat $OUTPUT_DIR/docs-versions.log"
             echo "    To fix:"
             echo "      bin/docs-update-versions.sh"
             echo ""
         fi
 
-        if [ "$DOCS_MIRROR_STATUS" -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-mirror.log" ]; then
+        if [ "$DOCS_MIRROR_STATUS" -ne 0 ] && [ -f "$OUTPUT_DIR/docs-mirror.log" ]; then
             echo -e "  ${CYAN}Documentation Mirror Drift:${NC}"
             echo "    View mirror differences:"
-            echo "      cat $ARTIFACTS_DIR/docs-mirror.log"
+            echo "      cat $OUTPUT_DIR/docs-mirror.log"
             echo "    To fix:"
             echo "      bin/docs-mirror-check.py --fix   # or reclassify in .dataknobs/docs-mirror-manifest.json"
             echo ""
@@ -1682,7 +1774,7 @@ else
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
             echo -e "  ${CYAN}Test Failures:${NC}"
 
-            for output_file in "$ARTIFACTS_DIR"/*-test-output-*.txt; do
+            for output_file in "$OUTPUT_DIR"/*-test-output-*.txt; do
                 if [ -f "$output_file" ]; then
                     if grep -q "FAILED" "$output_file" 2>/dev/null; then
                         pkg_name=$(basename "$output_file" | sed 's/.*-test-output-\(.*\)\.txt/\1/')
@@ -1693,17 +1785,21 @@ else
             done
         fi
         
-        if [ $VALIDATION_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/validation.log" ]; then
+        if [ $VALIDATION_STATUS -ne 0 ] && [ -f "$OUTPUT_DIR/validation.log" ]; then
             echo -e "  ${CYAN}Code Validation Failures:${NC}"
             echo "    View full validation output:"
-            echo "      cat $ARTIFACTS_DIR/validation.log"
+            echo "      cat $OUTPUT_DIR/validation.log"
             echo "    To auto-fix what's possible:"
             echo "      bin/validate.sh -f"
         fi
         
         echo ""
-        echo -e "  ${CYAN}Full artifacts in:${NC} .quality-artifacts/"
-        echo -e "  ${CYAN}View summary:${NC} cat .quality-artifacts/quality-summary.json | python -m json.tool"
+        if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+            echo -e "  ${CYAN}Full artifacts in:${NC} .quality-artifacts/"
+            echo -e "  ${CYAN}View summary:${NC} cat .quality-artifacts/quality-summary.json | python -m json.tool"
+        else
+            echo -e "  ${CYAN}Full output kept in:${NC} $OUTPUT_DIR"
+        fi
     else
         # In dev mode, suggest re-running with specific focus
         if [ $TEST_STATUS -ne 0 ]; then

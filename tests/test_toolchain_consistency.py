@@ -37,14 +37,18 @@ from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
 
-#: Where the quality gate names the directory holding these tests. Extracted and
-#: resolved rather than searched for, so the guard cannot pass on a coincidence.
-GATE_TEST_DIR_RE = re.compile(r'^\s*WORKSPACE_TEST_DIR="\$PROJECT_ROOT/([^"]+)"', re.MULTILINE)
+#: How the gate asks for the guards in this directory. A named target on
+#: ``bin/test.sh`` rather than a directory the gate resolves itself: the gate
+#: used to call pytest here directly — ``test.sh`` took a package name and
+#: scanned ``packages/*``, so it could not reach a directory belonging to no
+#: package — which left one check the gate performed by a route no developer
+#: command shared, and so one place a gate pass and a local pass could differ.
+GATE_WORKSPACE_TARGET_RE = re.compile(r"\$TEST_CMD\s+workspace\b")
 
-#: Directories the gate excludes from the workspace run, read from the flags it
-#: actually passes. Frozen literals here would stop tracking the gate the first
-#: time a second exclusion is added — the same drift these guards exist to catch.
-GATE_IGNORE_RE = re.compile(r'--ignore="\$WORKSPACE_TEST_DIR/([^"]+)"')
+#: Directories excluded from the workspace run, read from the flag ``bin/test.sh``
+#: actually passes. Frozen literals here would stop tracking it the first time a
+#: second exclusion is added — the same drift these guards exist to catch.
+RUNNER_IGNORE_RE = re.compile(r"--ignore=\$test_path/(\S+)")
 
 #: The single declaration of which files outside packages/ affect a quality
 #: result. Read rather than restated so this guard cannot drift from the change
@@ -93,12 +97,18 @@ def test_workspace_tests_are_reachable():
     so the guards here can go red and stay red without a single check turning
     red with them.
 
-    Two mechanisms, because they cover different callers: ``testpaths`` covers
-    a bare ``pytest`` at the root, and the gate covers CI. Both are read for a
-    path and resolved, so neither can be satisfied by an unrelated mention of
-    the word "tests" — and the gate is checked for *running* that path, not
-    merely naming it, since a variable defined and never used would satisfy a
-    weaker check while running nothing.
+    Three mechanisms, because they cover different callers: ``testpaths``
+    covers a bare ``pytest`` at the root, ``bin/test.sh workspace`` covers a
+    developer, and the gate covers CI.
+
+    The runner half is *asked*, not parsed. The gate used to name this
+    directory itself and the guard read that string back; the string is gone
+    now — ``test.sh`` owns the target — and reading its replacement out of
+    ``test.sh`` would only move the same weakness one file over, since a target
+    that resolves to the wrong directory spells itself exactly like one that
+    resolves to the right one. Collecting through the real target answers the
+    question the string was standing in for: does asking for ``workspace``
+    reach *this file*.
     """
     here = Path(__file__).resolve().parent
     violations = []
@@ -109,27 +119,82 @@ def test_workspace_tests_are_reachable():
     if not any((ROOT / p).resolve() == here for p in testpaths):
         violations.append(f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}")
 
-    gate = ROOT / "bin" / "run-quality-checks.sh"
-    gate_text = gate.read_text()
-    named = [(ROOT / m.group(1)).resolve() for m in GATE_TEST_DIR_RE.finditer(gate_text)]
-    if here not in named:
-        found = ", ".join(_rel(p) for p in named) or "nothing"
-        violations.append(f"bin/run-quality-checks.sh: names {found}, not {_rel(here)}")
-    else:
-        # Naming the directory is not running it. Both modes are checked: the
-        # gate defines the variable once and each branch has its own test path,
-        # so dropping either leaves a mode that reports green without the
-        # guards — the failure this whole file exists to make impossible.
-        runs = len(re.findall(r'uv run pytest "\$WORKSPACE_TEST_DIR"', gate_text))
-        if runs < 2:
-            violations.append(
-                f"bin/run-quality-checks.sh: names {_rel(here)} but runs pytest against it "
-                f"{runs} time(s) — expected both the PR-mode and dev-mode paths"
-            )
+    collected = subprocess.run(
+        [str(ROOT / "bin" / "test.sh"), "-n", "workspace", "--", "--collect-only", "-q"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        # A non-zero exit is a finding here, not an error to raise on: the
+        # assertion below reports what was collected and what the run returned.
+        check=False,
+    )
+    if Path(__file__).name not in collected.stdout:
+        violations.append(
+            "bin/test.sh workspace collects nothing from "
+            f"{_rel(here)} (exit {collected.returncode})"
+        )
+
+    # Reaching it is not running it, and the gate has three test paths: the
+    # per-package split, the quick loop over named packages, and the quick loop
+    # over none. The first two name the target; the third hands test.sh no
+    # target at all and gets the guards from the discovery fallback, which is
+    # what the test below covers. Dropping any of the three leaves a mode that
+    # reports green without the guards, which is the failure this whole file
+    # exists to make impossible.
+    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
+    runs = len(GATE_WORKSPACE_TARGET_RE.findall(gate_text))
+    if runs < 2:
+        violations.append(
+            "bin/run-quality-checks.sh: asks for the workspace target "
+            f"{runs} time(s) — expected the PR-mode path and the dev-mode "
+            "named-package path"
+        )
 
     assert not violations, "Workspace guards are unreachable:\n" + "\n".join(
         f"  - {v}" for v in violations
     )
+
+
+def _runner_targets(*args: str) -> list[str]:
+    """What ``bin/test.sh`` would run, for these arguments.
+
+    Asked rather than parsed, for the reason ``_validate_targets_for`` is:
+    reading the discovery block as text answers what it says, and a condition
+    wrapped around it later would leave that reading unchanged.
+    """
+    listing = subprocess.run(
+        [str(ROOT / "bin" / "test.sh"), *args, "--print-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
+
+
+def test_running_everything_includes_the_guards():
+    """A bare ``bin/test.sh`` is the command that reads as "run the suite".
+
+    It discovers by looping ``packages/*``, so this directory — which belongs
+    to no package — sat outside it, and the entry point named for running
+    everything ran every test except the ones checking the toolchain that runs
+    them. The gate's no-package path hands test.sh no target and depends on
+    this, so it is the third reachability mechanism, not a convenience.
+
+    The negative case is asserted too: these need no service and are not
+    integration tests, so an integration-only run must not pick them up — else
+    the fix is "always run them", which reports on a suite the caller did not
+    ask for.
+    """
+    assert "workspace" in _runner_targets(), (
+        "a bare bin/test.sh does not run the workspace guards, so the gate's "
+        "no-package path runs none of them either"
+    )
+    assert "workspace" not in _runner_targets("-t", "integration")
+    assert "workspace" not in _runner_targets("--only-integration")
+
+    # Naming a package is naming a target, not a filter over the default set.
+    assert _runner_targets("common") == ["common"]
 
 
 def test_a_change_to_these_guards_still_schedules_them():
@@ -583,12 +648,12 @@ def test_no_workspace_test_is_filed_where_nothing_runs_it():
     the moment someone has one rather than after it has silently not run.
     """
     here = Path(__file__).resolve().parent
-    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
-    excluded = sorted(set(GATE_IGNORE_RE.findall(gate_text)))
+    runner_text = (ROOT / "bin" / "test.sh").read_text()
+    excluded = sorted(set(RUNNER_IGNORE_RE.findall(runner_text)))
     assert excluded, (
-        "bin/run-quality-checks.sh passes no --ignore for the workspace run — "
-        "either the gate stopped excluding a directory or this guard stopped "
-        "tracking how it spells the flag"
+        "bin/test.sh passes no --ignore for the workspace run — either the "
+        "runner stopped excluding a directory or this guard stopped tracking "
+        "how it spells the flag"
     )
 
     stranded = [
@@ -602,8 +667,8 @@ def test_no_workspace_test_is_filed_where_nothing_runs_it():
     assert not stranded, (
         "These tests are collected by no entry point:\n"
         + "\n".join(f"  - {_rel(p)}" for p in stranded)
-        + f"\n  The unit step passes --ignore for {', '.join(excluded)} and the "
-        "integration step only loops packages/*/tests/integration.\n"
+        + f"\n  The workspace target passes --ignore for {', '.join(excluded)} "
+        "and the integration step only loops packages/*/tests/integration.\n"
         "  Move them beside the other workspace guards if they need no "
         "service, or give the gate a step that runs them."
     )
@@ -1248,17 +1313,12 @@ def test_the_lint_deferrals_still_describe_the_repository():
     )
 
 
-#: Variables the gate may interpolate into a direct ``pytest`` call. Everything
-#: else in scope there holds ``bin/test.sh`` flags, which pytest rejects.
-PYTEST_SAFE_VARS = frozenset({"WORKSPACE_TEST_DIR", "PYTEST_ARGS", "ARTIFACTS_DIR"})
-
-
 def _gate_pytest_commands() -> list[str]:
-    """Every direct ``uv run pytest`` command in the gate, continuations joined."""
+    """Every direct ``pytest`` command in the gate, continuations joined."""
     lines = (ROOT / "bin" / "run-quality-checks.sh").read_text().splitlines()
     commands = []
     for i, line in enumerate(lines):
-        if "uv run pytest" not in line:
+        if "run pytest" not in line:
             continue
         parts, j = [line], i
         while j + 1 < len(lines) and lines[j].rstrip().endswith("\\"):
@@ -1268,29 +1328,31 @@ def _gate_pytest_commands() -> list[str]:
     return commands
 
 
-def test_the_gate_passes_only_pytest_arguments_to_pytest():
-    """``$TEST_FLAGS`` holds ``bin/test.sh`` flags, not pytest ones.
+def test_the_gate_runs_no_checker_itself():
+    """Every suite the gate records is run by the command a developer runs.
 
-    Every other test path in the gate goes through ``bin/test.sh``, which
-    translates ``--parallel`` / ``--quiet`` into pytest's own spelling. The
-    workspace step cannot: ``test.sh`` takes a package name and scans
-    ``packages/*``, so this one run calls pytest directly. Handing it a
-    variable holding ``--parallel`` makes pytest exit on a *usage* error —
-    which the gate counts as a failing test suite, while no test failed and
-    nothing in the summary says why.
+    This started as a narrower guard: the gate's one direct pytest call had to
+    receive only pytest arguments, because ``$TEST_FLAGS`` holds ``bin/test.sh``
+    spellings (``--parallel``, ``--quiet``) and handing one to pytest produces a
+    *usage* error — which the gate counts as a failing suite while no test
+    failed and nothing in the summary says why.
+
+    That hazard existed because the call was there at all. The workspace guards
+    were the one suite ``test.sh`` could not reach, so the gate ran them itself,
+    and a gate result and a local result had a place to differ that no assertion
+    covered. ``test.sh workspace`` closed it, and this became the emptiness
+    check it should always have been: a set that must stay empty cannot quietly
+    narrow to the one case someone remembered, and the flag-translation hazard
+    cannot come back without the call coming back first.
     """
     commands = _gate_pytest_commands()
-    assert commands, "no direct pytest invocation found in bin/run-quality-checks.sh"
 
-    violations = [
-        f"bin/run-quality-checks.sh: pytest receives ${var}, not a pytest argument"
-        for cmd in commands
-        for var in re.findall(r"\$([A-Z_]+)", cmd)
-        if var not in PYTEST_SAFE_VARS
-    ]
-
-    assert not violations, "Non-pytest arguments reach pytest:\n" + "\n".join(
-        f"  - {v}" for v in violations
+    assert not commands, (
+        "bin/run-quality-checks.sh runs pytest directly:\n"
+        + "\n".join(f"  - {c}" for c in commands)
+        + "\n  Every suite must go through bin/test.sh, so a gate run and a "
+        "developer run execute the same invocation. Add a target there if the "
+        "suite has no home."
     )
 
 

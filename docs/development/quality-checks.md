@@ -11,8 +11,8 @@ DataKnobs uses a **developer-driven quality assurance process** where developers
 Before creating a pull request:
 
 ```bash
-# Run all quality checks (required for PRs to main)
-./bin/run-quality-checks.sh
+# Run all quality checks and produce the artifacts CI verifies
+./bin/dk pr
 ```
 
 This single command will:
@@ -24,6 +24,28 @@ This single command will:
 6. ✅ Create artifacts in `.quality-artifacts/`
 
 **Important:** The artifacts must be committed with your PR!
+
+### Checking versus producing evidence
+
+Two roles, and they are deliberately separate:
+
+| Command | Runs the checks | Writes `.quality-artifacts/` |
+|---|---|---|
+| `./bin/run-quality-checks.sh` | yes, in every mode | **no** |
+| `./bin/dk pr` (and `pr-all`, `pr-full`) | yes | yes |
+
+`run-quality-checks.sh` is a checker: it writes its working output to a
+temporary directory, removed on exit and kept on failure so the logs stay
+readable. Use it to iterate. Only `--emit-artifacts` writes the artifacts
+directory, and `bin/dk pr` is the only thing that passes it.
+
+The separation matters because the artifacts are the evidence CI checks the tree
+against. A checker that also rewrote them meant the documented remedy for a
+failing gate — re-run the checks — was also the command that made the gate stop
+disagreeing, whether or not anything had been fixed.
+
+`bin/run-quality-checks.sh --print-output-dir` reports where a given invocation
+would write, running nothing.
 
 ## Detailed Process
 
@@ -50,11 +72,11 @@ Before creating a PR to `main` or `develop`:
 # Ensure Docker is running
 docker info
 
-# Run the complete quality check suite
-./bin/run-quality-checks.sh
+# Run the complete quality check suite and produce its artifacts
+./bin/dk pr
 ```
 
-The script will:
+The gate will:
 - Start PostgreSQL, Elasticsearch, and LocalStack containers
 - Wait for services to be healthy
 - Validate package references across the codebase
@@ -317,7 +339,7 @@ docker-compose up -d
 ### Tests Pass Locally but CI Rejects Artifacts
 
 Common causes:
-- **Artifacts too old** - Re-run `./bin/run-quality-checks.sh`
+- **Artifacts too old** - Re-run `./bin/dk pr`
 - **Merged main without re-running** - Expected; re-run and re-commit
 - **Forgot to commit artifacts** - Run `git add .quality-artifacts/`
 - **Modified artifacts** - Don't edit files in `.quality-artifacts/`
@@ -463,14 +485,14 @@ A: For PRs to feature branches, you might skip integration tests. For PRs to `ma
 A: Add it to `docker-compose.override.yml`, update `bin/run-quality-checks.sh` to wait for it, and document it here.
 
 **Q: What if artifacts are accidentally modified?**
-A: The signature check reports it, and the content hashes in `quality-summary.json` are what actually fail the build. Re-run `./bin/run-quality-checks.sh` to regenerate valid artifacts.
+A: The signature check reports it, and the content hashes in `quality-summary.json` are what actually fail the build. Re-run `./bin/dk pr` to regenerate valid artifacts.
 
 **Q: Do I have to re-run checks after merging main?**
 A: Yes. Your artifacts attest to a tree that no longer exists, and CI compares their hashes against the merged checkout. You do *not* have to resolve an artifact merge conflict first — see [Merging main into a branch](#merging-main-into-a-branch).
 
 ## Summary
 
-1. **Before PR:** Run `./bin/run-quality-checks.sh`
+1. **Before PR:** Run `./bin/dk pr`
 2. **Commit:** Include `.quality-artifacts/` in your commit
 3. **CI Validates:** Artifacts are checked automatically
 4. **Merge:** Only if all checks pass
