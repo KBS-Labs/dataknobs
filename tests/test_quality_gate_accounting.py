@@ -55,7 +55,10 @@ GATE_SCRIPTS = (
         section=r"^\s*print_status\s",
         failure="print_error",
         verdict=r"[A-Z][A-Z0-9_]*_STATUS",
-        end='quality-summary.json" <<EOF',
+        # Where the checking stops and the reporting begins. It was the line
+        # opening the summary heredoc until the summary stopped being one; the
+        # writer call now occupies the same position, for the same reason.
+        end='quality-summary.py" build',
     ),
     GateScript(
         path=VALIDATOR,
@@ -337,8 +340,24 @@ def _gates_the_verdict() -> set[str]:
 
 
 def _reported_in_summary() -> set[str]:
-    """Statuses that reach ``quality-summary.json``'s ``checks`` object."""
-    return set(_STATUS.findall(_block('"checks": {', r"EOF$"))) - {VERDICT}
+    """Statuses that reach ``quality-summary.json``'s ``checks`` object.
+
+    The population is every ``record_check`` call, wherever it sits. It used to
+    be one block — the heredoc that serialized all eight checks in one place —
+    and reading a block is what a positional guard can do; now each check states
+    its own outcome at the site that produced it, so the calls are scattered by
+    design and gathering them by name is the only reading that stays true.
+
+    Continuation lines are not scanned, and do not need to be: the status is the
+    call's second argument, so it is always on the line that opens it.
+    """
+    calls = [line for line in _gate_lines() if re.match(r"\s*record_check\b", line)]
+    assert calls, (
+        f"no record_check calls found in {rel(GATE)} — the checks no longer "
+        "report their outcomes by that name, so this guard is comparing against "
+        "nothing. Re-point it rather than leaving it passing."
+    )
+    return set(_STATUS.findall("\n".join(calls))) - {VERDICT}
 
 
 def test_the_status_exception_tables_still_describe_the_gate():
@@ -399,6 +418,110 @@ def test_every_status_that_gates_the_verdict_reaches_the_artifact():
         "quality-summary.json, so CI — which validates the artifact rather than "
         "re-running the gate — cannot see them. Add a 'checks' entry, or record "
         "the entries that report them in REPORTED_VIA_COMPONENTS."
+    )
+
+
+def _init_lines(lines: list[str]) -> frozenset[int]:
+    """The block that sets every status before any check has run.
+
+    An assignment here records nothing: it is the default a path that never
+    touches the variable falls through to.
+    """
+    start = next(
+        (i for i, ln in enumerate(lines) if "# Initialize status tracking" in ln), None
+    )
+    stop = next(
+        (i for i, ln in enumerate(lines) if "# How long each check took" in ln), None
+    )
+    assert start is not None and stop is not None, (
+        f"{rel(GATE)} no longer has the initialization block this guard reads "
+        "between those two comments — re-point it rather than letting it read "
+        "an empty range."
+    )
+    return frozenset(range(start, stop))
+
+
+def _pr_only_lines(lines: list[str]) -> frozenset[int]:
+    """Line numbers reachable only when ``PR_MODE`` is yes.
+
+    Every such block, not just the test one. A block's ``else`` ends the
+    PR-only region: that arm is the dev path.
+    """
+    gated: set[int] = set()
+    for number, line in enumerate(lines):
+        opened = re.match(r'(\s*)if \[ "\$PR_MODE" = "yes" \]; then\s*$', line)
+        if not opened:
+            continue
+        closing = {f"{opened.group(1)}fi", f"{opened.group(1)}else"}
+        for end in range(number + 1, len(lines)):
+            if lines[end].rstrip() in closing:
+                gated.update(range(number, end))
+                break
+        else:  # pragma: no cover - a block that never closes is a syntax error
+            raise AssertionError(
+                f"unterminated PR_MODE block at {rel(GATE)}:{number + 1}"
+            )
+    return frozenset(gated)
+
+
+def test_every_status_the_summary_records_is_measured_on_a_dev_run():
+    """A recorded status must not be able to reach the writer as its default.
+
+    Writing one record per check closed the "absent reads as passing" half of
+    this by construction: a check that records nothing has no entry, and no
+    entry cannot be mistaken for a passing one. Six of the eight checks are
+    finished by that argument — they run unconditionally, or their skip arm
+    passes a literal ``0`` beside ``--skipped true``.
+
+    The two test checks are not, and the difference is worth stating because it
+    is the reason this guard outlived the heredoc. ``UNIT_TEST_STATUS`` and
+    ``INTEGRATION_TEST_STATUS`` are **accumulators**: a package loop folds
+    failures into them with ``|| UNIT_TEST_STATUS=$?``, so ``0`` means "nothing
+    failed" and initialising to ``0`` is correct there. But the same variables
+    are what the dev arm records, and the dev arm runs no such loop — it assigns
+    them from ``TEST_STATUS``. Delete those two assignments and the record is
+    still written, still well-formed, and reports ``pass`` for a run whose tests
+    failed. That is the original defect, and the writer cannot see it: a stale
+    accumulator and a measured zero are the same byte by the time it arrives.
+
+    So the record is only as honest as the variable behind it, and a variable
+    assigned nowhere on the dev path is a verdict the run never measured. This
+    retires when the two test checks record at the site that produced their
+    outcome, the way the other six already do.
+    """
+    lines = _gate_lines()
+    init = _init_lines(lines)
+    pr_only = _pr_only_lines(lines)
+    assert pr_only, (
+        f"found no PR-gated region in {rel(GATE)} — the mode split has moved, "
+        "so this guard is exempting nothing and would pass on a gate that "
+        "measured nothing. Re-point it."
+    )
+
+    def assigned_on_dev(name: str) -> bool:
+        for number, line in enumerate(lines):
+            if number in init or number in pr_only:
+                continue
+            if re.match(rf"\s*{name}=", line) or re.search(
+                rf"\bread -r\b[^;|#]*\b{name}\b", line
+            ):
+                return True
+        return False
+
+    reported = _reported_in_summary()
+    assert reported, (
+        f"no status variable reaches a record_check call in {rel(GATE)} — this "
+        "guard is comparing against nothing. Re-point it rather than leaving it "
+        "passing."
+    )
+
+    unmeasured = sorted(name for name in reported if not assigned_on_dev(name))
+    assert not unmeasured, (
+        f"{unmeasured} reach quality-summary.json but are assigned only inside "
+        "PR-gated regions, so a dev run records whatever they were initialised "
+        "to — and they are initialised to 0, which the writer reports as "
+        '"pass". Assign the measured outcome on the dev path too, or record '
+        "that check from the site that produced it."
     )
 
 
@@ -512,169 +635,4 @@ def test_no_shell_script_continues_when_a_tool_it_probed_for_is_missing():
         "error naming the tool and exit non-zero, or install it — and if the "
         "branch does install it, name the tool in the command that does so, "
         "which is how this tells the two apart."
-    )
-
-
-# --------------------------------------------------------------------------
-# A verdict the summary reports must be one some path actually recorded.
-# --------------------------------------------------------------------------
-
-#: Where the summary's status fields come from: ``$([ $X -eq 0 ] && echo '"pass"'``.
-_REPORTED_STATUS_RE = re.compile(r"""\$\(\s*\[\s*"?\$(\w+)"?\s+-eq\s+0\s*\]\s*&&\s*echo\s*'"pass"'""")
-
-
-def _anchor(lines: list[str], needle: str) -> int:
-    """Index of the one line containing ``needle``.
-
-    Asserted rather than searched leniently: this guard slices the script by
-    position, so an anchor that has moved must fail loudly. A structural guard
-    that quietly finds nothing to check is the failure mode this whole file
-    exists to catch.
-    """
-    hits = [i for i, line in enumerate(lines) if needle in line]
-    assert len(hits) == 1, f"expected exactly one {needle!r} in {rel(GATE)}, found {len(hits)}"
-    return hits[0]
-
-
-def _summary_entries(lines: list[str]) -> list[tuple[str, str, str | None]]:
-    """Every check the summary writes, as ``(name, status_var, skipped_var)``.
-
-    Read out of the heredoc rather than listed here, so a check added to the
-    summary is covered the day it is added — which is the property the check
-    below is about in the first place.
-
-    A ``skipped`` field spelled as an inline expression rather than a variable
-    yields ``None``: deciding "did this run" in the heredoc is a second answer to
-    a question the block that ran it already answered, and the comment above
-    ``UNIT_SKIPPED`` records what that cost the last time.
-    """
-    start = _anchor(lines, 'quality-summary.json" <<EOF')
-    entries: list[tuple[str, str, str | None]] = []
-    name: str | None = None
-    status: str | None = None
-    skipped: str | None = None
-
-    for line in lines[start:]:
-        opened = re.match(r'\s*"(\w+)":\s*\{\s*$', line)
-        if opened:
-            name, status, skipped = opened.group(1), None, None
-            continue
-        if name is None:
-            continue
-        found = _REPORTED_STATUS_RE.search(line)
-        if found:
-            status = found.group(1)
-        flag = re.match(r'\s*"skipped":\s*\$(\w+)\s*,?\s*$', line)
-        if flag:
-            skipped = flag.group(1)
-        if re.match(r"\s*\}", line):
-            if status is not None:
-                entries.append((name, status, skipped))
-            name = None
-    return entries
-
-
-def _pr_only_lines(lines: list[str]) -> frozenset[int]:
-    """Line numbers reachable only when ``PR_MODE`` is yes.
-
-    Every such block, not just the test one. The docs checks are gated the same
-    way and report three statuses, so a guard that knew about one block would
-    have cleared the other three — the same "scoped to where you already looked"
-    shape this file keeps finding.
-
-    A block's ``else`` ends the PR-only region: that arm is the dev path.
-    """
-    gated: set[int] = set()
-    for number, line in enumerate(lines):
-        opened = re.match(r'(\s*)if \[ "\$PR_MODE" = "yes" \]; then\s*$', line)
-        if not opened:
-            continue
-        closing = {f"{opened.group(1)}fi", f"{opened.group(1)}else"}
-        for end in range(number + 1, len(lines)):
-            if lines[end].rstrip() in closing:
-                gated.update(range(number, end))
-                break
-        else:  # pragma: no cover - a block that never closes is a syntax error
-            raise AssertionError(f"unterminated PR_MODE block at {rel(GATE)}:{number + 1}")
-    return frozenset(gated)
-
-
-def test_every_status_the_summary_reports_is_recorded_on_both_run_modes():
-    """A status field must never fall through to its initial value.
-
-    The statuses are initialised to ``0``, and ``0`` renders as ``"pass"``. So a
-    variable no path assigns does not read as absent or unknown — it reads as a
-    check that ran and passed.
-
-    ``UNIT_TEST_STATUS`` and ``INTEGRATION_TEST_STATUS`` were assigned only on
-    the PR arm; the dev arm tracks ``TEST_STATUS`` alone. That was harmless while
-    the summary was written by the gate only, and stopped being harmless when the
-    summary became a record both tiers write: a dev run with failing tests then
-    wrote ``overall_status: FAIL`` beside ``unit_tests: pass``, and the
-    diagnostics tool gates its whole test-failure section on those two fields —
-    so it reported the failure and named nothing, for the most common developer
-    command and the most common kind of failure.
-
-    Note the duration fields got this right by accident of their default: they
-    initialise to ``null``, which is the absence of a measurement rather than a
-    passing one. ``0`` is a verdict; ``null`` is not.
-
-    **Delete this guard rather than porting it** when the summary stops being
-    written by a shell heredoc. It is a compensating control, not a property
-    worth keeping: it parses the producer's source to check an invariant the
-    producer cannot express, and it exists only because a status variable has a
-    default and that default is a verdict. A writer that emits one record per
-    check as the check runs has no defaults to fall through to — a check that did
-    not run has no record, and an absent record cannot be mistaken for a passing
-    one. At that point every regex above is describing a shape that is gone, and
-    keeping them would leave the next author maintaining a reader for a producer
-    that no longer exists.
-    """
-    lines = GATE.read_text(encoding="utf-8").splitlines()
-    entries = _summary_entries(lines)
-    assert entries, "no check entries found in the summary — has its shape changed?"
-
-    # Assignments made before any check runs record nothing; they are the
-    # defaults the bug fell through to.
-    init = range(_anchor(lines, "# Initialize status tracking"), _anchor(lines, "# How long each check took"))
-    pr_only = _pr_only_lines(lines)
-    assert pr_only, "found no PR-gated region — has the mode split moved?"
-
-    def records_on_dev(name: str) -> bool:
-        for number, line in enumerate(lines):
-            if number in init or number in pr_only:
-                continue
-            if re.match(rf"\s*{name}=", line) or re.search(rf"\bread -r\b[^;|#]*\b{name}\b", line):
-                return True
-        return False
-
-    def defaults_to_skipped(name: str | None) -> bool:
-        """True when the flag reads "skipped" unless a run says otherwise.
-
-        The default is what a path that never touches the variable reports, so
-        it is the only value that matters to a check the run did not perform.
-        """
-        return name is not None and any(
-            re.match(rf'\s*{name}="true"', lines[number]) for number in init
-        )
-
-    unaccounted = {}
-    for check, status_var, skipped_var in entries:
-        if records_on_dev(status_var):
-            continue
-        if defaults_to_skipped(skipped_var):
-            continue
-        unaccounted[check] = (
-            f"${status_var} is assigned only inside a PR-gated block"
-            if skipped_var is None
-            else f"${status_var} is PR-gated and ${skipped_var} does not default to \"true\""
-        )
-
-    assert not unaccounted, (
-        "these checks are reported in quality-summary.json but neither run nor\n"
-        'declared skipped on a dev run, so the summary reports "pass" for work\n'
-        "that was never done:\n  "
-        + "\n  ".join(f"{check}: {why}" for check, why in sorted(unaccounted.items()))
-        + "\nEither record the verdict on the dev path, or carry a skipped flag "
-        'that defaults to "true".'
     )

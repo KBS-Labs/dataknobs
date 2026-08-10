@@ -338,6 +338,33 @@ mkdir -p "$OUTPUT_DIR"
 # that would otherwise have to compare timestamps across files to notice.
 printf '%s\n' "$TIMESTAMP" > "$OUTPUT_DIR/.run-in-progress"
 
+# One line per check, appended by the site that ran it, read by the writer at
+# the far end. Truncated here rather than appended to: the diagnostics tier is
+# cleared on entry but the artifacts tier is not, so without this a gate run
+# would build its summary from its own records plus the previous run's.
+RECORDS_FILE="$OUTPUT_DIR/check-records.jsonl"
+: > "$RECORDS_FILE"
+
+# record_check <name> <exit_code> [--tool T] [--skipped true|false]
+#              --duration <seconds|null> [--field key=<json>]
+#
+# Called from the site that ran the check, or from the arm that deliberately
+# skipped it — which is the whole point of the file. The summary used to be a
+# heredoc over variables initialised to 0, and 0 renders as "pass", so a check
+# no path assigned reported as one that ran and passed. That shipped twice. A
+# record written where the outcome is produced has no default to fall through
+# to: a check nothing reaches writes nothing, and nothing cannot be read as a
+# pass.
+#
+# Not backgrounded and not batched. errexit is on, so a failure here stops the
+# run rather than leaving the summary quietly short of a check.
+record_check() {
+    local name="$1" code="$2"
+    shift 2
+    python3 "$SCRIPT_DIR/quality-summary.py" record \
+        --records "$RECORDS_FILE" --name "$name" --exit-code "$code" "$@"
+}
+
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
@@ -643,13 +670,6 @@ VALIDATION_SKIPPED="false"
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
 DOCS_MIRROR_STATUS=0
-# Defaults to skipped, and that direction is the whole point: the docs block is
-# PR-gated, so a --dev run never touches the three statuses above and they stay
-# 0 — which the summary renders as "pass". Three documentation checks reported
-# as passing on every run that could not have performed them. Set to false by
-# the block itself, so "did this run" is answered where the run happens rather
-# than reconstructed in the heredoc from the same conditions.
-DOCS_SKIPPED="true"
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
@@ -765,6 +785,11 @@ else
     print_error "Workflow lint failed"
 fi
 WORKFLOW_LINT_SECONDS=$(elapsed_since "$_check_start")
+# No "skipped" field: this check is not gated by anything, so there is no state
+# in which it did not run. A field that can only ever hold one value is one more
+# thing for a reader to check and one more thing for an author to get wrong.
+record_check workflow_lint "$WORKFLOW_LINT_STATUS" \
+    --tool lint-workflows.sh --duration "$WORKFLOW_LINT_SECONDS"
 
 # Lint the repository's own shell scripts. Same three-place wiring as above, for
 # the same reason: 46 shell files — including every script on this verdict path,
@@ -779,6 +804,21 @@ else
     print_error "Shell lint failed"
 fi
 SHELL_LINT_SECONDS=$(elapsed_since "$_check_start")
+# Unconditional for the same reason as the block above it, so no "skipped".
+record_check shell_lint "$SHELL_LINT_STATUS" \
+    --tool lint-shell.sh --duration "$SHELL_LINT_SECONDS"
+
+# Validation as a check that did not run. Two arms below reach it — asked to
+# skip style, and a PR whose diff gave validate.sh nothing to look at — and both
+# need the same record, so it is written once here.
+#
+# The zero is a literal, not an unset variable. A skipped check has always been
+# recorded with exit_code 0 and status "pass", and the field it is read by is
+# "skipped"; what this phase removes is not that convention but the *default*
+# behind it, where the same values arrived because nothing had assigned them.
+record_skipped_validation() {
+    record_check validation 0 --skipped true --tool validate.sh --duration null
+}
 
 # Run code validation (syntax, ruff, imports, mypy, print statements)
 if [ "$SKIP_STYLE" != "yes" ]; then
@@ -921,33 +961,40 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             fi
         fi
         VALIDATION_SECONDS=$(elapsed_since "$_check_start")
+        record_check validation "$VALIDATION_STATUS" \
+            --skipped false --tool validate.sh --duration "$VALIDATION_SECONDS"
     else
         VALIDATION_SKIPPED="true"
         print_status "Skipping code validation (no package changes)"
+        record_skipped_validation
     fi
 else
     VALIDATION_SKIPPED="true"
     print_status "Skipping code validation"
+    record_skipped_validation
 fi
 
 # Documentation checks (PR mode only, skip if no docs changes in pr mode)
-if [ "$PR_MODE" = "yes" ]; then
-    if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
-        DOCS_SKIPPED="false"
-        print_status "Running documentation checks (build, versions, mirrors)..."
-        # bin/docs-checks.sh is the single source of truth for the doc-check set.
-        # It writes per-check logs (docs-build.log / docs-versions.log /
-        # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
-        "$SCRIPT_DIR/docs-checks.sh" --artifacts "$OUTPUT_DIR" || true
-        # Six fields, in a fixed order: three exit codes then three durations.
-        # The durations are measured inside docs-checks.sh because this script
-        # invokes it once for all three checks, so timing it here could only
-        # ever have produced one number to spread across three entries.
-        #
-        # Still fails closed on any unreadable shape — a missing or malformed
-        # status file reports three failures, not three passes — and an
-        # unmeasured duration reports null rather than 0.
-        DOCS_CHECK_CODES=$(python3 -c "
+#
+# One condition rather than nested ones, so there is one arm that runs the three
+# checks and one that records them as not run. Three arms reached the second
+# state before — a PR with no doc changes, and every dev run, which does not
+# perform them at all — and each would have needed its own copy of the records.
+if [ "$PR_MODE" = "yes" ] && { [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; }; then
+    print_status "Running documentation checks (build, versions, mirrors)..."
+    # bin/docs-checks.sh is the single source of truth for the doc-check set.
+    # It writes per-check logs (docs-build.log / docs-versions.log /
+    # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
+    "$SCRIPT_DIR/docs-checks.sh" --artifacts "$OUTPUT_DIR" || true
+    # Six fields, in a fixed order: three exit codes then three durations.
+    # The durations are measured inside docs-checks.sh because this script
+    # invokes it once for all three checks, so timing it here could only
+    # ever have produced one number to spread across three entries.
+    #
+    # Still fails closed on any unreadable shape — a missing or malformed
+    # status file reports three failures, not three passes — and an
+    # unmeasured duration reports null rather than 0.
+    DOCS_CHECK_CODES=$(python3 -c "
 import json
 try:
     d = json.load(open('$OUTPUT_DIR/docs-checks-status.json'))
@@ -958,17 +1005,33 @@ try:
 except Exception:
     print(1, 1, 1, 'null', 'null', 'null')
 " 2>/dev/null || echo "1 1 1 null null null")
-        read -r DOCS_STATUS DOCS_VERSIONS_STATUS DOCS_MIRROR_STATUS \
-            DOCS_SECONDS DOCS_VERSIONS_SECONDS DOCS_MIRROR_SECONDS <<< "$DOCS_CHECK_CODES"
+    read -r DOCS_STATUS DOCS_VERSIONS_STATUS DOCS_MIRROR_STATUS \
+        DOCS_SECONDS DOCS_VERSIONS_SECONDS DOCS_MIRROR_SECONDS <<< "$DOCS_CHECK_CODES"
 
-        if [ "$DOCS_STATUS" -eq 0 ] && [ "$DOCS_VERSIONS_STATUS" -eq 0 ] && [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
-            print_success "Documentation checks passed (build, versions, mirrors)"
-        else
-            print_error "Documentation checks failed - see $OUTPUT_DIR/docs-*.log (details below)"
-        fi
+    if [ "$DOCS_STATUS" -eq 0 ] && [ "$DOCS_VERSIONS_STATUS" -eq 0 ] && [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
+        print_success "Documentation checks passed (build, versions, mirrors)"
     else
+        print_error "Documentation checks failed - see $OUTPUT_DIR/docs-*.log (details below)"
+    fi
+
+    record_check documentation "$DOCS_STATUS" \
+        --skipped false --tool mkdocs --duration "$DOCS_SECONDS"
+    record_check documentation_versions "$DOCS_VERSIONS_STATUS" \
+        --skipped false --tool docs-update-versions.sh --duration "$DOCS_VERSIONS_SECONDS"
+    record_check documentation_mirrors "$DOCS_MIRROR_STATUS" \
+        --skipped false --tool docs-mirror-check.py --duration "$DOCS_MIRROR_SECONDS"
+else
+    # Only PR mode announces the skip, because only PR mode was ever going to
+    # run them. A dev run reaches here having never offered.
+    if [ "$PR_MODE" = "yes" ]; then
         print_status "Skipping docs checks (no documentation changes detected)"
     fi
+    record_check documentation 0 \
+        --skipped true --tool mkdocs --duration null
+    record_check documentation_versions 0 \
+        --skipped true --tool docs-update-versions.sh --duration null
+    record_check documentation_mirrors 0 \
+        --skipped true --tool docs-mirror-check.py --duration null
 fi
 
 # Run tests using the test.sh script
@@ -1397,7 +1460,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         UNIT_TEST_STATUS=$TEST_STATUS
         INTEGRATION_TEST_STATUS=$TEST_STATUS
     fi
-    
+
+    record_check unit_tests "$UNIT_TEST_STATUS" \
+        --skipped "$UNIT_SKIPPED" --duration "$UNIT_TEST_SECONDS" \
+        --field "workspace_guards_seconds=$WORKSPACE_GUARD_SECONDS"
+    record_check integration_tests "$INTEGRATION_TEST_STATUS" \
+        --skipped "$INTEGRATION_SKIPPED" --duration "$INTEGRATION_TEST_SECONDS"
+
     # Create test results XML files for CI systems (an artifact, so gate only)
     if [ "$EMIT_ARTIFACTS" = "yes" ]; then
         if [ ! -f "$OUTPUT_DIR/unit-test-results.xml" ]; then
@@ -1409,6 +1478,15 @@ if [ "$SKIP_TESTS" != "yes" ]; then
     fi
 else
     print_status "Skipping tests"
+    # Neither suite ran, so neither has a duration and the workspace guards have
+    # none either. UNIT_SKIPPED and INTEGRATION_SKIPPED are already "true" on
+    # this path — they are set beside SKIP_TESTS — and are read rather than
+    # re-asserted so the two cannot come to disagree.
+    record_check unit_tests 0 \
+        --skipped "$UNIT_SKIPPED" --duration null \
+        --field "workspace_guards_seconds=null"
+    record_check integration_tests 0 \
+        --skipped "$INTEGRATION_SKIPPED" --duration null
 fi
 
 # Coverage, the summary and — for the gate — the signature.
@@ -1505,90 +1583,39 @@ WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-wo
 print_status "Generating quality summary..."
 OVERALL_STATUS=$(compute_overall_status)
 
-# Key order is not load-bearing. Every reader of this file goes through
-# bin/read-quality-summary.py, which parses it as JSON, so a new field goes
-# beside the one it belongs with rather than at the end.
+# The checks half of the document comes from the records each check wrote as it
+# ran; this call supplies the run's own metadata around them. Splitting the two
+# is the point: a check's outcome is stated once, where it is produced, and
+# there is no per-check stanza here to keep in step with anything.
 #
-# It used to be load-bearing, and the note saying so outlived the constraint by
-# long enough to shape the object below: durations sit last, away from the exit
-# codes they belong with, because line-offset greps read a fixed number of lines
-# past a match and a field inserted above one pushed it out of the window.
-# Leaving the instruction in place after the greps were gone was the more
-# expensive half — it asks every later author to preserve an order for a reader
-# that no longer exists, and the cost lands on whoever tries to work out why.
+# Every top-level field below is required by the writer, which refuses a name it
+# does not know and refuses to run without one it does. A field dropped from
+# this call fails the run rather than disappearing from the artifact.
 #
-# A check added here is displayed by CI and by bin/diagnose-quality-failures.sh
-# without either being edited: both enumerate. It does need wiring into
-# compute_overall_status, which is what decides whether it can fail the gate.
-cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
-{
-  "timestamp": "$TIMESTAMP",
-  "overall_status": "$OVERALL_STATUS",
-  "run_mode": "$RUN_MODE",
-  "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
-  "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
-  "tested_packages": $TESTED_PACKAGES_JSON,
-  "coverage_percent": $COVERAGE_PERCENT,
-  "package_hashes": $PACKAGE_HASHES_JSON,
-  "workspace_hashes": $WORKSPACE_HASHES_JSON,
-  "total_seconds": $(elapsed_since "$RUN_START"),
-  "checks": {
-"documentation": {
-  "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $DOCS_STATUS,
-  "skipped": $DOCS_SKIPPED,
-  "tool": "mkdocs",
-  "duration_seconds": $DOCS_SECONDS
-},
-"documentation_versions": {
-  "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $DOCS_VERSIONS_STATUS,
-  "skipped": $DOCS_SKIPPED,
-  "tool": "docs-update-versions.sh",
-  "duration_seconds": $DOCS_VERSIONS_SECONDS
-},
-"documentation_mirrors": {
-  "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $DOCS_MIRROR_STATUS,
-  "skipped": $DOCS_SKIPPED,
-  "tool": "docs-mirror-check.py",
-  "duration_seconds": $DOCS_MIRROR_SECONDS
-},
-"validation": {
-  "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $VALIDATION_STATUS,
-  "skipped": $VALIDATION_SKIPPED,
-  "tool": "validate.sh",
-  "duration_seconds": $VALIDATION_SECONDS
-},
-"shell_lint": {
-  "status": $([ "$SHELL_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $SHELL_LINT_STATUS,
-  "tool": "lint-shell.sh",
-  "duration_seconds": $SHELL_LINT_SECONDS
-},
-"workflow_lint": {
-  "status": $([ "$WORKFLOW_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $WORKFLOW_LINT_STATUS,
-  "tool": "lint-workflows.sh",
-  "duration_seconds": $WORKFLOW_LINT_SECONDS
-},
-"unit_tests": {
-  "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $UNIT_TEST_STATUS,
-  "skipped": $UNIT_SKIPPED,
-  "duration_seconds": $UNIT_TEST_SECONDS,
-  "workspace_guards_seconds": $WORKSPACE_GUARD_SECONDS
-},
-"integration_tests": {
-  "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-  "exit_code": $INTEGRATION_TEST_STATUS,
-  "skipped": $INTEGRATION_SKIPPED,
-  "duration_seconds": $INTEGRATION_TEST_SECONDS
-}
-  }
-}
-EOF
+# --str for the ones that are strings, --json for the ones that are not: the
+# hashes are objects, tested_packages an array, coverage_percent a float or
+# null. A quoted number reaching CI as a string is the kind of thing a shell
+# serializer got wrong by omission.
+if ! python3 "$SCRIPT_DIR/quality-summary.py" build \
+    --records "$RECORDS_FILE" \
+    --output "$OUTPUT_DIR/quality-summary.json" \
+    --str "timestamp=$TIMESTAMP" \
+    --str "overall_status=$OVERALL_STATUS" \
+    --str "run_mode=$RUN_MODE" \
+    --str "environment=$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")" \
+    --str "packages=$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")" \
+    --json "tested_packages=$TESTED_PACKAGES_JSON" \
+    --json "coverage_percent=$COVERAGE_PERCENT" \
+    --json "package_hashes=$PACKAGE_HASHES_JSON" \
+    --json "workspace_hashes=$WORKSPACE_HASHES_JSON" \
+    --json "total_seconds=$(elapsed_since "$RUN_START")"; then
+    # No summary means no verdict for CI to read and nothing for the signature
+    # to attest, so there is nothing useful left to do. The .run-in-progress
+    # marker below is deliberately left in place: this is exactly the state it
+    # exists to announce.
+    print_error "Could not write the quality summary — see the error above"
+    exit 1
+fi
 
 # The run is now readable: a verdict for every check sits beside the logs that
 # produced it. Whatever fails after this point, the summary is this run's, so
@@ -1723,92 +1750,26 @@ echo -e "${BLUE}                        Quality Check Summary                   
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-if [ "$PR_MODE" = "yes" ]; then
-    # Show documentation build status (only in PR mode)
-    if [ "$DOCS_STATUS" -eq 0 ]; then
-        echo -e "  Documentation:      ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Documentation:      ${RED}✗ FAILED${NC}"
-    fi
-
-    # Show documentation versions status
-    if [ "$DOCS_VERSIONS_STATUS" -eq 0 ]; then
-        echo -e "  Doc Versions:       ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Doc Versions:       ${RED}✗ FAILED${NC}"
-    fi
-
-    # Show documentation mirror status
-    if [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
-        echo -e "  Doc Mirrors:        ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Doc Mirrors:        ${RED}✗ FAILED${NC}"
-    fi
+# The check lines, rendered from the document rather than from the variables
+# that produced it. They used to be a second derivation of the same statuses,
+# and the two disagreed: on any pull request that changed no documentation the
+# banner printed three ✓ PASSED rows beside a summary recording skipped: true
+# for all three — the artifact half of that defect was fixed one phase earlier,
+# and this half was not, because it reads its own variables.
+#
+# Both arguments are presentation and neither can change what a row says. --mode
+# decides whether the documentation rows appear and whether the two test suites
+# are shown apart; --package-tests-skipped labels the unit row as the workspace
+# guards it is reduced to when no package changed. Every verdict comes from the
+# file.
+_render_args=""
+if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
+    _render_args="--package-tests-skipped"
 fi
-
-if [ "$SKIP_STYLE" = "yes" ]; then
-    echo -e "  Code Validation:    ${CYAN}⊘ SKIPPED${NC}"
-elif [ $VALIDATION_STATUS -eq 0 ]; then
-    echo -e "  Code Validation:    ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Code Validation:    ${RED}✗ FAILED${NC}"
-fi
-
-# Reported unconditionally because it runs unconditionally — it is not gated by
-# PR mode, changed packages, or any skip flag.
-if [ "$WORKFLOW_LINT_STATUS" -eq 0 ]; then
-    echo -e "  Workflow Lint:      ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Workflow Lint:      ${RED}✗ FAILED${NC}"
-fi
-
-# Unconditional for the same reason as the block above it.
-if [ "$SHELL_LINT_STATUS" -eq 0 ]; then
-    echo -e "  Shell Lint:         ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Shell Lint:         ${RED}✗ FAILED${NC}"
-fi
-
-if [ "$PR_MODE" = "yes" ]; then
-    # PR mode: Show unit and integration tests separately
-    if [ "$SKIP_TESTS" = "yes" ]; then
-        echo -e "  Unit Tests:        ${CYAN}⊘ SKIPPED${NC}"
-        echo -e "  Integration Tests: ${CYAN}⊘ SKIPPED${NC}"
-    elif [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
-        # Named apart rather than reported as two passing suites: no package
-        # suite ran, and "Unit Tests: PASSED" for a run that collected none is
-        # the same green-for-work-not-done this branch exists to end. The
-        # workspace guards did run, and their status is folded into the unit one.
-        if [ $UNIT_TEST_STATUS -eq 0 ]; then
-            echo -e "  Workspace Guards:  ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Workspace Guards:  ${RED}✗ FAILED${NC}"
-        fi
-        echo -e "  Package Tests:     ${CYAN}⊘ SKIPPED (no package changed)${NC}"
-    else
-        if [ $UNIT_TEST_STATUS -eq 0 ]; then
-            echo -e "  Unit Tests:        ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Unit Tests:        ${RED}✗ FAILED${NC}"
-        fi
-        
-        if [ $INTEGRATION_TEST_STATUS -eq 0 ]; then
-            echo -e "  Integration Tests: ${GREEN}✓ PASSED${NC}"
-        else
-            echo -e "  Integration Tests: ${RED}✗ FAILED${NC}"
-        fi
-    fi
-else
-    # Dev mode: Show combined test status
-    if [ "$SKIP_TESTS" = "yes" ]; then
-        echo -e "  Tests:             ${CYAN}⊘ SKIPPED${NC}"
-    elif [ $TEST_STATUS -eq 0 ]; then
-        echo -e "  Tests:             ${GREEN}✓ PASSED${NC}"
-    else
-        echo -e "  Tests:             ${RED}✗ FAILED${NC}"
-    fi
-fi
-
+# shellcheck disable=SC2086  # _render_args is an argument list, empty or one flag
+python3 "$SCRIPT_DIR/quality-summary.py" render \
+    --summary "$OUTPUT_DIR/quality-summary.json" \
+    --mode "$([ "$PR_MODE" = "yes" ] && echo pr || echo dev)" $_render_args
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 

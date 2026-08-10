@@ -207,7 +207,10 @@ def test_the_marker_brackets_everything_that_can_abort_a_run():
 
     write = first(lambda line: line.startswith("printf") and ".run-in-progress" in line)
     remove = first(lambda line: line.startswith("rm -f") and ".run-in-progress" in line)
-    summary = first(lambda line: line.startswith("cat >") and "quality-summary.json" in line)
+    # The line that invokes the writer. It was a `cat >` heredoc until the
+    # summary stopped being one; the position in the run is unchanged, which is
+    # all this guard is measuring.
+    summary = first(lambda line: 'quality-summary.py" build' in line)
     aborts = [n for n, line in enumerate(lines, 1) if line.strip() == "exit 1"]
 
     assert write > 0, "nothing writes the in-progress marker"
