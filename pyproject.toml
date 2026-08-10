@@ -170,7 +170,14 @@ line-length = 100
 # Include/exclude patterns
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 extend-include = ["*.ipynb"]
-src = ["packages/*/src", "packages/*/tests"]
+# Where a first-party module name resolves from. The package trees answer for
+# code under packages/; the last two answer for the code that belongs to no
+# package and is now linted alongside it -- `.` so a `tests.` import resolves,
+# `src` for the workspace shim. Without them isort classified both as
+# third-party, which passes today only because `pytest` happens to sort before
+# `tests`: the misgrouping is invisible until an import lands on the other side
+# of that accident, and then it is an I001 arguing for the wrong layout.
+src = ["packages/*/src", "packages/*/tests", ".", "src"]
 
 [tool.ruff.lint]
 # Rule selection
@@ -352,7 +359,11 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Configure import sorting
 combine-as-imports = true
 force-wrap-aliases = true
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+# `dataknobs_workspace` and `tests` are first-party too: the workspace shim and
+# the guard suite that checks the toolchain. Named explicitly rather than left to
+# `src` resolution because that only fires for a directory ruff can see from the
+# file being checked, and these are imported from every package tree as well.
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization", "dataknobs_workspace", "tests"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention
