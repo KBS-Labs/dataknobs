@@ -28,6 +28,21 @@ cd "$PROJECT_ROOT"
 # reach this path at all, whatever it writes.
 # tests/test_quality_check_roles.py holds both halves.
 ARTIFACTS_DIR="$PROJECT_ROOT/.quality-artifacts"
+# Where a check-only run's output lands: per-package test output, coverage
+# reports, the validation and docs logs. Git-ignored wholesale, read by no CI
+# step, and read by bin/diagnose-quality-failures.sh — which is why this is a
+# stable path and not a temporary directory. Sending check-only output to
+# `mktemp -d` and deleting it at exit satisfies the rule above and throws the
+# evidence away with the attestation: the diagnose tool then has input only
+# after a gate run, and a failing check-only run leaves an uncleaned directory
+# under /tmp that nothing knows how to find.
+#
+# Separate from ARTIFACTS_DIR rather than a subdirectory of it, because the rule
+# above is enforceable only as "the checker cannot name that directory". Which
+# files CI attests is not a list a writer could consult and avoid: the signature
+# enumerates by glob (git ls-files ... -- '*.json' '*.xml'), so it is a property
+# of .gitignore at the time of the run.
+REPORTS_DIR="$PROJECT_ROOT/.quality-reports"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Wall-clock start, for the durations recorded in quality-summary.json. Whole
 # seconds via `date +%s`: bash 3.2 has no EPOCHREALTIME and macOS `date` has no
@@ -60,8 +75,6 @@ BASE_REF="main" # Git ref for changed-package detection
 # so the documented remedy for a red gate was the command that rewrites the
 # evidence the gate reads.
 EMIT_ARTIFACTS="no"
-# Set by the failure path so cleanup() leaves a check-only run's logs readable.
-KEEP_OUTPUT_DIR="no"
 # Resolve the output directory, print it, run nothing. Same shape as
 # `validate.sh --print-targets`: it lets a guard ask this script where its
 # writes land without running a check, through the real resolution rather than a
@@ -144,8 +157,14 @@ ${YELLOW}Examples:${NC}
 ${YELLOW}Environment:${NC}
     Running in: $([ "$IN_DOCKER" = true ] && echo "Docker container" || echo "Host system")
     
-${YELLOW}Output (--emit-artifacts only):${NC}
-    Artifacts are saved to: .quality-artifacts/
+${YELLOW}Output:${NC}
+    Without --emit-artifacts, everything below goes to .quality-reports/ — the
+    diagnostics tier. Git-ignored, read by no CI step, cleared at the start of
+    each run, and where bin/diagnose-quality-failures.sh looks.
+
+    With --emit-artifacts (bin/dk pr), the same files go to .quality-artifacts/
+    instead, six of which are committed and verified by CI.
+
     - environment.json: System information
     - validation.log: Code validation results (syntax, ruff, imports, mypy)
     - style-check.json: Ruff findings (JSON format)
@@ -277,23 +296,30 @@ if [ "$EMIT_ARTIFACTS" = "yes" ] && [ "$PR_MODE" != "yes" ]; then
 fi
 
 # Everything this run writes goes here. The artifacts directory only when the
-# gate asked for it; otherwise a temporary directory removed by cleanup(). Every
-# later write names OUTPUT_DIR, so check-only is enforced by there being no
-# other path to name rather than by remembering to test a flag at each site.
+# gate asked for it; otherwise the diagnostics tier. Every later write names
+# OUTPUT_DIR, so check-only is enforced by there being no other path to name
+# rather than by remembering to test a flag at each site.
 if [ "$EMIT_ARTIFACTS" = "yes" ]; then
     OUTPUT_DIR="$ARTIFACTS_DIR"
 else
-    OUTPUT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dk-quality-checks.XXXXXX")
+    OUTPUT_DIR="$REPORTS_DIR"
 fi
-mkdir -p "$OUTPUT_DIR"
 
 if [ "$PRINT_OUTPUT_DIR" = "yes" ]; then
     printf '%s\n' "$OUTPUT_DIR"
-    # Nothing ran, so nothing is in it. Removed here rather than left to
-    # cleanup(), whose trap is not installed until further down.
-    [ "$EMIT_ARTIFACTS" = "yes" ] || rm -rf "$OUTPUT_DIR"
+    # Resolution only — nothing is created, so there is nothing to undo.
     exit 0
 fi
+
+# The diagnostics tier is cleared on entry, not at exit. On entry, so that what
+# is in it is one run's and cannot be read as this run's the way a month-old
+# coverage report sitting beside today's can be. Not at exit, so a failing run
+# leaves its logs where the paths it just printed say they are — the reason the
+# temporary-directory shape needed a keep-on-failure flag to be usable at all.
+if [ "$EMIT_ARTIFACTS" = "no" ]; then
+    rm -rf "$OUTPUT_DIR"
+fi
+mkdir -p "$OUTPUT_DIR"
 
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
@@ -455,12 +481,9 @@ set_environment_vars() {
 # leave the service teardown unreferenced *and* the trap naming nothing.
 # shellcheck disable=SC2329
 cleanup() {
-    # A check-only run leaves nothing behind. Gated on the flag rather than on
-    # comparing paths so that no future edit can make this delete the artifacts
-    # the gate just produced.
-    if [ "$EMIT_ARTIFACTS" = "no" ] && [ "$KEEP_OUTPUT_DIR" = "no" ] && [ -n "${OUTPUT_DIR:-}" ]; then
-        rm -rf "$OUTPUT_DIR"
-    fi
+    # Nothing to remove: the output directory is either the artifacts the gate
+    # was asked to produce, or the diagnostics tier, which is cleared at the
+    # start of the next run and is exactly what someone reads after a failure.
     if [ "$IN_DOCKER" = false ]; then
         # Only cleanup if manage-services.sh indicates we started them
         if [ -f "/tmp/.dataknobs_services_started_$$" ]; then
@@ -1345,97 +1368,109 @@ else
     print_status "Skipping tests"
 fi
 
-# Generate coverage.xml, the summary and the signature — the evidence CI reads,
-# so the gate alone. A check-only run has already produced every verdict these
-# report; what it has not produced is a record of them, which is the point.
-# This must happen before the summary/signature so coverage.xml is included in the signature.
-# The slower per-package coverage reports run afterward.
+# Coverage, the summary and — for the gate — the signature.
+#
+# Only the signature is gate-only, and it is the one thing here that *attests*
+# rather than records: it is what makes a committed set verifiable, and it is
+# meaningless over a directory git ignores wholesale. Everything else is a
+# record of verdicts the run has already produced, and a record is exactly what
+# the diagnostics tier is for. Writing quality-summary.json in both tiers is
+# what lets bin/diagnose-quality-failures.sh read a check-only run at all — it
+# opens that file first and exits when it is absent, so gating it here left the
+# tier holding logs that the tool built to read them could not find.
+#
+# A summary under .quality-reports/ cannot be mistaken for evidence: it is
+# git-ignored, outside the attested directory, and both readers that matter —
+# validate-quality-artifacts.sh and package-hashes.py — resolve
+# .quality-artifacts by literal path.
+#
+# Coverage runs before the summary because the summary reads a line-rate out of
+# coverage.xml. The slower per-package reports run afterward.
 COVERAGE_COMBINED=false
-if [ "$EMIT_ARTIFACTS" = "yes" ]; then
-    if ls "$OUTPUT_DIR"/.coverage.* >/dev/null 2>&1; then
-        print_status "Combining coverage data..."
-        cd "$OUTPUT_DIR"
+if ls "$OUTPUT_DIR"/.coverage.* >/dev/null 2>&1; then
+    print_status "Combining coverage data..."
+    cd "$OUTPUT_DIR"
 
-        if uv run coverage combine .coverage.* 2>/dev/null; then
-            COVERAGE_COMBINED=true
-            print_success "Coverage data combined"
+    if uv run coverage combine .coverage.* 2>/dev/null; then
+        COVERAGE_COMBINED=true
+        print_success "Coverage data combined"
 
-            if uv run coverage xml -o coverage.xml 2>/dev/null; then
-                print_success "Combined coverage XML generated"
-            else
-                print_warning "Could not generate combined XML"
-                if [ -f "coverage-unit.xml" ]; then
-                    cp coverage-unit.xml coverage.xml
-                elif [ -f "coverage-integration.xml" ]; then
-                    cp coverage-integration.xml coverage.xml
-                fi
-            fi
+        if uv run coverage xml -o coverage.xml 2>/dev/null; then
+            print_success "Combined coverage XML generated"
         else
-            print_warning "Could not combine coverage data, using individual reports"
-            if [ -f "coverage-unit.xml" ] && [ -f "coverage-integration.xml" ]; then
-                cp coverage-unit.xml coverage.xml
-                print_warning "Using unit test coverage as primary report"
-            elif [ -f "coverage-unit.xml" ]; then
+            print_warning "Could not generate combined XML"
+            if [ -f "coverage-unit.xml" ]; then
                 cp coverage-unit.xml coverage.xml
             elif [ -f "coverage-integration.xml" ]; then
                 cp coverage-integration.xml coverage.xml
             fi
         fi
-
-        cd "$PROJECT_ROOT"
-    elif ls "$OUTPUT_DIR"/coverage*.xml >/dev/null 2>&1; then
-        print_status "Processing coverage XML files..."
-        if [ ! -f "$OUTPUT_DIR/coverage.xml" ]; then
-            if [ -f "$OUTPUT_DIR/coverage-unit.xml" ]; then
-                cp "$OUTPUT_DIR/coverage-unit.xml" "$OUTPUT_DIR/coverage.xml"
-            elif [ -f "$OUTPUT_DIR/coverage-integration.xml" ]; then
-                cp "$OUTPUT_DIR/coverage-integration.xml" "$OUTPUT_DIR/coverage.xml"
-            fi
-        fi
     else
-        echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$OUTPUT_DIR/coverage.xml"
+        print_warning "Could not combine coverage data, using individual reports"
+        if [ -f "coverage-unit.xml" ] && [ -f "coverage-integration.xml" ]; then
+            cp coverage-unit.xml coverage.xml
+            print_warning "Using unit test coverage as primary report"
+        elif [ -f "coverage-unit.xml" ]; then
+            cp coverage-unit.xml coverage.xml
+        elif [ -f "coverage-integration.xml" ]; then
+            cp coverage-integration.xml coverage.xml
+        fi
     fi
 
-    # Read the line-rate out of coverage.xml now and record it in the summary.
-    # coverage.xml itself is no longer committed: it is a multi-megabyte
-    # generated file that changed on nearly every run, and the single thing the
-    # gate ever took from it was this number — which it reports as a warning and
-    # never fails on. A float belongs in the summary; the report belongs on disk.
-    COVERAGE_PERCENT=$(python3 -c "
+    cd "$PROJECT_ROOT"
+elif ls "$OUTPUT_DIR"/coverage*.xml >/dev/null 2>&1; then
+    print_status "Processing coverage XML files..."
+    if [ ! -f "$OUTPUT_DIR/coverage.xml" ]; then
+        if [ -f "$OUTPUT_DIR/coverage-unit.xml" ]; then
+            cp "$OUTPUT_DIR/coverage-unit.xml" "$OUTPUT_DIR/coverage.xml"
+        elif [ -f "$OUTPUT_DIR/coverage-integration.xml" ]; then
+            cp "$OUTPUT_DIR/coverage-integration.xml" "$OUTPUT_DIR/coverage.xml"
+        fi
+    fi
+else
+    echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$OUTPUT_DIR/coverage.xml"
+fi
+
+# Read the line-rate out of coverage.xml now and record it in the summary.
+# coverage.xml itself is no longer committed: it is a multi-megabyte
+# generated file that changed on nearly every run, and the single thing the
+# gate ever took from it was this number — which it reports as a warning and
+# never fails on. A float belongs in the summary; the report belongs on disk.
+COVERAGE_PERCENT=$(python3 -c "
 import xml.etree.ElementTree as ET
 try:
-    root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
-    print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
+root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
+print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
 except Exception:
-    print('null')
+print('null')
 " 2>/dev/null || echo "null")
-    # A blank would emit invalid JSON, which would fail the gate for a reason
-    # that has nothing to do with the code under test.
-    COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
+# A blank would emit invalid JSON, which would fail the gate for a reason
+# that has nothing to do with the code under test.
+COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
 
-    # Generate quality summary and signature immediately after coverage.xml is ready.
-    # These are the files CI validates and that must be committed — they must not be
-    # delayed by the slower per-package coverage reporting that follows.
-    print_status "Computing per-package content hashes..."
-    PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
-    # Workspace-level inputs (toolchain config, workspace guards) are hashed
-    # separately: they carry their own blast radius and never enter the
-    # package dependency graph. Without them a change to mypy.ini or a guard
-    # left every stored hash intact and CI validated a stale artifact.
-    WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+# Generate quality summary and signature immediately after coverage.xml is ready.
+# These are the files CI validates and that must be committed — they must not be
+# delayed by the slower per-package coverage reporting that follows.
+print_status "Computing per-package content hashes..."
+PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
+# Workspace-level inputs (toolchain config, workspace guards) are hashed
+# separately: they carry their own blast radius and never enter the
+# package dependency graph. Without them a change to mypy.ini or a guard
+# left every stored hash intact and CI validated a stale artifact.
+WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
 
-    print_status "Generating quality summary..."
-    OVERALL_STATUS=$(compute_overall_status)
+print_status "Generating quality summary..."
+OVERALL_STATUS=$(compute_overall_status)
 
-    # KEY ORDER INSIDE EACH CHECK IS LOAD-BEARING, and nothing enforces it.
-    # validate-quality-artifacts.sh reads this file with line-offset greps —
-    # `grep -A2 '"unit_tests"'` for the status, `grep -A3 "\"$check\""` for the
-    # skipped flag — so a field inserted above either one pushes it out of the
-    # window and the validator silently reads nothing. That is why the durations
-    # below are appended last in every object rather than sitting beside the
-    # exit code they belong with. Parsing that file as JSON would remove the
-    # constraint; until then, add new fields at the end. Tracked.
-    cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
+# KEY ORDER INSIDE EACH CHECK IS LOAD-BEARING, and nothing enforces it.
+# validate-quality-artifacts.sh reads this file with line-offset greps —
+# `grep -A2 '"unit_tests"'` for the status, `grep -A3 "\"$check\""` for the
+# skipped flag — so a field inserted above either one pushes it out of the
+# window and the validator silently reads nothing. That is why the durations
+# below are appended last in every object rather than sitting beside the
+# exit code they belong with. Parsing that file as JSON would remove the
+# constraint; until then, add new fields at the end. Tracked.
+cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
   "overall_status": "$OVERALL_STATUS",
@@ -1448,61 +1483,68 @@ except Exception:
   "workspace_hashes": $WORKSPACE_HASHES_JSON,
   "total_seconds": $(elapsed_since "$RUN_START"),
   "checks": {
-    "documentation": {
-      "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $DOCS_STATUS,
-      "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
-      "tool": "mkdocs",
-      "duration_seconds": $DOCS_SECONDS
-    },
-    "documentation_versions": {
-      "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $DOCS_VERSIONS_STATUS,
-      "tool": "docs-update-versions.sh",
-      "duration_seconds": $DOCS_VERSIONS_SECONDS
-    },
-    "documentation_mirrors": {
-      "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $DOCS_MIRROR_STATUS,
-      "tool": "docs-mirror-check.py",
-      "duration_seconds": $DOCS_MIRROR_SECONDS
-    },
-    "validation": {
-      "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $VALIDATION_STATUS,
-      "skipped": $VALIDATION_SKIPPED,
-      "tool": "validate.sh",
-      "duration_seconds": $VALIDATION_SECONDS
-    },
-    "shell_lint": {
-      "status": $([ "$SHELL_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $SHELL_LINT_STATUS,
-      "tool": "lint-shell.sh",
-      "duration_seconds": $SHELL_LINT_SECONDS
-    },
-    "workflow_lint": {
-      "status": $([ "$WORKFLOW_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $WORKFLOW_LINT_STATUS,
-      "tool": "lint-workflows.sh",
-      "duration_seconds": $WORKFLOW_LINT_SECONDS
-    },
-    "unit_tests": {
-      "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $UNIT_TEST_STATUS,
-      "skipped": $UNIT_SKIPPED,
-      "duration_seconds": $UNIT_TEST_SECONDS,
-      "workspace_guards_seconds": $WORKSPACE_GUARD_SECONDS
-    },
-    "integration_tests": {
-      "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
-      "exit_code": $INTEGRATION_TEST_STATUS,
-      "skipped": $INTEGRATION_SKIPPED,
-      "duration_seconds": $INTEGRATION_TEST_SECONDS
-    }
+"documentation": {
+  "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $DOCS_STATUS,
+  "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
+  "tool": "mkdocs",
+  "duration_seconds": $DOCS_SECONDS
+},
+"documentation_versions": {
+  "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $DOCS_VERSIONS_STATUS,
+  "tool": "docs-update-versions.sh",
+  "duration_seconds": $DOCS_VERSIONS_SECONDS
+},
+"documentation_mirrors": {
+  "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $DOCS_MIRROR_STATUS,
+  "tool": "docs-mirror-check.py",
+  "duration_seconds": $DOCS_MIRROR_SECONDS
+},
+"validation": {
+  "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $VALIDATION_STATUS,
+  "skipped": $VALIDATION_SKIPPED,
+  "tool": "validate.sh",
+  "duration_seconds": $VALIDATION_SECONDS
+},
+"shell_lint": {
+  "status": $([ "$SHELL_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $SHELL_LINT_STATUS,
+  "tool": "lint-shell.sh",
+  "duration_seconds": $SHELL_LINT_SECONDS
+},
+"workflow_lint": {
+  "status": $([ "$WORKFLOW_LINT_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $WORKFLOW_LINT_STATUS,
+  "tool": "lint-workflows.sh",
+  "duration_seconds": $WORKFLOW_LINT_SECONDS
+},
+"unit_tests": {
+  "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $UNIT_TEST_STATUS,
+  "skipped": $UNIT_SKIPPED,
+  "duration_seconds": $UNIT_TEST_SECONDS,
+  "workspace_guards_seconds": $WORKSPACE_GUARD_SECONDS
+},
+"integration_tests": {
+  "status": $([ $INTEGRATION_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+  "exit_code": $INTEGRATION_TEST_STATUS,
+  "skipped": $INTEGRATION_SKIPPED,
+  "duration_seconds": $INTEGRATION_TEST_SECONDS
+}
   }
 }
 EOF
 
+# The signature, and only the signature, is gate-only. It attests rather than
+# records: it is what makes a committed set verifiable, and it enumerates its
+# input with `git ls-files --exclude-standard`, so over a directory git ignores
+# wholesale it finds nothing and writes a checksum of an empty list — which
+# reads as a valid signature file. There is no useful thing for it to do in the
+# diagnostics tier, and one harmful one.
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
     print_status "Generating artifact signature..."
     cd "$OUTPUT_DIR"
     # Sign exactly the files that get committed, not everything the run left on
@@ -1524,95 +1566,97 @@ EOF
     fi
     cd "$PROJECT_ROOT"
     print_success "Quality summary and signature generated"
+else
+    print_success "Quality summary generated"
+fi
 
-    # Generate supplementary per-package coverage reports (not needed by CI).
-    # This section is slow due to multiple `uv run coverage report` calls but
-    # runs after the summary/signature are already written.
-    if [ "$COVERAGE_COMBINED" = true ]; then
-        print_status "Generating per-package coverage reports..."
-        cd "$OUTPUT_DIR"
+# Generate supplementary per-package coverage reports (not needed by CI).
+# This section is slow due to multiple `uv run coverage report` calls but
+# runs after the summary/signature are already written.
+if [ "$COVERAGE_COMBINED" = true ]; then
+    print_status "Generating per-package coverage reports..."
+    cd "$OUTPUT_DIR"
 
-        # Generate combined HTML report (full mode only — slow)
-        if [ "$RUN_MODE" = "full" ]; then
-            if uv run coverage html -d htmlcov 2>/dev/null; then
-                print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
+    # Generate combined HTML report (full mode only — slow)
+    if [ "$RUN_MODE" = "full" ]; then
+        if uv run coverage html -d htmlcov 2>/dev/null; then
+            print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
+        fi
+    fi
+
+    # Generate terminal report.
+    #
+    # Truncated first. Every write below appends, and nothing ever reset the
+    # file, so each run added a full report to the end of every previous
+    # one: 95.7 MB by the time anyone looked, for a file whose whole purpose
+    # is to show the current run's coverage. Untracked, so it never reached
+    # CI — it just grew.
+    : > test-coverage-summary.txt
+    echo "Combined Coverage Report:" >> test-coverage-summary.txt
+    echo "=========================" >> test-coverage-summary.txt
+    uv run coverage report >> test-coverage-summary.txt 2>&1 || true
+
+    # Generate per-package text and JSON summaries in a single loop
+    echo "" >> test-coverage-summary.txt
+    echo "Coverage by Package:" >> test-coverage-summary.txt
+    echo "====================" >> test-coverage-summary.txt
+
+    echo "{" > coverage-by-package.json
+    echo '  "generated": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'",' >> coverage-by-package.json
+    echo '  "packages": {' >> coverage-by-package.json
+
+    first_pkg=true
+    for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
+        if [ -d "$pkg_dir" ]; then
+            pkg_name=$(basename "$pkg_dir")
+            if [ "$pkg_name" = "legacy" ]; then
+                src_name="dataknobs"
+            else
+                src_name="dataknobs_${pkg_name}"
+            fi
+            if [ -d "$pkg_dir/src/${src_name}" ]; then
+                # Single coverage report call per package — used for both text and JSON
+                echo -ne "  ${DIM}$pkg_name...${NC} "
+                coverage_output=$(uv run coverage report --data-file="$OUTPUT_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null || true)
+                echo -e "${GREEN}done${NC}"
+
+                # Text summary
+                echo "" >> test-coverage-summary.txt
+                echo "Package: $pkg_name" >> test-coverage-summary.txt
+                echo "--------" >> test-coverage-summary.txt
+                if [ -n "$coverage_output" ]; then
+                    echo "$coverage_output" >> test-coverage-summary.txt
+                else
+                    echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
+                fi
+
+                # JSON summary
+                total_line=$(echo "$coverage_output" | tail -1)
+                if echo "$total_line" | grep -q "TOTAL"; then
+                    coverage_pct=$(echo "$total_line" | awk '{print $(NF)}' | sed 's/%//')
+                    statements=$(echo "$total_line" | awk '{print $2}')
+                    missing=$(echo "$total_line" | awk '{print $3}')
+
+                    if [ "$first_pkg" = false ]; then
+                        echo "," >> coverage-by-package.json
+                    fi
+                    first_pkg=false
+
+                    echo -n '    "'"$pkg_name"'": {' >> coverage-by-package.json
+                    echo -n '"statements": '"$statements"', ' >> coverage-by-package.json
+                    echo -n '"missing": '"$missing"', ' >> coverage-by-package.json
+                    echo -n '"coverage": "'"$coverage_pct"'%"}' >> coverage-by-package.json
+                fi
             fi
         fi
+    done
 
-        # Generate terminal report.
-        #
-        # Truncated first. Every write below appends, and nothing ever reset the
-        # file, so each run added a full report to the end of every previous
-        # one: 95.7 MB by the time anyone looked, for a file whose whole purpose
-        # is to show the current run's coverage. Untracked, so it never reached
-        # CI — it just grew.
-        : > test-coverage-summary.txt
-        echo "Combined Coverage Report:" >> test-coverage-summary.txt
-        echo "=========================" >> test-coverage-summary.txt
-        uv run coverage report >> test-coverage-summary.txt 2>&1 || true
+    echo "" >> coverage-by-package.json
+    echo "  }" >> coverage-by-package.json
+    echo "}" >> coverage-by-package.json
 
-        # Generate per-package text and JSON summaries in a single loop
-        echo "" >> test-coverage-summary.txt
-        echo "Coverage by Package:" >> test-coverage-summary.txt
-        echo "====================" >> test-coverage-summary.txt
-
-        echo "{" > coverage-by-package.json
-        echo '  "generated": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'",' >> coverage-by-package.json
-        echo '  "packages": {' >> coverage-by-package.json
-
-        first_pkg=true
-        for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-            if [ -d "$pkg_dir" ]; then
-                pkg_name=$(basename "$pkg_dir")
-                if [ "$pkg_name" = "legacy" ]; then
-                    src_name="dataknobs"
-                else
-                    src_name="dataknobs_${pkg_name}"
-                fi
-                if [ -d "$pkg_dir/src/${src_name}" ]; then
-                    # Single coverage report call per package — used for both text and JSON
-                    echo -ne "  ${DIM}$pkg_name...${NC} "
-                    coverage_output=$(uv run coverage report --data-file="$OUTPUT_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null || true)
-                    echo -e "${GREEN}done${NC}"
-
-                    # Text summary
-                    echo "" >> test-coverage-summary.txt
-                    echo "Package: $pkg_name" >> test-coverage-summary.txt
-                    echo "--------" >> test-coverage-summary.txt
-                    if [ -n "$coverage_output" ]; then
-                        echo "$coverage_output" >> test-coverage-summary.txt
-                    else
-                        echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
-                    fi
-
-                    # JSON summary
-                    total_line=$(echo "$coverage_output" | tail -1)
-                    if echo "$total_line" | grep -q "TOTAL"; then
-                        coverage_pct=$(echo "$total_line" | awk '{print $(NF)}' | sed 's/%//')
-                        statements=$(echo "$total_line" | awk '{print $2}')
-                        missing=$(echo "$total_line" | awk '{print $3}')
-
-                        if [ "$first_pkg" = false ]; then
-                            echo "," >> coverage-by-package.json
-                        fi
-                        first_pkg=false
-
-                        echo -n '    "'"$pkg_name"'": {' >> coverage-by-package.json
-                        echo -n '"statements": '"$statements"', ' >> coverage-by-package.json
-                        echo -n '"missing": '"$missing"', ' >> coverage-by-package.json
-                        echo -n '"coverage": "'"$coverage_pct"'%"}' >> coverage-by-package.json
-                    fi
-                fi
-            fi
-        done
-
-        echo "" >> coverage-by-package.json
-        echo "  }" >> coverage-by-package.json
-        echo "}" >> coverage-by-package.json
-
-        cd "$PROJECT_ROOT"
-        print_success "Per-package coverage reports generated"
-    fi
+    cd "$PROJECT_ROOT"
+    print_success "Per-package coverage reports generated"
 fi
 
 # Print summary
@@ -1722,7 +1766,8 @@ if [ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; 
         echo -e "${GREEN}  Artifacts saved to: .quality-artifacts/${NC}"
         echo -e "${GREEN}  You can now create your pull request.${NC}"
     else
-        echo -e "${GREEN}  Checks only — no artifacts written. Run ${CYAN}bin/dk pr${GREEN} to produce them.${NC}"
+        echo -e "${GREEN}  Checks only — no artifacts written. Reports in ${CYAN}${OUTPUT_DIR#"$PROJECT_ROOT"/}/${GREEN}.${NC}"
+        echo -e "${GREEN}  Run ${CYAN}bin/dk pr${GREEN} to produce the artifacts CI verifies.${NC}"
     fi
     echo ""
     exit 0
@@ -1731,14 +1776,10 @@ else
     echo -e "${RED}✗ Some checks failed!${NC}"
     echo -e "${RED}  Please fix the issues and run this script again.${NC}"
 
-    # The diagnostics below name log files. On a check-only run those live in a
-    # temporary directory cleanup() would delete, so a failing run would print
-    # paths that no longer exist by the time the prompt came back. Kept on
-    # failure only: nothing accumulates on the green path, and this is still
-    # outside .quality-artifacts/, so the G1 property is unaffected.
-    if [ "$EMIT_ARTIFACTS" = "no" ]; then
-        KEEP_OUTPUT_DIR="yes"
-    fi
+    # The diagnostics below name log files under OUTPUT_DIR. They survive the
+    # run either way — the artifacts directory because the gate produced it, the
+    # reports directory because it is cleared on entry rather than at exit — so
+    # the paths printed here still resolve when the prompt comes back.
 
     # Show quick diagnostic info for failures
     echo ""

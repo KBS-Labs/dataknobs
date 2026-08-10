@@ -397,11 +397,22 @@ main() {
                 "$SCRIPT_DIR/diagnose-quality-failures.sh" "$@"
             ;;
         coverage|cov)
-            if [ -f ".quality-artifacts/htmlcov/index.html" ]; then
+            # Either tier can hold it: the gate writes .quality-artifacts/, a
+            # checker writes the diagnostics tier. Checked in that order because
+            # a report is worth opening whichever run produced it.
+            _cov_report=""
+            for _cov_dir in ".quality-artifacts" \
+                "$("$SCRIPT_DIR/run-quality-checks.sh" --print-output-dir 2>/dev/null || echo .quality-reports)"; do
+                if [ -f "$_cov_dir/htmlcov/index.html" ]; then
+                    _cov_report="$_cov_dir/htmlcov/index.html"
+                    break
+                fi
+            done
+            if [ -n "$_cov_report" ]; then
                 echo -e "${GREEN}Opening coverage report...${NC}"
-                open ".quality-artifacts/htmlcov/index.html" 2>/dev/null || \
-                    xdg-open ".quality-artifacts/htmlcov/index.html" 2>/dev/null || \
-                    echo "Coverage report: .quality-artifacts/htmlcov/index.html"
+                open "$_cov_report" 2>/dev/null || \
+                    xdg-open "$_cov_report" 2>/dev/null || \
+                    echo "Coverage report: $_cov_report"
             else
                 echo -e "${YELLOW}No coverage report found${NC}"
                 echo -e "Run ${CYAN}dk pr${NC} or ${CYAN}dk test${NC} first"
@@ -461,7 +472,7 @@ main() {
         # Cleanup
         clean)
             echo -e "${BLUE}Cleaning up...${NC}"
-            rm -rf .quality-artifacts .pytest_cache .coverage* htmlcov
+            rm -rf .quality-artifacts .quality-reports .pytest_cache .coverage* htmlcov
             find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
             find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
             echo -e "${GREEN}✓${NC} Cleaned artifacts and caches"
