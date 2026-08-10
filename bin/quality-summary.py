@@ -167,6 +167,20 @@ def read_records(path: str) -> dict[str, dict[str, Any]]:
     one check are two answers to one question, and picking either silently would
     hide whichever site is wrong.
     """
+    try:
+        return _read_records(path)
+    except FileNotFoundError as exc:
+        # The gate truncates this file into existence before the first check, so
+        # its absence does not mean "nothing failed" — it means no check reached
+        # its recording site at all. Named here rather than left to a traceback,
+        # because every other malformed input to this module names itself.
+        # Narrowed to this one OSError: the rest are genuinely exceptional and
+        # read better as themselves than as a sentence about recording.
+        raise SystemExit(f"{path}: no check recorded an outcome here: {exc}") from exc
+
+
+def _read_records(path: str) -> dict[str, dict[str, Any]]:
+    """``read_records`` without the absent-file translation. See it for the contract."""
     checks: dict[str, dict[str, Any]] = {}
     with open(path, encoding="utf-8") as handle:
         for number, line in enumerate(handle, 1):
@@ -278,7 +292,15 @@ class Palette:
         self.cyan = "\033[0;36m" if enabled else ""
         self.off = "\033[0m" if enabled else ""
 
-    def verdict(self, entry: dict[str, Any]) -> str:
+    def verdict(self, entry: Any) -> str:
+        if not isinstance(entry, dict):
+            # Not a shape the writer produces, so it arrived from a hand-edited
+            # or foreign document. Reported as failed rather than raised: this
+            # runs after the summary is written and the in-progress marker is
+            # gone, so raising would fail a run whose checks all passed. And
+            # reported rather than dropped, because a row that vanishes is a
+            # check the developer never learns ran.
+            return f"{self.red}✗ FAILED{self.off}"
         if entry.get("skipped") is True:
             return f"{self.cyan}⊘ SKIPPED{self.off}"
         if entry.get("status") == "pass":
@@ -330,6 +352,18 @@ def render(
     unit = checks.get("unit_tests")
     integration = checks.get("integration_tests")
     if unit is None or integration is None:
+        return lines
+
+    if not isinstance(unit, dict) or not isinstance(integration, dict):
+        # Making verdict() total is not enough here: the grouping below reads
+        # fields off both entries to produce the single row a dev run earns, so
+        # a non-mapping entry would raise before reaching it. Same disposition
+        # as verdict() — reported, not raised, not dropped — with the rows going
+        # out ungrouped, which is the most the document supports.
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration))
+        )
         return lines
 
     if mode != "pr":

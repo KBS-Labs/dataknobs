@@ -319,6 +319,60 @@ def _entry(status: str = "pass", **extra: object) -> dict:
     return {"status": status, "exit_code": 0 if status == "pass" else 1, **extra}
 
 
+def test_a_records_file_that_is_not_there_is_named_rather_than_traced():
+    """Every other malformed input to this module names itself; this one did not.
+
+    A bad JSON line, a record with no ``name``, a duplicate check, an unknown
+    top-level field — each raises ``SystemExit`` carrying what was wrong. An
+    absent records file raised ``FileNotFoundError`` instead, so the one failure
+    that means *no check recorded anything* was the one that printed a traceback
+    rather than a sentence. It still failed closed, which is why this is a
+    legibility fix and not a correctness one.
+    """
+    with pytest.raises(SystemExit) as caught:
+        writer.read_records("/nonexistent/records.jsonl")
+
+    assert "no check recorded" in str(caught.value)
+
+
+def test_a_garbled_check_entry_is_not_rendered_as_a_pass():
+    """The renderer's own version of "absence is not a pass".
+
+    ``render`` already refuses a ``checks`` value that is not a mapping. The
+    entries inside it were read without the same question being asked, so a
+    non-mapping entry reached ``entry.get`` and raised ``AttributeError``. The
+    render call is the one gate step that is not wrapped in a failure branch,
+    and it runs *after* the summary is written and the in-progress marker is
+    removed — so an entry the writer would never produce could abort a run whose
+    checks had all passed and whose artifacts were already valid.
+
+    Failing closed rather than skipping the row: a garbled entry is not a check
+    that passed, and dropping it silently would make it a check that vanished.
+    """
+    rows = _rendered({"documentation": "pass"})
+
+    assert rows == ["  Documentation:      ✗ FAILED"]
+
+
+def test_a_garbled_test_entry_does_not_reach_the_grouping_arithmetic():
+    """The same guard one layer down, where the entries are read field by field.
+
+    The two test entries are not just handed to ``verdict`` — they are combined
+    (``dict(unit)``, ``integration.get("status")``) to produce the one row a dev
+    run earns. Making ``verdict`` total is therefore not enough on its own: a
+    non-mapping entry would still raise before it ever got there. The rows go
+    out ungrouped rather than not at all.
+    """
+    rows = _rendered(
+        {"unit_tests": "pass", "integration_tests": _entry()}, mode="dev"
+    )
+
+    assert rows == [
+        "  Unit Tests:        ✗ FAILED",
+        "  Integration Tests: ✓ PASSED",
+    ]
+
+
 def test_a_skipped_check_is_rendered_as_skipped_not_passed():
     """The defect this renderer exists to close, in its original form.
 
