@@ -8,17 +8,21 @@ three it depends on, and they are the only thing recording why a check is
 allowed to be narrow, which is usually that something else is broad.
 
 Nothing checked them. Three were wrong when this was written, from three
-different eras, each found by a person happening to look:
+different eras, each found by a person happening to look. Named in plain text
+below rather than in the double backticks the rest of this file uses, because
+this check reads that spelling as a claim the name resolves, and it is the
+whole point that these do not:
 
-- ``test_ruff_config_mirror`` — renamed to ``test_ruff_config_single_source``
-  when the per-package ruff sections were deleted. The pointer was one line
-  away from the rename and still missed.
-- ``test_no_cell_names_a_part_of_the_tree_that_is_gone`` — a forward pointer to
-  the replacement for a retired check, naming it as it was going to be called
-  rather than as it was.
-- ``test_entry_points_agree_on_the_failure_type`` — the prefix
-  ``test_single_reference_resolvers_`` was added to the real test and the
-  docstring naming it was not touched.
+- test_ruff_config_mirror, renamed to ``test_ruff_config_single_source`` when
+  the per-package ruff sections were deleted. The pointer was one line away
+  from the rename and still missed.
+- test_no_cell_names_a_part_of_the_tree_that_is_gone, a forward pointer to the
+  replacement for a retired check, naming it as it was going to be called
+  rather than as it was. The real one is
+  ``test_verify_names_a_cell_that_matches_no_tracked_file``.
+- test_entry_points_agree_on_the_failure_type, which kept its old spelling in a
+  docstring after a test_single_reference_resolvers_ prefix was added to the
+  test itself.
 
 None of these can fail anything. That is exactly what makes them expensive: a
 wrong verdict is contradicted by the code eventually, but a wrong *reference*
@@ -26,6 +30,14 @@ is read once, by someone already looking for something, and it costs them the
 search. It is the same defect as advice naming a deleted script, which
 ``test_every_path_named_in_advice_exists`` already covers for shell scripts —
 this is that check pointed at the harness's own prose.
+
+**It also has to be able to see a file nobody has committed yet.** The first
+version enumerated tracked files only, so it never scanned itself: it passed on
+this very docstring while the file was untracked, and reported the three names
+above only once a commit made it visible. A guard that cannot read the file
+being written is green at the moment it is most needed and red afterwards with
+no edit in between, which reads as flakiness rather than a finding. Hence
+``tracked_and_new_files``.
 
 Scope is ``tests/`` and ``bin/``: the workspace harness talking about itself.
 The package suites carry their own cross-references and roughly five of them
@@ -39,7 +51,7 @@ from __future__ import annotations
 
 import re
 
-from tests._workspace import ROOT, rel, tracked_files
+from tests._workspace import ROOT, rel, tracked_and_new_files
 
 #: A test name written as code in prose: ``name`` or `name`. Both spellings
 #: appear, along with ``:func:`name```, whose inner backticks this also catches.
@@ -79,23 +91,25 @@ MINIMUM_REFERENCES_FOUND = 10
 
 
 def _harness_files() -> list[str]:
-    """Tracked Python under ``tests/`` and ``bin/`` -- the workspace harness."""
+    """Python under ``tests/`` and ``bin/``, committed or not -- the harness."""
     return [
         name
-        for name in tracked_files()
+        for name in tracked_and_new_files()
         if name.endswith(".py") and name.startswith(("tests/", "bin/"))
     ]
 
 
 def _defined_test_names() -> set[str]:
-    """Every test function and test module in the tracked tree.
+    """Every test function and test module in the tree, committed or not.
 
     Deliberately the whole tree, not just the harness: a harness docstring
     pointing into a package suite is a legitimate reference, and resolving it
-    against a narrower set would report it as broken.
+    against a narrower set would report it as broken. Uncommitted files count
+    on the same reasoning in reverse -- a reference to a test added in the same
+    change as the prose naming it resolves, rather than failing until commit.
     """
     names: set[str] = set()
-    for name in tracked_files():
+    for name in tracked_and_new_files():
         if not name.endswith(".py"):
             continue
         stem = name.rsplit("/", 1)[-1][: -len(".py")]
