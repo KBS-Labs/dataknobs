@@ -698,6 +698,7 @@ UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
 WORKFLOW_LINT_STATUS=0
 SHELL_LINT_STATUS=0
+CONTRACT_STATUS=0
 
 # How long each check took, in whole seconds, for the durations recorded
 # alongside its status in quality-summary.json. These answer "where does a gate
@@ -714,6 +715,7 @@ DOCS_MIRROR_SECONDS=null
 VALIDATION_SECONDS=null
 SHELL_LINT_SECONDS=null
 WORKFLOW_LINT_SECONDS=null
+CONTRACT_SECONDS=null
 UNIT_TEST_SECONDS=null
 INTEGRATION_TEST_SECONDS=null
 WORKSPACE_GUARD_SECONDS=null
@@ -744,7 +746,7 @@ elapsed_since() { echo $(( $(date +%s) - $1 )); }
 # or leaves it invisible to CI entirely (the workflow lint). Both halves are
 # guarded by tests/test_quality_gate_accounting.py.
 compute_overall_status() {
-    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ]; then
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ] || [ "$CONTRACT_STATUS" -ne 0 ]; then
         echo "FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         echo "PASS_WITH_SKIPS"
@@ -830,6 +832,36 @@ SHELL_LINT_SECONDS=$(elapsed_since "$_check_start")
 # Unconditional for the same reason as the block above it, so no "skipped".
 record_check shell_lint "$SHELL_LINT_STATUS" \
     --tool lint-shell.sh --duration "$SHELL_LINT_SECONDS"
+
+# Compare the tree against the coverage-and-strictness contract. Same three-place
+# wiring as the two above, and unconditional for the same reason.
+#
+# This is what makes a ceiling a ceiling. .dataknobs/quality-contract.json says
+# which files each tool covers and how far from clean each part of the tree may
+# be, and a number nobody compares is one that stops being true without anyone
+# finding out — the declaration it replaces carried its counts in comment prose,
+# where an entry matching nothing failed while "241 findings" stayed green at
+# 400. Enforced in one direction is how a backlog grows during the phase that is
+# supposed to be clearing it.
+#
+# It re-runs ruff and mypy rather than reading the verdicts validate.sh already
+# produced, because they are different questions asked with different configs:
+# validate.sh asks "is the code this run touched clean", over the packages in
+# scope, under mypy.ini. This asks "has any cell of the whole tree moved past
+# what it declared", which needs every cell measured whether the run touched it
+# or not. Reusing one answer for the other would make the ratchet depend on
+# which packages happened to change.
+print_status "Checking the quality contract..."
+_check_start=$(date +%s)
+if uv run python "$SCRIPT_DIR/quality-contract.py" check; then
+    print_success "Every cell is within its ceiling"
+else
+    CONTRACT_STATUS=$?
+    print_error "The quality contract is not satisfied"
+fi
+CONTRACT_SECONDS=$(elapsed_since "$_check_start")
+record_check contract "$CONTRACT_STATUS" \
+    --tool quality-contract.py --duration "$CONTRACT_SECONDS"
 
 # Validation as a check that did not run. Two arms below reach it — asked to
 # skip style, and a PR whose diff gave validate.sh nothing to look at — and both

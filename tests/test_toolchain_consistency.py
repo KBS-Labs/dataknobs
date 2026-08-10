@@ -803,25 +803,27 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes():
     )
 
 
-#: Directories of first-party Python that ``bin/validate.sh`` does not reach
-#: when run with no arguments, each with the size that makes it a project rather
-#: than an edit. Deferring is a legitimate answer; deferring *silently* is not,
-#: and silence is what kept ``bin/`` — which holds the checkers deciding whether
-#: a pull request passes — outside every lint invocation in this repo for as
-#: long as it has had one. Counts are from the root ruff config.
-#:
-#: Two rules keep this from becoming the excuse list it would otherwise decay
-#: into, both enforced below: an entry matching no tracked file is an error, and
-#: so is an entry matching a file that *is* linted — because the cheapest way to
-#: silence the coverage test is to drop a directory from the targets and add it
-#: here, and that must not be a passing move.
-DEFERRED_FROM_DEFAULT_LINT = {
-    "packages/*/tests": "~1,790 findings; wants each package's src cleared first",
-    "packages/*/examples": "241 findings, ~90% of them under data/ and fsm/",
-    "packages/*/scripts": "9 findings",
-    "packages/*/benchmarks": "2 findings",
-    "packages/*/docs": "7 findings, all in a single fsm/ module",
-}
+# ``DEFERRED_FROM_DEFAULT_LINT`` used to live here: five directory classes of
+# first-party Python that ``bin/validate.sh`` does not reach, each with a count
+# in its comment. It has moved to ``.dataknobs/quality-contract.json`` as that
+# file's ruff axis, and the two guards over it — every tracked file is linted or
+# deferred, and no entry is stale or contradicted — are in
+# ``tests/test_quality_contract.py``.
+#
+# Two things changed in the move rather than merely relocating.
+#
+# The counts became **ceilings that are compared**. In prose they were enforced
+# in one direction only: an entry matching nothing failed, while "241 findings"
+# stayed green at 400. A number nobody checks is one that stops being true
+# without anyone finding out, and this program has now found that shape in a
+# guard, a reader, an ignore rule and a status field.
+#
+# And the population became **partitioned rather than filtered**. The old pair
+# asked "is this file linted, or excused?", which is satisfiable by a file that
+# is neither — it just has to be excused. The contract asks which cell each file
+# is in and fails when the answer is none or several, so a directory added to
+# the repository and to no declaration fails immediately rather than the first
+# time somebody wonders.
 
 
 def _tracked(*pathspecs: str) -> list[PurePosixPath]:
@@ -933,8 +935,8 @@ def _default_validate_targets() -> list[str]:
 #: answer to a specific hole. Every other assertion about coverage reads the
 #: target set and asks whether it reaches the tracked files — so dropping a
 #: directory from ``workspace_targets`` and naming it in
-#: ``DEFERRED_FROM_DEFAULT_LINT`` satisfied all of them at once: the files are no
-#: longer uncovered because they are now deferred, and the deferral is not
+#: the quality contract's deferred tier satisfied all of them at once: the files
+#: are no longer uncovered because they are now deferred, and the deferral is not
 #: contradicted because nothing lints them any more. Both guards green, ``bin/``
 #: unlinted again. A check derived from the thing it checks moves when that thing
 #: moves; this does not, so removing a member fails here and no entry elsewhere
@@ -942,51 +944,21 @@ def _default_validate_targets() -> list[str]:
 REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py"})
 
 
-def _linted_by(path: PurePosixPath, targets: list[str]) -> bool:
-    """Whether some default target is this file, or a directory containing it."""
-    name = str(path)
-    return any(name == target or name.startswith(f"{target}/") for target in targets)
-
-
-def _deferred_by(path: PurePosixPath, patterns: set[str]) -> bool:
-    """Whether any ancestor directory of this file matches a deferral pattern."""
-    return any(
-        PurePosixPath(*path.parts[:depth]).match(pattern)
-        for depth in range(1, len(path.parts))
-        for pattern in patterns
-    )
-
-
-def test_every_first_party_python_file_is_linted_by_default():
-    """Being *run* is not the same as being *checked*, and neither is being *shipped*.
-
-    ``bin/validate.sh`` builds its default target list by looping ``packages/*``
-    and appending each ``src`` directory. Everything else was therefore outside
-    every lint and type-check invocation in the repo, and nothing said so: the
-    workspace guards asserting the toolchain is coherent, and ``bin/`` itself —
-    the scripts that decide whether a pull request passes, including the two
-    that enforce documentation mirroring and internal-label hygiene.
-
-    The first version of this guard asserted that one directory was in the
-    target set, keyed to its own location. That is the shape that let the same
-    omission survive one directory over, so it reads the whole tracked set now
-    and takes the exceptions as declared data.
-    """
-    targets = _default_validate_targets()
-    deferred = set(DEFERRED_FROM_DEFAULT_LINT)
-
-    uncovered = sorted(
-        str(path)
-        for path in _tracked_python()
-        if not _linted_by(path, targets) and not _deferred_by(path, deferred)
-    )
-    assert not uncovered, (
-        f"bin/validate.sh validates {targets} by default, which reaches none of "
-        f"these tracked files:\n"
-        + "\n".join(f"  - {name}" for name in uncovered)
-        + "\nAdd the directory to the default targets, or record it in "
-        "DEFERRED_FROM_DEFAULT_LINT with the size that makes deferring honest."
-    )
+# ``test_every_first_party_python_file_is_linted_by_default`` used to sit here,
+# with ``_linted_by`` and ``_deferred_by`` beneath it. It asked whether each
+# tracked file was reached by ``bin/validate.sh`` or excused by name, which the
+# quality contract now answers more completely: totality places every file in
+# exactly one cell, and the tier guards compare ``checked`` and ``deferred``
+# against the target set the script resolves, in both directions.
+#
+# The helpers went with it, and one of them was subtly wrong in a way the
+# replacement is not. ``_deferred_by`` matched with ``PurePosixPath.match``,
+# which anchors a *relative* pattern at the right-hand end — so a single-segment
+# entry would have matched any directory of that name at any depth, while its
+# sibling ``_linted_by`` compared string prefixes from the left. Two rules over
+# one question. Nothing had exercised the difference because every entry in the
+# old list began with ``packages/``; ``cell_matches`` in bin/quality-contract.py
+# compares segment by segment from the root for both tiers.
 
 
 def test_the_default_target_set_still_contains_what_it_must():
@@ -995,8 +967,8 @@ def test_the_default_target_set_still_contains_what_it_must():
     The guard above compares the target set against the tracked files and takes
     the deferrals as declared data, which makes it complete about *accidents* and
     silent about one deliberate move: drop a directory from ``workspace_targets``,
-    add it to ``DEFERRED_FROM_DEFAULT_LINT``, and coverage is gone with both
-    checks still green. Replayed over the real repository before this was
+    re-file it in the quality contract's deferred tier, and coverage is gone
+    with both checks still green. Replayed over the real repository before this was
     written, the escape also worked for ``packages/*/src`` — all ten package
     sources could leave the target set without a single assertion failing.
 
@@ -1028,8 +1000,8 @@ def test_the_default_target_set_still_contains_what_it_must():
             "These are not deferrable: tests/ holds the guards that check the "
             "toolchain, and bin/ holds the checkers that decide whether a pull "
             "request passes. Restore the target — recording it in "
-            "DEFERRED_FROM_DEFAULT_LINT is not the fix, it is the failure this "
-            "guard exists to catch."
+            "deferring it in .dataknobs/quality-contract.json is not the fix, "
+            "it is the failure this guard exists to catch."
         )
 
     #: The pin must also grow when the declaration does, or a directory added to
@@ -1042,7 +1014,7 @@ def test_the_default_target_set_still_contains_what_it_must():
     assert not unpinned, (
         f"workspace_targets now declares {unpinned}, which REQUIRED_DEFAULT_TARGETS "
         "does not name. Add it there: until it is pinned, dropping it again and "
-        "recording it in DEFERRED_FROM_DEFAULT_LINT passes every check in this file."
+        "deferring it in .dataknobs/quality-contract.json passes every check here."
     )
 
     targets = set(_default_validate_targets())
@@ -1276,41 +1248,13 @@ def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_pa
     )
 
 
-def test_the_lint_deferrals_still_describe_the_repository():
-    """A deferral list nobody rechecks is how the omission it records becomes permanent.
-
-    Both directions are wrong and only one of them is obvious. An entry matching
-    nothing is stale, and leaves the reader believing a gap exists that closed.
-    An entry matching something already linted is worse: it is the cheapest way
-    to silence the test above — drop a directory from the targets, name it here,
-    and coverage is lost with every check still green.
-    """
-    tracked = _tracked_python()
-    targets = _default_validate_targets()
-
-    stale = sorted(
-        pattern
-        for pattern in DEFERRED_FROM_DEFAULT_LINT
-        if not any(_deferred_by(path, {pattern}) for path in tracked)
-    )
-    assert not stale, (
-        f"DEFERRED_FROM_DEFAULT_LINT records {stale}, which matches no tracked "
-        "Python file. Drop the entry — a gap that no longer exists reads as one "
-        "that does."
-    )
-
-    contradicted = sorted(
-        pattern
-        for pattern in DEFERRED_FROM_DEFAULT_LINT
-        if any(
-            _deferred_by(path, {pattern}) and _linted_by(path, targets) for path in tracked
-        )
-    )
-    assert not contradicted, (
-        f"DEFERRED_FROM_DEFAULT_LINT records {contradicted} as unlinted, but "
-        "bin/validate.sh does lint files there. Either the entry is obsolete and "
-        "should go, or a default target was removed and should come back."
-    )
+# ``test_the_lint_deferrals_still_describe_the_repository`` was here: a deferral
+# entry matching nothing is stale, and one matching something already linted is
+# the cheapest way to silence a coverage check. Both directions survive, over
+# every tool rather than just ruff, as
+# ``test_no_cell_names_a_part_of_the_tree_that_is_gone`` and
+# ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+# tests/test_quality_contract.py.
 
 
 def _gate_pytest_commands() -> list[str]:

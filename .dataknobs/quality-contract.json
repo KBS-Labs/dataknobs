@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "about": [
+    "What each tool checks, over which files, and how far from clean each one is",
+    "allowed to be. A ceiling, not evidence: nothing here is produced by a run,",
+    "CI never signs it, and moving a number is a deliberate visible diff.",
+    "",
+    "Read bin/quality-contract.py for the mechanism. Two rules make this a",
+    "ratchet rather than an excuse list, and both are enforced:",
+    "",
+    "  Totality. Every tracked first-party *.py lands in exactly one cell per",
+    "  tool. A file in no cell is one nobody decided about; a file in two is a",
+    "  decision that contradicts itself.",
+    "",
+    "  Ceilings are checked, not prose. A cell fails when its measurement",
+    "  exceeds its ceiling. The previous declaration carried counts in comment",
+    "  text, which stayed green at any number: it was enforced in one direction",
+    "  only, so an entry matching nothing failed while '241 findings' passed at",
+    "  400.",
+    "",
+    "A ceiling only ever falls. Raising one is how a backlog grows while it is",
+    "supposedly being worked, so it is a change that has to be argued for in a",
+    "pull request rather than absorbed by re-running --update-baseline."
+  ],
+  "tools": {
+    "ruff": {
+      "unit": "findings",
+      "config": "pyproject.toml",
+      "tiers": {
+        "checked": "inside bin/validate.sh's default target set, and clean",
+        "deferred": "outside that target set, with the size that makes deferring honest"
+      },
+      "cells": [
+        {
+          "path": "packages/*/src",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "shipped code \u2014 the one cell whose findings reach a consumer"
+        },
+        {
+          "path": "tests",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "the workspace guards, which decide whether a pull request passes"
+        },
+        {
+          "path": "bin",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "the checkers themselves; unlinted here for as long as this repository had a linter"
+        },
+        {
+          "path": "src",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "the workspace shim package"
+        },
+        {
+          "path": "conftest.py",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "root collection hook"
+        },
+        {
+          "path": "packages/*/tests",
+          "tier": "deferred",
+          "ceiling": 1766,
+          "reason": "wants each package's src cleared first; 101 of these are ASYNC230/ASYNC240, which is blocking I/O on the event loop and a defect rather than a tidy-up"
+        },
+        {
+          "path": "packages/*/examples",
+          "tier": "deferred",
+          "ceiling": 241,
+          "reason": "~90% under data/ and fsm/; needs a policy call on T201 and the annotation family before sweeping, since this is the code consumers copy"
+        },
+        {
+          "path": "packages/*/scripts",
+          "tier": "deferred",
+          "ceiling": 9,
+          "reason": "one sitting, alongside benchmarks and docs"
+        },
+        {
+          "path": "packages/*/benchmarks",
+          "tier": "deferred",
+          "ceiling": 2,
+          "reason": "one sitting, alongside scripts and docs"
+        },
+        {
+          "path": "packages/*/docs",
+          "tier": "deferred",
+          "ceiling": 7,
+          "reason": "all in a single fsm/ module"
+        }
+      ]
+    },
+    "mypy": {
+      "unit": "findings",
+      "config": "pyproject.toml",
+      "tiers": {
+        "strict": "type-checked and clean under the root config",
+        "transitional": "type-checked, with a backlog that can only shrink",
+        "unchecked": "outside the type-checker's target set entirely"
+      },
+      "cells": [
+        {
+          "path": "packages/structures/src",
+          "tier": "transitional",
+          "ceiling": 1,
+          "reason": "one finding from graduating"
+        },
+        {
+          "path": "packages/legacy/src",
+          "tier": "transitional",
+          "ceiling": 5,
+          "reason": "immediate-adoption group"
+        },
+        {
+          "path": "packages/config/src",
+          "tier": "transitional",
+          "ceiling": 22,
+          "reason": "immediate-adoption group"
+        },
+        {
+          "path": "packages/utils/src",
+          "tier": "transitional",
+          "ceiling": 40,
+          "reason": "immediate-adoption group"
+        },
+        {
+          "path": "packages/common/src",
+          "tier": "transitional",
+          "ceiling": 51,
+          "reason": "immediate-adoption group"
+        },
+        {
+          "path": "packages/bots/src",
+          "tier": "transitional",
+          "ceiling": 194,
+          "reason": "ratchet group"
+        },
+        {
+          "path": "packages/xization/src",
+          "tier": "transitional",
+          "ceiling": 215,
+          "reason": "ratchet group"
+        },
+        {
+          "path": "packages/llm/src",
+          "tier": "transitional",
+          "ceiling": 259,
+          "reason": "ratchet group"
+        },
+        {
+          "path": "packages/fsm/src",
+          "tier": "transitional",
+          "ceiling": 526,
+          "reason": "ratchet group"
+        },
+        {
+          "path": "packages/data/src",
+          "tier": "transitional",
+          "ceiling": 660,
+          "reason": "ratchet group, and the largest single cell in this file"
+        },
+        {
+          "path": "tests",
+          "tier": "transitional",
+          "ceiling": 228,
+          "reason": "the workspace guards; grows whenever a guard is added, which is why it is a ceiling rather than a target"
+        },
+        {
+          "path": "bin",
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "already clean under the strict config"
+        },
+        {
+          "path": "src",
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "already clean under the strict config"
+        },
+        {
+          "path": "conftest.py",
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "already clean under the strict config"
+        },
+        {
+          "path": "packages/*/tests",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "outside bin/validate.sh's target set, so the type checker never reads it; enters a tier when its package's src graduates"
+        },
+        {
+          "path": "packages/*/examples",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "outside the target set; annotation coverage here is a documentation choice, not a correctness one"
+        },
+        {
+          "path": "packages/*/scripts",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "outside the target set; developer utilities that ship to nobody"
+        },
+        {
+          "path": "packages/*/benchmarks",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "outside the target set; developer utilities that ship to nobody"
+        },
+        {
+          "path": "packages/*/docs",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "outside the target set; one illustrative module under fsm/"
+        }
+      ]
+    },
+    "format": {
+      "unit": "files",
+      "config": "pyproject.toml",
+      "tiers": {
+        "enforced": "formatted, and a regression fails",
+        "pending": "declared but not yet formatted; the count is files the formatter would rewrite"
+      },
+      "cells": [
+        {
+          "path": "src",
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "already formatted"
+        },
+        {
+          "path": "conftest.py",
+          "tier": "pending",
+          "ceiling": 1,
+          "reason": "one file, and it moves with the repository-wide reformat rather than ahead of it"
+        },
+        {
+          "path": "packages/*/src",
+          "tier": "pending",
+          "ceiling": 398,
+          "reason": "the formatter is declared in pyproject.toml and named in five published doc lines while being enforced nowhere; adopting it is one repository-wide diff, and doing it piecemeal would spread the blame-noise across many commits instead of one"
+        },
+        {
+          "path": "packages/*/tests",
+          "tier": "pending",
+          "ceiling": 660,
+          "reason": "same reformat"
+        },
+        {
+          "path": "packages/*/examples",
+          "tier": "pending",
+          "ceiling": 28,
+          "reason": "same reformat"
+        },
+        {
+          "path": "packages/*/scripts",
+          "tier": "pending",
+          "ceiling": 2,
+          "reason": "same reformat"
+        },
+        {
+          "path": "packages/*/benchmarks",
+          "tier": "pending",
+          "ceiling": 6,
+          "reason": "same reformat"
+        },
+        {
+          "path": "packages/*/docs",
+          "tier": "pending",
+          "ceiling": 1,
+          "reason": "same reformat"
+        },
+        {
+          "path": "tests",
+          "tier": "pending",
+          "ceiling": 20,
+          "reason": "same reformat; note the line-numbered allow sets in test_dotted_import_consolidation.py move with it"
+        },
+        {
+          "path": "bin",
+          "tier": "pending",
+          "ceiling": 12,
+          "reason": "same reformat"
+        }
+      ]
+    }
+  }
+}

@@ -454,6 +454,62 @@ rm -rf ~/dataknobs_elasticsearch_data
 rm -rf ~/dataknobs_localstack_data
 ```
 
+## The quality contract
+
+`.dataknobs/quality-contract.json` declares, for each of three tools, which
+files it covers and how far from clean each part of the tree is allowed to be.
+It is a **ceiling, not evidence**: no run produces it, CI never signs it, and
+moving a number is a deliberate visible diff rather than something a rerun does
+on your behalf.
+
+Each cell names a path, a tier, a ceiling and a reason:
+
+| Tool | Tiers | Ceiling counts |
+|---|---|---|
+| `ruff` | `checked` / `deferred` | findings |
+| `mypy` | `strict` / `transitional` / `unchecked` | findings |
+| `format` | `enforced` / `pending` | files the formatter would rewrite |
+
+Two properties make it a ratchet rather than a list of excuses, and both are
+enforced rather than described:
+
+**Totality.** Every tracked first-party `*.py` lands in exactly one cell per
+tool. A file in no cell is one nobody decided about — the state `bin/` was in
+for as long as this repository has had a linter, outside every lint invocation
+with nothing saying so. A file in two cells is a decision that contradicts
+itself.
+
+**Ceilings are compared, not read.** The declaration this replaced recorded its
+counts in comment prose, which is enforced in one direction only: an entry
+matching nothing failed, while "241 findings" stayed green at 400. A number
+nobody compares is one that stops being true without anyone finding out.
+
+```bash
+# Measure the tree against every ceiling (the `contract` check the gate records)
+uv run python bin/quality-contract.py check
+
+# Just the declaration's shape — total, well-formed, no stale cells. Fast.
+uv run python bin/quality-contract.py verify
+
+# One tool at a time
+uv run python bin/quality-contract.py check --tool mypy
+
+# Which cell does each file land in?
+uv run python bin/quality-contract.py partition --tool ruff
+```
+
+When you clear findings, lower the ceilings you cleared:
+
+```bash
+uv run python bin/quality-contract.py update-baseline
+```
+
+That command **only lowers**. A cell measuring above its ceiling is reported and
+left alone, because raising one is how a backlog grows during the phase that is
+supposed to be clearing it — and doing it by rerunning a command is how that
+happens without anyone deciding to. Raising a ceiling is a hand edit, so the
+argument for it lands in a pull request where someone can read it.
+
 ## Configuration
 
 ### Linting and Code Style
