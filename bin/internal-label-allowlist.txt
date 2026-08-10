@@ -28,6 +28,15 @@
 # guard's own configuration: a suppression that silently stops covering
 # its target reads exactly like a clean scan.
 #
+# So an entry that suppresses nothing is now an error on a full-scope run,
+# and the check names it.  Both failures above happened to be loud, because
+# the hit each stopped covering became a reported leak -- but that is luck,
+# not a property.  An entry whose target line was deleted or reworded away
+# goes on suppressing nothing forever, and nothing in the report says so.
+# If the check names an entry here, do not delete it reflexively: re-read
+# the target line first, because a moved or requoted hit needs the entry
+# corrected, and only a genuinely-gone one needs it removed.
+#
 # Every entry below is a genuine fixture record value or markdown
 # list-item test fixture -- NOT a planning/tracker reference.  Adding a
 # new entry is intentional friction: it produces a reviewer-visible diff

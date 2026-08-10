@@ -48,9 +48,21 @@ unit-bearing tokens (``200k``, ``30s``) and printf format specs
 
 False positives (fixture record values, markdown list-item test content)
 are suppressed via ``bin/internal-label-allowlist.txt``, keyed by
-(repo-relative path, exact substring) -- never by line number, because
-line numbers drift while content is stable.  Extending the allowlist
-requires a reviewer-visible diff to that file with a stated reason.
+(repo-relative path, exact substring) rather than by line number, because
+line numbers drift under any edit above them.  Content is *more* stable
+than a line number but is not stable: adopting the formatter broke two
+entries at once, one on quote style and one that had only ever worked
+because two tokens shared a line.  See that file's header for what a
+durable substring looks like.
+
+An entry matching nothing is therefore an error, not a shrug -- on a
+full-scope run, which is the only run where every entry is reachable.
+A suppression whose target moved or was reworded goes on suppressing
+nothing, and nothing about the report distinguishes that from a clean
+scan; the two sibling guards in this repository
+(``assert_no_ad_hoc_dotted_import``, ``assert_no_broad_except_in_error_text``)
+both take the same position.  Extending the allowlist requires a
+reviewer-visible diff to that file with a stated reason.
 
 Exit status: 0 when clean (modulo allowlist), 1 when any non-allowlisted
 label is found.  No autofix -- rewording requires human judgement.
@@ -238,14 +250,20 @@ def iter_target_files(args: list[str]) -> list[Path]:
     return sorted(files)
 
 
-def is_allowlisted(rel_path: str, line: str, allowlist: list[tuple[str, str]]) -> bool:
-    """A hit is suppressed iff its file matches an allowlist path AND the
-    offending line contains that entry's exact substring.
+def matching_entry(
+    rel_path: str, line: str, allowlist: list[tuple[str, str]]
+) -> tuple[str, str] | None:
+    """Return the entry suppressing this hit, or ``None``.
+
+    A hit is suppressed iff its file matches an allowlist path AND the
+    offending line contains that entry's exact substring.  The matched entry
+    is returned rather than a bool so the caller can tell which suppressions
+    are load-bearing and which have gone dead.
     """
     for allow_path, substring in allowlist:
         if rel_path == allow_path and substring in line:
-            return True
-    return False
+            return (allow_path, substring)
+    return None
 
 
 def package_of(rel_path: str) -> str:
@@ -256,11 +274,45 @@ def package_of(rel_path: str) -> str:
     return str(Path(rel_path).parent)
 
 
-def main() -> int:
+def report_dead_entries(allowlist: list[tuple[str, str]], used: set[tuple[str, str]]) -> int:
+    """Print any allowlist entry that suppressed nothing, and return 1 if any did.
+
+    Only meaningful after a full-scope run -- on a targeted invocation every
+    entry outside the named paths is trivially unused.
+    """
+    dead = [entry for entry in allowlist if entry not in used]
+    if not dead:
+        return 0
+    print(
+        "    ✗ Allowlist entries that suppressed nothing. Each one is a "
+        "suppression over code that no longer says what it did, which reads "
+        "exactly like a clean scan:"
+    )
+    for allow_path, substring in dead:
+        print(f"        {allow_path}\t{substring!r}")
+    print(
+        f"\n    {len(dead)} dead entr(ies). Re-read the target line: the text "
+        f"was reworded or reformatted (quote style counts), the hit moved to "
+        f"another line, or the suppression is no longer needed and the entry "
+        f"should be deleted."
+    )
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Scan, report, and return the exit status.
+
+    ``argv`` is the target list, defaulting to the real one.  Taken as a
+    parameter because the dead-entry check below runs only on a full-scope
+    run, and a test that cannot ask for one cannot reach it.
+    """
+    args = sys.argv[1:] if argv is None else argv
     allowlist = load_allowlist()
     findings: list[tuple[str, int, str, str]] = []  # pkg, lineno, label, rel
+    full_scope = not args
+    used: set[tuple[str, str]] = set()
 
-    for path in iter_target_files(sys.argv[1:]):
+    for path in iter_target_files(args):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -276,30 +328,38 @@ def main() -> int:
             match = LABEL_PATTERN.search(line)
             if not match:
                 continue
-            if is_allowlisted(rel_path, line, allowlist):
+            entry = matching_entry(rel_path, line, allowlist)
+            if entry is not None:
+                used.add(entry)
                 continue
             findings.append((package_of(rel_path), lineno, match.group(0), rel_path))
 
-    if not findings:
+    if findings:
+        findings.sort(key=lambda f: (f[0], f[3], f[1]))
+        print(
+            "    ✗ Found internal-tracking-label leakage "
+            "(reword to drop the planning reference; preserve technical intent):"
+        )
+        current_pkg = ""
+        for pkg, lineno, label, rel_path in findings:
+            if pkg != current_pkg:
+                current_pkg = pkg
+                print(f"      - {pkg}:")
+            print(f"        {rel_path}:{lineno}: {label!r}")
+        print(
+            f"\n    {len(findings)} occurrence(s). If a hit is a genuine "
+            f"fixture/data value (not a tracker label), add a reviewed entry "
+            f"to bin/internal-label-allowlist.txt."
+        )
+
+    # Reported even when there are findings: the two are independent faults,
+    # and a run that stopped at the first would hide dead suppressions behind
+    # every unrelated leak until the last one was reworded.
+    dead = report_dead_entries(allowlist, used) if full_scope else 0
+
+    if not findings and not dead:
         print("    ✓ No internal-tracking-label leakage found")
         return 0
-
-    findings.sort(key=lambda f: (f[0], f[3], f[1]))
-    print(
-        "    ✗ Found internal-tracking-label leakage "
-        "(reword to drop the planning reference; preserve technical intent):"
-    )
-    current_pkg = ""
-    for pkg, lineno, label, rel_path in findings:
-        if pkg != current_pkg:
-            current_pkg = pkg
-            print(f"      - {pkg}:")
-        print(f"        {rel_path}:{lineno}: {label!r}")
-    print(
-        f"\n    {len(findings)} occurrence(s). If a hit is a genuine "
-        f"fixture/data value (not a tracker label), add a reviewed entry "
-        f"to bin/internal-label-allowlist.txt."
-    )
     return 1
 
 
