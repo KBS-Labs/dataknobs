@@ -34,6 +34,7 @@ import pytest
 
 from tests._workspace import ROOT, load_bin_module, load_toml, pyprojects, python_floor
 from tests._workspace import rel as _rel
+from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
 
 #: Where the quality gate names the directory holding these tests. Extracted and
@@ -801,6 +802,25 @@ WORKSPACE_TARGET_CONSUMERS = (
 #: ``-o pipefail`` on files that set only ``-e``. A definition is neither.
 WORKSPACE_TARGETS_CALL = re.compile(r"\$\([^)]*workspace[_-]targets\b[^)]*\)")
 
+#: The other way to not keep your own copy: ask the consumer that already has
+#: one. ``run-quality-checks.sh`` resolves the scope it writes the diagnostics
+#: artifact over by calling ``validate.sh --print-targets`` with the very
+#: argument string it is about to validate with, so the artifact's scope and the
+#: validated scope are one value rather than two that have to agree. That is
+#: stronger than calling ``workspace-targets`` directly, not weaker -- a direct
+#: call would restore the second answer this removed -- so the guard below has
+#: to accept it or it fails the fix for the defect it exists to catch.
+#:
+#: Sound only because the delegate is itself in WORKSPACE_TARGET_CONSUMERS and so
+#: is held to the same rule; the assertion below checks that rather than assuming
+#: it, since a delegation to something unguarded is just a copy one file over.
+WORKSPACE_TARGETS_DELEGATION = re.compile(
+    r"\$\(\s*\"?\$\{?\w+\}?/(?P<delegate>[\w.-]+)\"?\s+--print-targets\b[^)]*\)"
+)
+
+#: Which consumer each delegation resolves to, by basename under bin/.
+DELEGATE_ROOT = "bin"
+
 #: The variable a consumer captures the set into, when it captures rather than
 #: expanding inline. Feeds the "is it ever read" half of the guard below.
 CAPTURED_WORKSPACE_TARGETS = re.compile(
@@ -814,23 +834,6 @@ CAPTURED_WORKSPACE_TARGETS = re.compile(
 VALIDATE_ARGS_ASSIGNMENT = re.compile(
     r"""^\s*VALIDATE_ARGS=(?:"([^"]*)"|'([^']*)'|([^\s;&|#]*))""", re.MULTILINE
 )
-
-
-def _workspace_targets() -> list[str]:
-    """The first-party code belonging to no package, from the one declaration.
-
-    Executed rather than parsed. The declaration is four filesystem tests, so
-    reading it as text would report what it says while the question is what it
-    returns.
-    """
-    listing = subprocess.run(
-        [str(ROOT / "bin" / "package-discovery.sh"), "workspace-targets"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return listing.split()
 
 
 def _validate_targets_for(*args: str) -> list[str]:
@@ -1041,15 +1044,36 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
         "additive; it does not displace the packages beside it."
     )
 
+    sources = {
+        name: (ROOT / name).read_text(encoding="utf-8")
+        for name in WORKSPACE_TARGET_CONSUMERS
+    }
+
+    #: Delegation is only "not keeping your own copy" if what it delegates to is
+    #: held to this same rule. Checked before it is honoured, so a delegation to
+    #: an unguarded script fails here rather than silently satisfying the guard.
+    unguarded_delegates = sorted(
+        f"{name} -> {match.group('delegate')}"
+        for name, text in sources.items()
+        for match in WORKSPACE_TARGETS_DELEGATION.finditer(text)
+        if f"{DELEGATE_ROOT}/{match.group('delegate')}" not in WORKSPACE_TARGET_CONSUMERS
+    )
+    assert not unguarded_delegates, (
+        f"{unguarded_delegates} resolve their target set from a script this guard "
+        "does not hold to the same rule, so the copy moved rather than went away"
+    )
+
     unread = sorted(
         name
-        for name in WORKSPACE_TARGET_CONSUMERS
-        if not WORKSPACE_TARGETS_CALL.search((ROOT / name).read_text(encoding="utf-8"))
+        for name, text in sources.items()
+        if not WORKSPACE_TARGETS_CALL.search(text)
+        and not WORKSPACE_TARGETS_DELEGATION.search(text)
     )
     assert not unread, (
         f"{unread} build a default set of things to check without calling "
-        "workspace_targets, so each carries its own idea of which code belongs "
-        "to no package. That is how bin/ ended up in none of them."
+        "workspace_targets or asking a consumer that does, so each carries its "
+        "own idea of which code belongs to no package. That is how bin/ ended "
+        "up in none of them."
     )
 
     # A call whose result nothing reads is the same dead end as a definition

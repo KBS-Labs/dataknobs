@@ -90,6 +90,31 @@ def tracked_files() -> tuple[str, ...]:
 
 
 @cache
+def workspace_targets() -> tuple[str, ...]:
+    """The first-party code belonging to no package, from the one declaration.
+
+    Executed rather than parsed. The declaration is four filesystem tests, so
+    reading it as text would report what it says while the question is what it
+    returns.
+
+    Lives here for the reason ``tracked_shell_files`` does: a third guard now
+    asks it, and the answer decides what each of them scans. Three private
+    copies of a subprocess call is how two of them end up disagreeing about
+    which directories are in scope, with neither reporting that they do.
+    """
+    listing = subprocess.run(
+        [str(ROOT / "bin" / "package-discovery.sh"), "workspace-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    found = tuple(listing.split())
+    assert found, "bin/package-discovery.sh workspace-targets named nothing"
+    return found
+
+
+@cache
 def tracked_dirs() -> frozenset[str]:
     """Every directory holding at least one tracked file, root-relative."""
     dirs: set[str] = set()
