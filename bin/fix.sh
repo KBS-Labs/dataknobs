@@ -63,15 +63,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Get all packages dynamically
-# Word splitting is intended: discover_packages emits a space-separated
-# list. Collected with a read loop rather than the mapfile shellcheck
-# suggests, because mapfile is bash 4+ and these scripts run on the
-# stock macOS bash 3.2. The loop is also glob-safe, which the bare
-# arr=($(cmd)) form is not.
+# Collected with a read loop rather than the mapfile shellcheck suggests,
+# because mapfile is bash 4+ and these scripts run on the stock macOS bash 3.2.
+# The loop is also glob-safe, which the bare arr=($(cmd)) form is not.
+#
+# Captured into a variable first, then fed as a here-string: a process
+# substitution's exit status is examined by nothing, so `done < <(...)` read a
+# failing discovery as an empty package list. This script has no floor at all --
+# an empty list means it silently formats nothing and exits 0 -- so the missing
+# status check is worse here than in validate.sh. A bare assignment propagates
+# it under `set -e`.
 ALL_PACKAGES=()
+_discovered=$(discover_packages)
 while IFS= read -r _pkg; do
     [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
-done < <(discover_packages | tr ' ' '\n')
+done <<< "${_discovered// /$'\n'}"
 
 # Determine what to fix
 FIX_TARGETS=()

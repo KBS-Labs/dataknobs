@@ -60,9 +60,17 @@ workspace_targets() {
 get_packages_in_order() {
     local ordered_packages=()
     local remaining_packages=() _pkg
+    # Declared on its own line before the assignment: `local x=$(cmd)` reports
+    # `local`'s status rather than the command's (SC2155), and the process
+    # substitution this replaces reported no status at all. Either way a failing
+    # discovery came back as an empty list, and this function's contract -- the
+    # dependency order every caller installs in -- has no way to tell that from
+    # a workspace with no packages.
+    local discovered
+    discovered=$(discover_packages)
     while IFS= read -r _pkg; do
         [[ -n "$_pkg" ]] && remaining_packages+=("$_pkg")
-    done < <(discover_packages | tr ' ' '\n')
+    done <<< "${discovered// /$'\n'}"
     local max_iterations=10
     local iterations=0
     
