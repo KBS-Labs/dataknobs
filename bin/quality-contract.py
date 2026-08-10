@@ -34,10 +34,10 @@ import logging
 import re
 import subprocess
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +101,14 @@ def cell_matches(path: PurePosixPath, pattern: str) -> bool:
     return all(fnmatch.fnmatchcase(part, glob) for part, glob in zip(have, want))
 
 
-def partition(contract: dict[str, Any], tool: str, files: list[PurePosixPath]) -> dict[str, Any]:
-    """Which cell each file lands in, and every file that lands in none or several."""
-    cells = contract["tools"][tool]["cells"]
+def partition(cells: list[dict[str, Any]], files: list[PurePosixPath]) -> dict[str, Any]:
+    """Which cell each file lands in, and every file that lands in none or several.
+
+    Takes the cells rather than the tool name so ``verify`` can pass only the
+    ones it has already found well formed: a cell with no ``path`` would
+    otherwise be indexed here and raise, turning a reportable fault into the
+    traceback this module exists to avoid.
+    """
     by_cell: dict[str, list[str]] = {cell["path"]: [] for cell in cells}
     orphans: list[str] = []
     overlaps: list[str] = []
@@ -127,6 +132,45 @@ def _cell_for(cells: list[dict[str, Any]], relative: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+#: How many offending files a breached ceiling names before it summarises.
+_NAMED_OFFENDERS = 10
+
+
+class Measurement(NamedTuple):
+    """What one tool found, kept per file rather than per cell.
+
+    A cell total answers *whether* a ceiling is breached; it cannot answer
+    *what* breached it. The first ceiling this mechanism ever broke reported
+    ``21 findings against 20 allowed`` over a directory of 21 files, and finding
+    the twenty-first took a separate script — a failure nobody can act on gets
+    suppressed just as surely as one that fires spuriously, which is G4's
+    subject from the other side. So the file names are carried out of the
+    measurement and the total is derived from them.
+
+    ``unattributed`` holds findings that resolved to no cell at all. Totality
+    makes that impossible for a tracked file, so it stays empty in the ordinary
+    case — but mypy follows imports, and a finding reported against something
+    outside the population would otherwise be dropped in silence, which is this
+    repository's own defect class: an absence rendered as a pass.
+    """
+
+    by_cell: dict[str, Counter[str]]
+    unattributed: Counter[str]
+
+
+def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
+    """Bucket reported paths into the cell each belongs to."""
+    by_cell: dict[str, Counter[str]] = defaultdict(Counter)
+    unattributed: Counter[str] = Counter()
+    for name in names:
+        cell = _cell_for(cells, name) if name else None
+        if cell:
+            by_cell[cell][name] += 1
+        else:
+            unattributed[name or "<unnamed>"] += 1
+    return Measurement(dict(by_cell), unattributed)
+
+
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a measuring tool from the repository root.
 
@@ -136,15 +180,20 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=_ROOT, capture_output=True, text=True, check=False)
 
 
-def measure_ruff(contract: dict[str, Any], files: list[PurePosixPath]) -> Counter[str]:
+def measure_ruff(contract: dict[str, Any], files: list[PurePosixPath]) -> Measurement:
     """Findings per cell, from one ruff pass over the whole population."""
     cells = contract["tools"]["ruff"]["cells"]
     config = contract["tools"]["ruff"]["config"]
     result = _run(
         [
-            "uv", "run", "ruff", "check",
-            "--config", config,
-            "--output-format", "json",
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "--config",
+            config,
+            "--output-format",
+            "json",
             "--no-cache",
             *(str(f) for f in files),
         ]
@@ -156,16 +205,10 @@ def measure_ruff(contract: dict[str, Any], files: list[PurePosixPath]) -> Counte
             f"ruff did not emit JSON, so nothing was measured: {exc}\n{result.stderr[:800]}"
         ) from exc
 
-    counts: Counter[str] = Counter()
-    for finding in findings:
-        relative = _relative(finding.get("filename", ""))
-        cell = _cell_for(cells, relative) if relative else None
-        if cell:
-            counts[cell] += 1
-    return counts
+    return _tally(cells, [_relative(finding.get("filename", "")) for finding in findings])
 
 
-def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Counter[str]:
+def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Measurement:
     """Findings per cell, from one mypy pass over the cells it actually covers.
 
     Takes the population and ignores it, so the three measurers share one
@@ -190,21 +233,18 @@ def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Count
         }
     )
     if not targets:
-        return Counter()
+        return Measurement({}, Counter())
 
     result = _run(["uv", "run", "mypy", *targets, "--config-file", config])
-    counts: Counter[str] = Counter()
-    for line in result.stdout.splitlines():
-        match = re.match(r"([^:]+):\d+:(?:\d+:)?\s*error:", line)
-        if not match:
-            continue
-        cell = _cell_for(cells, _relative(match.group(1)))
-        if cell:
-            counts[cell] += 1
-    return counts
+    reported = [
+        _relative(match.group(1))
+        for line in result.stdout.splitlines()
+        if (match := re.match(r"([^:]+):\d+:(?:\d+:)?\s*error:", line))
+    ]
+    return _tally(cells, reported)
 
 
-def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Counter[str]:
+def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Measurement:
     """Files the formatter would rewrite, per cell.
 
     Counted in files rather than findings because that is the unit the formatter
@@ -216,21 +256,18 @@ def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Coun
     config = contract["tools"]["format"]["config"]
     result = _run(
         [
-            "uv", "run", "ruff", "format", "--check",
-            "--config", config,
+            "uv",
+            "run",
+            "ruff",
+            "format",
+            "--check",
+            "--config",
+            config,
             *(str(f) for f in files),
         ]
     )
-    named = {
-        _relative(match.group(1))
-        for match in re.finditer(r"-->\s+(\S+?):\d+", result.stdout)
-    }
-    counts: Counter[str] = Counter()
-    for relative in sorted(named):
-        cell = _cell_for(cells, relative)
-        if cell:
-            counts[cell] += 1
-    return counts
+    named = {_relative(match.group(1)) for match in re.finditer(r"-->\s+(\S+?):\d+", result.stdout)}
+    return _tally(cells, sorted(named))
 
 
 def _relative(name: str) -> str:
@@ -250,24 +287,45 @@ def _expand(pattern: str) -> list[PurePosixPath]:
 
 
 #: One measurer per tool, each ``(contract, files) -> Counter[cell]``.
-MEASURERS: dict[str, Callable[[dict[str, Any], list[PurePosixPath]], Counter[str]]] = {
+MEASURERS: dict[str, Callable[[dict[str, Any], list[PurePosixPath]], Measurement]] = {
     "ruff": measure_ruff,
     "mypy": measure_mypy,
     "format": measure_format,
 }
 
 
+def _measure(contract: dict[str, Any], tools: list[str]) -> dict[str, Measurement]:
+    """Run every requested tool once, over one shared file population.
+
+    The single entry point for measuring, so ``check`` and ``update-baseline``
+    cannot come to disagree about what a cell measures — which is the failure
+    that would be hardest to see, since each would be internally consistent and
+    the ratchet would move under one and not the other.
+    """
+    files = tracked_python()
+    return {tool: MEASURERS[tool](contract, files) for tool in tools}
+
+
+def _measured(measurement: Measurement, cell: dict[str, Any]) -> int:
+    """A cell's total, derived from its per-file counts rather than kept beside them."""
+    return sum(measurement.by_cell.get(cell["path"], Counter()).values())
+
+
 def verify(contract: dict[str, Any]) -> list[str]:
     """Structural faults in the declaration itself, as reportable sentences.
 
-    Separate from ``check`` because these cost nothing and those cost minutes:
-    a malformed contract should be reported by the test suite in milliseconds
-    rather than after a full measuring run.
+    Separate from ``check`` because these are pure comparisons over a small
+    document while that shells out to three tools over the whole tree — a second
+    or two with the type-checker's cache warm, and considerably more without it.
+    A malformed contract should be reported in milliseconds rather than after a
+    full measuring run.
     """
     faults: list[str] = []
     files = tracked_python()
     if not files:
-        return ["git tracks no *.py at all — the population is empty and nothing below means anything"]
+        return [
+            "git tracks no *.py at all — the population is empty and nothing below means anything"
+        ]
 
     declared_tools = set(contract.get("tools", {}))
     missing = sorted(set(MEASURERS) - declared_tools)
@@ -279,11 +337,45 @@ def verify(contract: dict[str, Any]) -> list[str]:
         tiers = set(spec.get("tiers", {}))
         seen: set[str] = set()
 
-        for cell in spec["cells"]:
-            where = f"{tool}/{cell.get('path', '?')}"
+        # Read rather than indexed, and checked before anything downstream uses
+        # it. A tool entry with no cells is a population nothing decided about,
+        # which is the same fault as a file in no cell — and reaching it through
+        # ``spec["cells"]`` reported it as a traceback naming a line of this
+        # script instead of a sentence naming the contract.
+        cells = spec.get("cells")
+        if not isinstance(cells, list) or not cells:
+            faults.append(
+                f"{tool}: declares no cells, so every file it would measure is covered by nothing"
+            )
+            continue
+
+        # Split before the per-cell loop: a cell with no ``path`` cannot be
+        # partitioned, and passing it on would raise where a fault belongs.
+        well_formed: list[dict[str, Any]] = []
+        for cell in cells:
+            if isinstance(cell.get("path"), str):
+                well_formed.append(cell)
+            else:
+                faults.append(f"{tool}: a cell has no path, so it names nothing")
+
+        split = partition(well_formed, files)
+
+        for cell in well_formed:
+            where = f"{tool}/{cell['path']}"
             if cell["path"] in seen:
                 faults.append(f"{where}: declared twice")
             seen.add(cell["path"])
+            # The stale direction, which totality does not imply: a cell can
+            # match zero files while every file still lands in some other cell,
+            # so the partition stays valid and the entry stays wrong. The
+            # declaration this replaced enforced exactly this, and it is the
+            # half that fires when a directory is cleaned up and its deferral
+            # outlives it — leaving the reader believing in a gap that closed.
+            if not split["by_cell"][cell["path"]]:
+                faults.append(
+                    f"{where}: matches no tracked Python file, so it records a "
+                    "gap that no longer exists"
+                )
             if cell.get("tier") not in tiers:
                 faults.append(f"{where}: tier {cell.get('tier')!r} is not one of {sorted(tiers)}")
             if not isinstance(cell.get("ceiling"), int) or isinstance(cell.get("ceiling"), bool):
@@ -296,39 +388,53 @@ def verify(contract: dict[str, Any]) -> list[str]:
                     f"of {cell['ceiling']} claims a number nothing takes"
                 )
 
-        split = partition(contract, tool, files)
         for orphan in split["orphans"]:
             faults.append(f"{tool}: {orphan} is in no cell, so nobody decided about it")
         for overlap in split["overlaps"]:
-            faults.append(f"{tool}: {overlap} is in several cells, so the decision contradicts itself")
+            faults.append(
+                f"{tool}: {overlap} is in several cells, so the decision contradicts itself"
+            )
 
     return faults
 
 
 def check(contract: dict[str, Any], tools: list[str]) -> dict[str, Any]:
     """Measure each tool and compare every cell against its ceiling."""
-    files = tracked_python()
-    report: dict[str, Any] = {"exceeded": [], "cleared": [], "cells": {}}
+    report: dict[str, Any] = {"exceeded": [], "cleared": [], "cells": {}, "unattributed": []}
 
-    for tool in tools:
-        counts = MEASURERS[tool](contract, files)
+    for tool, measurement in _measure(contract, tools).items():
         for cell in contract["tools"][tool]["cells"]:
             name = f"{tool}/{cell['path']}"
-            measured = counts.get(cell["path"], 0)
+            measured = _measured(measurement, cell)
             report["cells"][name] = {"measured": measured, "ceiling": cell["ceiling"]}
+            entry = {"cell": name, "measured": measured, "ceiling": cell["ceiling"]}
             if measured > cell["ceiling"]:
+                per_file = measurement.by_cell.get(cell["path"], Counter())
+                ranked = sorted(per_file.items(), key=lambda item: (-item[1], item[0]))
                 report["exceeded"].append(
-                    {"cell": name, "measured": measured, "ceiling": cell["ceiling"]}
+                    {
+                        **entry,
+                        "files": [
+                            {"file": name, "count": count}
+                            for name, count in ranked[:_NAMED_OFFENDERS]
+                        ],
+                        "further_files": max(len(ranked) - _NAMED_OFFENDERS, 0),
+                    }
                 )
             elif measured < cell["ceiling"]:
-                report["cleared"].append(
-                    {"cell": name, "measured": measured, "ceiling": cell["ceiling"]}
-                )
+                report["cleared"].append(entry)
+
+        report["unattributed"] += [
+            {"tool": tool, "file": name, "findings": count}
+            for name, count in sorted(measurement.unattributed.items())
+        ]
 
     return report
 
 
-def update_baseline(contract: dict[str, Any], tools: list[str], path: Path) -> list[str]:
+def update_baseline(
+    contract: dict[str, Any], tools: list[str], path: Path
+) -> tuple[list[str], list[str]]:
     """Lower every ceiling to what the tree currently measures.
 
     Lower only. Raising a ceiling is how a backlog grows while it is supposedly
@@ -336,21 +442,32 @@ def update_baseline(contract: dict[str, Any], tools: list[str], path: Path) -> l
     without anyone deciding to — so an exceeded cell is left alone here and
     reported, which puts the argument for raising it in a pull request where it
     belongs.
+
+    Returns ``(lowered, exceeded)``. The second half is why this returns a pair:
+    leaving a breached ceiling alone *and silent* would tell a developer who has
+    just introduced a regression that there was nothing to do — the docstring
+    above said "reported" while the code only ever mentioned the cells it
+    lowered, which is the same shape as a status field whose default is a
+    verdict.
     """
-    files = tracked_python()
-    changed: list[str] = []
+    lowered: list[str] = []
+    exceeded: list[str] = []
 
-    for tool in tools:
-        counts = MEASURERS[tool](contract, files)
+    for tool, measurement in _measure(contract, tools).items():
         for cell in contract["tools"][tool]["cells"]:
-            measured = counts.get(cell["path"], 0)
+            measured = _measured(measurement, cell)
             if measured < cell["ceiling"]:
-                changed.append(f"{tool}/{cell['path']}: {cell['ceiling']} -> {measured}")
+                lowered.append(f"{tool}/{cell['path']}: {cell['ceiling']} -> {measured}")
                 cell["ceiling"] = measured
+            elif measured > cell["ceiling"]:
+                exceeded.append(
+                    f"{tool}/{cell['path']}: {measured} findings against "
+                    f"{cell['ceiling']} allowed, left alone"
+                )
 
-    if changed:
+    if lowered:
         path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
-    return changed
+    return lowered, exceeded
 
 
 def _selected(requested: str | None) -> list[str]:
@@ -359,9 +476,7 @@ def _selected(requested: str | None) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "command", choices=("check", "verify", "update-baseline", "partition")
-    )
+    parser.add_argument("command", choices=("check", "verify", "update-baseline", "partition"))
     parser.add_argument("--tool", choices=sorted(MEASURERS), help="restrict to one tool")
     parser.add_argument("--json", action="store_true", dest="use_json")
     args = parser.parse_args()
@@ -382,8 +497,10 @@ def main() -> None:
         sys.exit(1 if faults else 0)
 
     if args.command == "partition":
+        files = tracked_python()
         split = {
-            tool: partition(contract, tool, tracked_python()) for tool in _selected(args.tool)
+            tool: partition(contract["tools"][tool]["cells"], files)
+            for tool in _selected(args.tool)
         }
         json.dump(split, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -399,11 +516,18 @@ def main() -> None:
         sys.exit(2)
 
     if args.command == "update-baseline":
-        changed = update_baseline(contract, _selected(args.tool), _CONTRACT)
-        for line in changed:
+        lowered, exceeded = update_baseline(contract, _selected(args.tool), _CONTRACT)
+        for line in lowered:
             logger.info("%s", line)
-        if not changed:
+        if not lowered:
             logger.info("No ceiling was above what the tree measures.")
+        for line in exceeded:
+            logger.warning("%s", line)
+        if exceeded:
+            logger.warning(
+                "Raising a ceiling is a hand edit, so the argument for it lands "
+                "in a pull request rather than in a rerun."
+            )
         sys.exit(0)
 
     report = check(contract, _selected(args.tool))
@@ -415,13 +539,30 @@ def main() -> None:
     for cleared in report["cleared"]:
         logger.info(
             "%s is under its ceiling (%d of %d) — lower it with --update-baseline",
-            cleared["cell"], cleared["measured"], cleared["ceiling"],
+            cleared["cell"],
+            cleared["measured"],
+            cleared["ceiling"],
+        )
+    for stray in report["unattributed"]:
+        logger.warning(
+            "%s reported %d in %s, which is in no cell — not counted anywhere",
+            stray["tool"],
+            stray["findings"],
+            stray["file"],
         )
     for exceeded in report["exceeded"]:
         logger.error(
             "%s exceeds its ceiling: %d findings against %d allowed",
-            exceeded["cell"], exceeded["measured"], exceeded["ceiling"],
+            exceeded["cell"],
+            exceeded["measured"],
+            exceeded["ceiling"],
         )
+        # A count alone does not say which file to open, and a failure nobody
+        # can act on gets suppressed as surely as one that fires spuriously.
+        for offender in exceeded["files"]:
+            logger.error("    %s (%d)", offender["file"], offender["count"])
+        if exceeded["further_files"]:
+            logger.error("    ... and %d more", exceeded["further_files"])
     if not report["exceeded"]:
         logger.info("Every cell is within its ceiling.")
     sys.exit(1 if report["exceeded"] else 0)

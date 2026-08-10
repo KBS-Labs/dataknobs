@@ -741,6 +741,49 @@ def test_the_recorded_hashes_describe_the_tree_that_was_checked() -> None:
     )
 
 
+def test_the_gate_refuses_to_sign_over_an_empty_digest_set() -> None:
+    """A failed hash computation must not become a comparison that passes.
+
+    Both computations fall back to ``{}`` when they fail, and an empty document
+    compares clean against anything — so in the gate that fallback would put a
+    signature on the far side of a comparison that never happened. The
+    diagnostics tier attests nothing, so there the same fallback is a tolerable
+    degradation and the run should finish; the refusal is therefore gated on
+    ``--emit-artifacts`` rather than applied to both roles.
+
+    Structural, like the ordering guard above, because exercising it for real
+    means running the gate from inside the gate's own test suite. What it
+    protects against is deletion: the refusal is a compensating control whose
+    absence is silent, and this program has already removed one of those on the
+    strength of its own docstring.
+    """
+    lines = _gate_lines()
+
+    first_hash = _first_matching(
+        lines, lambda ln: "package-hashes.py" in ln and "compute" in ln
+    )
+    assert first_hash > 0, "nothing computes content hashes; re-point this guard"
+
+    refusal = _first_matching(
+        lines, lambda ln: re.search(r'=\s*"\{\}"\s*\]', ln) is not None
+    )
+    assert refusal > first_hash, (
+        "nothing in the gate compares a hash document against the empty "
+        f"fallback after computing it at line {first_hash}. Without that, a "
+        "failed computation is signed over as though it had succeeded — the "
+        "comparison passes because there is nothing in it."
+    )
+
+    guarded = _last_matching(
+        lines[:refusal], lambda ln: 'EMIT_ARTIFACTS" = "yes"' in ln
+    )
+    assert guarded > first_hash, (
+        f"the empty-digest refusal at line {refusal} is not inside an "
+        "--emit-artifacts branch, so it would also abort the diagnostics tier, "
+        "which signs nothing and has no artifact to protect."
+    )
+
+
 def _hashes(command: str) -> str:
     """One of the producer's hash documents, as it prints it."""
     return subprocess.run(

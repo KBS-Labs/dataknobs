@@ -24,10 +24,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
-from tests._workspace import ROOT, load_bin_module, rel, tracked_python_files
+from tests._workspace import ROOT, load_bin_module, rel
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
 TOOL = ROOT / "bin" / "quality-contract.py"
@@ -83,6 +83,14 @@ def test_the_contract_is_total_and_well_formed() -> None:
     contradicts itself, and the winner would be whichever cell the matcher
     happened to try first.
 
+    This also covers the *stale* direction — a cell matching no tracked file —
+    which totality does not imply, since a cell can match zero files while every
+    file still lands in some other cell. It is asserted through ``verify`` here
+    rather than recomputed, and the fault itself is driven on a synthetic
+    contract in ``test_verify_names_a_cell_that_matches_no_tracked_file``: a
+    second implementation of the rule over the real contract would pass while
+    the tool it is meant to be checking had stopped enforcing it.
+
     That second failure is not hypothetical: written with the obvious matcher,
     ``PurePosixPath.match``, the first run of this reported all 554 files under
     ``packages/*/src`` as belonging to two cells, because a relative pattern
@@ -100,8 +108,7 @@ def test_the_contract_is_total_and_well_formed() -> None:
         check=False,
     )
     assert result.returncode == 0, (
-        f"{rel(CONTRACT)} does not describe the repository:\n"
-        f"{result.stdout}{result.stderr}"
+        f"{rel(CONTRACT)} does not describe the repository:\n{result.stdout}{result.stderr}"
     )
 
 
@@ -119,29 +126,6 @@ def test_the_contract_covers_every_tool_that_decides_a_verdict() -> None:
         f"{rel(CONTRACT)} declares {sorted(declared)} and {rel(TOOL)} can "
         f"measure {sorted(measurable)}. A tool on one side only is either an "
         "undeclared population or a ceiling nothing compares."
-    )
-
-
-def test_no_cell_names_a_part_of_the_tree_that_is_gone() -> None:
-    """A cell matching nothing leaves the reader believing in a gap that closed.
-
-    The stale half of the rule the previous declaration enforced, kept because
-    totality does not imply it: a cell can match zero files while every file
-    still matches some other cell, so the partition stays valid and the entry
-    stays wrong.
-    """
-    files = [PurePosixPath(name) for name in tracked_python_files()]
-    assert files, "git tracks no Python at all — this guard would check nothing"
-
-    stale = sorted(
-        f"{tool}/{cell['path']}"
-        for tool in _contract()["tools"]
-        for cell in _cells(tool)
-        if not any(contract_module.cell_matches(path, cell["path"]) for path in files)
-    )
-    assert not stale, (
-        f"{rel(CONTRACT)} declares cells matching no tracked Python file: "
-        f"{stale}. Drop them — a gap that no longer exists reads as one that does."
     )
 
 
@@ -237,17 +221,20 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
 
     inflated = "packages/*/tests"
     deflated = "packages/*/examples"
-    true_ceilings = {inflated: ruff_cells[inflated]["ceiling"], deflated: ruff_cells[deflated]["ceiling"]}
+    true_ceilings = {
+        inflated: ruff_cells[inflated]["ceiling"],
+        deflated: ruff_cells[deflated]["ceiling"],
+    }
 
     ruff_cells[inflated]["ceiling"] = true_ceilings[inflated] + 500
     ruff_cells[deflated]["ceiling"] = max(true_ceilings[deflated] - 5, 0)
 
     destination = tmp_path / "quality-contract.json"
-    changed = contract_module.update_baseline(contract, ["ruff"], destination)
+    lowered, exceeded = contract_module.update_baseline(contract, ["ruff"], destination)
 
     assert ruff_cells[inflated]["ceiling"] == true_ceilings[inflated], (
         f"an inflated ceiling on {inflated} was not lowered to what the tree "
-        f"measures; --update-baseline reported {changed}"
+        f"measures; --update-baseline reported {lowered}"
     )
     assert ruff_cells[deflated]["ceiling"] == max(true_ceilings[deflated] - 5, 0), (
         f"{deflated} had a ceiling below its measurement and --update-baseline "
@@ -255,6 +242,134 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
         "an argument to have in a pull request, not a side effect of a rerun."
     )
     assert destination.is_file(), "a lowered ceiling was reported but never written"
+
+    # Left alone *and* reported. Silence here tells a developer who has just
+    # introduced a regression that there was nothing to do, which is the same
+    # shape as a status field whose default is a verdict — and the function's
+    # own docstring claimed it reported while the code named only what it
+    # lowered.
+    assert any(deflated in line for line in exceeded), (
+        f"{deflated} measures above its ceiling and --update-baseline said "
+        f"nothing about it; it reported only {exceeded}"
+    )
+
+
+def _with_cell(tool: str, **overrides: Any) -> dict[str, Any]:
+    """The real contract with one extra cell, for exercising a single fault.
+
+    Built from the real declaration rather than a minimal fake so the fault
+    under test is the *only* thing wrong: a hand-built contract fails totality
+    on all 1,470 tracked files at once, and every assertion below would then
+    pass on a fault it did not cause.
+    """
+    contract = _contract()
+    cell = {"path": "packages/*/nowhere", "tier": "deferred", "ceiling": 0, "reason": "x"}
+    cell.update(overrides)
+    contract["tools"][tool]["cells"].append(cell)
+    return contract
+
+
+def _faults_for(contract: dict[str, Any]) -> list[str]:
+    faults: list[str] = contract_module.verify(contract)
+    return faults
+
+
+def test_verify_names_a_cell_that_matches_no_tracked_file() -> None:
+    """The stale direction, which totality does not imply.
+
+    A cell can match zero files while every file still lands in some other
+    cell, so the partition stays valid and the entry stays wrong. This is half
+    of the rule the previous declaration enforced — the half that fired when a
+    directory was cleaned up and its deferral outlived it — and losing it in the
+    move would leave the reader believing in a gap that closed.
+    """
+    faults = _faults_for(_with_cell("ruff"))
+    assert any("packages/*/nowhere" in fault for fault in faults), (
+        "verify() accepted a cell matching no tracked Python file. A gap that no "
+        f"longer exists reads as one that does. Faults reported: {faults}"
+    )
+
+
+def test_verify_names_a_tool_whose_cells_are_missing_entirely() -> None:
+    """A malformed declaration must produce a fault, not a traceback.
+
+    ``verify`` promises 'a clear error naming the file rather than a traceback',
+    and a tool entry with no ``cells`` key reached ``spec["cells"]`` directly.
+    """
+    contract = _contract()
+    contract["tools"]["ruff"] = {"unit": "findings", "config": "pyproject.toml"}
+    faults = _faults_for(contract)
+    assert any("ruff" in fault for fault in faults), (
+        f"a tool declaring no cells produced no fault: {faults}"
+    )
+
+
+def test_verify_names_each_malformed_cell() -> None:
+    """Every fault branch, made to fail on purpose.
+
+    None of these had been exercised. A guard is not done until it has been
+    shown to go red, and this program has three times shipped one that could
+    not — so the branches are driven here rather than trusted from reading.
+    """
+    cases: dict[str, tuple[dict[str, Any], str]] = {
+        "tier": ({"tier": "invented"}, "invented"),
+        "ceiling": ({"ceiling": "twelve"}, "twelve"),
+        "boolean ceiling": ({"ceiling": True}, "True"),
+        "reason": ({"reason": "   "}, "reason"),
+    }
+    for label, (override, expected) in cases.items():
+        faults = _faults_for(_with_cell("ruff", **override))
+        assert any(expected in fault for fault in faults), (
+            f"a cell with a bad {label} produced no fault mentioning {expected!r}: {faults}"
+        )
+
+    duplicated = _contract()
+    duplicated["tools"]["ruff"]["cells"].append(dict(duplicated["tools"]["ruff"]["cells"][0]))
+    assert any("twice" in fault for fault in _faults_for(duplicated)), (
+        "the same path declared in two cells produced no fault"
+    )
+
+    unmeasured = _with_cell("mypy", tier="unchecked", ceiling=7)
+    assert any("claims a number nothing takes" in fault for fault in _faults_for(unmeasured)), (
+        "an unmeasured tier with a positive ceiling produced no fault — the "
+        "number would read as a backlog nothing is measuring"
+    )
+
+
+def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
+    """A count says *whether*; it cannot say *what*.
+
+    The first ceiling this mechanism ever broke reported ``21 findings against
+    20 allowed`` over a directory holding 21 files, and finding the
+    twenty-first took a separate script. A failure nobody can act on gets
+    suppressed as surely as one that fires spuriously — the same subject as G4,
+    approached from the other side — so an exceeded cell carries the file names
+    out with it.
+
+    Driven over the real measurement with one ceiling pushed below what the
+    tree holds, because what is being pinned is what a developer sees when a
+    real cell goes over.
+    """
+    contract = _contract()
+    cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
+    breached = "packages/*/tests"
+    cells[breached]["ceiling"] = 0
+
+    report = contract_module.check(contract, ["ruff"])
+
+    entry = next((e for e in report["exceeded"] if e["cell"] == f"ruff/{breached}"), None)
+    assert entry is not None, (
+        f"a cell measuring above zero was not reported as exceeded: {report['exceeded']}"
+    )
+    assert entry["files"], (
+        "the breach named no files, so the developer is told a number and left "
+        "to find the offenders with a second tool"
+    )
+    for offender in entry["files"]:
+        assert offender["file"].startswith("packages/"), (
+            f"{offender['file']} was named against {breached}, which it is not in"
+        )
+    assert entry["further_files"] >= 0
 
 
 def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
@@ -267,9 +382,7 @@ def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
     """
     changed_packages = load_bin_module("changed-packages")
     declared = {
-        entry
-        for entries in changed_packages.WORKSPACE_QUALITY_INPUTS.values()
-        for entry in entries
+        entry for entries in changed_packages.WORKSPACE_QUALITY_INPUTS.values() for entry in entries
     }
     relative = CONTRACT.relative_to(ROOT).as_posix()
     assert relative in declared, (

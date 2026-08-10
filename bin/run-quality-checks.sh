@@ -380,6 +380,18 @@ record_check() {
 # version structurally cannot.
 #
 # The far end now re-computes and compares instead; see the re-check below.
+#
+# The `|| echo "{}"` fallback below is the checker role's, and only the
+# checker's. An empty document is a hash computation that *failed*, and it
+# compares clean against anything — so in the gate it would put a signed
+# artifact on the far side of a comparison that never happened, which is this
+# repository's own defect class rather than a tolerable degradation. The
+# diagnostics tier attests nothing, so there it is exactly a tolerable
+# degradation: the run is still worth finishing.
+#
+# Failing here rather than at the re-check is the difference between a minute
+# and the whole run: there is nothing the intervening checks could produce that
+# would make an artifact writable without these.
 print_status "Computing per-package content hashes..."
 PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
 # Workspace-level inputs (toolchain config, workspace guards) are hashed
@@ -387,6 +399,18 @@ PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/d
 # package dependency graph. Without them a change to mypy.ini or a guard
 # left every stored hash intact and CI validated a stale artifact.
 WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
+
+if [ "$EMIT_ARTIFACTS" = "yes" ]; then
+    for _half in "packages:$PACKAGE_HASHES_JSON" "workspace:$WORKSPACE_HASHES_JSON"; do
+        if [ "${_half#*:}" = "{}" ]; then
+            print_error "Could not compute ${_half%%:*} content hashes."
+            print_error "An artifact signed over an empty digest set attests nothing,"
+            print_error "so no checks were run. Fix the hash computation and re-run."
+            exit 1
+        fi
+    done
+    unset _half
+fi
 
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
@@ -845,12 +869,16 @@ record_check shell_lint "$SHELL_LINT_STATUS" \
 # supposed to be clearing it.
 #
 # It re-runs ruff and mypy rather than reading the verdicts validate.sh already
-# produced, because they are different questions asked with different configs:
-# validate.sh asks "is the code this run touched clean", over the packages in
-# scope, under mypy.ini. This asks "has any cell of the whole tree moved past
-# what it declared", which needs every cell measured whether the run touched it
-# or not. Reusing one answer for the other would make the ratchet depend on
-# which packages happened to change.
+# produced, because they are different questions. validate.sh asks "is the code
+# this run touched clean", over the packages in scope; this asks "has any cell
+# of the whole tree moved past what it declared", which needs every cell
+# measured whether the run touched it or not. Reusing one answer for the other
+# would make the ratchet depend on which packages happened to change.
+#
+# For ruff the difference is scope alone — both read the root config. For mypy
+# it is scope *and* config, since validate.sh runs under mypy.ini and the
+# contract measures under the root one; that second half disappears when mypy.ini
+# is retired, and the two invocations then differ only in what they cover.
 print_status "Checking the quality contract..."
 _check_start=$(date +%s)
 if uv run python "$SCRIPT_DIR/quality-contract.py" check; then
