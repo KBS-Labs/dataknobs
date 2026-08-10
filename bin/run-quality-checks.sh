@@ -643,6 +643,13 @@ VALIDATION_SKIPPED="false"
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
 DOCS_MIRROR_STATUS=0
+# Defaults to skipped, and that direction is the whole point: the docs block is
+# PR-gated, so a --dev run never touches the three statuses above and they stay
+# 0 — which the summary renders as "pass". Three documentation checks reported
+# as passing on every run that could not have performed them. Set to false by
+# the block itself, so "did this run" is answered where the run happens rather
+# than reconstructed in the heredoc from the same conditions.
+DOCS_SKIPPED="true"
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
@@ -926,6 +933,7 @@ fi
 # Documentation checks (PR mode only, skip if no docs changes in pr mode)
 if [ "$PR_MODE" = "yes" ]; then
     if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
+        DOCS_SKIPPED="false"
         print_status "Running documentation checks (build, versions, mirrors)..."
         # bin/docs-checks.sh is the single source of truth for the doc-check set.
         # It writes per-check logs (docs-build.log / docs-versions.log /
@@ -1370,6 +1378,24 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 print_error "Some tests failed"
             fi
         fi
+
+        # The verdict the summary reports for both suites, recorded once here
+        # rather than at each assignment above, so neither sub-branch can be the
+        # one that forgets.
+        #
+        # Dev mode runs `test.sh -n` with no --type, so unit and integration go
+        # through one invocation and come back as one exit code. That coarseness
+        # is the truth available, and it is why the two are set from the same
+        # value; the per-suite durations stay null, which is the honest record of
+        # a measurement that was never taken separately.
+        #
+        # Without this they kept their initial 0 while TEST_STATUS carried the
+        # real answer, and 0 renders as "pass". A failing dev run wrote
+        # overall_status FAIL beside unit_tests pass — and the diagnostics tool
+        # gates its entire test-failure section on exactly those two fields, so
+        # it announced a failure and then named nothing that had failed.
+        UNIT_TEST_STATUS=$TEST_STATUS
+        INTEGRATION_TEST_STATUS=$TEST_STATUS
     fi
     
     # Create test results XML files for CI systems (an artifact, so gate only)
@@ -1510,19 +1536,21 @@ cat > "$OUTPUT_DIR/quality-summary.json" <<EOF
 "documentation": {
   "status": $([ "$DOCS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
   "exit_code": $DOCS_STATUS,
-  "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
+  "skipped": $DOCS_SKIPPED,
   "tool": "mkdocs",
   "duration_seconds": $DOCS_SECONDS
 },
 "documentation_versions": {
   "status": $([ "$DOCS_VERSIONS_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
   "exit_code": $DOCS_VERSIONS_STATUS,
+  "skipped": $DOCS_SKIPPED,
   "tool": "docs-update-versions.sh",
   "duration_seconds": $DOCS_VERSIONS_SECONDS
 },
 "documentation_mirrors": {
   "status": $([ "$DOCS_MIRROR_STATUS" -eq 0 ] && echo '"pass"' || echo '"fail"'),
   "exit_code": $DOCS_MIRROR_STATUS,
+  "skipped": $DOCS_SKIPPED,
   "tool": "docs-mirror-check.py",
   "duration_seconds": $DOCS_MIRROR_SECONDS
 },

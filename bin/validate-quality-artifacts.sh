@@ -32,6 +32,26 @@ if [ "${1:-}" = "--read-summary" ]; then
     READ_SUMMARY_MODE="$2"
 fi
 
+# Which artifact set to validate. CI passes nothing and gets the committed one;
+# --from names another, which is what lets a test drive the main path below over
+# a synthetic run — the same affordance diagnose-quality-failures.sh carries, for
+# the same reason.
+#
+# Nothing could drive that path before this existed. Every guard in
+# tests/test_quality_artifact_validation.py went through --read-summary, and
+# --read-summary returns above the main path, so the two extractions that read
+# the projection outside read_summary() were executed by no test at all. They
+# were still matching on a tab after the projection moved to \037, which made
+# the overall status read empty and failed every artifact set CI has ever been
+# handed. A mode that exits before the code is not coverage of the code.
+if [ "${1:-}" = "--from" ]; then
+    if [ -z "${2:-}" ]; then
+        echo "--from needs a directory" >&2
+        exit 2
+    fi
+    ARTIFACTS_DIR="$2"
+fi
+
 if [ -z "$READ_SUMMARY_MODE" ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}         Validating Quality Check Artifacts                       ${NC}"
@@ -89,6 +109,29 @@ print_info() {
 read_summary() {
     python3 "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
         || printf 'ERROR\037could not run read-quality-summary.py\n'
+}
+
+# Pull a single-valued record — OVERALL, ERROR — out of a projection.
+#
+# The same IFS-driven split the CHECK loops below use, rather than a second
+# answer to "what separates two fields" written as a regex. Both extractions
+# here were `sed -n 's/^OVERALL\t//p'` and stayed that way when the projection
+# moved from a tab to \037: they then matched nothing, the overall status read
+# empty on every run, and this script failed every artifact set CI was handed.
+# A parse error and a passing run reached the same message, which is the one
+# collapse the comment at the call site says must never happen.
+#
+# Never returns non-zero: under `set -e` a "no such record" exit status would
+# abort the run, and an absent record is a value to test for, not a failure.
+projection_value() {
+    local want="$1" kind rest
+    while IFS="$(printf '\037')" read -r kind rest; do
+        if [ "$kind" = "$want" ]; then
+            printf '%s\n' "$rest"
+            return 0
+        fi
+    done
+    return 0
 }
 
 # Print the projection for one summary file and exit. The main path below calls
@@ -196,7 +239,7 @@ fi
 print_check "Test results"
 if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
     SUMMARY_PROJECTION=$(read_summary "$ARTIFACTS_DIR/quality-summary.json")
-    SUMMARY_ERROR=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^ERROR\t//p')
+    SUMMARY_ERROR=$(projection_value ERROR <<< "$SUMMARY_PROJECTION")
 
     if [ -n "$SUMMARY_ERROR" ]; then
         # An unreadable summary is a failure, not a skip. It is the file the
@@ -205,7 +248,7 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
         print_fail "Could not read quality-summary.json: $SUMMARY_ERROR"
         VALIDATION_FAILED=1
     else
-        OVERALL_STATUS=$(printf '%s\n' "$SUMMARY_PROJECTION" | sed -n 's/^OVERALL\t//p')
+        OVERALL_STATUS=$(projection_value OVERALL <<< "$SUMMARY_PROJECTION")
 
         if [ "$OVERALL_STATUS" = "PASS" ]; then
             print_pass "Overall status: PASS"

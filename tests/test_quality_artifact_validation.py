@@ -344,3 +344,123 @@ def test_every_consumer_of_the_projection_names_every_field(tmp_path):
         + f"\nA CHECK record has {widest} fields; name all of them, using `_` "
         "for the ones the loop ignores."
     )
+
+
+# --------------------------------------------------------------------------
+# The main path — everything above drives --read-summary, which returns before
+# the main path begins.
+# --------------------------------------------------------------------------
+
+#: What the validator requires to be present before it will read anything. Their
+#: contents do not matter to the assertions below; their existence does, because
+#: the script exits at the missing-files check.
+_REQUIRED_ARTIFACTS = (
+    "environment.json",
+    "signature.sha256",
+    "unit-test-results.xml",
+)
+
+
+def _artifacts_dir(tmp_path: Path, summary: object | str) -> Path:
+    """Build a directory shaped like ``.quality-artifacts/`` around one summary."""
+    directory = tmp_path / "artifacts"
+    directory.mkdir()
+    for name in _REQUIRED_ARTIFACTS:
+        (directory / name).write_text("", encoding="utf-8")
+
+    target = directory / "quality-summary.json"
+    if isinstance(summary, str):
+        target.write_text(summary, encoding="utf-8")
+    else:
+        _write(target, summary)
+    return directory
+
+
+def _validate(directory: Path) -> str:
+    """Run the validator's main path over ``directory`` and return its report.
+
+    The exit code is deliberately not asserted on. This script also revalidates
+    package content hashes against the working tree, which is a real check with
+    a real verdict that has nothing to do with the summary — so the status lines
+    are the subject here, not the overall result.
+    """
+    result = subprocess.run(
+        ["bash", str(VALIDATOR), "--from", str(directory)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout + result.stderr
+
+
+def test_the_overall_status_reaches_the_main_path(tmp_path):
+    r"""A passing summary must be reported as passing.
+
+    The projection moved from tab-delimited to ``\037`` records. Three
+    ``while IFS`` loops moved with it and two ``sed`` extractions did not, so
+    ``OVERALL_STATUS`` resolved to the empty string on every run and the
+    validator reported ``Overall status: `` — failing CI on every pull request,
+    whatever the artifacts said.
+
+    Nothing caught it because every test above drives ``--read-summary``, which
+    exits before this code. The reader was right; its callers were not.
+    """
+    report = _validate(_artifacts_dir(tmp_path, _PRODUCER_ORDER))
+
+    assert "Overall status: PASS" in report, (
+        "the validator did not read PASS from a passing summary:\n" + report
+    )
+
+
+def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path):
+    """A summary that cannot be parsed must not read as one that says nothing.
+
+    These are the two verdicts the script's own comment says must never meet:
+    "could not parse it" and "it says the run passed". With the ERROR extraction
+    matching a separator the projection no longer uses, the parse error was
+    dropped and the run fell through to an empty overall status — so a corrupt
+    artifact and a passing one produced the same message.
+    """
+    report = _validate(_artifacts_dir(tmp_path, "[not, an, object]"))
+
+    assert "Could not read quality-summary.json" in report, (
+        "an unparseable summary was not reported as unreadable:\n" + report
+    )
+
+
+def test_the_projection_is_split_never_pattern_matched():
+    """Recurrence guard for the class the two stale ``sed`` calls belong to.
+
+    ``test_nothing_reads_the_summary_except_the_parser`` covers readers of the
+    *file*. These two read the *projection*, on lines that never mention
+    ``quality-summary.json``, so that guard could not see them — and the
+    separator changed underneath them silently.
+
+    The projection is delimited text with a declared separator. The one correct
+    way to read it is to let ``IFS`` split it; spelling the separator into a
+    regex is a second copy of that decision, and the two do not change together.
+    The carriers are discovered from the assignment rather than named here, so a
+    third one is covered the day it is written.
+    """
+    offenders = []
+    for name in tracked_shell_files():
+        text = (ROOT / name).read_text(encoding="utf-8")
+        carriers = set(re.findall(r"(\w+)=\$\(\s*read_summary\b", text)) | set(
+            re.findall(r"(\w+)=\$\([^)]*--read-summary", text)
+        )
+        if not carriers:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if not any(f"${carrier}" in line or f'${{{carrier}}}' in line for carrier in carriers):
+                continue
+            if any(token in line for token in _TEXT_READERS):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+
+    assert not offenders, (
+        "the projection is being pattern-matched rather than split:\n  "
+        + "\n  ".join(offenders)
+        + "\nRead it with `while IFS=\"$(printf '\\037')\" read -r ...`, which "
+        "takes the separator from one place."
+    )

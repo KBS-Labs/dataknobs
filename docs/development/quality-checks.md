@@ -262,9 +262,24 @@ To see what the validator makes of a summary without running the rest of it:
 bin/validate-quality-artifacts.sh --read-summary .quality-artifacts/quality-summary.json
 ```
 
-That prints one tab-delimited line per check — `CHECK<TAB>name<TAB>status<TAB>skipped<TAB>label`
-— and is the same reader the validation path uses, so what it shows is what CI
-sees.
+That prints one record per line with fields separated by ASCII Unit Separator
+(`\037`) — `CHECK<US>name<US>status<US>skipped<US>exit_code<US>tool<US>label`,
+plus an `OVERALL` record and `META` records. The separator is not a tab
+because a tab is IFS *whitespace*, and shell `read` collapses runs of it and
+discards empty fields, so a check with no `tool` recorded shifted every later
+field one place left and blanked the row.
+
+`--read-summary` returns before the rest of the script, which is what makes it
+cheap — and also means it exercises none of the validation below it. To run
+that part over a summary of your own:
+
+```bash
+bin/validate-quality-artifacts.sh --from /path/to/some-run
+```
+
+Use it when you want to know what CI would say about an artifact set. The
+projection alone cannot tell you: for a while the reader was correct and the two
+lines that consumed it were not.
 
 **Coverage reports are not committed.** The gate's only use for `coverage.xml`
 was its line rate, which it reports as a warning and never fails on, so that
