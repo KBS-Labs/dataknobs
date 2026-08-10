@@ -328,7 +328,7 @@ that changed. There are three, and only the first dirties any package:
 | Scope | Covers | Effect when it changes |
 |---|---|---|
 | `toolchain` | root `pyproject.toml`, `uv.lock`, `conftest.py`, `mypy.ini`, `pytest.ini`, `.python-version`, and the three scripts that *are* the lint and test steps | every package needs re-validation |
-| `workspace_tests` | `bin/`, `tests/`, `.pylintrc`, `run_api.sh`, `setup-dk.sh` | artifacts stale, no package dirtied |
+| `workspace_tests` | `bin/`, `tests/`, `.github/workflows/`, `.pylintrc`, `run_api.sh`, `setup-dk.sh`, and the data files a recorded check reads — `.gitignore`, `.gitattributes`, `bin/internal-label-allowlist.txt` | artifacts stale, no package dirtied |
 | `docs` | `docs/`, `packages/*/docs/`, `mkdocs.yml`, and the two `.dataknobs/` registries the version and mirror checks read | artifacts stale, no package dirtied |
 
 The last two report a changed scope and no package list — nothing they cover can

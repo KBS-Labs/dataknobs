@@ -194,8 +194,8 @@ none and inherit the repository default.
 
 Your committed artifacts do not match the code in the pull request. The job
 output names either the packages needing re-validation, or the workspace scope
-(`toolchain`, `workspace_tests`) that changed. A workspace scope dirties no
-individual package, so that case reports a changed scope and an empty package
+(`toolchain`, `workspace_tests`, `docs`) that changed. The last two dirty no
+individual package, so those cases report a changed scope and an empty package
 list.
 
 ```bash

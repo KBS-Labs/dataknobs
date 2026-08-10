@@ -133,6 +133,14 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".pylintrc",
     "bin/",
     "tests/",
+    # The whole input to the recorded workflow_lint check, and a directory entry
+    # rather than six names so a seventh workflow is covered on arrival. Note
+    # what makes that work: a directory entry expands through the suffix
+    # predicate in package-hashes.py, so this entry and ".yml"/".yaml" being
+    # quality-input suffixes are one decision written in two files — declared
+    # here while the predicate rejected them, it would have expanded to nothing
+    # and read exactly like coverage.
+    ".github/workflows/",
     # Named individually, per the note above: these are the probes that prove
     # CI's path filter covers non-Python files. Each decides what the gate checks
     # or records without moving any package's own result — a suite that passed
@@ -149,6 +157,16 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     # contributing docs tell a new developer to run.
     "run_api.sh",
     "setup-dk.sh",
+    # Data files that decide a recorded check's answer without being code, and
+    # so reached by no directory entry's suffix predicate. Each sits beside
+    # something already hashed, which is what kept them out of view: the guard
+    # is hashed but the file it reads was not, and the script is hashed but the
+    # list it consults was not. Editing one moves a recorded verdict with every
+    # stored hash intact — the same sentence as a shell script outside every
+    # scope, one layer in.
+    ".gitignore",  # what three artifact-contract guards are a verdict about
+    ".gitattributes",  # ditto, for the merge-driver guard
+    "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
 ]
 
 # The inputs to the three documentation checks the gate records: the site build,

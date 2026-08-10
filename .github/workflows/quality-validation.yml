@@ -67,12 +67,27 @@ jobs:
               - 'mkdocs.yml'
               - 'packages/*/docs/**'
               - '.dataknobs/*.json'
-              # This file. Without it a pull request whose only change deletes
-              # the patterns above matches nothing, skips the sole PR-time
-              # quality job, and reports green — leaving every declaration
-              # above untriggered from that merge forward. The docs filter
-              # below already covers its own workflow for the same reason.
-              - '.github/workflows/quality-validation.yml'
+              # Every workflow, this file among them. Two reasons that arrive
+              # at the same pattern:
+              #
+              # This file, because a pull request whose only change deletes the
+              # patterns above would otherwise match nothing, skip the sole
+              # PR-time quality job, and report green — leaving every
+              # declaration above untriggered from that merge forward.
+              #
+              # All of them, because the gate records a workflow_lint verdict
+              # and these files are its entire input. Naming this one alone
+              # meant a change to any other moved that verdict while skipping
+              # the job that would have recomputed it — the same gap the two
+              # root shell scripts above were added to close.
+              - '.github/workflows/**'
+              # Inputs to recorded checks that are neither code nor
+              # documentation, so no pattern above reaches them: between them
+              # these two decide what four of the workspace guards report.
+              # (bin/internal-label-allowlist.txt is the third of that kind and
+              # is deliberately absent — 'bin/**' already matches it.)
+              - '.gitignore'
+              - '.gitattributes'
             docs:
               - 'docs/**'
               - '!docs/changelog.md'
