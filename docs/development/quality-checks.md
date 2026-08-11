@@ -567,9 +567,23 @@ cells, so the formatter additionally reaches each package's `tests`,
 `examples`, `scripts`, `benchmarks` and `docs`. Scoping to a package
 (`bin/validate.sh data`) narrows both lists to that package.
 
-`bin/validate.sh --print-format-targets` and `./bin/fix.sh --print-format-targets`
-print the resolved list without running anything, which is also how
-`tests/test_toolchain_consistency.py` checks the two against the contract.
+Each script prints either resolved list without running anything —
+`--print-targets` for the linter's, `--print-format-targets` for the
+formatter's — which is also how `tests/test_toolchain_consistency.py` checks
+them against the contract. Four probes, and the reason there are four is that
+each list has a check side and a fix side, and both directions can fail: a
+check reading less than the contract enforces is a green verdict over
+unexamined files, and a fix reaching less than the check flags is a red gate
+with no local remedy.
+
+`./bin/fix.sh --print-targets` is the newest of the four and closes the last of
+those corners. It is also worth knowing what it does **not** cover: a bare
+`./bin/fix.sh` reaches each package's `tests` but none of `examples`,
+`scripts`, `benchmarks` or `docs`, whose ruff ceilings the contract does
+compare. Naming the directory reaches it — `./bin/fix.sh packages/bots/examples`
+— so the remedy exists; what it lacks is any way to find out about it from the
+failure. Widening the default would run the linter's `--fix` over files nobody
+has asked to be clean, so it waits on the decision to hold them clean at all.
 
 ### Type Checking and Python Compatibility
 
