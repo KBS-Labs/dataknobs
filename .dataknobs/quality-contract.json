@@ -116,9 +116,9 @@
         },
         {
           "path": "packages/config/src",
-          "tier": "transitional",
-          "ceiling": 22,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; a documented method that raised AttributeError was among the findings"
         },
         {
           "path": "packages/utils/src",

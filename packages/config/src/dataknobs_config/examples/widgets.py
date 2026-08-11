@@ -34,7 +34,12 @@ class AsyncWidget(StructuredConfigConsumer[WidgetConfig]):
     def _setup(self) -> None:
         self.warmed = False
 
-    async def _ainit(self) -> None:
+    async def _ainit(self, **_: Any) -> None:
+        # ``**_`` rather than no parameters at all: the base declares
+        # ``**components``, and the mixin broadcasts whatever collaborators it
+        # was handed. Absorbing them is the documented shape for a hook that
+        # consumes none of them, and it keeps this override substitutable for
+        # the method it overrides.
         self.warmed = True
 
 

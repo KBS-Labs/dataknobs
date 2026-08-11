@@ -209,6 +209,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `load_yaml_or_json` and `parse_yaml_or_json` declare `dict[str, Any]` when
+  `require_dict=True` (the default) and `Any` otherwise, rather than `Any` in
+  both cases. The docstrings already described this; stating it as overloads
+  means a caller that declares a mapping return no longer has to restate it.
+
 - **`assert_no_broad_except_in_error_text` now treats `ImportError` as
   unbounded by default.** A narrow `except` is not automatically a bounded
   one: an `ImportError`'s own text reads `cannot import name 'X' from 'pkg'

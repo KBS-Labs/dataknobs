@@ -666,9 +666,10 @@ class Config:
         """Get all registered factories.
 
         Returns:
-            Dictionary mapping factory names to factory instances
+            Dictionary mapping factory names to factory instances, as a snapshot
+            the caller may mutate freely.
         """
-        return self._registered_factories.copy()
+        return dict(self._registered_factories.items())
 
     def get_instance(
         self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any
