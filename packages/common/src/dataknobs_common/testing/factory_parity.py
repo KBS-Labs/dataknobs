@@ -64,7 +64,7 @@ from typing import Any
 
 def assert_dataclass_config_matches_ctor(
     config_cls: type,
-    target_cls: type,
+    target_cls: type[Any],
     *,
     ignore_params: set[str] | None = None,
 ) -> None:
@@ -136,7 +136,7 @@ def assert_dataclass_config_matches_ctor(
 
 def assert_factory_kwargs_match_ctor(
     factory: Callable[..., Any],
-    target_cls: type,
+    target_cls: type[Any],
     *,
     ignore_kwargs: set[str] | None = None,
 ) -> None:
@@ -259,7 +259,7 @@ def assert_factory_kwargs_match_ctor(
 
 
 def assert_ctor_reads_documented_keys(
-    target_cls: type,
+    target_cls: type[Any],
     documented_keys: set[str],
     *,
     config_param: str = "config",
@@ -332,7 +332,7 @@ def assert_ctor_reads_documented_keys(
 
 
 def assert_config_attribute_access_matches_dataclass(
-    consumer_cls: type,
+    consumer_cls: type[Any],
     config_cls: type,
     *,
     config_attr: str = "config",
@@ -443,7 +443,7 @@ def assert_config_attribute_access_matches_dataclass(
         )
 
 
-def _override_calls_attr(consumer_cls: type, method_name: str, attr_name: str) -> bool:
+def _override_calls_attr(consumer_cls: type[Any], method_name: str, attr_name: str) -> bool:
     """True if the ``method_name`` override *calls* ``....attr_name(...)``.
 
     Reads the source of the ``method_name`` entry in
@@ -482,7 +482,7 @@ def _override_calls_attr(consumer_cls: type, method_name: str, attr_name: str) -
 
 
 def assert_structured_config_consumer(
-    consumer_cls: type,
+    consumer_cls: type[Any],
     *,
     expected_factory: Callable[..., Any] | None = None,
     ignore_params: set[str] | None = None,

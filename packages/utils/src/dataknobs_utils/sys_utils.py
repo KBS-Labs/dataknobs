@@ -10,7 +10,7 @@ import socket
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from dotenv import dotenv_values  # type: ignore[import-not-found]
+from dotenv import dotenv_values
 
 
 def load_project_vars(
@@ -41,14 +41,19 @@ def load_project_vars(
         Dict[str, str] | None: Dictionary of configuration variables, or None
             if no configuration file is found.
     """
-    config = None
+    config: Dict[str, str] | None = None
     path = Path(start_path) if start_path else Path.cwd()
     while not os.path.exists(path.joinpath(pvname)) and path.parent != path:
         # Walk up the parents to find the closest project variables file
         path = path.parent
     pvpath = path.joinpath(pvname).absolute()
     if os.path.exists(pvpath):
-        config = dotenv_values(pvpath)
+        # A bare ``KEY`` line -- no ``=`` at all -- is reported by dotenv as
+        # None, which os.environ cannot hold and which this function's declared
+        # return type does not admit. ``KEY=`` is how an empty value is
+        # spelled, so a valueless line is dropped rather than coerced to "";
+        # coercing would turn a malformed line into a plausible-looking one.
+        config = {k: v for k, v in dotenv_values(pvpath).items() if v is not None}
     if include_dot_env and pvname != ".env":
         cfg = load_project_vars(
             pvname=".env",
@@ -136,7 +141,7 @@ class MySubnet:
                     return hn[0].get("name", None) if len(hn) > 0 else None
                 return None
 
-            import nmap3  # type: ignore[import-not-found]
+            import nmap3
 
             nmap = nmap3.NmapHostDiscovery()
             subnet = ".".join(self.my_ip.split(".")[:3]) + ".*"

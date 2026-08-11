@@ -210,7 +210,10 @@ class AsyncChainedDiscriminator(Generic[_InputT, _KindT]):
 
     async def classify(self, value: _InputT) -> _KindT:
         for discriminator in self.inner:
-            result = discriminator.classify(value)
+            # ``inner`` is deliberately Sequence[Any] so it can hold either
+            # Protocol, which makes every result Any; this method is where the
+            # kind is promised.
+            result: _KindT = discriminator.classify(value)
             if asyncio.iscoroutine(result):
                 result = await result
             if result != self.default:

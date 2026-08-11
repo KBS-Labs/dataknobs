@@ -148,6 +148,12 @@ def compute_backoff_delay(
     Returns:
         Delay in seconds, capped at ``max_delay``.
     """
+    # Seeded rather than defaulted in a trailing ``else``: the chain below
+    # covers every BackoffStrategy member, so mypy proves such an else
+    # unreachable -- while at runtime a caller passing something outside the
+    # enum still needs a delay rather than an UnboundLocalError.
+    delay = initial_delay
+
     if strategy == BackoffStrategy.FIXED:
         delay = initial_delay
 
@@ -167,9 +173,6 @@ def compute_backoff_delay(
             delay = initial_delay
         else:
             delay = random.uniform(initial_delay, previous_delay * 3)
-
-    else:
-        delay = initial_delay
 
     return min(delay, max_delay)
 

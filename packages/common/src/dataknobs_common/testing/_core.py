@@ -763,16 +763,16 @@ except ImportError:
     requires_localstack = None  # type: ignore
     requires_bedrock = None  # type: ignore
 
-    def requires_localstack_service(service: str) -> Any:  # type: ignore
+    def requires_localstack_service(service: str) -> Any:
         return None
 
-    def requires_package(package_name: str) -> Any:  # type: ignore
+    def requires_package(package_name: str) -> Any:
         return None
 
-    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:  # type: ignore
+    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:
         return None
 
-    def requires_ollama_usable_model(  # type: ignore
+    def requires_ollama_usable_model(
         model_name: str, *, host: str = "localhost", port: int = 11434
     ) -> Any:
         return None

@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from dataknobs_config import Config, ConfigNotFoundError, ValidationError
+from dataknobs_config.examples import DatabaseFactory
 
 
 class TestConfigBasics:
@@ -321,3 +322,48 @@ class TestAtomicConfig:
         """Test that type mismatch raises error."""
         with pytest.raises(ValidationError):
             Config({"database": [{"type": "cache", "name": "wrong"}]})
+
+
+class TestFactoryRegistry:
+    """Test the runtime factory registry.
+
+    ``register_factory`` / ``unregister_factory`` / ``get_registered_factories``
+    had no test between them, which is why the third one shipped calling a
+    method its backing store does not have.
+    """
+
+    def test_register_then_read_back(self):
+        """A registered factory comes back from get_registered_factories()."""
+        config = Config()
+        factory = DatabaseFactory()
+
+        config.register_factory("database", factory)
+
+        assert config.get_registered_factories() == {"database": factory}
+
+    def test_registry_starts_empty(self):
+        """No factories registered means an empty mapping, not an error."""
+        assert Config().get_registered_factories() == {}
+
+    def test_returned_mapping_is_a_copy(self):
+        """Mutating the returned dict must not reach the registry."""
+        config = Config()
+        config.register_factory("database", DatabaseFactory())
+
+        config.get_registered_factories()["database"] = "clobbered"
+
+        assert isinstance(config.get_registered_factories()["database"], DatabaseFactory)
+
+    def test_unregister_removes_it(self):
+        """An unregistered factory is gone from the mapping."""
+        config = Config()
+        config.register_factory("database", DatabaseFactory())
+
+        config.unregister_factory("database")
+
+        assert config.get_registered_factories() == {}
+
+    def test_unregister_unknown_raises_key_error(self):
+        """Unregistering a name that was never registered is a KeyError."""
+        with pytest.raises(KeyError):
+            Config().unregister_factory("nope")

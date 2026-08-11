@@ -104,68 +104,68 @@
       "cells": [
         {
           "path": "packages/structures/src",
-          "tier": "transitional",
-          "ceiling": 1,
-          "reason": "one finding from graduating"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; its one finding was fixed rather than waived"
         },
         {
           "path": "packages/legacy/src",
-          "tier": "transitional",
-          "ceiling": 5,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; four of its five findings were a module that could not be imported, now deleted"
         },
         {
           "path": "packages/config/src",
-          "tier": "transitional",
-          "ceiling": 22,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; a documented method that raised AttributeError was among the findings"
         },
         {
           "path": "packages/utils/src",
-          "tier": "transitional",
-          "ceiling": 40,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; two of its findings were live defects, one of them a request that carried no timeout at all"
         },
         {
           "path": "packages/common/src",
-          "tier": "transitional",
-          "ceiling": 51,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; two overrides had narrowed away the collaborator channel, and ten directives suppressed nothing"
         },
         {
           "path": "packages/bots/src",
           "tier": "transitional",
-          "ceiling": 194,
+          "ceiling": 182,
           "reason": "ratchet group"
         },
         {
           "path": "packages/xization/src",
           "tier": "transitional",
-          "ceiling": 215,
+          "ceiling": 214,
           "reason": "ratchet group"
         },
         {
           "path": "packages/llm/src",
           "tier": "transitional",
-          "ceiling": 259,
+          "ceiling": 257,
           "reason": "ratchet group"
         },
         {
           "path": "packages/fsm/src",
           "tier": "transitional",
-          "ceiling": 526,
+          "ceiling": 524,
           "reason": "ratchet group"
         },
         {
           "path": "packages/data/src",
           "tier": "transitional",
-          "ceiling": 660,
+          "ceiling": 657,
           "reason": "ratchet group, and the largest single cell in this file"
         },
         {
           "path": "tests",
           "tier": "transitional",
-          "ceiling": 227,
+          "ceiling": 223,
           "reason": "the workspace guards; grows whenever a guard is added, which is why it is a ceiling rather than a target"
         },
         {

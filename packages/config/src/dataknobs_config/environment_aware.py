@@ -344,7 +344,11 @@ class EnvironmentAwareConfig:
         Returns:
             Fully resolved configuration dictionary
         """
-        # Get the base configuration
+        # Get the base configuration. Annotated because every step below —
+        # ``get``, the substitution pass, the resource splice — walks an
+        # arbitrary config tree and so is declared ``Any``; this method is
+        # where the shape is actually promised.
+        config: dict[str, Any]
         if config_key:
             config = self.get(config_key)
             if config is None:

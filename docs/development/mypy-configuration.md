@@ -118,11 +118,21 @@ dev = [
 ## Search path
 
 `mypy_path` in the root config lists the package source trees, so a first-party
-import resolves to the source under check rather than to an installed copy. An
-entry that does not exist contributes no modules — every import through it falls
-back to `ignore_missing_imports`, the symbols come back as `Any`, and the run
-still reports success. `tests/test_toolchain_consistency.py` asserts every
-declared entry resolves.
+import resolves to the source under check rather than to an installed copy.
+
+Both directions fail the same way, and both are guarded in
+`tests/test_toolchain_consistency.py`:
+
+- **A declared entry that does not exist** contributes no modules. Every import
+  through it falls back to `ignore_missing_imports`, the symbols come back as
+  `Any`, and the run still reports success.
+- **A type-checked package that is not declared** is the same failure reached
+  from the other side: its modules resolve to `Any` wherever they are imported
+  by name, so the findings that would have been reported are never computed. The
+  package still measures a number, and the number is lower than the truth. The
+  guard compares the search path against the mypy cells in
+  `.dataknobs/quality-contract.json`, because a package the contract
+  type-checks is exactly the population that must be resolvable.
 
 ## IDE integration
 

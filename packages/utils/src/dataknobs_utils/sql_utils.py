@@ -8,18 +8,28 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import IO, Any, Dict, List
 
 import numpy as np
 import pandas as pd
 import psycopg2
 
 try:
-    from dotenv import load_dotenv  # type: ignore[import-not-found]
-except ImportError:
-    # dotenv is optional - provide a stub if not installed
-    def load_dotenv() -> None:
-        pass
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - exercised only without python-dotenv
+    # dotenv is optional. The stub takes the real function's parameters and
+    # returns its type: a narrower stand-in is a different function under the
+    # same name, and which one a caller gets depends on what happens to be
+    # installed.
+    def load_dotenv(
+        dotenv_path: str | os.PathLike[str] | None = None,
+        stream: IO[str] | None = None,
+        verbose: bool = False,
+        override: bool = False,
+        interpolate: bool = True,
+        encoding: str | None = "utf-8",
+    ) -> bool:
+        return False
 
 
 from dataknobs_utils.sys_utils import load_project_vars
@@ -348,7 +358,7 @@ class PostgresDB:
         with self.get_conn() as conn:
             with conn.cursor() as curs:
                 curs.execute(stmt, params)
-                rowcount = curs.rowcount
+                rowcount: int = curs.rowcount
                 conn.commit()
         return rowcount
 

@@ -32,6 +32,11 @@ dev = [
     "pandas-stubs>=2.0.0",
     "types-requests>=2.31.0",
     "types-beautifulsoup4>=4.12.0",
+    "types-PyYAML>=6.0.0",
+    # botocore arrives transitively via aioboto3 and is imported directly for
+    # its config, exceptions and session modules. Stubs rather than an
+    # ignore_missing_imports override, which would type all three as Any.
+    "botocore-stubs>=1.34.0",
     "numpy>=1.24.0",
     "jupyter>=1.1.1",
     "ipywidgets>=8.1.5",
@@ -94,7 +99,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src:packages/legacy/src"
 cache_dir = ".mypy_cache"
 incremental = true
 # The only mypy configuration. There used to be a second — mypy.ini — which
@@ -119,7 +124,13 @@ module = [
     "pyparsing.*",
     "json_stream.*",
     "more_itertools.*",
-    "flask.*",
+    # A hard dependency of dataknobs-utils (distribution `python3-nmap`) that
+    # ships neither stubs nor a py.typed marker, and has no stub package.
+    # Typeshed's `types-python-nmap` covers the *other* library -- distribution
+    # `python-nmap`, module `nmap` -- which is what an override spelled
+    # `python_nmap.*` was reaching for here, and why it matched nothing for as
+    # long as it existed.
+    "nmap3.*",
     "asyncpg.*",
     # Imported inside a try/except ImportError by bin/check-services.py, as the
     # more accurate of its two PostgreSQL liveness probes. Stubs are not carried

@@ -10,7 +10,7 @@ class Cache:
     but can still be instantiated via configuration.
     """
 
-    def __init__(self, host: str, port: int, ttl: int = 3600, **kwargs):
+    def __init__(self, host: str, port: int, ttl: int = 3600, **kwargs: Any):
         """Initialize cache.
 
         Args:
@@ -48,12 +48,12 @@ class CacheFactory:
     inheriting from FactoryBase.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize factory."""
         self.created_count = 0
         self.default_ttl = 3600
 
-    def __call__(self, **config):
+    def __call__(self, **config: Any) -> Cache:
         """Create a cache instance.
 
         Args:
@@ -72,7 +72,7 @@ class CacheFactory:
         return Cache(**config)
 
 
-def create_cache(**config):
+def create_cache(**config: Any) -> Cache:
     """Function factory for creating cache instances.
 
     This demonstrates using a simple function as a factory.

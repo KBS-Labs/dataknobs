@@ -14,6 +14,13 @@ import requests
 
 DEFAULT_TIMEOUT = 5
 HEADERS = {"Content-Type": "application/json"}
+
+#: What a request body may be, which is what ``requests`` accepts for ``data=``:
+#: a mapping is form-encoded, while a str or bytes is sent as the raw body. The
+#: second form is how a caller sends pre-serialized JSON — which the
+#: Elasticsearch helper in this package has always done, against a declared type
+#: that admitted only the first.
+Payload = Union[Dict[str, Any], str, bytes]
 DBG_HEADERS = {"Content-Type": "application/json", "error_trace": "true"}
 
 
@@ -34,7 +41,8 @@ def get_current_ip() -> str:
         # Note: This doesn't actually send any DNS queries, just establishes a connection
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+            local_ip: str = s.getsockname()[0]
+            return local_ip
     except Exception:
         # Fallback to hostname resolution
         try:
@@ -95,7 +103,7 @@ def get_request(
 
 def post_request(
     api_request: str,
-    payload: Dict[str, Any],
+    payload: Payload,
     params: Dict[str, Any] | None = None,
     headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
@@ -182,7 +190,7 @@ def post_files_request(
 
 def put_request(
     api_request: str,
-    payload: Dict[str, Any],
+    payload: Payload,
     params: Dict[str, Any] | None = None,
     headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
@@ -416,12 +424,12 @@ class RequestHelper:
         self,
         rtype: str,
         path: str,
-        payload: Dict[str, Any] | None = None,
+        payload: Payload | None = None,
         params: Dict[str, Any] | None = None,
         files: Dict[str, Any] | None = None,
         response_handler: Callable | None = None,
         headers: Dict[str, Any] | None = None,
-        timeout: int = 0,
+        timeout: int | None = 0,
         verbose: Union[bool, Any] = True,
     ) -> ServerResponse:
         """Execute an HTTP request of any type.
@@ -445,7 +453,12 @@ class RequestHelper:
             ServerResponse: Response object with status and parsed data.
         """
         rtype = rtype.lower()
-        if timeout == 0:
+        # Both spellings of "unset". This method's own default is 0, while every
+        # convenience wrapper below defaults to None and passes it straight
+        # through -- so testing for 0 alone let None past, and None reaches
+        # requests as "no timeout at all" on a call the caller believed
+        # carried the helper's default.
+        if not timeout:
             timeout = self.timeout
         if headers is None:
             headers = self.headers
@@ -459,9 +472,7 @@ class RequestHelper:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                api_response_handler=response_handler
-                if response_handler is not None
-                else self.response_handler,
+                api_response_handler=response_handler,
                 requests=self.requests,
             )
         elif rtype == "post":
@@ -511,10 +522,9 @@ class RequestHelper:
                     headers=headers,
                     timeout=timeout,
                 )
-                # HEAD requests don't have a body, but we still need to process the response
-                result = {}  # Empty dict for HEAD response
-                if response_handler:
-                    resp, result = response_handler(resp)
+                # HEAD requests have no body, but the response still goes
+                # through the handler.
+                resp, result = response_handler(resp)
             except Exception:
                 resp = None
                 result = None
@@ -538,7 +548,7 @@ class RequestHelper:
         headers: Dict[str, Any] | None = None,
         timeout: int | None = None,
         verbose: bool = False,
-    ) -> Any:
+    ) -> ServerResponse:
         """Convenience method for GET requests.
 
         Args:
@@ -563,13 +573,13 @@ class RequestHelper:
     def post(
         self,
         path: str,
-        payload: Dict[str, Any] | None = None,
+        payload: Payload | None = None,
         params: Dict[str, Any] | None = None,
         files: Dict[str, Any] | None = None,
         headers: Dict[str, Any] | None = None,
         timeout: int | None = None,
         verbose: bool = False,
-    ) -> Any:
+    ) -> ServerResponse:
         """Convenience method for POST requests.
 
         Args:
@@ -598,12 +608,12 @@ class RequestHelper:
     def put(
         self,
         path: str,
-        payload: Dict[str, Any] | None = None,
+        payload: Payload | None = None,
         params: Dict[str, Any] | None = None,
         headers: Dict[str, Any] | None = None,
         timeout: int | None = None,
         verbose: bool = False,
-    ) -> Any:
+    ) -> ServerResponse:
         """Convenience method for PUT requests.
 
         Args:
@@ -634,7 +644,7 @@ class RequestHelper:
         headers: Dict[str, Any] | None = None,
         timeout: int | None = None,
         verbose: bool = False,
-    ) -> Any:
+    ) -> ServerResponse:
         """Convenience method for DELETE requests.
 
         Args:
@@ -663,7 +673,7 @@ class RequestHelper:
         headers: Dict[str, Any] | None = None,
         timeout: int | None = None,
         verbose: bool = False,
-    ) -> Any:
+    ) -> ServerResponse:
         """Convenience method for HEAD requests.
 
         Args:

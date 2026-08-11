@@ -105,6 +105,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         connection_string: str | None = None,
         *,
         config: PostgresLockConfig | Mapping[str, Any] | None = None,
+        _components: Mapping[str, Any] | None = None,
     ) -> None:
         """Resolve and store the Postgres DSN.
 
@@ -152,12 +153,13 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
             merged: dict[str, Any] = dict(config or {})
             merged["connection_string"] = connection_string
             config = merged
-        super().__init__(config=config)
+        super().__init__(config=config, _components=_components)
 
     @classmethod
     def from_config(
         cls,
         config: Mapping[str, Any] | StructuredConfig,
+        **components: Any,
     ) -> PostgresAdvisoryLock:
         """Construct from a config dict or typed config.
 
@@ -167,8 +169,14 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         slot rather than the legacy ``connection_string`` positional.
         Reuses the inherited ``_coerce_config`` guard so a config of the
         wrong ``StructuredConfig`` subclass raises a clear ``TypeError``.
+
+        Injected collaborators reach ``self.components`` through the
+        mixin's ``_components`` channel, as they do on the base method.
+        Omitting ``**components`` here narrowed the override, which left
+        this class the one member of the family to raise ``TypeError``
+        when a registry factory forwarded one.
         """
-        return cls(config=cls._coerce_config(config))
+        return cls(config=cls._coerce_config(config), _components=components or None)
 
     def _setup(self) -> None:
         self._dsn: str = self._config.connection_string

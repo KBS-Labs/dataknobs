@@ -188,6 +188,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PostgresEventBus.from_config` and `PostgresAdvisoryLock.from_config`
+  raised `TypeError` when handed an injected collaborator.** Both overrides had
+  narrowed the base signature by dropping `**components`, leaving these two the
+  only members of the `StructuredConfigConsumer` family that could not receive
+  one — including from a registry factory forwarding it. Both now accept and
+  forward collaborators exactly as the base method does.
+
 - **A `SyncLoopBridge.close()` that raised deadlocked every later
   `close()`.** Teardown claimed ownership by setting a closed flag, then
   joined the loop thread, then set the event that concurrent closers wait
@@ -208,6 +215,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once on entry.
 
 ### Changed
+
+- `load_yaml_or_json` and `parse_yaml_or_json` declare `dict[str, Any]` when
+  `require_dict=True` (the default) and `Any` otherwise, rather than `Any` in
+  both cases. The docstrings already described this; stating it as overloads
+  means a caller that declares a mapping return no longer has to restate it.
 
 - **`assert_no_broad_except_in_error_text` now treats `ImportError` as
   unbounded by default.** A narrow `except` is not automatically a bounded

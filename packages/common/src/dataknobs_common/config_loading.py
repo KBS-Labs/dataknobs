@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 DEFAULT_CONFIG_EXTENSIONS: tuple[str, ...] = (".yaml", ".yml", ".json")
 
@@ -89,6 +89,30 @@ def find_config_file(
     return None
 
 
+#: ``require_dict`` decides the return type, so it is spelled as overloads
+#: rather than left to the docstring. Every caller that passes ``True`` (or
+#: takes the default) declares a ``dict[str, Any]`` return of its own, and a
+#: helper returning bare ``Any`` made each of those a *Returning Any from
+#: function declared to return* finding — a whole class of them, one per
+#: caller, all traceable to one signature.
+@overload
+def load_yaml_or_json(
+    path: str | Path,
+    *,
+    require_dict: Literal[True] = ...,
+    encoding: str = ...,
+) -> dict[str, Any]: ...
+
+
+@overload
+def load_yaml_or_json(
+    path: str | Path,
+    *,
+    require_dict: bool,
+    encoding: str = ...,
+) -> Any: ...
+
+
 def load_yaml_or_json(
     path: str | Path,
     *,
@@ -141,6 +165,26 @@ def load_yaml_or_json(
         source_name=str(p),
         require_dict=require_dict,
     )
+
+
+@overload
+def parse_yaml_or_json(
+    data: bytes | str,
+    *,
+    format: Literal["yaml", "json"],
+    source_name: str | None = ...,
+    require_dict: Literal[True] = ...,
+) -> dict[str, Any]: ...
+
+
+@overload
+def parse_yaml_or_json(
+    data: bytes | str,
+    *,
+    format: Literal["yaml", "json"],
+    source_name: str | None = ...,
+    require_dict: bool,
+) -> Any: ...
 
 
 def parse_yaml_or_json(

@@ -210,8 +210,13 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
             )
 
         async with self._lock:
+            # Double-checked locking; see the unlocked fast path above. mypy
+            # narrows _connected to False from that check and calls this one
+            # unreachable, which holds only for a single task -- another task
+            # completing connect() while this one awaited the lock is the case
+            # this exists for.
             if self._connected:
-                return
+                return  # type: ignore[unreachable]
             # Route through the shared session factory: it builds the
             # ``aioboto3.Session`` and warms botocore's data-file caches on
             # a worker thread, so the first ``session.client("sqs")`` below

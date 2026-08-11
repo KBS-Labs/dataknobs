@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from dataknobs_common import NotFoundError, Registry
 from dataknobs_common.config_loading import (
     ConfigLoadError,
@@ -666,9 +666,10 @@ class Config:
         """Get all registered factories.
 
         Returns:
-            Dictionary mapping factory names to factory instances
+            Dictionary mapping factory names to factory instances, as a snapshot
+            the caller may mutate freely.
         """
-        return self._registered_factories.copy()
+        return dict(self._registered_factories.items())
 
     def get_instance(
         self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any

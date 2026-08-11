@@ -182,7 +182,7 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
     per-class caching of :func:`_resolved_hints`, keeping the union off the
     ``repr`` hot path.
     """
-    sensitive_fields = getattr(cls, "_SENSITIVE_FIELDS", frozenset())
+    sensitive_fields: frozenset[str] = getattr(cls, "_SENSITIVE_FIELDS", frozenset())
     # Snapshot the live mutable set under the lock so a concurrent
     # ``register_sensitive_interior_key`` cannot mutate it mid-iteration.
     with _sensitive_keys_lock:
@@ -516,7 +516,9 @@ class StructuredConfig:
             # *before* the ``@dataclass`` decorator runs, so dataclass sees a
             # user-defined repr and skips generating one — that is what lets the
             # redacting repr win over the generated one.
-            cls.__repr__ = StructuredConfig._redacted_repr
+            # Deliberate: see the comment above. Both codes are mypy
+            # objecting to the assignment itself, which is the mechanism.
+            cls.__repr__ = StructuredConfig._redacted_repr  # type: ignore[method-assign,assignment]
         # Validate an explicitly-overridden depth only (an inherited value is
         # already known-valid). ``bool`` is an ``int`` subclass but a
         # nonsensical depth, so reject it explicitly.
@@ -565,7 +567,11 @@ class StructuredConfig:
         configs with no sensitive content. Installed as the ``__repr__`` of
         every subclass by :meth:`__init_subclass__`.
         """
-        sensitive = _interior_sensitive_keys(type(self))
+        # mypy reads ``Hashable`` off the *class* attribute ``__hash__`` and
+        # finds this dataclass's instance method there, so it judges the
+        # class object unhashable. Every class object is hashable; the cache
+        # key is the class, not an instance of it.
+        sensitive = _interior_sensitive_keys(type(self))  # type: ignore[arg-type]
         max_depth = self._MAX_REDACT_DEPTH
         parts: list[str] = []
         for f in dataclasses.fields(self):
@@ -611,7 +617,7 @@ class StructuredConfig:
             ``config`` (and defaults where keys are absent).
         """
         normalized = cls._normalize_dict(dict(config))
-        hints = _resolved_hints(cls)
+        hints = _resolved_hints(cls)  # type: ignore[arg-type]  # see _redacted_repr
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
             if f.name not in normalized:
@@ -681,7 +687,10 @@ class StructuredConfig:
         (JSON has no set type). Delegates the enum normalisation to the
         shared :func:`dataknobs_common.serialization.jsonify` utility.
         """
-        return jsonify(dataclasses.asdict(self))
+        # ``jsonify`` walks arbitrary containers and so is declared Any;
+        # this method is where the mapping shape is promised.
+        jsonified: dict[str, Any] = jsonify(dataclasses.asdict(self))
+        return jsonified
 
     def validate(self) -> None:
         """Validate polymorphic raw-dict sections by dry-run construction.
@@ -815,7 +824,10 @@ class StructuredConfig:
             )
             return
         config_cls = resolver(raw)
-        if config_cls is SKIP_VALIDATION:
+        # ``isinstance`` rather than ``is SKIP_VALIDATION``: identity against a
+        # module singleton does not narrow the union, so the sentinel arm
+        # survived to the ``from_dict`` call below.
+        if isinstance(config_cls, _SkipValidation):
             logger.debug(
                 "Resolver for binding %r recognizes the discriminator in "
                 "field %s.%s but exposes no typed config; skipping validation "

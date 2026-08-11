@@ -880,7 +880,7 @@ class Tree:
         """
         if node_name_fn is None:
 
-            def node_name_fn(n):
+            def node_name_fn(n: Tree) -> str:
                 return str(n.data)
 
         dot = graphviz.Digraph(**kwargs)
