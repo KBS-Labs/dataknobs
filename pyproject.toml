@@ -124,6 +124,13 @@ module = [
     "pyparsing.*",
     "json_stream.*",
     "more_itertools.*",
+    # A hard dependency of dataknobs-utils (distribution `python3-nmap`) that
+    # ships neither stubs nor a py.typed marker, and has no stub package.
+    # Typeshed's `types-python-nmap` covers the *other* library -- distribution
+    # `python-nmap`, module `nmap` -- which is what an override spelled
+    # `python_nmap.*` was reaching for here, and why it matched nothing for as
+    # long as it existed.
+    "nmap3.*",
     "asyncpg.*",
     # Imported inside a try/except ImportError by bin/check-services.py, as the
     # more accurate of its two PostgreSQL liveness probes. Stubs are not carried

@@ -623,7 +623,7 @@ class SimplifiedElasticsearchIndex:
         path: str,
         body: Any | None = None,
         params: Dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> requests_utils.ServerResponse:
         """Make a request to Elasticsearch."""
         # Build path without leading slash (RequestHelper will add it)
         full_path = f"{self.index_name}/{path}" if path else self.index_name
@@ -767,7 +767,11 @@ class SimplifiedElasticsearchIndex:
             response = self._request(method, path, body, params or None)
 
             if response.succeeded and response.json:
-                return response.json
+                # ``ServerResponse.json`` is parsed JSON and so is typed Any;
+                # this method is where the shape Elasticsearch returns for an
+                # index call is actually promised.
+                indexed: Dict[str, Any] = response.json
+                return indexed
 
             status = response.status
 
@@ -815,7 +819,8 @@ class SimplifiedElasticsearchIndex:
         response = self._request("get", f"_doc/{_encode_doc_id(doc_id)}")
 
         if response.succeeded and response.json:
-            return response.json
+            document: Dict[str, Any] = response.json
+            return document
         return None
 
     def update(
@@ -893,7 +898,8 @@ class SimplifiedElasticsearchIndex:
         response = self._request("post", "_count", body or {})
 
         if response.succeeded and response.json:
-            return response.json.get("count", 0)
+            count: int = response.json.get("count", 0)
+            return count
         return 0
 
     def delete_by_query(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -908,7 +914,8 @@ class SimplifiedElasticsearchIndex:
         response = self._request("post", "_delete_by_query", body)
 
         if response.succeeded and response.json:
-            return response.json
+            deleted: Dict[str, Any] = response.json
+            return deleted
         return {"deleted": 0}
 
     def refresh(self) -> bool:

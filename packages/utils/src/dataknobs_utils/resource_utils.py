@@ -4,7 +4,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
 
 import nltk
 
@@ -17,8 +17,24 @@ NLTK_RESOURCES = {
 }
 
 
+class _ResourceCache(TypedDict):
+    """The runtime cache's shape, one type per key.
+
+    Spelled out because every value starts as ``None``, so an unannotated
+    literal infers ``dict[str, None]`` and every later assignment into it is a
+    type error — while a blanket ``dict[str, Any]`` would erase the two keys
+    that really do hold ``str | None`` and push the imprecision out to each
+    accessor's return type instead.
+    """
+
+    datadir: str | None
+    nltk_resources_dir: str | None
+    #: The ``nltk.corpus.wordnet`` module object; nltk ships no stubs.
+    nltk_wn: Any
+
+
 # Runtime cache using mutable container to avoid global statement
-_CACHE = {
+_CACHE: _ResourceCache = {
     "datadir": None,
     "nltk_resources_dir": None,
     "nltk_wn": None,
@@ -40,9 +56,10 @@ def active_datadir() -> str | None:
         str | None: Path to the active data directory, or None if not found.
     """
     if _CACHE["datadir"] is None:
-        _CACHE["datadir"] = os.environ.get("DATADIR", os.environ.get("HOME", "") + "/data")
-        if not os.path.exists(_CACHE["datadir"]) and os.path.exists("/data"):
-            _CACHE["datadir"] = "/data"
+        datadir = os.environ.get("DATADIR", os.environ.get("HOME", "") + "/data")
+        if not os.path.exists(datadir) and os.path.exists("/data"):
+            datadir = "/data"
+        _CACHE["datadir"] = datadir
     return _CACHE["datadir"]
 
 

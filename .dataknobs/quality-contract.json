@@ -122,9 +122,9 @@
         },
         {
           "path": "packages/utils/src",
-          "tier": "transitional",
-          "ceiling": 40,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; two of its findings were live defects, one of them a request that carried no timeout at all"
         },
         {
           "path": "packages/common/src",
