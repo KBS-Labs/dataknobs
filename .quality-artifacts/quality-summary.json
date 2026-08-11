@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-08-11T03:43:37Z",
+  "timestamp": "2026-08-11T06:29:35Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "a9200dfcbd55b0f9465c6fa845bccb5f22fdca5a5d7646f5e3a7190a1185c3d6",
@@ -32,22 +21,22 @@
   },
   "workspace_hashes": {
     "toolchain": "d70b2fc9f72f32a0d2a9f6bddbd8e14cf752692c64e88c1255d99bc88ac9389e",
-    "workspace_tests": "15c27b0694549ed69f79b93559a60ab83cab13598e8150ddee5fcf5606f3f4e3",
-    "docs": "ea3715eff8794e3ab6d8a8a300028ee136d2d68f6cdc9dd70849f21d94961d31"
+    "workspace_tests": "ea30bb57ac19cdd9ed74a1173b346b5343d04a616dd270678687d3577dbd159c",
+    "docs": "04fd4cd39fd8a2bc2d5b179f8037b666ec980de0203e74b4f95dcc370cc1fe7a"
   },
-  "total_seconds": 208,
+  "total_seconds": 67,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
@@ -60,7 +49,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 35
+      "duration_seconds": 5
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +76,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 83,
-      "workspace_guards_seconds": 33
+      "duration_seconds": 31,
+      "workspace_guards_seconds": 31
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 54
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }
