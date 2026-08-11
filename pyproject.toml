@@ -44,7 +44,7 @@ dev = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.5.0",
     "markdown>=3.8.1",  # GHSA-5wmx-573v-2qwq (XSS, CVSS 7.5) fixed in 3.8.1 — transitive via mkdocs-material; its own constraint `markdown~=3.2` permits the vulnerable version, so explicit floor required
-    "pymdown-extensions>=11.0.0",  # GHSA-9xwg-3r6f-jcx2 / CVE-2026-61632 (path traversal in the b64 image-inlining extension, CVSS 5.3) fixed in 11.0.0; extends the prior >=10.21.3 floor (GHSA-62q4-447f-wv8h, CVSS 4.3) and sweeps GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1) — transitive via mkdocs-material, whose own constraint permits the vulnerable version, so an explicit floor is required
+    "pymdown-extensions>=11.0.1",  # GHSA-gm37-52c6-37mw / CVE-2026-67422 (exponential-backtracking ReDoS in the caret/tilde/betterem/magiclink inline processors, CVSS 7.5) fixed in 11.0.1; extends the prior >=11.0.0 floor (GHSA-9xwg-3r6f-jcx2 / CVE-2026-61632, CVSS 5.3) and sweeps GHSA-62q4-447f-wv8h (CVSS 4.3, 10.21.3) and GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1) — transitive via mkdocs-material, whose own constraint permits the vulnerable version, so an explicit floor is required
     "mkdocstrings[python]>=0.24.0",
     "mkdocs-monorepo-plugin>=1.0.5",
     "mkdocs-awesome-pages-plugin>=2.9.0",

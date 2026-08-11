@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `pymdown-extensions` requirement (docs dev
+  dependency) from `>=11.0.0` to `>=11.0.1` to exclude
+  GHSA-gm37-52c6-37mw / CVE-2026-67422 (exponential-backtracking
+  ReDoS in the caret, tilde, betterem, and magiclink inline
+  processors, CVSS 7.5), flagged at the floor resolve by the
+  `dependency-update` workflow. All four processors fire in the
+  extension's default configuration, so a single untrusted Markdown
+  line under 50 bytes can drive `markdown.markdown()` into unbounded
+  CPU. The floor preserves the prior sweep of GHSA-9xwg-3r6f-jcx2 /
+  CVE-2026-61632 (CVSS 5.3, 11.0.0), GHSA-62q4-447f-wv8h (CVSS 4.3,
+  10.21.3), and GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1).
+  `pymdown-extensions` is a transitive dependency of
+  `mkdocs-material` whose own constraint permits the vulnerable
+  version, so an explicit floor is required; the identical floor in
+  the workspace-root docs dev dependencies was bumped in lockstep.
+
 ### Changed
 
 - **The `llm` and `vector_store` resource types now report as unsupported

@@ -1682,7 +1682,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=11.0.0" },
+    { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=11.0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -1934,7 +1934,7 @@ dev = [
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas-stubs", specifier = ">=2.0.0" },
     { name = "pylint", specifier = ">=3.3.6" },
-    { name = "pymdown-extensions", specifier = ">=11.0.0" },
+    { name = "pymdown-extensions", specifier = ">=11.0.1" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
@@ -2552,17 +2552,18 @@ wheels = [
 
 [[package]]
 name = "hatchling"
-version = "1.31.0"
+version = "1.32.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
     { name = "pathspec" },
     { name = "pluggy" },
+    { name = "tomlkit" },
     { name = "trove-classifiers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/e2/dfa73fe78f773018dcaebc6d09b819bc10d328ff5a6b4a66efa1e3d71f52/hatchling-1.31.0.tar.gz", hash = "sha256:6b48ad4068a482ed7239b3a8215bc55b47aad3345d58dfc94e553c5d2d46211b", size = 57208, upload-time = "2026-07-08T01:48:32.237Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/08/33331757185504aae48b8d9bd78cec03a76e3aecfb52e549d05a2347c0dd/hatchling-1.32.0.tar.gz", hash = "sha256:0bdbde4a52b06c37e3eca395f85a762bf0ef06fe374fd8ae429dc6be10230f5f", size = 57783, upload-time = "2026-08-11T05:03:44.114Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/e2/2c0af0a52d16be74a4f194564fcdc417521ed863e9b65e4bc9052dacba6f/hatchling-1.31.0-py3-none-any.whl", hash = "sha256:aac80bec8b6fe35e8480f1c335be8910fa210a0e6f735a139be205dadcacb544", size = 77747, upload-time = "2026-07-08T01:48:31.024Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/84/1798b6d85ecde0e31546004efd25c5de1b1f49250644a60cce460e12593a/hatchling-1.32.0-py3-none-any.whl", hash = "sha256:0e17c9c3b9aa7c625acc8d0f5b622f107d5049af9ecf5ada4de1aada5be7cdbc", size = 78435, upload-time = "2026-08-11T05:03:42.644Z" },
 ]
 
 [[package]]
@@ -3219,7 +3220,7 @@ wheels = [
 
 [[package]]
 name = "jupyterlab"
-version = "4.6.2"
+version = "4.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "async-lru" },
@@ -3236,9 +3237,9 @@ dependencies = [
     { name = "tornado" },
     { name = "traitlets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/7f/51c0c856ab286bdaf5709cf61ed13584ed9d4bee906479707da45b11b353/jupyterlab-4.6.2.tar.gz", hash = "sha256:e18ce8b34f3de350e93cd5b2c4f3ae884cbe266eb76bf5d6825a4ed34c13bcff", size = 28183650, upload-time = "2026-07-21T12:05:24.051Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/c0/45934229995d4c6e38192ca118d93185f60808f64157e3df3c5c28f8c5fd/jupyterlab-4.6.3.tar.gz", hash = "sha256:2e3db6e3a12495ebd188276e985bf5ac502fbde3d1e8628819920210008de498", size = 28319771, upload-time = "2026-08-10T18:50:57.947Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/63/1f/e39b248c76bb3736bc05a9491a6aa1315414c32dea12f548ecc1b24c758e/jupyterlab-4.6.2-py3-none-any.whl", hash = "sha256:5964447036629adfcd3fc0969effc1da6f47d2cbd0a60b2c2eea7c31be0ec6a8", size = 17166703, upload-time = "2026-07-21T12:05:19.818Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/47/242f46de028074651c9bd6d8000fc340ed0d3cdd1a0eae4387826123413a/jupyterlab-4.6.3-py3-none-any.whl", hash = "sha256:0a1ebc6567186f1eabd99536e94df7ed9e96d1e7c5ddf3e4406ae16e88abacb7", size = 17168312, upload-time = "2026-08-10T18:50:53.044Z" },
 ]
 
 [[package]]
@@ -3432,7 +3433,7 @@ wheels = [
 
 [[package]]
 name = "langgraph"
-version = "1.2.10"
+version = "1.2.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
@@ -3442,9 +3443,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/1d/a32f3caf4b3d60651656c0d64976b48d168653e81c71bb7512e9a31541aa/langgraph-1.2.10.tar.gz", hash = "sha256:05a183a746ed570a06c7c1b879920163509a75df9e44e92dd2238218d677fd37", size = 723404, upload-time = "2026-07-28T18:33:51.441Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/0d/c8e7ee98896659e1b6555db0ab115a9ca899844744645d5d894032bab1d7/langgraph-1.2.11.tar.gz", hash = "sha256:9ecfe11e50d338b34b15cf4d8a442642de103e8ae6971320efba84e4542eb363", size = 725753, upload-time = "2026-08-11T14:00:36.945Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/4d/3fc3e2535ee2c731130d71371848ebc6d4a9d2e8ae6060b11987ba134951/langgraph-1.2.10-py3-none-any.whl", hash = "sha256:52c48bd42fa31a1de0e1c0f0ebfe342e11ca2957b8b3563f83dbd60d8e30f921", size = 247753, upload-time = "2026-07-28T18:33:50.028Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/7f/c5c30e4be99ff821029c7ac872a480676bb179c9f3df85ea3f38d13f86d4/langgraph-1.2.11-py3-none-any.whl", hash = "sha256:8bab70de7b2d00b5300fb289bcf38d8b241400f3184c1e95e8ce706fb0e8686b", size = 248854, upload-time = "2026-08-11T14:00:35.494Z" },
 ]
 
 [[package]]
@@ -4422,7 +4423,7 @@ wheels = [
 
 [[package]]
 name = "notebook"
-version = "7.6.1"
+version = "7.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jupyter-builder" },
@@ -4432,9 +4433,9 @@ dependencies = [
     { name = "notebook-shim" },
     { name = "tornado" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/28/62/34df9b5f6cef6a3e71301cd2f5525fe93a983ae46bd217e7cca27374a037/notebook-7.6.1.tar.gz", hash = "sha256:0b45fd1010668dd4808c40914d957706dbf044a677d28764dc881b74dfcede82", size = 5499443, upload-time = "2026-07-22T12:39:05.432Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/d9/5c76de84e96e1cf8aae3fce930875e0615e14f3557bbcdb634aab52da9d3/notebook-7.6.2.tar.gz", hash = "sha256:cc02b5f0bb972160cccfe44ad8a1a202036206ba3439469c514f03aefa9ae807", size = 5500147, upload-time = "2026-08-11T13:21:16.632Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl", hash = "sha256:6ea1e4c926f0dc490444ddcc335797a3dacda470a805d01031872fb119988ba2", size = 5546368, upload-time = "2026-07-22T12:39:02.287Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/fd/3e552ff5b24dd305c6e9a10e8645e29c03091c317429f326ae10dbae1ac6/notebook-7.6.2-py3-none-any.whl", hash = "sha256:5fe9e09c335cb4b7de21627b860f77210e70e54b1fb1276ad942a4a7e1d858d3", size = 5547102, upload-time = "2026-08-11T13:21:13.302Z" },
 ]
 
 [[package]]
@@ -5113,11 +5114,11 @@ wheels = [
 
 [[package]]
 name = "platformdirs"
-version = "4.11.1"
+version = "4.11.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/36/0a/062135c9a98dac804265073cc3afdbec5ae1aa37980bb354f461bafe81b4/platformdirs-4.11.1.tar.gz", hash = "sha256:bb1af68078f25e2f3e111e2d43b8d536df41b73c8a684b40bb018223b66fae27", size = 32396, upload-time = "2026-08-07T23:06:48.516Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/98/0bf930c4f97d0266b58a89e36c015f56232c52b5d2f207215d48cca9e8f7/platformdirs-4.11.2.tar.gz", hash = "sha256:3a2ae5fca3520a01ab1be8b45613537f52ddf5b5f6f53d88233892dfbf0cd82d", size = 32716, upload-time = "2026-08-10T15:48:06.092Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/85/9b31b44296cfa3bb56cddb35e6a0f6578bab0b490c0806c0245e32c6110c/platformdirs-4.11.1-py3-none-any.whl", hash = "sha256:2efd27d363e8dd2e661639ffb398865a5e0a46442a11d266bf375a0e0c10e386", size = 23261, upload-time = "2026-08-07T23:06:47.219Z" },
+    { url = "https://files.pythonhosted.org/packages/49/e2/4e6eee633809c376c024821b91ade709cbfd040ec53939ffbcc292aa7eee/platformdirs-4.11.2-py3-none-any.whl", hash = "sha256:7f89089b6ea71bda7962953edcf784b2e2d9d285b40ad88be2bb75c6e9d82ab4", size = 23361, upload-time = "2026-08-10T15:48:04.855Z" },
 ]
 
 [[package]]
