@@ -5,6 +5,134 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-08-11
+
+Two changes run across the workspace in this release.
+
+**Error messages no longer relay the text of an underlying failure.** Where a
+message previously interpolated an exception raised by a driver, a parser, an
+imported module, or a provider's SDK, it now names what failed and the
+exception type, with the original on `__cause__` and in the logs. That text was
+unbounded — a connection URL, an absolute filesystem path, a quoted config line
+containing a credential — and some of these types are rendered with their
+message shown at an HTTP boundary. Types, attributes, and `retry_after` are
+unchanged; anyone matching on error *text* rather than on its *type* is
+affected, in bots, common, config, fsm, llm, and xization.
+
+**Dotted paths resolve through one shared resolver**
+(`dataknobs_common.imports`), replacing nine copies that disagreed. Every
+config key taking a dotted path now accepts both `module:Name` and
+`module.Name`, where some keys previously took only one; only paths that were
+already rejected start resolving, so no working configuration changes meaning.
+Failures raise `DottedPathError` or `DottedPathTypeError` — both
+`ConfigurationError` subclasses — rather than an assortment of `ValueError`,
+`ImportError`, `AttributeError`, `KeyError`, and `TypeError`. A caller catching
+`ConfigurationError` is unaffected; one catching a specific stdlib type is not.
+
+### dataknobs-common [2.0.0]
+
+#### Changed
+- **Breaking:** `assert_no_broad_except_in_error_text` treats `ImportError` as unbounded by default — its own text carries an absolute site-packages path. `unbounded_types=` still **replaces** the default set rather than extending it
+
+#### Added
+- `dataknobs_common.packs` — ordered, precedence-resolved composition of named declaration bundles, with per-field merge rules a domain package declares for itself
+- `aclose_if_owned` — the third owned-vs-injected close guard, for a collaborator carrying both a sync `close()` and an `aclose()`
+- `assert_no_leaked_bridge_threads` — fails when a block leaks a dataknobs daemon thread, measured as a delta so an earlier test's leak cannot name the wrong culprit
+
+#### Fixed
+- a `SyncLoopBridge.close()` that raised left every later caller waiting forever
+- `PostgresEventBus.from_config` / `PostgresAdvisoryLock.from_config` config handling
+
+### dataknobs-config [0.5.0]
+
+#### Changed
+- **Breaking:** `EnvironmentConfig.merge()` can raise `RequiredEnvVarError`. It was previously pure data manipulation that never read the environment; it now normalizes mixed substitution provenance. Merging two sides that agree still cannot raise
+- **Breaking:** `InheritableConfigLoader.load(use_cache=False)` no longer writes to the cache, and `clear_cache(name)` now transitively clears dependents
+- `get_resource()`, `merge()`, and `to_dict()` copy nested containers instead of handing back the environment's own objects
+- a `$resource` name or `type` containing `${VAR}` now resolves, instead of matching nothing and falling back to inline defaults
+
+### dataknobs-structures [1.0.16]
+
+#### Added
+- a package changelog, with per-version history reconstructed from the release tags back to 1.0.0
+
+#### Changed
+- sources adopted strict typing at a ceiling of zero findings; the one outstanding finding was fixed rather than waived
+
+### dataknobs-utils [2.0.0]
+
+#### Fixed
+- **Breaking:** `RequestHelper.get` / `post` / `put` / `delete` / `head` sent requests with **no timeout at all** — the wrappers spell "unset" as `None`, which reaches `requests` as *wait indefinitely*, on calls the caller believed carried the configured default. All five now fall back correctly
+- `load_project_vars` dropped `None` values from bare `KEY` lines rather than raising `TypeError` when setting the environment
+- raised the `nltk` floor to `>=3.10.2`, excluding the broken 3.10.1 import hook
+
+### dataknobs-xization [2.0.0]
+
+#### Changed
+- **Breaking:** chunker and transform path resolution raises `DottedPathError` / `DottedPathTypeError` instead of `ImportError`, `AttributeError`, or `TypeError` — catch `ConfigurationError`
+- a `chunker:` or transform key written `module.path:Name` resolves, instead of falling through to a registry lookup and reporting an unregistered plugin
+
+### dataknobs-data [0.8.0]
+
+#### Added
+- `[chroma]`, `[faiss]`, and `[pgvector]` extras splitting the all-or-nothing `vector` extra, so reaching FAISS or pgvector no longer pulls chromadb and its unfixed advisory. `[vector]` is retained as a roll-up and resolves to the same distributions as before
+
+#### Changed
+- `ConversionOptions.merge_metadata` documents list-replace and delegates to the shared `deep_merge`; behavior unchanged
+
+### dataknobs-legacy [0.2.0]
+
+#### Removed
+- **Breaking:** `dataknobs.flask_api`, and with it the `flask` dependency it alone required. The module imported a `create_app` this package does not define, so `import dataknobs.flask_api` already raised `ImportError`
+
+### dataknobs-llm [0.7.0]
+
+#### Changed
+- **Breaking:** `_dataknobs_error_for_status`'s second parameter is renamed `message` → `detail`. An out-of-tree provider passing `message=` gets a `TypeError`; one passing it positionally keeps working but has its string read as classification material and discarded. A provider can no longer influence a translated error's message
+- `ConversationManager` persists the canonical provider family key on assistant-node metadata, where it previously stored `config.provider` verbatim
+- the missing-aiohttp `ImportError` points at the floor-governed extras rather than an unconstrained `pip install aiohttp`
+
+#### Added
+- `CostCalculator.cost_from_tokens(pricing, input_tokens, output_tokens)` — pricing for callers holding token counts rather than an `LLMResponse`
+- `LLMProviderFactory.list_providers()` — every registered family key, reflecting consumer registrations
+
+#### Security
+- raised the `aiohttp` floor to `>=3.14.3` (extras: `ollama`, `huggingface`)
+
+### dataknobs-bots [0.10.0]
+
+#### Changed
+- **Breaking:** a config key naming something that cannot be imported is now fatal, where four classes of key were a warning and a bot that started while quietly doing less than its configuration said — derivation rules, wizard hooks, turn-lifecycle hooks, task-injection hooks, and a wrong-*type* `context_transform`. All faults in a block are reported together, and nothing is registered from a block containing one. Every case logged a WARNING first, so existing logs show whether a deployment is affected
+- **Breaking:** the `provider` value in turn logs, in `after_message` middleware kwargs, and across every cost-stats surface (`by_provider` in `get_client_stats()` / `get_all_stats()`, and the `export_stats_json()` / `export_stats_csv()` buckets) is now the canonical family key — `"openai"` where it read `"OpenAIProvider"`. The class name moved to `TurnState.provider_impl` and the `provider_impl` log field
+- **Breaking:** recorded costs change. Pricing resolves from the provider's own model profile before the built-in table, and a dated-model-ID lookup bug billed `gpt-4o-mini-*` at `gpt-4o` rates
+- `api.RateLimitError` and `api.BotCreationError` are now also `OperationError`, widening what an existing `except OperationError` block catches
+- handled DataKnobs errors no longer propagate to the ASGI server, so a deployment alerting on unhandled exceptions sees that signal drop; the handlers log every error they handle instead
+
+#### Security
+- **Breaking:** `BotCreationError` no longer returns its `reason` to the caller. A subclass setting `client_safe = True` restores the old behavior; the other API error classes are unaffected
+- per-instance `cost_rates=` overrides permanently rewrote the class-level defaults, so one middleware instance's rates repriced every instance built afterwards in the same process — including other tenants'
+- declared an `http` extra pinning `aiohttp>=3.14.3` for `HTTPRegistryBackend`, whose transport reached consumers only transitively and under no dataknobs floor
+
+### dataknobs-fsm [0.4.0]
+
+#### Changed
+- **Breaking:** `CircuitBreakerError` is a `ResourceError`, not a `ConcurrencyError`. `except ConcurrencyError` no longer catches it, and it maps to 503 rather than 409 — retry logic keyed on the old base treated an open breaker as a contended write worth re-attempting at once
+- the `functions.base` exceptions join the shared hierarchy, so `except DataknobsError` reaches 60 raise sites it previously missed and a boundary resolves them to 503 / 422 rather than an indistinguishable 500. `except FSMError` catches exactly what it caught before
+- `CircuitBreakerError.retry_after` answers alongside the existing `wait_time`
+- the `llm` and `vector_store` resource types report as unsupported instead of failing on an internal import naming a module that does not exist
+
+#### Deprecated
+- `functions.base.FSMError`, `ConfigurationError`, and `StateTransitionError` (with its `FunctionError` alias) — the three that duplicate a `core.exceptions` name and that nothing in the package raises
+
+#### Fixed
+- **Breaking:** `ConfigLoader.merge_configs` replaces list-valued fields instead of extending them, matching its own docstring. An FSM's substance is list-shaped, so two configurations each declaring a network named `main` previously merged into two networks both named `main`
+- `merge_configs` no longer overrides fields the later configuration never mentioned
+- `AdvancedFSM.aclose()` stalled the caller's event loop; `SimpleFSM.aclose()` and the CLI leaked daemon threads
+- `ResourcePool.acquire()` waited out its whole timeout before creating a resource, and ignored `timeout=0`
+
+#### Security
+- raised the `pymdown-extensions` floor to `>=11.0.1`
+
 ## Release - 2026-07-29 (2)
 
 ### dataknobs-bots [0.9.4]

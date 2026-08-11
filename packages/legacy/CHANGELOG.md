@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.2.0 - 2026-08-11
+
 ### Removed
 - `dataknobs.flask_api`, and with it the `flask` dependency it alone required.
   The module imported a `create_app` that this package does not define, so

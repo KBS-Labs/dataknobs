@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.0.0 - 2026-08-11
+
 ### Added
 
 - **`dotted_path(target)` — the inverse of `resolve_dotted`.** Spells the

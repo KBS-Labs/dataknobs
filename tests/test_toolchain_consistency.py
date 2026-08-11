@@ -247,6 +247,82 @@ def test_a_change_to_these_guards_still_schedules_them():
     assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
 
 
+def test_a_release_bump_schedules_no_package_suite() -> None:
+    """The two mechanisms agree about what a version bump is.
+
+    The hasher strips a package's own version line and the cross-package
+    constraints bumped beside it, precisely so a release does not dirty a
+    package. Change detection matched on paths and stripped nothing, so the
+    same bump that moved not one stored hash still scheduled all ten suites —
+    through the package paths, and again through ``uv.lock`` as a global
+    trigger. Both halves are asserted because either alone still schedules
+    everything.
+    """
+    # A bump rewrites the version and the sibling constraints. Neither is a
+    # change to how the package behaves, and both must compare equal.
+    before = b'[project]\nversion = "1.6.3"\ndeps = [\n"dataknobs-config>=0.4.4",\n]\n'
+    after = b'[project]\nversion = "2.0.0"\ndeps = [\n"dataknobs-config>=0.5.0",\n]\n'
+    assert _scopes.strip_release_noise(before) == _scopes.strip_release_noise(after), (
+        "a version bump must not read as a content change, or every release "
+        "re-runs every suite to publish a version string"
+    )
+
+    # The exemption has to stay narrow: an edit beside the version is a change.
+    edited = after.replace(b"[project]", b"[project]\nrequires-python = '>=3.13'")
+    assert _scopes.strip_release_noise(after) != _scopes.strip_release_noise(edited)
+
+    # The other file every bump rewrites. It is in no hash scope, so mapping it
+    # to its package scheduled that package's whole suite for a release note.
+    plan = _scopes.plan_for_files(["packages/common/CHANGELOG.md"])
+    assert plan["packages"] == [], f"a changelog belongs to no suite, got {plan['packages']}"
+    assert plan["test_scope"] == "none"
+    assert plan["docs_changed"] is True
+
+
+def test_an_unhashed_test_input_still_schedules_its_package() -> None:
+    """Change detection shares the hasher's definition, not its blind spot.
+
+    The hasher decides *membership* as well — ``_HASH_PATTERNS`` reaches the
+    ``.py`` files under ``src/`` and ``tests/`` and nothing else. Deferring to
+    that wholesale would be the unsafe half of the unification: these files
+    decide whether a suite passes while moving no stored hash, so a golden
+    file regenerated wrongly would stop scheduling the suite that would have
+    caught it. Over-scheduling here is the deliberate asymmetry.
+    """
+    unhashed_inputs = (
+        "packages/llm/tests/golden/anthropic_profile_golden.json",
+        "packages/config/tests/fixtures/test_config.yaml",
+    )
+
+    for path in unhashed_inputs:
+        assert (ROOT / path).exists(), (
+            f"{path} was this test's real instance of an unhashed test input; "
+            "if it moved, re-anchor on another rather than deleting the case"
+        )
+        assert _scopes.plan_for_files([path])["test_scope"] == "packages", (
+            f"{path} feeds a test result — it must still schedule its package"
+        )
+
+
+def test_the_release_noise_definition_has_one_home() -> None:
+    """Declared once, in the module both readers already share.
+
+    Identity is not the assertion: ``load_bin_module`` execs a fresh module
+    per call, so the two would compare unequal while agreeing perfectly. What
+    a re-introduced copy looks like is a *second definition* in the hasher.
+    """
+    hashes = load_bin_module("package-hashes")
+
+    for name in ("_VERSION_LINE_RE", "_DEP_CONSTRAINT_LINE_RE"):
+        assert not hasattr(hashes, name), (
+            f"package-hashes.py defines its own {name} again — that is the "
+            "duplication whose two copies disagreed about a version bump"
+        )
+
+    sample = b'version = "1.0.0"\n"dataknobs-common>=1.0.0",\nkept = 1\n'
+    assert hashes.strip_release_noise(sample) == _scopes.strip_release_noise(sample)
+
+
 def test_the_gate_reads_the_scope_change_detection_computes():
     """The decision above only helps if the gate acts on it.
 
