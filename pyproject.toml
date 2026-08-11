@@ -97,6 +97,16 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
+# A bare `# type: ignore` waives every check on its line, including ones written
+# years after it. `warn_unused_ignores` cannot reach that: a bare directive that
+# still suppresses *something* is used, so it never goes stale, and what it
+# suppresses is free to change underneath it. Requiring the code is what makes a
+# suppression reviewable -- and what lets a directive stop applying loudly.
+#
+# Enabled tree-wide, with the four exceptions below. The default direction is
+# deliberate: a new package, or a new top-level directory, is covered on the day
+# it appears rather than on the day someone remembers to list it.
+enable_error_code = ["ignore-without-code"]
 namespace_packages = true
 explicit_package_bases = true
 mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src:packages/legacy/src"
@@ -161,6 +171,31 @@ warn_return_any = false
 warn_unused_ignores = false
 warn_no_return = false
 warn_unreachable = false
+
+# `ignore-without-code`, paused where a backlog predates it.
+#
+# These four packages hold 66 bare directives between them. Their ceilings in
+# .dataknobs/quality-contract.json equal their measurements exactly, so turning
+# the rule on for them would breach all four at once -- and `update_baseline`
+# lowers a ceiling, never raises one. Rather than re-baseline four packages to
+# absorb a rule none of them has read, each pays for its own when it is adopted:
+# the entry comes out, the directives get their codes, and the ceiling falls.
+#
+# So this list is expected to shrink to nothing, and an entry that outlives its
+# package's adoption is the failure mode -- a package at tier `strict` while the
+# rule that makes its suppressions readable is still switched off. That is what
+# `test_ignore_without_code_tracks_the_adopted_set` asserts, since mypy cannot:
+# a section that matches modules is a *used* section however little it earns.
+#
+# Counts measured 2026-08-10 on `ce926e32`, whole-tree.
+[[tool.mypy.overrides]]
+module = [
+    "dataknobs_fsm.*",   # 46
+    "dataknobs_data.*",  #  9
+    "dataknobs_llm.*",   #  8
+    "dataknobs_bots.*",  #  3
+]
+disable_error_code = ["ignore-without-code"]
 
 # Gradual migration for complex vector store implementations
 [[tool.mypy.overrides]]
