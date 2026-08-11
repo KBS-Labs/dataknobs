@@ -1221,7 +1221,7 @@ wheels = [
 
 [[package]]
 name = "dataknobs"
-version = "0.1.11"
+version = "0.2.0"
 source = { editable = "packages/legacy" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1240,7 +1240,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.9.4"
+version = "0.10.0"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1344,7 +1344,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.6.3"
+version = "2.0.0"
 source = { editable = "packages/common" }
 
 [package.optional-dependencies]
@@ -1406,7 +1406,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-config"
-version = "0.4.4"
+version = "0.5.0"
 source = { editable = "packages/config" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1438,7 +1438,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1582,7 +1582,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.3.3"
+version = "0.4.0"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1705,7 +1705,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.6.9"
+version = "0.7.0"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1795,7 +1795,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-structures"
-version = "1.0.15"
+version = "1.0.16"
 source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1814,7 +1814,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.2.18"
+version = "2.0.0"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1948,7 +1948,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.3.14"
+version = "2.0.0"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "beautifulsoup4" },

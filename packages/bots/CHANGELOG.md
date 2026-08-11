@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.10.0 - 2026-08-11
+
 ### Changed
 
 - **A config key naming something that cannot be imported is now fatal, where
