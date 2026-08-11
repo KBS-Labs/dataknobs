@@ -62,6 +62,15 @@ _load = load_toml
 
 
 def _mypy_inis() -> list[Path]:
+    """Every ``mypy.ini`` there is, which is currently none.
+
+    The root one is retired: two configurations meant two answers to "is this
+    clean", and mypy reads a ``mypy.ini`` in preference to ``pyproject.toml``
+    whenever one is present. This stays as a forward guard rather than being
+    deleted — a new one, here or in a package, would silently take precedence
+    over the strict configuration the ceilings are measured under, and the
+    readers below would then have something to check it against.
+    """
     return [p for p in [ROOT / "mypy.ini", *sorted(ROOT.glob("packages/*/mypy.ini"))] if p.exists()]
 
 
@@ -1629,38 +1638,25 @@ def test_mypy_path_entries_resolve():
     )
 
 
-def test_mypy_configs_declare_the_same_search_path():
-    """The two live configs may differ in strictness, but not in where source is.
-
-    ``bin/validate.sh`` type-checks against ``mypy.ini`` by default and against
-    the root ``[tool.mypy]`` under ``--all-errors``, so both are live and which
-    one applies is decided by the flag. Strictness is *supposed* to differ
-    between them — that is the point of having two. A search path is not a
-    strictness knob: a package's source is in the same place either way, so a
-    package listed in one and not the other means the same code type-checks
-    differently depending on how the run was invoked, with the weaker side
-    resolving those imports to ``Any`` and reporting success.
-
-    Compared as sets, because order carries no meaning here.
-    """
-    declared: dict[str, set[str]] = {}
-    for path, entry in _mypy_path_entries():
-        declared.setdefault(_rel(path), set()).add(entry)
-
-    if len(declared) < 2:
-        pytest.skip("only one config declares a mypy_path — nothing to compare")
-
-    names = sorted(declared)
-    reference = declared[names[0]]
-    violations = [
-        f"{name}: {sorted(reference ^ declared[name])} declared in one config but not the other"
-        for name in names[1:]
-        if declared[name] != reference
-    ]
-
-    assert not violations, f"mypy search paths disagree with {names[0]}:\n" + "\n".join(
-        f"  - {v}" for v in violations
-    )
+# ``test_mypy_configs_declare_the_same_search_path`` used to sit here: it read
+# ``mypy_path`` from every config and asserted the sets matched, opening with
+# ``if len(declared) < 2: pytest.skip(...)``. With ``mypy.ini`` retired there is
+# one config, so it would skip forever — a check reporting green because it
+# cannot report anything else.
+#
+# It was worse than vacuous-in-future. Comparing two configs to each other can
+# only find a *disagreement*, and the one real search-path fault in this tree is
+# an omission both configs shared: ``packages/legacy/src`` is on neither, so the
+# guard read agreement and passed while a package's imports resolved to ``Any``.
+#
+# Its replacement is a completeness property — every package holding a mypy cell
+# is on the search path — compared against the contract rather than against a
+# second config, so a shared omission has nothing to hide behind. That guard
+# lands with the fix that makes it green, since it is red on the tree as it
+# stands and greening it moves a measurement.
+#
+# ``test_mypy_path_entries_resolve`` above is unaffected and keeps the other
+# direction: a declared entry that points at nothing.
 
 
 # --------------------------------------------------------------------------
@@ -1743,8 +1739,12 @@ def test_the_type_check_fails_when_mypy_does(tmp_path):
     never set. The check could not fail, which is the shape the rest of this file
     exists to catch, in the script that does the checking.
 
-    Run against a file with an error ``mypy.ini`` still reports (most codes are
-    disabled there, so the probe has to use one that is not).
+    The probe is written outside the repository on purpose, and that is now a
+    second property rather than an accident of using ``tmp_path``. A path in no
+    cell has no ceiling to be within, so any finding there is a breach — while
+    inside a cell the verdict is ``measured <= ceiling`` and a lone type error
+    is absorbed by a backlog that already allows thousands. Both are correct;
+    this pins the half where "any error fails" still holds.
     """
     probe = tmp_path / "type_error_probe.py"
     probe.write_text("def broken() -> int:\n    return undefined_symbol_xyz\n", encoding="utf-8")

@@ -130,15 +130,18 @@ After configuration, focus on these error types that indicate real issues:
 
 ### How the verdict is reached
 
-`bin/validate.sh` fails a run when mypy exits non-zero, and prints whatever mypy
-said. It does not match mypy's output for the word "error": it previously piped
-mypy into `grep` and tested the pipeline, and because the script sets `pipefail`
-and mypy exits non-zero exactly when it has findings, a real type error made the
-pipeline non-zero and sent the check down its *success* branch. Every type error
-was reported as "Type checks passed". Note that `mypy.ini` disables most error
-codes, so the set of findings that can fail a run is narrower than mypy's
-default — the config decides what counts, and the exit status decides the
-verdict.
+`bin/validate.sh` does not count mypy's findings and does not match its output
+for the word "error". It asks `.dataknobs/quality-contract.json` which cells its
+targets fall in and delegates the comparison to `bin/quality-contract.py`: a cell
+fails when it measures **above its ceiling**, not when it measures above zero.
+See [MyPy Configuration](./mypy-configuration.md).
+
+For a path in no cell there is no ceiling, so any finding fails, and that verdict
+follows mypy's exit status. It used to follow a `grep` over mypy's output
+instead — and because the script sets `pipefail` and mypy exits non-zero exactly
+when it has findings, a real type error made the pipeline non-zero and sent the
+check down its *success* branch. Every type error was reported as "Type checks
+passed".
 
 ## Running Validation
 

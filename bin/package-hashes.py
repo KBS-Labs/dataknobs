@@ -241,13 +241,13 @@ def compute_workspace_hash(scope: str) -> str:
     """Hash one workspace-level scope declared in WORKSPACE_QUALITY_INPUTS.
 
     These live outside packages/ and so were hashed by nothing, which meant a
-    change to mypy.ini, pytest.ini, .python-version, .pylintrc, the root
-    pyproject.toml, or a workspace guard itself left every stored hash intact.
-    CI would start the job, find nothing dirty, and pass on a stale artifact.
+    change to pytest.ini, .python-version, .pylintrc, the root pyproject.toml,
+    or a workspace guard itself left every stored hash intact. CI would start
+    the job, find nothing dirty, and pass on a stale artifact.
 
     A missing entry contributes nothing rather than raising: these are optional
-    by nature (.pylintrc and mypy.ini are both absent in a fresh checkout of
-    some branches), and its later appearance changes the hash on its own.
+    by nature (.pylintrc is absent in a fresh checkout of some branches), and
+    its later appearance changes the hash on its own.
     """
     return _hash_files(workspace_scope_files(scope), _ROOT)
 

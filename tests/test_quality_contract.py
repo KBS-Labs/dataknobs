@@ -179,29 +179,67 @@ def test_the_type_checker_reads_exactly_the_cells_it_is_measured_over() -> None:
     in that tier that mypy *does* read has its findings counted against whichever
     cell claimed it — or against none, and silently vanish. Both readings are
     wrong and neither is visible in the output.
+
+    Asserted against what ``bin/validate.sh`` *does with* its targets rather than
+    against the target list itself. The two used to be the same statement: the
+    script type-checked whatever it linted, so comparing the tiers against
+    ``--print-targets`` said something about mypy. It no longer does — that list
+    is the linter's, and the script now asks ``scope`` which cells its targets
+    name and hands those to the contract. The old comparison would still pass
+    today, because the two lists are identical, which is exactly how a guard
+    stops asserting what its name claims: unchanged, green, and about something
+    else.
     """
-    targets = _validate_targets()
+    targets = sorted(_validate_targets())
+    classified = contract_module.scope_paths(_contract(), "mypy", targets)
+    reached = {cell for kind, _path, cell in classified if kind == contract_module.SCOPE_MEASURED}
     cells = _cells("mypy")
 
     read_anyway = sorted(
-        cell["path"]
-        for cell in cells
-        if cell["tier"] == "unchecked" and _covered_by_targets(cell["path"], targets)
+        cell["path"] for cell in cells if cell["tier"] == "unchecked" and cell["path"] in reached
     )
     assert not read_anyway, (
-        f"{rel(CONTRACT)} calls {read_anyway} unchecked by mypy, but they are "
-        "inside bin/validate.sh's target set, so mypy reads them. Give each a "
-        "tier and a ceiling."
+        f"{rel(CONTRACT)} calls {read_anyway} unchecked by mypy, but bin/validate.sh "
+        "resolves its targets onto them, so mypy reads them. Give each a tier and "
+        "a ceiling."
     )
 
     unread = sorted(
         cell["path"]
         for cell in cells
-        if cell["tier"] != "unchecked" and not _covered_by_targets(cell["path"], targets)
+        if cell["tier"] != "unchecked" and cell["path"] not in reached
     )
     assert not unread, (
         f"{rel(CONTRACT)} gives {unread} a mypy ceiling, but bin/validate.sh "
         "does not type-check them, so the number is a measurement of nothing."
+    )
+
+
+def test_the_type_check_scope_comes_from_the_contract() -> None:
+    """The structural property behind the tier comparison above.
+
+    ``bin/validate.sh`` must *derive* its mypy scope from the contract rather
+    than restate it. Restating it is not hypothetical — it is what the script
+    did until this phase, and the two declarations then drifted in the way only
+    duplicated declarations can: the script read a second configuration under
+    which a transitional package was clean, so a new finding passed locally and
+    failed in CI.
+
+    Read as text, because what is being asserted is that the call exists at all.
+    The behavioural half — that the derived scope is the one measured — is the
+    tier comparison above, and neither substitutes for the other.
+    """
+    script = (ROOT / "bin" / "validate.sh").read_text(encoding="utf-8")
+    assert "quality-contract.py" in script, (
+        "bin/validate.sh no longer calls bin/quality-contract.py, so its mypy "
+        "verdict is reached by something other than the ceilings the gate "
+        "enforces. Two verdicts over one tree is the drift this replaced."
+    )
+    assert "scope --tool mypy" in script, (
+        "bin/validate.sh no longer asks the contract which cells its targets "
+        "name. Matching cell patterns in the script is a second copy of "
+        "cell_matches, waiting to disagree with the one the ceilings were "
+        "measured under."
     )
 
 
@@ -372,6 +410,109 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
             f"{offender['file']} was named against {breached}, which it is not in"
         )
     assert entry["further_files"] >= 0
+
+
+#: What mypy emits when a per-module override section matched no module, taken
+#: verbatim from a run against this repository before the three dead sections
+#: were removed. A *note*, so the exit status is untouched and nothing fails.
+UNUSED_SECTION_NOTE = (
+    "pyproject.toml: note: unused section(s): module = "
+    "['dataknobs_legacy.*', 'python_nmap.*', 'sklearn.*']\n"
+)
+
+
+def test_an_override_section_that_matches_nothing_is_read_out_of_the_note() -> None:
+    """The parse under the guard, driven on the tool's own wording.
+
+    A section matching no module suppresses nothing, and is one of two things:
+    a waiver whose spelling is wrong — so the findings it was written for are
+    still being reported — or one whose subject is gone. Both read as "handled"
+    to anyone looking at the config, and mypy files the observation as a note.
+    """
+    assert contract_module.unused_config_sections(UNUSED_SECTION_NOTE) == [
+        "dataknobs_legacy.*",
+        "python_nmap.*",
+        "sklearn.*",
+    ]
+    assert contract_module.unused_config_sections("no such note here\n") == []
+
+
+def test_a_section_may_match_nothing_when_it_says_why(tmp_path: Path) -> None:
+    """The escape hatch, and its limit.
+
+    An ``ignore_missing_imports`` override for a library imported only inside a
+    ``try/except ImportError`` legitimately matches nothing in a run that does
+    not take that branch. So the failure is an entry that suppresses nothing
+    *and says nothing about why*, which is the shape the internal-label
+    allowlist settled on: a reason on the line above.
+
+    Two negative halves, and they are what the test is for — an escape hatch
+    nobody has bounded excuses everything. The reason must be *adjacent*, or one
+    comment covers every entry in the list beneath it; and it must be attached
+    to a *module declaration*, or any quoted string under any comment becomes an
+    excuse for a module that happens to share its spelling.
+    """
+    config = tmp_path / "pyproject.toml"
+    config.write_text(
+        "[tool.mypy]\n"
+        "# Where a first-party module resolves from.\n"
+        'mypy_path = "nltk.*"\n'
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        "module = [\n"
+        "    # Imported inside a try/except ImportError, so it may match nothing.\n"
+        '    "psycopg2.*",\n'
+        '    "sklearn.*",\n'
+        "]\n"
+        "ignore_missing_imports = true\n",
+        encoding="utf-8",
+    )
+
+    excused = contract_module.excused_config_sections(config)
+    assert "psycopg2.*" in excused
+    assert "sklearn.*" not in excused, (
+        "a section two lines below a comment was excused by it, so one reason "
+        "would cover every entry in the list beneath it"
+    )
+    assert "nltk.*" not in excused, (
+        "a commented setting that is not a module declaration supplied an "
+        "excuse, so any quoted value under any comment waives the module that "
+        "shares its spelling"
+    )
+
+
+def test_a_dead_override_section_fails_the_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Detected is not enforced: the note has to reach the exit status.
+
+    mypy has always reported this and nothing has ever failed on it — three
+    sections were dead when this guard was written, two of them waivers for
+    findings still being reported. That is this program's own defect class, in
+    the configuration the program measures under.
+
+    The note is injected rather than provoked: the repository is clean of them
+    now, so the only way to drive the fault is to supply one. What is being
+    pinned is the wiring from note to non-zero, not mypy's ability to emit it.
+    """
+    monkeypatch.setattr(
+        contract_module,
+        "_run",
+        lambda _command: subprocess.CompletedProcess(
+            args=_command, returncode=0, stdout=UNUSED_SECTION_NOTE, stderr=""
+        ),
+    )
+
+    report = contract_module.check(_contract(), ["mypy"])
+    dead = sorted(entry["section"] for entry in report["unused_config"])
+    assert dead == ["dataknobs_legacy.*", "python_nmap.*", "sklearn.*"], (
+        f"a section matching nothing was not reported: {report['unused_config']}"
+    )
+
+    scoped = contract_module.check(_contract(), ["mypy"], only={"bin"})
+    assert not scoped["unused_config"], (
+        "a scoped run reported unused sections. Scoped to part of the tree "
+        "almost every section legitimately matches nothing, so treating that as "
+        "a fault would make every single-package validation fail."
+    )
 
 
 def test_the_formatter_measurer_refuses_a_file_it_could_not_read() -> None:
