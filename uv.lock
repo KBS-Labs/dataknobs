@@ -639,6 +639,15 @@ wheels = [
 ]
 
 [[package]]
+name = "botocore-stubs"
+version = "1.43.67"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/45/53d662227dc4787b2c854445ee7eb4751cb5d74cfb5c686a6ecbe1f94c17/botocore_stubs-1.43.67.tar.gz", hash = "sha256:853e74014a1f557055c4ffae5fb38d7c65c7c0520e1aab366cac41d5428f419d", size = 42846, upload-time = "2026-08-08T14:57:53.412Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/5e/bdbf19967898a032292da65a47d6e25b2eee55865db4e687f861d80b5602/botocore_stubs-1.43.67-py3-none-any.whl", hash = "sha256:c51262bac3341c1cda71f05fa01141fffd3990d7a92c7960e3b755c1bc830373", size = 67244, upload-time = "2026-08-08T14:57:52.01Z" },
+]
+
+[[package]]
 name = "bracex"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1803,6 +1812,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "botocore-stubs" },
     { name = "dataknobs-data", extra = ["vector"] },
     { name = "dataknobs-llm", extra = ["anthropic", "bedrock", "huggingface", "ollama", "openai"] },
     { name = "editables" },
@@ -1830,6 +1840,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "types-beautifulsoup4" },
+    { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
 
@@ -1850,6 +1861,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=26.3.1" },
+    { name = "botocore-stubs", specifier = ">=1.34.0" },
     { name = "dataknobs-data", extras = ["vector"], editable = "packages/data" },
     { name = "dataknobs-llm", extras = ["anthropic", "openai", "ollama", "huggingface", "bedrock"], editable = "packages/llm" },
     { name = "editables", specifier = ">=0.3" },
@@ -1877,6 +1889,7 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.5.0" },
     { name = "ruff", specifier = ">=0.8.0" },
     { name = "types-beautifulsoup4", specifier = ">=4.12.0" },
+    { name = "types-pyyaml", specifier = ">=6.0.0" },
     { name = "types-requests", specifier = ">=2.31.0" },
 ]
 

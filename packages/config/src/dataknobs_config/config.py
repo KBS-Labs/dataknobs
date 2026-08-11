@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from dataknobs_common import NotFoundError, Registry
 from dataknobs_common.config_loading import (
     ConfigLoadError,
