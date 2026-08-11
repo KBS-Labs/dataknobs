@@ -1713,6 +1713,103 @@ def test_type_checked_packages_are_on_the_search_path() -> None:
     )
 
 
+#: The rule a package's suppressions become readable under, and the one the
+#: adoption series turns on per package rather than tree-wide at once.
+ADOPTION_ERROR_CODE = "ignore-without-code"
+
+
+def _top_level_modules(cell_path: str) -> list[str]:
+    """The importable names a package source root contributes.
+
+    Read from disk rather than guessed from the package directory name: the two
+    agree today (``packages/utils/src`` holds ``dataknobs_utils``) and the one
+    place they do not is exactly where a guessed name would be wrong — the
+    legacy package's source root holds ``dataknobs``.
+
+    Single-file modules count too. Every package here ships a directory, so the
+    branch is unreached today — but a guard that stops seeing a package the day
+    it changes shape is a guard that reports green over it.
+    """
+    root = ROOT / cell_path
+    if not root.is_dir():
+        return []
+    return sorted(
+        child.stem if child.suffix == ".py" else child.name
+        for child in root.iterdir()
+        if not child.name.startswith((".", "_")) and (child.is_dir() or child.suffix == ".py")
+    )
+
+
+def _modules_with_code_disabled(code: str) -> set[str]:
+    """Top-level module names for which ``code`` is switched off by an override.
+
+    A pattern's leading segment is what identifies the package: ``dataknobs_fsm.*``
+    and a hypothetical ``dataknobs_fsm.vector.*`` both name fsm, and either one
+    leaves some of fsm's suppressions unreadable.
+    """
+    overrides = _load(ROOT / "pyproject.toml")["tool"]["mypy"].get("overrides", [])
+    disabled: set[str] = set()
+    for section in overrides:
+        if code not in section.get("disable_error_code", []):
+            continue
+        module = section.get("module", [])
+        patterns = [module] if isinstance(module, str) else module
+        disabled.update(pattern.split(".", 1)[0] for pattern in patterns)
+    return disabled
+
+
+def test_ignore_without_code_tracks_the_adopted_set() -> None:
+    """A package cannot be at tier ``strict`` with this rule switched off for it.
+
+    ``ignore-without-code`` is enabled tree-wide and paused per package, because
+    four of them hold a backlog of bare directives their ceilings already account
+    for. Each pause is meant to end when its package is adopted: the override
+    comes out, the directives get their codes, and the ceiling falls.
+
+    Nothing in mypy notices when one does not. ``warn_unused_configs`` reports a
+    section matching *no module*, and ``dataknobs_fsm.*`` goes on matching every
+    fsm module for as long as fsm exists — so an override that has outlived its
+    reason is indistinguishable, to mypy, from one still earning its place. The
+    result would be a package the contract calls ``strict`` whose suppressions
+    are still unreadable: a tier that reports clean because the rule that would
+    dirty it is off, which is the failure this whole series is about.
+
+    **Only this direction.** An override naming something that is not a module
+    at all — a typo, or a package that has been deleted — is the case mypy *does*
+    detect, as a note the contract's dead-override check reads and fails on. This
+    guard covers the case that check cannot see, and asserting the converse here
+    would duplicate it while forbidding a future pause on a cell that is not a
+    package source root.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    cells = [
+        cell
+        for cell in contract["tools"]["mypy"]["cells"]
+        if PurePosixPath(cell["path"]).match(PACKAGE_SOURCE_CELL)
+    ]
+    disabled = _modules_with_code_disabled(ADOPTION_ERROR_CODE)
+
+    assert cells, (
+        "no package source cell found in the mypy contract — either every "
+        "package became unchecked or this guard stopped recognising the shape"
+    )
+
+    violations = [
+        f"{cell['path']}: tier {cell['tier']!r}, but '{module}.*' still disables "
+        f"{ADOPTION_ERROR_CODE} in pyproject.toml, so its bare directives are "
+        f"unreachable and its ceiling of {cell['ceiling']} does not count them"
+        for cell in sorted(cells, key=lambda c: str(c["path"]))
+        if cell["tier"] == "strict"
+        for module in _top_level_modules(cell["path"])
+        if module in disabled
+    ]
+
+    assert not violations, (
+        f"Adopted packages with {ADOPTION_ERROR_CODE} still switched off:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
 # --------------------------------------------------------------------------
 # Interpreter pins
 # --------------------------------------------------------------------------

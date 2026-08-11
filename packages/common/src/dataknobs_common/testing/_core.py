@@ -752,16 +752,23 @@ try:
         )
 
 except ImportError:
-    # pytest not installed - provide placeholder markers
-    requires_ollama = None  # type: ignore
-    requires_faiss = None  # type: ignore
-    requires_chromadb = None  # type: ignore
-    requires_redis = None  # type: ignore
-    requires_postgres = None  # type: ignore
-    requires_elasticsearch = None  # type: ignore
-    requires_real_postgres = None  # type: ignore
-    requires_localstack = None  # type: ignore
-    requires_bedrock = None  # type: ignore
+    # pytest not installed - provide placeholder markers.
+    #
+    # dataknobs-common installs with no required dependencies, so this branch is
+    # reachable: pytest is a dev-group dependency and a consumer importing this
+    # module without it lands here. Each name was bound to a MarkDecorator above,
+    # so rebinding it to None is an `assignment` mismatch -- named on every line
+    # rather than waived blank, because a bare directive would go on covering
+    # whatever else these lines came to report.
+    requires_ollama = None  # type: ignore[assignment]
+    requires_faiss = None  # type: ignore[assignment]
+    requires_chromadb = None  # type: ignore[assignment]
+    requires_redis = None  # type: ignore[assignment]
+    requires_postgres = None  # type: ignore[assignment]
+    requires_elasticsearch = None  # type: ignore[assignment]
+    requires_real_postgres = None  # type: ignore[assignment]
+    requires_localstack = None  # type: ignore[assignment]
+    requires_bedrock = None  # type: ignore[assignment]
 
     def requires_localstack_service(service: str) -> Any:
         return None

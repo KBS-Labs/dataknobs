@@ -101,6 +101,42 @@ module = [
 ignore_missing_imports = true
 ```
 
+## Suppressions name what they suppress
+
+`ignore-without-code` is enabled in the root config, so a bare `# type: ignore`
+is itself a finding. Write the code mypy names in its message:
+
+```python
+requires_ollama = None  # type: ignore[assignment]
+```
+
+`warn_unused_ignores` cannot reach this. A bare directive that still suppresses
+*something* is a used directive, so it never goes stale — while what it
+suppresses is free to change underneath it, silently, as the code around it
+moves. Naming the code is what lets a directive stop applying loudly, and what
+lets a reader disagree with one suppression without reading the whole line's
+type story.
+
+The rule is on tree-wide, and **paused per package** for the four that hold a
+backlog of bare directives predating it:
+
+```toml
+[[tool.mypy.overrides]]
+module = ["dataknobs_fsm.*", "dataknobs_data.*", "dataknobs_llm.*", "dataknobs_bots.*"]
+disable_error_code = ["ignore-without-code"]
+```
+
+Their ceilings equal their measurements exactly, and `update_baseline` lowers a
+ceiling rather than raising one, so enabling the rule for them would breach four
+cells at once. Each package pays for its own when it moves to tier `strict`: the
+entry comes out, the directives get their codes, and the ceiling falls.
+
+An entry that outlives its package's adoption is the failure mode — a package
+the contract calls `strict` whose suppressions are still unreadable. mypy cannot
+see it (`dataknobs_fsm.*` goes on matching modules however little the section
+earns), so `test_ignore_without_code_tracks_the_adopted_set` in
+`tests/test_toolchain_consistency.py` does.
+
 ## Adding type stubs
 
 Prefer stubs to an `ignore_missing_imports` waiver: stubs give real checking,
