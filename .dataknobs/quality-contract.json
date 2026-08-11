@@ -104,9 +104,9 @@
       "cells": [
         {
           "path": "packages/structures/src",
-          "tier": "transitional",
-          "ceiling": 1,
-          "reason": "one finding from graduating"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; its one finding was fixed rather than waived"
         },
         {
           "path": "packages/legacy/src",
