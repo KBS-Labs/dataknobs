@@ -110,9 +110,9 @@
         },
         {
           "path": "packages/legacy/src",
-          "tier": "transitional",
-          "ceiling": 5,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; four of its five findings were a module that could not be imported, now deleted"
         },
         {
           "path": "packages/config/src",

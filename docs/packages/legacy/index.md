@@ -34,7 +34,6 @@ dataknobs/
 ├── src/
 │   └── dataknobs/
 │       ├── __init__.py          # Deprecation warning
-│       ├── flask_api.py         # Legacy Flask API
 │       ├── structures/
 │       │   └── __init__.py
 │       ├── utils/
@@ -180,16 +179,15 @@ The modular packages maintain API compatibility with the legacy package. No brea
 
 ## Legacy Flask API
 
-The legacy package includes a Flask API that is not migrated to the modular packages:
+Removed. The package once carried a `flask_api` module, and it could not be
+imported: its first statement asked `dataknobs` for a `create_app` that this
+package has never defined, so `import dataknobs.flask_api` raised `ImportError`.
+The example printed here was wrong in a second way, sourcing `create_app` from
+`flask_api` itself.
 
-```python
-from dataknobs.flask_api import create_app
-
-# This functionality is deprecated and not available in modular packages
-app = create_app()
-```
-
-If you need web API functionality, consider building a new API using modern frameworks with the modular packages.
+Nothing depended on it, because nothing could. If you need web API
+functionality, build it with the modular packages and a framework of your
+choosing.
 
 ## Support Timeline
 

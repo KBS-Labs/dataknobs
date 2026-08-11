@@ -1638,25 +1638,79 @@ def test_mypy_path_entries_resolve():
     )
 
 
-# ``test_mypy_configs_declare_the_same_search_path`` used to sit here: it read
-# ``mypy_path`` from every config and asserted the sets matched, opening with
-# ``if len(declared) < 2: pytest.skip(...)``. With ``mypy.ini`` retired there is
-# one config, so it would skip forever — a check reporting green because it
-# cannot report anything else.
-#
-# It was worse than vacuous-in-future. Comparing two configs to each other can
-# only find a *disagreement*, and the one real search-path fault in this tree is
-# an omission both configs shared: ``packages/legacy/src`` is on neither, so the
-# guard read agreement and passed while a package's imports resolved to ``Any``.
-#
-# Its replacement is a completeness property — every package holding a mypy cell
-# is on the search path — compared against the contract rather than against a
-# second config, so a shared omission has nothing to hide behind. That guard
-# lands with the fix that makes it green, since it is red on the tree as it
-# stands and greening it moves a measurement.
-#
-# ``test_mypy_path_entries_resolve`` above is unaffected and keeps the other
-# direction: a declared entry that points at nothing.
+#: A cell naming one package's source root, as opposed to a glob over several
+#: (``packages/*/tests``) or a directory that is not an importable root
+#: (``bin``, ``tests``). Only these carry the property below: they are the
+#: directories whose modules another package imports *by name*.
+PACKAGE_SOURCE_CELL = "packages/*/src"
+
+
+def _type_checked_package_sources() -> list[str]:
+    """Every package source root the mypy contract measures.
+
+    Read from the contract rather than from ``packages/*/src`` on disk. The
+    contract is what decides a directory is type-checked at all, so a package
+    the contract has deliberately left ``unchecked`` must not be demanded here
+    — and a package that appears on disk without a cell is already a failure,
+    of the totality rule in ``test_quality_contract.py``, reported there.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"]
+        for cell in contract["tools"]["mypy"]["cells"]
+        if cell["tier"] != "unchecked" and PurePosixPath(cell["path"]).match(PACKAGE_SOURCE_CELL)
+    ]
+
+
+def test_type_checked_packages_are_on_the_search_path() -> None:
+    """A type-checked package missing from ``mypy_path`` is checked against ``Any``.
+
+    mypy resolves an import by name against its search path. A package under
+    check whose own root is *absent* from that path does not fail to resolve —
+    it falls back to ``ignore_missing_imports``, so every symbol crossing that
+    boundary comes back as ``Any`` and the errors that would have been reported
+    are never computed. The package still measures a number, and the number is
+    lower than the truth.
+
+    ``test_mypy_configs_declare_the_same_search_path`` used to sit here and
+    asserted that every config declared the *same* ``mypy_path``. Two failings,
+    and the second is why the replacement is shaped differently. It opened with
+    ``if len(declared) < 2: pytest.skip(...)``, so retiring ``mypy.ini`` would
+    have left it skipping forever — a check reporting green because it cannot
+    report anything else. And comparing two declarations to each other can only
+    find a *disagreement*: ``packages/legacy/src`` was missing from both, so the
+    guard read agreement and passed over the one real search-path fault in the
+    tree, which is the defect this test now names.
+
+    Stated as completeness against the contract, a shared omission has nothing
+    to hide behind: there is one declaration to check and one population to
+    check it against.
+
+    **Only this direction.** The converse — every ``mypy_path`` entry is a
+    measured cell — is not asserted, because an entry that is *not* a package
+    source root is legitimate (a stubs directory is the obvious one), so the
+    converse would forbid a correct future declaration to catch a fault that
+    ``test_mypy_path_entries_resolve`` already reports as a path pointing at
+    nothing.
+    """
+    declared = {entry for _, entry in _mypy_path_entries()}
+    cells = _type_checked_package_sources()
+
+    assert cells, (
+        "no package source cell found in the mypy contract — either every "
+        "package became unchecked or this guard stopped recognising the shape"
+    )
+
+    violations = [
+        f"{cell}: type-checked by the contract, absent from mypy_path, so its "
+        f"modules resolve to Any when imported by name"
+        for cell in sorted(cells)
+        if cell not in declared
+    ]
+
+    assert not violations, "Type-checked packages missing from the search path:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
 
 
 # --------------------------------------------------------------------------

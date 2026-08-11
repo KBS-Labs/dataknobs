@@ -94,7 +94,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src:packages/legacy/src"
 cache_dir = ".mypy_cache"
 incremental = true
 # The only mypy configuration. There used to be a second — mypy.ini — which
@@ -119,7 +119,6 @@ module = [
     "pyparsing.*",
     "json_stream.*",
     "more_itertools.*",
-    "flask.*",
     "asyncpg.*",
     # Imported inside a try/except ImportError by bin/check-services.py, as the
     # more accurate of its two PostgreSQL liveness probes. Stubs are not carried
