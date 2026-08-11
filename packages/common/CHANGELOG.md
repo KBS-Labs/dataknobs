@@ -188,6 +188,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PostgresEventBus.from_config` and `PostgresAdvisoryLock.from_config`
+  raised `TypeError` when handed an injected collaborator.** Both overrides had
+  narrowed the base signature by dropping `**components`, leaving these two the
+  only members of the `StructuredConfigConsumer` family that could not receive
+  one — including from a registry factory forwarding it. Both now accept and
+  forward collaborators exactly as the base method does.
+
 - **A `SyncLoopBridge.close()` that raised deadlocked every later
   `close()`.** Teardown claimed ownership by setting a closed flag, then
   joined the loop thread, then set the event that concurrent closers wait

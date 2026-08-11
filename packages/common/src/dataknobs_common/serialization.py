@@ -42,7 +42,7 @@ Example:
 import dataclasses
 import logging
 from enum import Enum
-from typing import Any, Dict, Protocol, Type, TypeVar, runtime_checkable
+from typing import Any, Dict, Protocol, Type, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.exceptions import SerializationError
 
@@ -204,7 +204,11 @@ def deserialize(cls: Type[T], data: Dict[str, Any]) -> T:
         )
 
     try:
-        return cls.from_dict(data)
+        # The hasattr guard above is what establishes ``from_dict``; this names
+        # the shape it established. ``Type[T]`` alone does not carry it, so the
+        # call was unchecked and its result leaked out as ``Any``.
+        deserializable = cast("type[Serializable]", cls)
+        return cast("T", deserializable.from_dict(data))
     except Exception as e:
         if isinstance(e, SerializationError):
             raise

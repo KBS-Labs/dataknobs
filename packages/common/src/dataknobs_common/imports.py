@@ -59,7 +59,7 @@ the resolution sites here are reached from surfaces that render a
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable, TypeAlias, TypeVar
+from typing import Any, Callable, TypeAlias, TypeVar, cast
 
 from dataknobs_common.exceptions import (
     DottedPathError,
@@ -291,7 +291,9 @@ def resolve_callable(ref: str) -> Callable[..., Any]:
     Warning:
         Importing the module **executes** it. See the module docstring.
     """
-    target = resolve_dotted(ref)
+    # ``resolve_dotted`` returns Any by nature; the callable check below is
+    # what this function adds, and this is where the shape is promised.
+    target: Callable[..., Any] = resolve_dotted(ref)
 
     if not callable(target):
         # `DottedPathError`, not `DottedPathTypeError`: "callable" is not a
@@ -354,12 +356,20 @@ def resolve_class(ref: str, base: ClassConstraint[_T]) -> type[_T]:
     """
     target = resolve_dotted(ref)
 
-    if not isinstance(target, type) or not issubclass(target, base):
+    # ``base`` is declared ``ClassConstraint`` — ``Callable[..., _T]``, not
+    # ``type[_T]`` — so abstract classes and protocols are accepted; see the
+    # Args note above for why the obvious spelling would reject every useful
+    # constraint. Both uses below want the class form, and a *base* that is
+    # not a class lands on ``issubclass``'s own ``TypeError``, which the
+    # Raises note documents as a defect in the calling code.
+    constraint = cast("type[_T]", base)
+
+    if not isinstance(target, type) or not issubclass(target, constraint):
         raise DottedPathTypeError(
             f"{ref!r} must resolve to a subclass of "
             f"{base.__module__}.{base.__qualname__}; got {target!r}",
             ref=ref,
-            expected=base,
+            expected=constraint,
         )
 
     return target

@@ -424,9 +424,9 @@ class CallbackRegistry(Generic[CallbackT]):
             for entries in self._entries.values():
                 entries.clear()
             return
-        entries = self._entries.get(topic)
-        if entries is not None:
-            entries.clear()
+        topic_entries = self._entries.get(topic)
+        if topic_entries is not None:
+            topic_entries.clear()
 
     def set_ordering(self, ordering: CallbackOrdering) -> None:
         """Replace the ordering. Affects subsequent ``fire`` calls only."""

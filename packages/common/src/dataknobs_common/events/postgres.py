@@ -87,6 +87,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         channel_prefix: str | None = None,
         *,
         config: PostgresEventBusConfig | Mapping[str, Any] | None = None,
+        _components: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize the Postgres event bus.
 
@@ -135,12 +136,13 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             if channel_prefix is not None:
                 merged["channel_prefix"] = channel_prefix
             config = merged
-        super().__init__(config=config)
+        super().__init__(config=config, _components=_components)
 
     @classmethod
     def from_config(
         cls,
         config: Mapping[str, Any] | StructuredConfig,
+        **components: Any,
     ) -> PostgresEventBus:
         """Construct from a config dict or typed config.
 
@@ -151,8 +153,14 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         positional. Reuses the inherited ``_coerce_config`` guard so a
         config of the wrong ``StructuredConfig`` subclass raises a clear
         ``TypeError``.
+
+        Injected collaborators reach ``self.components`` through the
+        mixin's ``_components`` channel, as they do on the base method.
+        Omitting ``**components`` here narrowed the override, which left
+        this class the one member of the family to raise ``TypeError``
+        when a registry factory forwarded one.
         """
-        return cls(config=cls._coerce_config(config))
+        return cls(config=cls._coerce_config(config), _components=components or None)
 
     def _setup(self) -> None:
         # ``channel_prefix`` is already sanitized by

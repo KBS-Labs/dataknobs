@@ -163,7 +163,7 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
         )
 
 
-class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
+class _CategoryBucketFactory(BucketFactory):
     """BucketFactory that creates per-category buckets with different rates.
 
     Each category gets its own bucket with the rates configured for that
@@ -177,9 +177,9 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
     ) -> None:
         self._parsed = parsed_config
         self._raw = raw_config
-        self._buckets: dict[str, AbstractBucket] = {}  # type: ignore[no-any-unimported]
+        self._buckets: dict[str, AbstractBucket] = {}
 
-    def wrap_item(self, name: str, weight: int = 1) -> RateItem:  # type: ignore[no-any-unimported]
+    def wrap_item(self, name: str, weight: int = 1) -> RateItem:
         """Wrap an item name and weight into a RateItem.
 
         pyrate-limiter uses millisecond timestamps internally
@@ -198,8 +198,8 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
 
     def get(
         self,
-        item: RateItem,  # type: ignore[no-any-unimported]
-    ) -> AbstractBucket:  # type: ignore[no-any-unimported]
+        item: RateItem,
+    ) -> AbstractBucket:
         """Get or create the bucket for a given item's category.
 
         Args:

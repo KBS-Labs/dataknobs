@@ -47,6 +47,7 @@ import asyncio
 import inspect
 import threading
 import time
+from collections.abc import Iterator
 from typing import (
     Any,
     Callable,
@@ -400,7 +401,7 @@ class Registry(Generic[T]):
         """Check if item exists using 'in' operator."""
         return self.has(key)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[T]:
         """Iterate over registered items."""
         return iter(self.list_items())
 
@@ -760,7 +761,7 @@ class AsyncRegistry(Generic[T]):
         # Note: This is synchronous but safe since it just reads the dict
         return key in self._items
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[T]:
         """Iterate over registered items."""
         # Note: Returns iterator over current snapshot
         return iter(list(self._items.values()))
@@ -899,10 +900,17 @@ class PluginRegistry(Generic[T]):
                 would crash on the unknown keyword.
         """
         self._name = name
-        self._factories: Dict[str, type[T] | Callable[..., T]] = {}
+        #: Every factory is invoked as ``factory(key, config)``, so the stored
+        #: shape is the callable one. A class satisfies it: ``type[T]`` is
+        #: assignable to ``Callable[..., T]``, and ``register`` still spells
+        #: the union to document that both are accepted. Storing the union
+        #: instead makes mypy resolve a call against ``type[T]``'s ``__init__``
+        #: -- ``object.__init__`` for an unbound TypeVar -- so every call site
+        #: reported "Too many arguments" and returned ``Any``.
+        self._factories: Dict[str, Callable[..., T]] = {}
         self._instances: Dict[str, T] = {}
         self._lock = threading.RLock()
-        self._default_factory = default_factory
+        self._default_factory: Callable[..., T] | None = default_factory
         self._validate_type = validate_type
         self._canonicalize_keys = canonicalize_keys
         self._config_key = config_key
@@ -957,8 +965,12 @@ class PluginRegistry(Generic[T]):
         if self._initialized:
             return
         with self._lock:
+            # Double-checked locking. mypy narrows _initialized to False from
+            # the unlocked check above and calls this one unreachable, which
+            # holds only for a single thread -- another thread completing
+            # initialisation between the two reads is the case this exists for.
             if self._initialized:
-                return
+                return  # type: ignore[unreachable]
             # Snapshot so a partial-failure init can be rolled back atomically.
             # Without this, a populator that registers some keys and then
             # raises leaves those keys behind; because we reset _initialized
@@ -1241,6 +1253,11 @@ class PluginRegistry(Generic[T]):
                 )
 
         # Create instance (outside lock for async)
+        # Annotated: the dispatch below reaches the factory through
+        # isinstance/hasattr probes and an optional await, none of which
+        # mypy can follow back to T. This is where the produced type is
+        # promised, and _check_validate_type is what enforces it.
+        instance: T
         try:
             if isinstance(factory, type):
                 instance = factory(key, config or {})
@@ -1327,6 +1344,11 @@ class PluginRegistry(Generic[T]):
         """
         factory, key, config = self._resolve_factory(key, config)
 
+        # Annotated: the dispatch below reaches the factory through
+        # isinstance/hasattr probes and an optional await, none of which
+        # mypy can follow back to T. This is where the produced type is
+        # promised, and _check_validate_type is what enforces it.
+        instance: T
         try:
             if isinstance(factory, type) and hasattr(factory, "from_config"):
                 instance = factory.from_config(config or {}, **kwargs)
@@ -1396,6 +1418,11 @@ class PluginRegistry(Generic[T]):
         """
         factory, key, config = self._resolve_factory(key, config)
 
+        # Annotated: the dispatch below reaches the factory through
+        # isinstance/hasattr probes and an optional await, none of which mypy
+        # can follow back to T. This is where the produced type is promised,
+        # and _check_validate_type is what enforces it.
+        instance: T
         try:
             if isinstance(factory, type) and hasattr(factory, "from_config_async"):
                 instance = await factory.from_config_async(config or {}, **kwargs)
@@ -1422,7 +1449,7 @@ class PluginRegistry(Generic[T]):
         self,
         key: str | None,
         config: Dict[str, Any] | None,
-    ) -> tuple[type[T] | Callable[..., T], str, Dict[str, Any] | None]:
+    ) -> tuple[Callable[..., T], str, Dict[str, Any] | None]:
         """Resolve ``(factory, canonical_key, config)`` for create paths.
 
         Shared prologue for :meth:`create` and :meth:`create_async` — the

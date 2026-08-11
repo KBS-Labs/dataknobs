@@ -180,14 +180,15 @@ def _reads_unsafely(node: ast.AST, tainted: frozenset[str]) -> bool:
     )
 
 
-def _assigned_names(node: ast.stmt) -> list[str]:
+_Assigning = ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr
+
+
+def _assigned_names(node: _Assigning) -> list[str]:
     """The plain names a statement binds, ignoring attribute/subscript targets."""
     if isinstance(node, ast.Assign):
         targets: list[ast.expr] = list(node.targets)
-    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-        targets = [node.target]
     else:
-        return []
+        targets = [node.target]
     return [sub.id for target in targets for sub in ast.walk(target) if isinstance(sub, ast.Name)]
 
 

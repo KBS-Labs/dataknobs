@@ -128,9 +128,9 @@
         },
         {
           "path": "packages/common/src",
-          "tier": "transitional",
-          "ceiling": 51,
-          "reason": "immediate-adoption group"
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "adopted; two overrides had narrowed away the collaborator channel, and ten directives suppressed nothing"
         },
         {
           "path": "packages/bots/src",

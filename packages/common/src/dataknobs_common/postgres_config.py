@@ -56,7 +56,7 @@ def _load_dotenv_fallbacks(
     dependency-optional.
     """
     try:
-        from dotenv import dotenv_values  # type: ignore[import-not-found]
+        from dotenv import dotenv_values
     except ImportError:
         return {}
 
