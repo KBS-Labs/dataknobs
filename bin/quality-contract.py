@@ -209,10 +209,43 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=_ROOT, capture_output=True, text=True, check=False)
 
 
+#: How ruff reports a file it could not open — the rule code and the rule name
+#: for the same entry. Either spelling identifies it, so renaming one does not
+#: quietly reopen the hole below.
+_RUFF_IO_ERROR = frozenset({"E902", "io-error"})
+
+
 def measure_ruff(
     contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
 ) -> Measurement:
-    """Findings per cell, from one ruff pass over the whole population."""
+    """Findings per cell, from one ruff pass over the whole population.
+
+    Guarded the way ``measure_format`` is, and against three further faults the
+    decode check alone renders as a clean tree. That measurer earned its checks
+    by having a parse fail toward a tidier tree than the one on disk; each of
+    these is the same failure, reached by a route ruff's linter offers and its
+    formatter does not.
+
+    * **The exit status has to be a verdict.** ruff exits 2 on a configuration
+      it cannot load — an unknown rule code in ``select``, a malformed table —
+      having read no file, and writes nothing to stdout. The parse below reads
+      ``result.stdout or "[]"``, so that emptiness became an empty finding list
+      and **every cell measured zero**. The ratchet then reports a tree it never
+      opened as one with nothing wrong, and ``update-baseline`` will write those
+      zeroes down. Editing this repository's ruff config is how a cell gets
+      promoted, so the route is the work rather than an accident beside it.
+
+    * **The status has to agree with the count.** 0 means clean and 1 means at
+      least one finding. Either alongside the opposite tally means the two
+      halves of this measurement are describing different runs.
+
+    * **An ``E902`` is not a lint verdict.** It is ruff reporting that it could
+      not open the file, and it is worse here than the formatter's ``io`` entry
+      is there: that one *vanishes* from the tally, this one **replaces** it. A
+      file holding twenty findings that becomes unreadable measures one — which
+      reads as an ordinary small backlog rather than as an absence, and at a
+      ceiling of 1,685 is absorbed without trace.
+    """
     cells = contract["tools"]["ruff"]["cells"]
     config = contract["tools"]["ruff"]["config"]
     files = _files_in(cells, files, only)
@@ -232,6 +265,17 @@ def measure_ruff(
             *(str(f) for f in files),
         ]
     )
+
+    # Before the parse, not after: the failure this catches produces *empty*
+    # stdout, which the `or "[]"` below turns into a valid, and entirely
+    # fictional, measurement of zero. Checked here, the developer gets ruff's
+    # own complaint instead.
+    if result.returncode not in (0, 1):
+        raise SystemExit(
+            f"ruff exited {result.returncode}, so its report is not a "
+            f"measurement:\n{result.stderr[:800]}"
+        )
+
     try:
         findings = json.loads(result.stdout or "[]")
     except json.JSONDecodeError as exc:
@@ -239,7 +283,31 @@ def measure_ruff(
             f"ruff did not emit JSON, so nothing was measured: {exc}\n{result.stderr[:800]}"
         ) from exc
 
-    return _tally(cells, [_relative(finding.get("filename", "")) for finding in findings])
+    unreadable = [
+        entry for entry in findings if _RUFF_IO_ERROR & {entry.get("code"), entry.get("name")}
+    ]
+    if unreadable:
+        detail = "\n".join(
+            f"  {entry.get('filename', '?')}: {entry.get('message', entry.get('code', '?'))}"
+            for entry in unreadable[:20]
+        )
+        raise SystemExit(
+            f"ruff could not read {len(unreadable)} file(s) and reported that "
+            f"instead of their findings, so the counts below are wrong by "
+            f"however many those files hold:\n{detail}"
+        )
+
+    if bool(findings) != bool(result.returncode):
+        raise SystemExit(
+            f"ruff exited {result.returncode} but reported {len(findings)} "
+            "finding(s); status and output disagree, so one of them is not "
+            "describing this run"
+        )
+
+    # `or ""` rather than a default: a path-less diagnostic carries the key with
+    # a null value, which a default never sees. The empty name lands in
+    # `unattributed`, where it is reported, instead of raising inside the tally.
+    return _tally(cells, [_relative(finding.get("filename") or "") for finding in findings])
 
 
 def measure_mypy(
@@ -372,7 +440,16 @@ def measure_format(
 
 
 def _relative(name: str) -> str:
-    """A tool's reported path as a repo-relative POSIX one."""
+    """A tool's reported path as a repo-relative POSIX one.
+
+    An empty name is returned as it came, because ``Path("")`` is ``Path(".")``
+    and resolves to the working directory — so a diagnostic that named no file
+    would arrive here nameless and leave holding the repository root. Down that
+    route it is not reported as unattributed; it is attributed, to whichever
+    cell the root happens to match.
+    """
+    if not name:
+        return name
     try:
         return str(Path(name).resolve().relative_to(_ROOT))
     except ValueError:

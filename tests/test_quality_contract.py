@@ -577,6 +577,112 @@ def test_the_formatter_measurer_refuses_output_it_could_not_parse(
         )
 
 
+def test_the_linter_measurer_refuses_a_config_ruff_would_not_load(tmp_path: Path) -> None:
+    """A configuration ruff rejects must not read as a tree with nothing wrong.
+
+    ruff exits 2 on a config it cannot load — an unknown code in ``select``, a
+    malformed table — having opened no file, and writes nothing to stdout. The
+    measurer read ``result.stdout or "[]"``, so that emptiness parsed cleanly
+    into an empty finding list and **every ruff cell measured zero**: a green
+    ``check``, and an ``update-baseline`` that would write those zeroes down as
+    the new ceilings.
+
+    Driven through the real ruff rather than an injected result, because ruff
+    genuinely does this and the assertion is worth no more than the claim that
+    it does. The route is also the work: promoting a cell out of the deferred
+    tier means editing this config, which is precisely when a rejected one
+    reaches the measurer.
+    """
+    rejected = tmp_path / "rejected.toml"
+    rejected.write_text('[tool.ruff.lint]\nselect = ["NOSUCHRULE999"]\n', encoding="utf-8")
+    contract = _contract()
+    contract["tools"]["ruff"]["config"] = str(rejected)
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_ruff(contract, [PurePosixPath("conftest.py")])
+
+    assert "exited 2" in str(refusal.value), (
+        f"the measurer refused, but not for the reason it should have: {refusal.value}"
+    )
+
+
+def test_the_linter_measurer_refuses_a_file_it_could_not_read() -> None:
+    """An unreadable file must not stand in for the findings it holds.
+
+    ruff reports one as an ordinary JSON entry — ``code: "E902"``,
+    ``name: "io-error"`` — and exits 1, exactly as it does with real findings.
+    So the file contributes **one** finding instead of however many it holds.
+
+    That is the formatter's ``io`` fault with the sign changed and it is the
+    worse of the two. There, the entry vanishes and the cell measures lower;
+    here it is replaced, and a file with twenty findings measuring one reads as
+    an ordinary small backlog rather than as an absence — at a ceiling of 1,685,
+    as nothing at all.
+    """
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_ruff(_contract(), [PurePosixPath("no/such/path.py")])
+
+    assert "no/such/path.py" in str(refusal.value), (
+        f"the measurer refused, but did not name the file it could not read: {refusal.value}"
+    )
+
+
+def test_the_linter_measurer_refuses_a_status_its_output_contradicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit 0 with findings, or exit 1 without, means two runs are being read.
+
+    Injected, because no input makes a working ruff answer this way — the fault
+    being driven is ruff not behaving like ruff, or a wrapper interposing on one
+    of the two channels. Which is the case worth holding: the count and the
+    status are read from one invocation *by assumption*, and this is the only
+    thing that checks the assumption.
+    """
+    completed = subprocess.CompletedProcess(
+        args=["ruff"],
+        returncode=0,
+        stdout='[{"filename": "conftest.py", "code": "F401"}]',
+        stderr="",
+    )
+    monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_ruff(_contract(), [PurePosixPath("conftest.py")])
+
+    assert "disagree" in str(refusal.value), (
+        f"refused without saying the status and the output disagree: {refusal.value}"
+    )
+
+
+def test_the_linter_measurer_reports_a_path_less_finding_rather_than_dying_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A finding with a null path belongs in ``unattributed``, which is reported.
+
+    ``.get("filename", "")`` returns the default only when the key is *absent*;
+    a key carrying ``null`` comes back as ``None`` and reaches ``Path(None)``,
+    which raises inside the measurement rather than reporting anything about it.
+
+    The remedy is not to drop the finding — that is the silent direction this
+    file exists to refuse. An empty name tallies as unattributed, where
+    ``check`` warns that something was reported and counted against no cell.
+    """
+    completed = subprocess.CompletedProcess(
+        args=["ruff"],
+        returncode=1,
+        stdout='[{"filename": null, "code": "F401"}]',
+        stderr="",
+    )
+    monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
+
+    measurement = contract_module.measure_ruff(_contract(), [PurePosixPath("conftest.py")])
+
+    assert dict(measurement.unattributed) == {"<unnamed>": 1}, (
+        "a path-less finding was not carried through to unattributed, where it "
+        f"gets reported: {measurement.unattributed}"
+    )
+
+
 def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
     """Editing a ceiling must invalidate the artifacts that were checked against it.
 
