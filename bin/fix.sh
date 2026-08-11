@@ -19,6 +19,7 @@ source "$ROOT_DIR/bin/package-discovery.sh"
 
 # Default values
 TARGETS=()
+PRINT_TARGETS=false
 PRINT_FORMAT_TARGETS=false
 
 # Usage function
@@ -36,6 +37,10 @@ usage() {
     echo "                        If not specified, fixes all packages"
     echo ""
     echo "Options:"
+    echo "      --print-targets   Print what the linter pass would fix and exit,"
+    echo "                        fixing nothing. The quality contract holds cells"
+    echo "                        to a lint ceiling, and a cell this set misses is"
+    echo "                        a finding the gate reports with no local remedy"
     echo "      --print-format-targets"
     echo "                        Print what the formatter pass would rewrite and"
     echo "                        exit, fixing nothing. The check names this set"
@@ -56,6 +61,10 @@ usage() {
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --print-targets)
+            PRINT_TARGETS=true
+            shift
+            ;;
         --print-format-targets)
             PRINT_FORMAT_TARGETS=true
             shift
@@ -187,6 +196,14 @@ for target in "${FIX_TARGETS[@]}"; do
         FORMAT_TARGETS+=("$target")
     fi
 done
+
+# Both probes resolve and exit above every line that writes a file. That is not
+# tidiness: this script's main path rewrites source, so a probe answered after a
+# partial pass would have edited the tree to answer a question about it.
+if [[ "$PRINT_TARGETS" == true ]]; then
+    printf '%s\n' "${FIX_TARGETS[@]}"
+    exit 0
+fi
 
 if [[ "$PRINT_FORMAT_TARGETS" == true ]]; then
     printf '%s\n' "${FORMAT_TARGETS[@]}"

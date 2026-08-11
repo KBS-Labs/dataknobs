@@ -915,25 +915,34 @@ VALIDATE_ARGS_ASSIGNMENT = re.compile(
 )
 
 
-def _validate_targets_for(*args: str) -> list[str]:
-    """What ``bin/validate.sh`` resolves as its target list, for these arguments.
+def _lint_targets_for(script: str, *args: str) -> list[str]:
+    """What ``script`` resolves as the linter's population, for these arguments.
 
     Asked rather than parsed, for the reason ``_workspace_targets`` is: the
-    question is what the script checks, and reading the appends as text answers
+    question is what the script reads, and reading the appends as text answers
     what it says. The earlier form read them out of the default branch and
     treated each as unconditional, so wrapping the package loop in a condition
     that skipped it left this reporting full coverage — the append was still
     textually present. ``--print-targets`` resolves the list through the real
-    code path and prints it before any check runs.
+    code path and prints it before anything is checked or rewritten.
+
+    Two scripts answer it, and their answers are not the same list: the check's
+    is what the contract holds to a lint ceiling, the fix's is that plus the
+    cells it may rewrite anyway.
     """
     listing = subprocess.run(
-        [str(ROOT / "bin" / "validate.sh"), *args, "--print-targets"],
+        [str(ROOT / "bin" / script), *args, "--print-targets"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
     return listing.split()
+
+
+def _validate_targets_for(*args: str) -> list[str]:
+    """What ``bin/validate.sh`` resolves as its target list, for these arguments."""
+    return _lint_targets_for("validate.sh", *args)
 
 
 def _default_validate_targets() -> list[str]:
@@ -963,6 +972,21 @@ def _enforced_format_cells() -> list[str]:
     contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
     return [
         cell["path"] for cell in contract["tools"]["format"]["cells"] if cell["tier"] == "enforced"
+    ]
+
+
+def _checked_lint_cells() -> list[str]:
+    """Every path the quality contract holds to a lint ceiling of zero.
+
+    Read from the tier rather than from what ``bin/validate.sh`` reaches. The
+    two agree — ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+    tests/test_quality_contract.py is what makes them — and deriving this from
+    the target set would make the guard below move whenever that set does,
+    which is the shape ``REQUIRED_DEFAULT_TARGETS`` exists to refuse.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"] for cell in contract["tools"]["ruff"]["cells"] if cell["tier"] == "checked"
     ]
 
 
@@ -1123,6 +1147,48 @@ def test_every_formatting_ceiling_is_reachable_by_the_check_and_by_the_fix() -> 
             "formatting ceiling of 0, so a file arriving unformatted there "
             f"fails `dk pr` while bin/{script} says nothing about it."
         )
+
+
+def test_every_lint_ceiling_is_reachable_by_the_fix() -> None:
+    """The linter's half of the guard above — the half that was still missing.
+
+    The check side is already held, from the other end:
+    ``test_a_checked_cell_is_one_the_linter_actually_reaches`` compares the ruff
+    tiers against ``bin/validate.sh`` in both directions. Nothing compared the
+    *fix* side, and that is the direction with no symptom — a cell the check
+    reads and the fix cannot reach is a red gate with no local remedy, which
+    looks exactly like a developer who has not run ``bin/fix.sh`` yet.
+
+    Reachability, not repair. Half of ruff's rules have no autofix, so the
+    property here is that the pass runs over the cell at all; whether a given
+    finding is fixable is the rule's business. That is the whole claim, and it
+    is enough — a cell the pass never opens has *nothing* fixable in it.
+
+    Load-bearing now rather than later because promoting a cell is two
+    declarations, its tier and each script's reach, and shipping one without
+    the other is what 2c did: a check that passed over the territory the
+    contract had started enforcing. Every promotion still to come has the same
+    shape, and this is what makes the second declaration compulsory.
+
+    The deferred cells are deliberately outside this, and the gap is narrower
+    than it first looks: a bare ``bin/fix.sh`` reaches none of ``examples``,
+    ``scripts``, ``benchmarks`` or ``docs``, while their ceilings *are*
+    compared — but naming the directory does reach it, so the remedy exists and
+    is merely undiscoverable from the failure. Widening the default is a policy
+    call about rewriting files nobody has asked to be clean, which belongs with
+    their promotion rather than ahead of it.
+    """
+    cells = _checked_lint_cells()
+    assert cells, "the contract holds no cell to a lint ceiling, so this proves nothing"
+
+    targets = set(_lint_targets_for("fix.sh"))
+    uncovered = [cell for cell in cells if not _cell_is_covered(cell, targets)]
+    assert not uncovered, (
+        f"bin/fix.sh repairs lint findings over {sorted(targets)}, which does not "
+        f"reach {uncovered}. The quality contract holds those cells to a lint "
+        "ceiling of 0, so a finding arriving there fails `dk pr` while the "
+        "command the failure tells you to run cannot touch it."
+    )
 
 
 def test_the_named_opt_in_asks_for_the_format_target_set_rather_than_restating_it() -> None:
