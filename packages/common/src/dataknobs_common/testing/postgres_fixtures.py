@@ -144,8 +144,7 @@ try:
             )
             if not cursor.fetchone():
                 cursor.execute(
-                    f"CREATE DATABASE "
-                    f"{safe_sql_ident(postgres_connection_params['database'])}"
+                    f"CREATE DATABASE {safe_sql_ident(postgres_connection_params['database'])}"
                 )
         except psycopg2.errors.DuplicateDatabase:
             pass
@@ -297,9 +296,7 @@ try:
                 )
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(
-                            "CREATE EXTENSION IF NOT EXISTS vector"
-                        )
+                        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
                     conn.commit()
                 finally:
                     conn.close()
@@ -347,9 +344,7 @@ try:
                 (read-only; this fixture deliberately does NOT depend on
                 ``ensure_postgres_ready`` so it cannot force DB creation).
         """
-        if os.environ.get(
-            "DK_SWEEP_ORPHAN_TEST_TABLES", ""
-        ).lower() != "true":
+        if os.environ.get("DK_SWEEP_ORPHAN_TEST_TABLES", "").lower() != "true":
             return
 
         db = str(postgres_connection_params.get("database", ""))
@@ -379,8 +374,7 @@ try:
             )
         except (OSError, psycopg2.OperationalError) as exc:
             logger.warning(
-                "Orphan test-table sweep skipped: Postgres unreachable "
-                "(%s)",
+                "Orphan test-table sweep skipped: Postgres unreachable (%s)",
                 exc,
             )
             return
@@ -407,22 +401,17 @@ try:
                 dropped = 0
                 for tbl in orphans:
                     try:
-                        cursor.execute(
-                            f"DROP TABLE IF EXISTS public."
-                            f"{safe_sql_ident(tbl)} CASCADE"
-                        )
+                        cursor.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(tbl)} CASCADE")
                         dropped += 1
                     except psycopg2.Error as exc:
                         logger.warning(
-                            "Orphan test-table sweep could not drop "
-                            "%r: %s",
+                            "Orphan test-table sweep could not drop %r: %s",
                             tbl,
                             exc,
                         )
                 if dropped:
                     logger.info(
-                        "Orphan test-table sweep dropped %d/%d "
-                        "public.test_* table(s) in %r",
+                        "Orphan test-table sweep dropped %d/%d public.test_* table(s) in %r",
                         dropped,
                         len(orphans),
                         db,

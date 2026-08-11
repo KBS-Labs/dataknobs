@@ -289,9 +289,7 @@ class TestInMemoryKnowledgeBackend:
         assert info.ingestion_status == IngestionStatus.ERROR
         assert info.ingestion_error == "Something failed"
 
-    async def test_checksum_and_change_detection(
-        self, memory_backend: InMemoryKnowledgeBackend
-    ):
+    async def test_checksum_and_change_detection(self, memory_backend: InMemoryKnowledgeBackend):
         """Checksum + change detection use one canonical version space.
 
         The version passed to ``has_changes_since`` is a ``get_checksum``

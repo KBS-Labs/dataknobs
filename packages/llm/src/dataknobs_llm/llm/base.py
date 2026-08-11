@@ -64,15 +64,30 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, ClassVar, Coroutine, Dict, List, NamedTuple, NoReturn, TYPE_CHECKING,
-    TypeVar, Union, AsyncIterator, Iterator, Callable, Protocol
+    Any,
+    ClassVar,
+    Coroutine,
+    Dict,
+    List,
+    NamedTuple,
+    NoReturn,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+    AsyncIterator,
+    Iterator,
+    Callable,
+    Protocol,
 )
 
 if TYPE_CHECKING:
     from .model_profile import ModelPricing
 
 from dataknobs_common.exceptions import (
-    OperationError, RateLimitError, ResourceError, ValidationError,
+    OperationError,
+    RateLimitError,
+    ResourceError,
+    ValidationError,
 )
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_llm.exceptions import ContextLengthExceededError
@@ -121,6 +136,7 @@ class CompletionMode(Enum):
         )
         ```
     """
+
     CHAT = "chat"  # Chat completion with message history
     TEXT = "text"  # Text completion
     INSTRUCT = "instruct"  # Instruction following
@@ -164,6 +180,7 @@ class ModelCapability(Enum):
             response = await llm.function_call(messages, functions)
         ```
     """
+
     TEXT_GENERATION = "text_generation"
     CHAT = "chat"
     EMBEDDINGS = "embeddings"
@@ -175,9 +192,7 @@ class ModelCapability(Enum):
 
 
 # String-to-enum mapping for config-driven capability references.
-CAPABILITY_NAMES: dict[str, ModelCapability] = {
-    cap.value: cap for cap in ModelCapability
-}
+CAPABILITY_NAMES: dict[str, ModelCapability] = {cap.value: cap for cap in ModelCapability}
 
 
 @dataclass(frozen=True)
@@ -275,22 +290,16 @@ class ModelConstraints:
         changes: Dict[str, Any] = {}
         if "rejected_params" in overrides:
             raw = overrides["rejected_params"]
-            changes["rejected_params"] = (
-                frozenset(raw) if raw is not None else frozenset()
-            )
+            changes["rejected_params"] = frozenset(raw) if raw is not None else frozenset()
         if "accepts_inline_system" in overrides:
-            changes["accepts_inline_system"] = bool(
-                overrides["accepts_inline_system"]
-            )
+            changes["accepts_inline_system"] = bool(overrides["accepts_inline_system"])
         if "max_tokens_ceiling" in overrides:
             changes["max_tokens_ceiling"] = overrides["max_tokens_ceiling"]
         if "max_input_tokens" in overrides:
             changes["max_input_tokens"] = overrides["max_input_tokens"]
         if "param_remaps" in overrides:
             raw = overrides["param_remaps"]
-            changes["param_remaps"] = (
-                {str(k): str(v) for k, v in dict(raw).items()} if raw else {}
-            )
+            changes["param_remaps"] = {str(k): str(v) for k, v in dict(raw).items()} if raw else {}
         return replace(self, **changes)
 
 
@@ -305,6 +314,7 @@ class ToolCall:
         parameters: Arguments to pass to the tool
         id: Optional unique identifier for the tool call
     """
+
     name: str
     parameters: Dict[str, Any]
     id: str | None = None
@@ -388,6 +398,7 @@ class LLMMessage:
         messages = [system_msg, user_msg, assistant_msg]
         ```
     """
+
     role: str  # 'system', 'user', 'assistant', 'tool', 'function'
     content: str
     name: str | None = None  # For function/tool messages
@@ -509,6 +520,7 @@ class LLMResponse:
         LLMMessage: Request message format
         LLMStreamResponse: Streaming response format
     """
+
     content: str
     model: str
     finish_reason: str | None = None  # 'stop', 'length', 'function_call', 'tool_calls'
@@ -583,6 +595,7 @@ class LLMStreamResponse:
         LLMResponse: Non-streaming response format
         AsyncLLMProvider.stream_complete: Streaming method
     """
+
     delta: str  # Incremental content
     is_final: bool = False
     finish_reason: str | None = None
@@ -801,6 +814,7 @@ class LLMConfig(StructuredConfig):
             >>> creative_config = base_config.clone(temperature=1.2, max_tokens=500)
         """
         from dataclasses import replace
+
         return replace(self, **overrides)
 
     def generation_params(self) -> Dict[str, Any]:
@@ -859,14 +873,16 @@ CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
 #: providers (Ollama, HuggingFace) via ``raise_for_status_with_body`` (which
 #: preserves the body aiohttp's own ``raise_for_status`` would drop) — so a
 #: marker here fires uniformly without per-provider translator changes.
-_CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset({
-    "context_length_exceeded",   # OpenAI machine code + message fragment
-    "maximum context length",    # OpenAI message
-    "prompt is too long",        # Anthropic message
-    "input is too long",         # Bedrock message
-    "too many input tokens",     # Bedrock variant
-    "context window",            # generic
-})
+_CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset(
+    {
+        "context_length_exceeded",  # OpenAI machine code + message fragment
+        "maximum context length",  # OpenAI message
+        "prompt is too long",  # Anthropic message
+        "input is too long",  # Bedrock message
+        "too many input tokens",  # Bedrock variant
+        "context window",  # generic
+    }
+)
 
 
 def normalize_claude_stop_reason(
@@ -892,9 +908,7 @@ def normalize_claude_stop_reason(
     """
     if raw_stop_reason is None:
         return None, False, {}
-    finish_reason = CLAUDE_STOP_REASON_NORMALIZATION.get(
-        raw_stop_reason, raw_stop_reason
-    )
+    finish_reason = CLAUDE_STOP_REASON_NORMALIZATION.get(raw_stop_reason, raw_stop_reason)
     metadata: Dict[str, Any] = {}
     if raw_stop_reason != finish_reason:
         metadata["raw_finish_reason"] = raw_stop_reason
@@ -927,11 +941,11 @@ def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> 
 
     # dataknobs Config object - try to get the config dict
     # We check for the get method to identify Config objects
-    if hasattr(config, 'get') and hasattr(config, 'get_types'):
+    if hasattr(config, "get") and hasattr(config, "get_types"):
         # It's a Config object, extract the llm configuration
         # Try to get first llm config, or fall back to first available type
         try:
-            config_dict = config.get('llm', 0)
+            config_dict = config.get("llm", 0)
         except Exception as e:
             # If no 'llm' type, try to get first available config of any type
             types = config.get_types()
@@ -943,8 +957,7 @@ def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> 
         return LLMConfig.from_dict(config_dict)
 
     raise TypeError(
-        f"Unsupported config type: {type(config).__name__}. "
-        f"Expected LLMConfig, Config, or dict."
+        f"Unsupported config type: {type(config).__name__}. Expected LLMConfig, Config, or dict."
     )
 
 
@@ -978,7 +991,7 @@ class LLMProvider(ABC):
     def __init__(
         self,
         config: Union[LLMConfig, Config, Dict[str, Any]],
-        prompt_builder: Union[PromptBuilder, AsyncPromptBuilder] | None = None
+        prompt_builder: Union[PromptBuilder, AsyncPromptBuilder] | None = None,
     ):
         """Initialize provider with configuration.
 
@@ -1072,10 +1085,7 @@ class LLMProvider(ABC):
                 f"got {type(self.prompt_builder).__name__}"
             )
 
-    def _validate_render_params(
-        self,
-        prompt_type: str
-    ) -> None:
+    def _validate_render_params(self, prompt_type: str) -> None:
         """Validate render parameters.
 
         Args:
@@ -1086,8 +1096,7 @@ class LLMProvider(ABC):
         """
         if prompt_type not in ("system", "user", "both"):
             raise ValueError(
-                f"Invalid prompt_type: {prompt_type}. "
-                f"Must be 'system', 'user', or 'both'"
+                f"Invalid prompt_type: {prompt_type}. Must be 'system', 'user', or 'both'"
             )
 
     @staticmethod
@@ -1343,9 +1352,7 @@ class LLMProvider(ABC):
         """
         pass
 
-    def _resolve_capabilities(
-        self, detected: List[ModelCapability]
-    ) -> List[ModelCapability]:
+    def _resolve_capabilities(self, detected: List[ModelCapability]) -> List[ModelCapability]:
         """Return config-declared capabilities if set, else *detected*.
 
         Providers should call this at the end of their
@@ -1363,9 +1370,7 @@ class LLMProvider(ABC):
             return resolved
         return detected
 
-    def get_constraints(
-        self, config: LLMConfig | None = None
-    ) -> ModelConstraints:
+    def get_constraints(self, config: LLMConfig | None = None) -> ModelConstraints:
         """Get resolved request-shape constraints for this provider/model.
 
         Template method mirroring :meth:`get_capabilities`: calls
@@ -1424,9 +1429,7 @@ class LLMProvider(ABC):
         """
         return None
 
-    def estimate_cost(
-        self, response: "LLMResponse", model: str | None = None
-    ) -> float | None:
+    def estimate_cost(self, response: "LLMResponse", model: str | None = None) -> float | None:
         """Estimate the USD cost of *response* from this provider's pricing.
 
         The one-call **convenience** over :meth:`get_pricing` (facts) +
@@ -1581,9 +1584,7 @@ class LLMProvider(ABC):
         return config.clone(**overrides) if overrides else config
 
     @staticmethod
-    def _apply_param_remaps(
-        wire: Dict[str, Any], remaps: Mapping[str, str]
-    ) -> Dict[str, Any]:
+    def _apply_param_remaps(wire: Dict[str, Any], remaps: Mapping[str, str]) -> Dict[str, Any]:
         """Rename wire params per *remaps*, in place, returning *wire*.
 
         The **wire-level** half of request shaping, complementary to
@@ -1663,9 +1664,7 @@ class LLMProvider(ABC):
         wire_extra: Dict[str, Any] = {}
         if extra:
             shaped_fields = (
-                set(constraints.rejected_params)
-                | set(constraints.param_remaps)
-                | {"max_tokens"}
+                set(constraints.rejected_params) | set(constraints.param_remaps) | {"max_tokens"}
             )
             field_extra: Dict[str, Any] = {}
             for key, value in extra.items():
@@ -1715,17 +1714,14 @@ class LLMProvider(ABC):
         ):
             response.metadata["thinking_only"] = True
             logger.warning(
-                "Thinking-only response detected: %d completion tokens, "
-                "empty content (model: %s)",
+                "Thinking-only response detected: %d completion tokens, empty content (model: %s)",
                 response.usage.get("completion_tokens", 0),
                 response.model,
             )
         self._warn_if_truncated(response)
         return response
 
-    def _warn_if_truncated(
-        self, response: "LLMResponse | LLMStreamResponse"
-    ) -> None:
+    def _warn_if_truncated(self, response: "LLMResponse | LLMStreamResponse") -> None:
         """Log when a response was cut off at the token budget.
 
         Shared by the complete path (via :meth:`_analyze_response`) and the
@@ -1752,8 +1748,7 @@ class LLMProvider(ABC):
             )
         else:
             logger.info(
-                "Response truncated at the token budget (model=%s): the "
-                "output is incomplete.",
+                "Response truncated at the token budget (model=%s): the output is incomplete.",
                 response.model,
             )
 
@@ -1806,11 +1801,20 @@ class ConfigOverrideMixin:
     # Supported fields for config overrides (base set)
     ALLOWED_CONFIG_OVERRIDES = {
         # Core generation parameters
-        "model", "temperature", "max_tokens", "top_p", "stop_sequences", "seed",
+        "model",
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "stop_sequences",
+        "seed",
         # Provider-specific parameters
-        "presence_penalty", "frequency_penalty", "logit_bias", "response_format",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "response_format",
         # Function calling (dynamic)
-        "functions", "function_call",
+        "functions",
+        "function_call",
         # Provider-specific options dict
         "options",
     }
@@ -1847,8 +1851,7 @@ class ConfigOverrideMixin:
 
     @classmethod
     def on_override_applied(
-        cls,
-        callback: Callable[[Any, Dict[str, Any], LLMConfig], None]
+        cls, callback: Callable[[Any, Dict[str, Any], LLMConfig], None]
     ) -> None:
         """Register a callback for when overrides are applied.
 
@@ -1894,10 +1897,7 @@ class ConfigOverrideMixin:
         """
         return list(cls._override_presets.keys())
 
-    def _validate_config_overrides(
-        self,
-        overrides: Dict[str, Any] | None
-    ) -> None:
+    def _validate_config_overrides(self, overrides: Dict[str, Any] | None) -> None:
         """Validate that config override fields are supported.
 
         Args:
@@ -1918,10 +1918,7 @@ class ConfigOverrideMixin:
                 f"Allowed fields: {self.ALLOWED_CONFIG_OVERRIDES}"
             )
 
-    def _expand_preset(
-        self,
-        overrides: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _expand_preset(self, overrides: Dict[str, Any]) -> Dict[str, Any]:
         """Expand preset reference to actual override values.
 
         If overrides contains a 'preset' key, replaces it with the
@@ -1944,8 +1941,7 @@ class ConfigOverrideMixin:
         preset_values = self.get_preset(preset_name)
         if preset_values is None:
             raise ValueError(
-                f"Unknown preset: '{preset_name}'. "
-                f"Available presets: {self.list_presets()}"
+                f"Unknown preset: '{preset_name}'. Available presets: {self.list_presets()}"
             )
 
         # Preset values as base, explicit overrides take precedence
@@ -1957,9 +1953,7 @@ class ConfigOverrideMixin:
         return expanded
 
     def _merge_options(
-        self,
-        base_options: Dict[str, Any],
-        override_options: Dict[str, Any]
+        self, base_options: Dict[str, Any], override_options: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Deep merge options dicts.
 
@@ -1975,9 +1969,7 @@ class ConfigOverrideMixin:
         return merged
 
     def _notify_override_callbacks(
-        self,
-        overrides: Dict[str, Any],
-        runtime_config: LLMConfig
+        self, overrides: Dict[str, Any], runtime_config: LLMConfig
     ) -> None:
         """Notify registered callbacks about applied overrides.
 
@@ -1992,10 +1984,7 @@ class ConfigOverrideMixin:
                 # Don't let callback errors break the main flow
                 pass
 
-    def _get_runtime_config(
-        self,
-        config_overrides: Dict[str, Any] | None = None
-    ) -> LLMConfig:
+    def _get_runtime_config(self, config_overrides: Dict[str, Any] | None = None) -> LLMConfig:
         """Get runtime config, applying overrides if provided.
 
         Supports:
@@ -2022,7 +2011,7 @@ class ConfigOverrideMixin:
         if "options" in expanded and self.config.options:  # type: ignore[attr-defined]
             expanded["options"] = self._merge_options(
                 self.config.options,  # type: ignore[attr-defined]
-                expanded["options"]
+                expanded["options"],
             )
 
         runtime_config = self.config.clone(**expanded)  # type: ignore[attr-defined]
@@ -2042,7 +2031,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs
+        **kwargs,
     ) -> LLMResponse:
         """Generate completion asynchronously.
 
@@ -2123,7 +2112,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs
+        **llm_kwargs,
     ) -> LLMResponse:
         """Render prompt from library and execute LLM completion.
 
@@ -2155,13 +2144,12 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         # Validate
         from dataknobs_llm.prompts import AsyncPromptBuilder
+
         self._validate_prompt_builder(AsyncPromptBuilder)
         self._validate_render_params(prompt_type)
 
         # Render messages
-        messages = await self._render_messages(
-            prompt_name, params, prompt_type, index, include_rag
-        )
+        messages = await self._render_messages(prompt_name, params, prompt_type, index, include_rag)
 
         # Execute LLM
         return await self.complete(messages, **llm_kwargs)
@@ -2173,7 +2161,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs
+        **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Render prompt and stream LLM response.
 
@@ -2200,13 +2188,12 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         # Validate
         from dataknobs_llm.prompts import AsyncPromptBuilder
+
         self._validate_prompt_builder(AsyncPromptBuilder)
         self._validate_render_params(prompt_type)
 
         # Render messages
-        messages = await self._render_messages(
-            prompt_name, params, prompt_type, index, include_rag
-        )
+        messages = await self._render_messages(prompt_name, params, prompt_type, index, include_rag)
 
         # Stream LLM response
         async for chunk in self.stream_complete(messages, **llm_kwargs):
@@ -2218,7 +2205,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         params: Dict[str, Any] | None,
         prompt_type: str,
         index: int,
-        include_rag: bool
+        include_rag: bool,
     ) -> List[LLMMessage]:
         """Render messages from prompt library (async version).
 
@@ -2233,6 +2220,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             List of rendered LLM messages
         """
         from dataknobs_llm.prompts import AsyncPromptBuilder
+
         builder: AsyncPromptBuilder = self.prompt_builder  # type: ignore
 
         messages: List[LLMMessage] = []
@@ -2251,14 +2239,14 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             messages.append(LLMMessage(role="user", content=result.content))
 
         return messages
-        
+
     @abstractmethod
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Generate streaming completion asynchronously.
 
@@ -2324,12 +2312,10 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             LLMStreamResponse: Chunk data structure
         """
         pass
-        
+
     @abstractmethod
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings asynchronously.
 
@@ -2400,13 +2386,10 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             complete: Text generation method
         """
         pass
-        
+
     @abstractmethod
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """Execute function calling asynchronously.
 
@@ -2522,12 +2505,10 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             dataknobs_llm.tools: Tool abstraction framework
         """
         pass
-        
+
     def __enter__(self) -> None:
         """Prevent sync context manager usage on async providers."""
-        raise TypeError(
-            "Use 'async with' for AsyncLLMProvider, not 'with'"
-        )
+        raise TypeError("Use 'async with' for AsyncLLMProvider, not 'with'")
 
     def __exit__(
         self,
@@ -2614,7 +2595,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs
+        **kwargs,
     ) -> LLMResponse:
         """Generate completion synchronously.
 
@@ -2638,7 +2619,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs
+        **llm_kwargs,
     ) -> LLMResponse:
         """Render prompt from library and execute LLM completion.
 
@@ -2670,13 +2651,12 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         # Validate
         from dataknobs_llm.prompts import PromptBuilder
+
         self._validate_prompt_builder(PromptBuilder)
         self._validate_render_params(prompt_type)
 
         # Render messages
-        messages = self._render_messages(
-            prompt_name, params, prompt_type, index, include_rag
-        )
+        messages = self._render_messages(prompt_name, params, prompt_type, index, include_rag)
 
         # Execute LLM
         return self.complete(messages, **llm_kwargs)
@@ -2688,7 +2668,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs
+        **llm_kwargs,
     ) -> Iterator[LLMStreamResponse]:
         """Render prompt and stream LLM response.
 
@@ -2715,13 +2695,12 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         # Validate
         from dataknobs_llm.prompts import PromptBuilder
+
         self._validate_prompt_builder(PromptBuilder)
         self._validate_render_params(prompt_type)
 
         # Render messages
-        messages = self._render_messages(
-            prompt_name, params, prompt_type, index, include_rag
-        )
+        messages = self._render_messages(prompt_name, params, prompt_type, index, include_rag)
 
         # Stream LLM response
         for chunk in self.stream_complete(messages, **llm_kwargs):
@@ -2733,7 +2712,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         params: Dict[str, Any] | None,
         prompt_type: str,
         index: int,
-        include_rag: bool
+        include_rag: bool,
     ) -> List[LLMMessage]:
         """Render messages from prompt library (sync version).
 
@@ -2748,6 +2727,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             List of rendered LLM messages
         """
         from dataknobs_llm.prompts import PromptBuilder
+
         builder: PromptBuilder = self.prompt_builder  # type: ignore
 
         messages: List[LLMMessage] = []
@@ -2773,7 +2753,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs
+        **kwargs,
     ) -> Iterator[LLMStreamResponse]:
         """Generate streaming completion synchronously.
 
@@ -2789,43 +2769,38 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             Streaming response chunks
         """
         pass
-        
+
     @abstractmethod
     def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings synchronously.
-        
+
         Args:
             texts: Input text(s)
             **kwargs: Additional parameters
-            
+
         Returns:
             Embedding vector(s)
         """
         pass
-        
+
     @abstractmethod
     def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """Execute function calling synchronously.
-        
+
         Args:
             messages: Conversation messages
             functions: Available functions
             **kwargs: Additional parameters
-            
+
         Returns:
             Response with function call
         """
         pass
-        
+
     def initialize(self) -> None:
         """Initialize the sync LLM client."""
         self._is_initialized = True
@@ -2949,10 +2924,7 @@ class LLMAdapter(ABC):
         pass
 
     @abstractmethod
-    def adapt_response(
-        self,
-        response: Any
-    ) -> LLMResponse:
+    def adapt_response(self, response: Any) -> LLMResponse:
         """Adapt provider response to standard format.
 
         Args:
@@ -2964,10 +2936,7 @@ class LLMAdapter(ABC):
         pass
 
     @abstractmethod
-    def adapt_config(
-        self,
-        config: LLMConfig
-    ) -> Dict[str, Any]:
+    def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
         """Adapt configuration to provider format.
 
         Args:
@@ -2979,10 +2948,7 @@ class LLMAdapter(ABC):
         pass
 
     @abstractmethod
-    def adapt_tools(
-        self,
-        tools: list[Any]
-    ) -> list[Dict[str, Any]]:
+    def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
         """Adapt Tool objects to provider-specific tool format.
 
         Args:
@@ -3100,9 +3066,7 @@ class LLMMiddleware(Protocol):
     """
 
     async def process_request(
-        self,
-        messages: List[LLMMessage],
-        config: Union[LLMConfig, Config, Dict[str, Any]]
+        self, messages: List[LLMMessage], config: Union[LLMConfig, Config, Dict[str, Any]]
     ) -> List[LLMMessage]:
         """Process request before sending to LLM.
 
@@ -3122,9 +3086,7 @@ class LLMMiddleware(Protocol):
         ...
 
     async def process_response(
-        self,
-        response: LLMResponse,
-        config: Union[LLMConfig, Config, Dict[str, Any]]
+        self, response: LLMResponse, config: Union[LLMConfig, Config, Dict[str, Any]]
     ) -> LLMResponse:
         """Process response from LLM.
 

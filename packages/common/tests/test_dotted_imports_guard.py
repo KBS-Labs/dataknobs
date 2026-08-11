@@ -72,8 +72,9 @@ def test_dunder_import_is_flagged_too(tmp_path: Path) -> None:
 
 def test_pkgutil_resolve_name_is_flagged_when_qualified(tmp_path: Path) -> None:
     _write(
-        tmp_path, "viapkgutil.py", "import pkgutil\n\n\ndef f(p):\n"
-        "    return pkgutil.resolve_name(p)\n"
+        tmp_path,
+        "viapkgutil.py",
+        "import pkgutil\n\n\ndef f(p):\n    return pkgutil.resolve_name(p)\n",
     )
 
     with pytest.raises(AssertionError, match="pkgutil.resolve_name"):
@@ -89,7 +90,8 @@ def test_an_unrelated_resolve_name_method_is_not_flagged(tmp_path: Path) -> None
     of this operation. The names collide; the operations do not.
     """
     _write(
-        tmp_path, "loader.py",
+        tmp_path,
+        "loader.py",
         "class Loader:\n"
         "    def __init__(self, resolver):\n"
         "        self._resolver = resolver\n\n"
@@ -109,7 +111,8 @@ def test_find_spec_is_not_flagged(tmp_path: Path) -> None:
     which is how an allow-list stops being readable.
     """
     _write(
-        tmp_path, "probe.py",
+        tmp_path,
+        "probe.py",
         "import importlib.util\n\n\n"
         "def available(name):\n"
         "    return importlib.util.find_spec(name) is not None\n",

@@ -77,9 +77,7 @@ class TestPoolConfigStructured:
 
     def test_from_dict_parity(self) -> None:
         cfg = PoolConfig(min_size=2, max_size=20, acquire_timeout=15.0)
-        loaded = PoolConfig.from_dict(
-            {"min_size": 2, "max_size": 20, "acquire_timeout": 15.0}
-        )
+        loaded = PoolConfig.from_dict({"min_size": 2, "max_size": 20, "acquire_timeout": 15.0})
         assert loaded == cfg
 
     def test_defaults_roundtrip(self) -> None:
@@ -125,9 +123,7 @@ class TestIOConfigStructured:
     def test_string_enum_coercion_from_load_shape(self) -> None:
         # The YAML/JSON load shape supplies the Enum fields as raw strings;
         # ``from_dict`` coerces them to the member.
-        loaded = IOConfig.from_dict(
-            {"mode": "read", "format": "json", "source": "in.json"}
-        )
+        loaded = IOConfig.from_dict({"mode": "read", "format": "json", "source": "in.json"})
         assert loaded.mode is IOMode.READ
         assert loaded.format is IOFormat.JSON
 

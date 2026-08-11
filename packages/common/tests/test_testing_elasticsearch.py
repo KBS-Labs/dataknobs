@@ -219,14 +219,10 @@ def _drive_cleanup_with_exception(
             raise AssertionError("delete should not be reached")
 
     fake_module = SimpleNamespace(SimplifiedElasticsearchIndex=_StubIndex)
-    monkeypatch.setitem(
-        sys.modules, "dataknobs_utils.elasticsearch_utils", fake_module
-    )
+    monkeypatch.setitem(sys.modules, "dataknobs_utils.elasticsearch_utils", fake_module)
 
     handler = _RecordingHandler()
-    logger = logging.getLogger(
-        "dataknobs_common.testing.elasticsearch_fixtures"
-    )
+    logger = logging.getLogger("dataknobs_common.testing.elasticsearch_fixtures")
     prior_level = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
@@ -255,9 +251,7 @@ def _drive_cleanup_with_exception(
 
 def test_cleanup_swallows_connection_error_and_logs(monkeypatch):
     """ConnectionError during cleanup is logged at WARNING and swallowed."""
-    records, propagated = _drive_cleanup_with_exception(
-        monkeypatch, ConnectionError
-    )
+    records, propagated = _drive_cleanup_with_exception(monkeypatch, ConnectionError)
     assert propagated is None
     assert any("Failed to clean up" in r.getMessage() for r in records)
     assert all(r.levelname == "WARNING" for r in records)

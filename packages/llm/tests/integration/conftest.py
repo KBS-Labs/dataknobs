@@ -17,9 +17,7 @@ import requests
 from dataknobs_common.testing import is_ollama_model_usable
 
 
-def is_ollama_available(
-    host: str = "localhost", port: int = 11434, timeout: float = 2.0
-) -> bool:
+def is_ollama_available(host: str = "localhost", port: int = 11434, timeout: float = 2.0) -> bool:
     """Check if Ollama is available.
 
     Args:
@@ -37,9 +35,7 @@ def is_ollama_available(
         return False
 
 
-def wait_for_ollama(
-    host: str = "localhost", port: int = 11434, max_retries: int = 30
-) -> bool:
+def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int = 30) -> bool:
     """Wait for Ollama to be ready.
 
     Args:
@@ -65,9 +61,7 @@ def wait_for_ollama(
     return False
 
 
-def get_available_models(
-    host: str = "localhost", port: int = 11434
-) -> list[str]:
+def get_available_models(host: str = "localhost", port: int = 11434) -> list[str]:
     """Get list of available Ollama models.
 
     Args:
@@ -87,9 +81,7 @@ def get_available_models(
     return []
 
 
-def verify_ollama_model(
-    model: str, host: str = "localhost", port: int = 11434
-) -> bool:
+def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) -> bool:
     """Verify that a specific Ollama model is available.
 
     Args:
@@ -184,9 +176,7 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
     for model in candidates:
         # Bounded canary: a slow reasoning model that returns empty (e.g.
         # qwen3-coder) is cut off at the timeout instead of stalling the run.
-        if is_ollama_model_usable(
-            model, host=host, port=port, num_predict=16, timeout=12.0
-        ):
+        if is_ollama_model_usable(model, host=host, port=port, num_predict=16, timeout=12.0):
             if tried:
                 print(
                     f"\nOllama: preferred model unusable; recovered with "

@@ -90,6 +90,41 @@ def tracked_files() -> tuple[str, ...]:
 
 
 @cache
+def tracked_and_new_files() -> tuple[str, ...]:
+    """``tracked_files`` plus files added but not yet committed.
+
+    ``git ls-files`` cannot see a file that has never been committed, so a guard
+    built on it alone is blind to exactly the file a developer is writing when
+    they run it. It reports green on content it has not read, then goes red in
+    CI once the file is committed — the answer changes with no edit between the
+    two runs, which reads as a flaky guard rather than a real finding.
+
+    This is not hypothetical. ``test_prose_cross_references`` was verified
+    against a tree that excluded the file being verified, so it passed on a
+    docstring naming three tests that do not exist, and said so only after the
+    commit that made it visible to itself.
+
+    ``--exclude-standard`` keeps the reason ``tracked_files`` is tracked rather
+    than walked: ignored paths stay ignored, so ``htmlcov/`` and ``dist/`` are
+    still absent whether or not coverage was last run. The difference is only
+    that a new source file counts before it is staged.
+
+    Additive on purpose. ``tracked_files`` decides the quality contract's
+    totality, where an uncommitted scratch file becoming a coverage gap is a
+    behaviour change and not obviously the wanted one.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    new = tuple(name for name in listing.split("\0") if name)
+    return tuple(sorted({*tracked_files(), *new}))
+
+
+@cache
 def workspace_targets() -> tuple[str, ...]:
     """The first-party code belonging to no package, from the one declaration.
 

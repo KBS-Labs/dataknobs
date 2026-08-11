@@ -167,9 +167,7 @@ def is_ollama_model_usable(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.load(response)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        logger.debug(
-            "Ollama usability canary for model %r failed: %s", model_name, exc
-        )
+        logger.debug("Ollama usability canary for model %r failed: %s", model_name, exc)
         return False
     content = (body.get("message") or {}).get("content") or ""
     return bool(str(content).strip())
@@ -285,9 +283,7 @@ def is_redis_available(host: str | None = None, port: int | None = None) -> bool
     )
 
 
-def is_postgres_available(
-    host: str | None = None, port: int | None = None
-) -> bool:
+def is_postgres_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if PostgreSQL service is available.
 
     Resolves the host as ``host`` arg → ``$POSTGRES_HOST`` → Docker-aware
@@ -312,9 +308,7 @@ def is_postgres_available(
     )
 
 
-def is_elasticsearch_available(
-    host: str | None = None, port: int | None = None
-) -> bool:
+def is_elasticsearch_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if the Elasticsearch service is available.
 
     Resolves the host as ``host`` arg → ``$ELASTICSEARCH_HOST`` → Docker-aware
@@ -339,9 +333,7 @@ def is_elasticsearch_available(
     )
 
 
-def get_localstack_endpoint(
-    host: str | None = None, port: int | None = None
-) -> str:
+def get_localstack_endpoint(host: str | None = None, port: int | None = None) -> str:
     """Resolve the LocalStack edge endpoint URL.
 
     Returns the URL form (e.g. ``"http://localhost:4566"``) suitable
@@ -383,9 +375,7 @@ def get_localstack_endpoint(
     scheme = "http"
 
     if host is None or port is None:
-        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
-            "AWS_ENDPOINT_URL"
-        )
+        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
         if endpoint:
             parsed = urlparse(endpoint)
             # Only honor the env-supplied scheme when the URL parses as
@@ -405,9 +395,7 @@ def get_localstack_endpoint(
             env_host = os.environ.get("LOCALSTACK_HOST")
             if env_host:
                 host = env_host
-            elif os.path.exists("/.dockerenv") or os.environ.get(
-                "DOCKER_CONTAINER"
-            ):
+            elif os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
                 host = "localstack"
             else:
                 host = "localhost"
@@ -764,27 +752,34 @@ try:
         )
 
 except ImportError:
-    # pytest not installed - provide placeholder markers
-    requires_ollama = None  # type: ignore
-    requires_faiss = None  # type: ignore
-    requires_chromadb = None  # type: ignore
-    requires_redis = None  # type: ignore
-    requires_postgres = None  # type: ignore
-    requires_elasticsearch = None  # type: ignore
-    requires_real_postgres = None  # type: ignore
-    requires_localstack = None  # type: ignore
-    requires_bedrock = None  # type: ignore
+    # pytest not installed - provide placeholder markers.
+    #
+    # dataknobs-common installs with no required dependencies, so this branch is
+    # reachable: pytest is a dev-group dependency and a consumer importing this
+    # module without it lands here. Each name was bound to a MarkDecorator above,
+    # so rebinding it to None is an `assignment` mismatch -- named on every line
+    # rather than waived blank, because a bare directive would go on covering
+    # whatever else these lines came to report.
+    requires_ollama = None  # type: ignore[assignment]
+    requires_faiss = None  # type: ignore[assignment]
+    requires_chromadb = None  # type: ignore[assignment]
+    requires_redis = None  # type: ignore[assignment]
+    requires_postgres = None  # type: ignore[assignment]
+    requires_elasticsearch = None  # type: ignore[assignment]
+    requires_real_postgres = None  # type: ignore[assignment]
+    requires_localstack = None  # type: ignore[assignment]
+    requires_bedrock = None  # type: ignore[assignment]
 
-    def requires_localstack_service(service: str) -> Any:  # type: ignore
+    def requires_localstack_service(service: str) -> Any:
         return None
 
-    def requires_package(package_name: str) -> Any:  # type: ignore
+    def requires_package(package_name: str) -> Any:
         return None
 
-    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:  # type: ignore
+    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:
         return None
 
-    def requires_ollama_usable_model(  # type: ignore
+    def requires_ollama_usable_model(
         model_name: str, *, host: str = "localhost", port: int = 11434
     ) -> Any:
         return None

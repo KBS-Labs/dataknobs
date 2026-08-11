@@ -80,9 +80,7 @@ class VariableSubstitution:
         except RequiredEnvVarError as exc:
             if exc.bash_form:
                 raise
-            raise ValueError(
-                f"Environment variable '{exc.var_name}' not found"
-            ) from exc
+            raise ValueError(f"Environment variable '{exc.var_name}' not found") from exc
 
     def has_variables(self, value: Any) -> bool:
         """Check if a value contains environment variable references.

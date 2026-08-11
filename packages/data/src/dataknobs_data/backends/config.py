@@ -260,8 +260,10 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         # is routed to ``schema_name`` so it fails ``__post_init__``'s
         # identifier validation with a clear error rather than being
         # silently dropped.
-        if "schema" in raw and raw["schema"] is not None and not isinstance(
-            raw["schema"], DatabaseSchema
+        if (
+            "schema" in raw
+            and raw["schema"] is not None
+            and not isinstance(raw["schema"], DatabaseSchema)
         ):
             raw["schema_name"] = raw.pop("schema")
         # ``table`` wins over the ``table_name`` alias (legacy precedence).
@@ -299,12 +301,8 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         # e.g. a DatabaseSchema injected via the key collision — fails
         # fast with a clear ConfigurationError rather than emitting broken
         # DDL at first query).
-        object.__setattr__(
-            self, "table", validate_pg_identifier(self.table, "table")
-        )
-        object.__setattr__(
-            self, "schema_name", validate_pg_identifier(self.schema_name, "schema")
-        )
+        object.__setattr__(self, "table", validate_pg_identifier(self.table, "table"))
+        object.__setattr__(self, "schema_name", validate_pg_identifier(self.schema_name, "schema"))
         object.__setattr__(self, "port", int(self.port))
         object.__setattr__(
             self,
@@ -408,9 +406,7 @@ class AsyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
     # Redacted from ``repr`` by the StructuredConfig base. ``basic_auth``
     # is a ``(user, password)`` tuple — masking the whole field hides the
     # password (and the username) in one shot.
-    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset(
-        {"api_key", "basic_auth"}
-    )
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key", "basic_auth"})
 
 
 @dataclass(frozen=True)
@@ -524,9 +520,7 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
         object.__setattr__(self, "prefix", self.prefix.rstrip("/") + "/")
         # Coerce the int knobs so YAML/env string values behave as they did
         # when ``AwsSessionConfig.from_dict`` applied ``int(...)``.
-        object.__setattr__(
-            self, "max_pool_connections", int(self.max_pool_connections)
-        )
+        object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
         object.__setattr__(self, "max_attempts", int(self.max_attempts))
 
 

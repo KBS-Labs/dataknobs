@@ -23,6 +23,7 @@ from dataknobs_common.serialization import (
 @dataclass
 class User:
     """Simple user class for testing."""
+
     name: str
     email: str
 
@@ -37,6 +38,7 @@ class User:
 @dataclass
 class Product:
     """Product class with nested data."""
+
     id: int
     name: str
     price: float
@@ -70,6 +72,7 @@ class TestSerializableProtocol:
 
     def test_class_without_methods_not_serializable(self):
         """Test that classes without methods don't satisfy protocol."""
+
         class NotSerializable:
             pass
 
@@ -78,6 +81,7 @@ class TestSerializableProtocol:
 
     def test_class_with_only_to_dict_is_serializable(self):
         """Test that class with only to_dict satisfies protocol."""
+
         class PartialSerializable:
             def to_dict(self):
                 return {}
@@ -112,6 +116,7 @@ class TestSerialize:
 
     def test_serialize_without_to_dict_raises_error(self):
         """Test that serializing object without to_dict raises error."""
+
         class NotSerializable:
             pass
 
@@ -127,6 +132,7 @@ class TestSerialize:
 
     def test_serialize_to_dict_returns_non_dict_raises_error(self):
         """Test that to_dict returning non-dict raises error."""
+
         class BadSerializable:
             def to_dict(self):
                 return "not a dict"
@@ -141,6 +147,7 @@ class TestSerialize:
 
     def test_serialize_to_dict_raises_exception(self):
         """Test that exceptions in to_dict are wrapped."""
+
         class FailingSerializable:
             def to_dict(self):
                 raise ValueError("Intentional error")
@@ -191,6 +198,7 @@ class TestDeserialize:
 
     def test_deserialize_without_from_dict_raises_error(self):
         """Test that deserializing class without from_dict raises error."""
+
         class NotDeserializable:
             pass
 
@@ -213,6 +221,7 @@ class TestDeserialize:
 
     def test_deserialize_from_dict_raises_exception(self):
         """Test that exceptions in from_dict are wrapped."""
+
         class FailingDeserializable:
             @classmethod
             def from_dict(cls, data):
@@ -256,6 +265,7 @@ class TestSerializeList:
 
     def test_serialize_list_with_invalid_item(self):
         """Test that serializing list with invalid item raises error."""
+
         class NotSerializable:
             pass
 
@@ -316,6 +326,7 @@ class TestIsSerializable:
 
     def test_custom_object_with_to_dict_is_serializable(self):
         """Test custom class with to_dict."""
+
         class Custom:
             def to_dict(self):
                 return {}
@@ -339,6 +350,7 @@ class TestIsDeserializable:
 
     def test_custom_class_with_from_dict_is_deserializable(self):
         """Test custom class with from_dict."""
+
         class Custom:
             @classmethod
             def from_dict(cls, data):
@@ -436,6 +448,7 @@ class TestCustomSerializable:
 
     def test_custom_serialization_logic(self):
         """Test class with custom serialization logic."""
+
         class Point:
             def __init__(self, x, y):
                 self.x = x
@@ -460,6 +473,7 @@ class TestCustomSerializable:
 
     def test_nested_serializable_objects(self):
         """Test serialization of nested objects."""
+
         class Address:
             def __init__(self, street, city):
                 self.street = street
@@ -485,10 +499,7 @@ class TestCustomSerializable:
 
             @classmethod
             def from_dict(cls, data):
-                return cls(
-                    data["name"],
-                    deserialize(Address, data["address"])
-                )
+                return cls(data["name"], deserialize(Address, data["address"]))
 
         address = Address("123 Main St", "Springfield")
         person = Person("Homer", address)

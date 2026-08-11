@@ -419,9 +419,7 @@ def test_a_run_with_findings_exits_non_zero():
     it returns — the weaker form, and the reason it is written narrowly.
     """
     source = LINT_SHELL.read_text(encoding="utf-8")
-    branch = re.search(
-        r'if \[\[ "\$FAILED" == true \]\]; then(?P<body>.*?)\nfi', source, re.DOTALL
-    )
+    branch = re.search(r'if \[\[ "\$FAILED" == true \]\]; then(?P<body>.*?)\nfi', source, re.DOTALL)
     assert branch, (
         "the aggregate failure branch was not found in lint-shell.sh — if it was "
         "restructured, re-point this guard rather than leaving it passing vacuously"
@@ -478,7 +476,9 @@ def test_no_quoted_regex_hides_a_pattern_shellcheck_will_not_report():
             pattern = match.group("d") if match.group("d") is not None else match.group("s")
             used = sorted(set(pattern) & _REGEX_METACHARACTERS)
             if used:
-                offenders.append(f"{name}:{number}: =~ {pattern!r} — {''.join(used)} is literal here")
+                offenders.append(
+                    f"{name}:{number}: =~ {pattern!r} — {''.join(used)} is literal here"
+                )
 
     assert not offenders, (
         "These comparisons quote a regex into a literal string, so the pattern's "
@@ -486,7 +486,7 @@ def test_no_quoted_regex_hides_a_pattern_shellcheck_will_not_report():
         "than it reads as:\n"
         + "\n".join(f"  - {entry}" for entry in offenders)
         + "\nDrop the quotes to match as a regex, or use a glob comparison "
-        "([[ \"$x\" != -* ]]) where that says it better. Quoting is right when "
+        '([[ "$x" != -* ]]) where that says it better. Quoting is right when '
         "the pattern is genuinely literal — this only flags patterns that are not."
     )
 

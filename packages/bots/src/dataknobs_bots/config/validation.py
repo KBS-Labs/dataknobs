@@ -231,9 +231,7 @@ class ConfigValidator:
             )
         return ValidationResult.ok()
 
-    def validate_component(
-        self, component: str, config: dict[str, Any]
-    ) -> ValidationResult:
+    def validate_component(self, component: str, config: dict[str, Any]) -> ValidationResult:
         """Validate a specific component section of the config.
 
         Args:
@@ -248,9 +246,7 @@ class ConfigValidator:
 
         schema = self._schema.get_component_schema(component)
         if schema is None:
-            return ValidationResult.warning(
-                f"No schema registered for component '{component}'"
-            )
+            return ValidationResult.warning(f"No schema registered for component '{component}'")
 
         return _validate_against_schema(component, config, schema)
 
@@ -308,8 +304,7 @@ def resolve_enum_options(prop_schema: dict[str, Any]) -> list[str] | None:
         resolver = _ENUM_REGISTRIES.get(registry_name)
         if resolver is None:
             logger.warning(
-                "No enum registry named %r; leaving the field unconstrained. "
-                "Known registries: %s",
+                "No enum registry named %r; leaving the field unconstrained. Known registries: %s",
                 registry_name,
                 sorted(_ENUM_REGISTRIES),
             )

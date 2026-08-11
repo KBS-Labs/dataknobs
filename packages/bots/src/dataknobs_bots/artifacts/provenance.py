@@ -256,20 +256,14 @@ class ProvenanceRecord:
             created_at=data.get("created_at", ""),
             creation_method=data.get("creation_method", ""),
             creation_context=data.get("creation_context", {}),
-            sources=[
-                SourceReference.from_dict(s) for s in data.get("sources", [])
-            ],
-            tool_chain=[
-                ToolInvocation.from_dict(t) for t in data.get("tool_chain", [])
-            ],
+            sources=[SourceReference.from_dict(s) for s in data.get("sources", [])],
+            tool_chain=[ToolInvocation.from_dict(t) for t in data.get("tool_chain", [])],
             llm_invocations=[
-                LLMInvocation.from_dict(inv)
-                for inv in data.get("llm_invocations", [])
+                LLMInvocation.from_dict(inv) for inv in data.get("llm_invocations", [])
             ],
             review_history=data.get("review_history", []),
             revision_history=[
-                RevisionRecord.from_dict(r)
-                for r in data.get("revision_history", [])
+                RevisionRecord.from_dict(r) for r in data.get("revision_history", [])
             ],
         )
 

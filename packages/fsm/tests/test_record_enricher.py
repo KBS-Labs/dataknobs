@@ -38,6 +38,7 @@ async def _call(enricher: Any, record: dict, context: Any = None) -> dict:
 
 # --- merge_enrichment_field primitive -------------------------------------
 
+
 def test_merge_primitive_overwrite_policy() -> None:
     rec = {"a": 1}
     assert merge_enrichment_field(rec, "b", 2, overwrite=False) is True
@@ -51,6 +52,7 @@ def test_merge_primitive_overwrite_policy() -> None:
 
 
 # --- field->value map branch ----------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_field_map_static_and_callable() -> None:
@@ -69,6 +71,7 @@ async def test_field_map_does_not_overwrite_existing() -> None:
 
 # --- ITransformFunction branch --------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_instance_branch_uses_construct_directly() -> None:
     enr = build_record_enricher(DataEnricher({"name": "REPLACED"}, overwrite=True))
@@ -77,6 +80,7 @@ async def test_instance_branch_uses_construct_directly() -> None:
 
 
 # --- callable branch (arity + await normalization) ------------------------
+
 
 @pytest.mark.asyncio
 async def test_callable_one_arg() -> None:
@@ -105,6 +109,7 @@ async def test_async_callable_is_awaited() -> None:
 
 # --- dispatch errors -------------------------------------------------------
 
+
 def test_database_key_rejected_in_library_builder() -> None:
     with pytest.raises(TypeError, match="ETL-level convenience"):
         build_record_enricher({"database": {"type": "memory"}, "match": {"a": "b"}})
@@ -128,28 +133,23 @@ def test_match_without_resource_is_rejected() -> None:
     to every record instead of doing a reference lookup.
     """
     with pytest.raises(TypeError, match="'match' join spec but no 'resource'"):
-        build_record_enricher(
-            {"match": {"country_code": "code"}, "fields": ["region"]}
-        )
+        build_record_enricher({"match": {"country_code": "code"}, "fields": ["region"]})
 
 
 def test_overwrite_without_fields_is_rejected() -> None:
     """``overwrite=True`` with no explicit ``fields`` would clobber record keys."""
-    with pytest.raises(
-        ValueError, match="overwrite=True requires an explicit 'fields'"
-    ):
+    with pytest.raises(ValueError, match="overwrite=True requires an explicit 'fields'"):
         LookupMergeEnricher("ref", {"country": "code"}, overwrite=True)
 
 
 def test_null_on_missing_without_fields_is_rejected() -> None:
     """``on_missing='null'`` with no ``fields`` would null nothing — a no-op."""
-    with pytest.raises(
-        ValueError, match="on_missing='null' requires an explicit 'fields'"
-    ):
+    with pytest.raises(ValueError, match="on_missing='null' requires an explicit 'fields'"):
         LookupMergeEnricher("ref", {"country": "code"}, on_missing="null")
 
 
 # --- shared step loop: non-dict guard for both stages ---------------------
+
 
 @pytest.mark.asyncio
 async def test_etl_enrich_rejects_non_dict_return() -> None:
@@ -170,12 +170,8 @@ async def test_etl_transform_rejects_non_dict_return() -> None:
     """
     from dataknobs_fsm.patterns.etl import _ETLTransform
 
-    step = _ETLTransform(
-        field_mappings=None, transformations=[lambda _record: ["nope"]]
-    )
-    with pytest.raises(
-        TransformError, match="transformation #0 must return a dict"
-    ):
+    step = _ETLTransform(field_mappings=None, transformations=[lambda _record: ["nope"]])
+    with pytest.raises(TransformError, match="transformation #0 must return a dict"):
         await step.transform({"id": "1"})
 
 
@@ -200,6 +196,7 @@ async def test_etl_transform_awaits_async_callable() -> None:
 
 # --- DataEnricher: shared collision predicate short-circuits the callable --
 
+
 def test_data_enricher_skips_callable_when_present_and_not_overwrite() -> None:
     """A present, not-overwritten field never evaluates its callable value.
 
@@ -220,6 +217,7 @@ def test_data_enricher_skips_callable_when_present_and_not_overwrite() -> None:
 
 # --- LookupMergeEnricher direct (match / miss policies) -------------------
 
+
 async def _ref_resource(rows: list[dict]) -> AsyncDatabaseResourceAdapter:
     # Seed through the adapter's public ``upsert`` (the same surface the ETL
     # load step writes through), not the private ``_ensure_db()`` internal.
@@ -231,9 +229,7 @@ async def _ref_resource(rows: list[dict]) -> AsyncDatabaseResourceAdapter:
 
 @pytest.mark.asyncio
 async def test_lookup_match_merges_fields() -> None:
-    adapter = await _ref_resource(
-        [{"id": "US", "code": "US", "region": "NA"}]
-    )
+    adapter = await _ref_resource([{"id": "US", "code": "US", "region": "NA"}])
     enr = LookupMergeEnricher("ref", {"country": "code"}, fields=["region"])
     ctx = SimpleNamespace(resources={"ref": adapter})
     out = await enr.transform({"country": "US"}, ctx)
@@ -261,9 +257,7 @@ async def test_lookup_on_missing_policies() -> None:
     kept = await null_keep.transform({"country": "ZZ", "region": "EU"}, ctx)
     assert kept["region"] == "EU", "overwrite=False must preserve existing on miss"
 
-    null_over = LookupMergeEnricher(
-        *spec, fields=["region"], on_missing="null", overwrite=True
-    )
+    null_over = LookupMergeEnricher(*spec, fields=["region"], on_missing="null", overwrite=True)
     over = await null_over.transform({"country": "ZZ", "region": "EU"}, ctx)
     assert over["region"] is None, "overwrite=True must null existing on miss"
 
@@ -292,9 +286,7 @@ async def test_lookup_composite_key_match() -> None:
             {"id": "2", "code": "US", "tier": "silver", "perk": "wifi"},
         ]
     )
-    enr = LookupMergeEnricher(
-        "ref", {"country": "code", "level": "tier"}, fields=["perk"]
-    )
+    enr = LookupMergeEnricher("ref", {"country": "code", "level": "tier"}, fields=["perk"])
     ctx = SimpleNamespace(resources={"ref": adapter})
     out = await enr.transform({"country": "US", "level": "silver"}, ctx)
     assert out["perk"] == "wifi", out

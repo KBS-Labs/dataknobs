@@ -11,6 +11,7 @@ consumers that build children from a registry:
 - The returned dict is a fresh dict; caller mutation does not bleed
   back into ``self.components``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

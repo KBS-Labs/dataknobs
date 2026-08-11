@@ -174,9 +174,7 @@ class ConfigTemplateRegistry:
         """
         return self._templates.get(name)
 
-    def list_templates(
-        self, tags: list[str] | None = None
-    ) -> list[ConfigTemplate]:
+    def list_templates(self, tags: list[str] | None = None) -> list[ConfigTemplate]:
         """List templates, optionally filtered by tags.
 
         Args:
@@ -256,9 +254,7 @@ class ConfigTemplateRegistry:
         var_map = _build_variable_map(template, variables)
 
         structure = copy.deepcopy(template.structure)
-        result: dict[str, Any] = substitute_template_vars(
-            structure, var_map, preserve_missing=True
-        )
+        result: dict[str, Any] = substitute_template_vars(structure, var_map, preserve_missing=True)
         return result
 
     def validate_variables(
@@ -288,9 +284,7 @@ class ConfigTemplateRegistry:
             if var.required and var.name not in variables:
                 if var.default is None:
                     result = result.merge(
-                        ValidationResult.error(
-                            f"Missing required variable: {var.name}"
-                        )
+                        ValidationResult.error(f"Missing required variable: {var.name}")
                     )
             if var.choices is not None and var.name in variables:
                 value = variables[var.name]

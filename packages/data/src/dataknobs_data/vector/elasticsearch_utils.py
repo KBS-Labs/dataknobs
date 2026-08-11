@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 def get_similarity_for_metric(metric: DistanceMetric) -> str:
     """Get Elasticsearch similarity function for a distance metric.
-    
+
     Args:
         metric: Distance metric
-        
+
     Returns:
         Elasticsearch similarity function name
     """
@@ -41,14 +41,14 @@ def build_knn_query(
     filter_query: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a KNN query for Elasticsearch.
-    
+
     Args:
         query_vector: Query vector
         field_name: Name of the vector field (will be prefixed with 'data.')
         k: Number of results to return
         num_candidates: Number of candidates to consider (default: k * 10)
         filter_query: Optional filter query
-        
+
     Returns:
         Elasticsearch KNN query
     """
@@ -82,13 +82,13 @@ def build_script_score_query(
     filter_query: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a script_score query for exact vector search.
-    
+
     Args:
         query_vector: Query vector
         field_name: Name of the vector field
         metric: Distance metric to use
         filter_query: Optional filter query
-        
+
     Returns:
         Elasticsearch script_score query
     """
@@ -115,12 +115,7 @@ def build_script_score_query(
     return {
         "script_score": {
             "query": base_query,
-            "script": {
-                "source": script_source,
-                "params": {
-                    "query_vector": query_vector
-                }
-            }
+            "script": {"source": script_source, "params": {"query_vector": query_vector}},
         }
     }
 
@@ -135,7 +130,7 @@ def build_hybrid_query(
     k: int = 10,
 ) -> dict[str, Any]:
     """Build a hybrid text + vector search query.
-    
+
     Args:
         text_query: Text query string
         query_vector: Query vector
@@ -144,7 +139,7 @@ def build_hybrid_query(
         text_boost: Boost for text search
         vector_boost: Boost for vector search
         k: Number of results for KNN
-        
+
     Returns:
         Elasticsearch hybrid query
     """
@@ -180,10 +175,10 @@ def build_hybrid_query(
 
 def format_vector_for_elasticsearch(vector: np.ndarray | list[float]) -> list[float]:
     """Format a vector for Elasticsearch storage.
-    
+
     Args:
         vector: Vector to format
-        
+
     Returns:
         List of floats suitable for Elasticsearch
     """
@@ -200,10 +195,10 @@ def format_vector_for_elasticsearch(vector: np.ndarray | list[float]) -> list[fl
 
 def parse_elasticsearch_vector(value: Any) -> np.ndarray | None:
     """Parse a vector value from Elasticsearch.
-    
+
     Args:
         value: Value from Elasticsearch document
-        
+
     Returns:
         Numpy array or None
     """
@@ -225,12 +220,12 @@ def get_vector_mapping(
     index: bool = True,
 ) -> dict[str, Any]:
     """Get Elasticsearch mapping for a vector field.
-    
+
     Args:
         dimensions: Number of dimensions
         similarity: Similarity metric (cosine, dot_product, l2_norm)
         index: Whether to index the field for KNN search
-        
+
     Returns:
         Mapping dictionary for the field
     """
@@ -244,10 +239,10 @@ def get_vector_mapping(
 
 def estimate_index_parameters(num_vectors: int) -> dict[str, Any]:
     """Estimate optimal index parameters based on dataset size.
-    
+
     Args:
         num_vectors: Expected number of vectors
-        
+
     Returns:
         Dictionary of index parameters
     """
@@ -277,11 +272,11 @@ def estimate_index_parameters(num_vectors: int) -> dict[str, Any]:
 
 def validate_vector_dimensions(vector: np.ndarray | list[float], expected_dims: int) -> bool:
     """Validate that a vector has the expected dimensions.
-    
+
     Args:
         vector: Vector to validate
         expected_dims: Expected number of dimensions
-        
+
     Returns:
         True if dimensions match
     """

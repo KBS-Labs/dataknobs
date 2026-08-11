@@ -27,10 +27,7 @@ class TestDataknobsError:
 
     def test_exception_with_context(self):
         """Test exception with context dictionary."""
-        error = DataknobsError(
-            "Operation failed",
-            context={"operation": "save", "item_id": "123"}
-        )
+        error = DataknobsError("Operation failed", context={"operation": "save", "item_id": "123"})
         assert str(error) == "Operation failed"
         assert error.context == {"operation": "save", "item_id": "123"}
         assert error.details == {"operation": "save", "item_id": "123"}
@@ -38,8 +35,7 @@ class TestDataknobsError:
     def test_exception_with_details(self):
         """Test exception with details dictionary (FSM-style)."""
         error = DataknobsError(
-            "State transition failed",
-            details={"state": "processing", "error_code": 500}
+            "State transition failed", details={"state": "processing", "error_code": 500}
         )
         assert str(error) == "State transition failed"
         assert error.context == {"state": "processing", "error_code": 500}
@@ -48,9 +44,7 @@ class TestDataknobsError:
     def test_details_takes_precedence(self):
         """Test that details parameter takes precedence over context."""
         error = DataknobsError(
-            "Error",
-            context={"key": "context_value"},
-            details={"key": "details_value"}
+            "Error", context={"key": "context_value"}, details={"key": "details_value"}
         )
         assert error.context == {"key": "details_value"}
         assert error.details == {"key": "details_value"}
@@ -79,7 +73,7 @@ class TestValidationError:
         """Test validation error with field context."""
         error = ValidationError(
             "Field validation failed",
-            context={"field": "email", "value": "not-an-email", "rule": "email_format"}
+            context={"field": "email", "value": "not-an-email", "rule": "email_format"},
         )
         assert error.context["field"] == "email"
         assert error.context["value"] == "not-an-email"
@@ -98,7 +92,7 @@ class TestConfigurationError:
         """Test configuration error with key context."""
         error = ConfigurationError(
             "Configuration key not found",
-            context={"key": "database.host", "available": ["database.port"]}
+            context={"key": "database.host", "available": ["database.port"]},
         )
         assert error.context["key"] == "database.host"
         assert "available" in error.context
@@ -116,8 +110,7 @@ class TestResourceError:
     def test_resource_error_with_pool_context(self):
         """Test resource error with pool information."""
         error = ResourceError(
-            "Connection pool exhausted",
-            context={"pool_size": 10, "active": 10, "waiting": 5}
+            "Connection pool exhausted", context={"pool_size": 10, "active": 10, "waiting": 5}
         )
         assert error.context["pool_size"] == 10
         assert error.context["active"] == 10
@@ -135,8 +128,7 @@ class TestNotFoundError:
     def test_not_found_error_with_id(self):
         """Test not found error with item identifier."""
         error = NotFoundError(
-            "Record not found",
-            context={"record_id": "user-123", "table": "users"}
+            "Record not found", context={"record_id": "user-123", "table": "users"}
         )
         assert error.context["record_id"] == "user-123"
         assert error.context["table"] == "users"
@@ -155,11 +147,7 @@ class TestOperationError:
         """Test operation error with operation details."""
         error = OperationError(
             "Database operation failed",
-            context={
-                "operation": "update",
-                "backend": "postgres",
-                "error": "connection lost"
-            }
+            context={"operation": "update", "backend": "postgres", "error": "connection lost"},
         )
         assert error.context["operation"] == "update"
 
@@ -177,11 +165,7 @@ class TestConcurrencyError:
         """Test concurrency error with version information."""
         error = ConcurrencyError(
             "Optimistic lock failure",
-            context={
-                "record_id": "123",
-                "expected_version": 5,
-                "actual_version": 6
-            }
+            context={"record_id": "123", "expected_version": 5, "actual_version": 6},
         )
         assert error.context["expected_version"] == 5
         assert error.context["actual_version"] == 6
@@ -200,7 +184,7 @@ class TestSerializationError:
         """Test serialization error with format details."""
         error = SerializationError(
             "JSON encoding failed",
-            context={"format": "json", "field": "created_at", "value": "invalid"}
+            context={"format": "json", "field": "created_at", "value": "invalid"},
         )
         assert error.context["format"] == "json"
 
@@ -218,7 +202,7 @@ class TestTimeoutError:
         """Test timeout error with timeout details."""
         error = TimeoutError(
             "Query timeout exceeded",
-            context={"query": "SELECT * FROM large_table", "timeout_seconds": 30}
+            context={"query": "SELECT * FROM large_table", "timeout_seconds": 30},
         )
         assert error.context["timeout_seconds"] == 30
 
@@ -228,6 +212,7 @@ class TestCustomExceptions:
 
     def test_custom_exception_basic(self):
         """Test creating custom exception."""
+
         class MyPackageError(DataknobsError):
             pass
 
@@ -237,12 +222,10 @@ class TestCustomExceptions:
 
     def test_custom_exception_with_custom_init(self):
         """Test custom exception with custom __init__."""
+
         class ItemError(DataknobsError):
             def __init__(self, item_id: str, message: str):
-                super().__init__(
-                    f"Item '{item_id}': {message}",
-                    context={"item_id": item_id}
-                )
+                super().__init__(f"Item '{item_id}': {message}", context={"item_id": item_id})
 
         error = ItemError("item-123", "not found")
         assert str(error) == "Item 'item-123': not found"
@@ -250,6 +233,7 @@ class TestCustomExceptions:
 
     def test_custom_exception_catchable_as_base(self):
         """Test custom exception can be caught as base."""
+
         class MyError(DataknobsError):
             pass
 

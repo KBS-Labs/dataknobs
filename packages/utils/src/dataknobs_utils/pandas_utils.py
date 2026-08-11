@@ -6,7 +6,7 @@ including conversions between dicts, lists, and DataFrame formats.
 
 import itertools
 import json
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -138,9 +138,7 @@ class GroupManager:
         # Index values must be unique and sorted in the collapsed form
         if df.index.value_counts().max() > 1 or not (df.index.sort_values() == df.index).all():
             # Index isn't unique or in order, so need to reset the index
-            df = df.reset_index(
-                drop=False, allow_duplicates=False, names="__orig_idx__"
-            )
+            df = df.reset_index(drop=False, allow_duplicates=False, names="__orig_idx__")
         return df
 
     @property
@@ -199,13 +197,17 @@ class GroupManager:
         if self._glocs is None:
             edf = pd.DataFrame(self.expanded_ser)
             edf["__tmp_idx__"] = edf.index
-            glocs_dict = (
+            # pandas types every groupby key as ``Hashable``; these keys are
+            # the group-number column's values, which this class declares as
+            # ``int`` where it stores them.
+            glocs_dict = cast(
+                "Dict[int, List[int]]",
                 edf.groupby(
                     self.gcol,
                     group_keys=True,
                 )["__tmp_idx__"]
                 .apply(list)
-                .to_dict()
+                .to_dict(),
             )
             self._glocs = glocs_dict if glocs_dict else {}
         return self._glocs if self._glocs is not None else {}

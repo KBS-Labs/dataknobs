@@ -149,9 +149,7 @@ def register_untyped_backend() -> Iterator[Callable[..., str]]:
     """
     registered: list[tuple[PluginRegistry[Any], str]] = []
 
-    def _register(
-        registry: PluginRegistry[Any], name: str = "untyped_test_backend"
-    ) -> str:
+    def _register(registry: PluginRegistry[Any], name: str = "untyped_test_backend") -> str:
         def _factory(config: object = None, **_: object) -> object:
             raise NotImplementedError  # never built — the resolver only reads the type
 

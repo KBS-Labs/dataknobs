@@ -118,12 +118,15 @@ def test_inputs_see_extra_context(renderer: WizardRenderer) -> None:
     }
     state = _StubState(data={})
     ctx = renderer.build_context(
-        stage, state, extra_context={"name": "Sam"},
+        stage,
+        state,
+        extra_context={"name": "Sam"},
     )
     assert ctx["greeting"] == "Hi Sam"
 
 
 # --- Security: the wizard inputs path is sandboxed -------------------- #
+
 
 def test_inputs_sandbox_escape_does_not_leak(
     renderer: WizardRenderer,
@@ -145,6 +148,7 @@ def test_inputs_sandbox_escape_does_not_leak(
 
 
 # --- Resilience: a bad inputs: expression degrades, never aborts ------ #
+
 
 def test_bad_input_does_not_abort_build_context(
     renderer: WizardRenderer,

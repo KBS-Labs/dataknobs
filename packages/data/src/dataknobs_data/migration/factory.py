@@ -28,20 +28,20 @@ logger = logging.getLogger(__name__)
 
 class MigrationFactory(FactoryBase):
     """Factory for creating migrations from configuration.
-    
+
     Configuration Options:
         from_version (str): Source version
         to_version (str): Target version
         description (str): Migration description
         operations (list): List of operation definitions
-        
+
     Operation Types:
         - add_field: Add a new field
         - remove_field: Remove an existing field
         - rename_field: Rename a field
         - transform_field: Transform field values
         - composite: Multiple operations combined
-        
+
     Example Configuration:
         migrations:
           - name: v1_to_v2
@@ -63,10 +63,10 @@ class MigrationFactory(FactoryBase):
 
     def create(self, **config) -> Migration:
         """Create a Migration instance from configuration.
-        
+
         Args:
             **config: Migration configuration
-            
+
         Returns:
             Migration instance
         """
@@ -89,10 +89,10 @@ class MigrationFactory(FactoryBase):
 
     def _create_operation(self, op_config: dict[str, Any]) -> Operation | None:
         """Create an operation from configuration.
-        
+
         Args:
             op_config: Operation configuration
-            
+
         Returns:
             Operation instance or None if invalid
         """
@@ -105,7 +105,7 @@ class MigrationFactory(FactoryBase):
             return AddField(
                 field_name=field_name,
                 default_value=op_config.get("default_value"),
-                field_type=self._parse_field_type(op_config.get("field_type"))
+                field_type=self._parse_field_type(op_config.get("field_type")),
             )
 
         elif op_type == "remove_field":
@@ -113,8 +113,7 @@ class MigrationFactory(FactoryBase):
             if not field_name:
                 raise ValueError("remove_field operation requires field_name")
             return RemoveField(
-                field_name=field_name,
-                store_removed=op_config.get("store_removed", False)
+                field_name=field_name, store_removed=op_config.get("store_removed", False)
             )
 
         elif op_type == "rename_field":
@@ -122,10 +121,7 @@ class MigrationFactory(FactoryBase):
             new_name = op_config.get("new_name")
             if not old_name or not new_name:
                 raise ValueError("rename_field operation requires old_name and new_name")
-            return RenameField(
-                old_name=old_name,
-                new_name=new_name
-            )
+            return RenameField(old_name=old_name, new_name=new_name)
 
         elif op_type == "transform_field":
             # Note: Transform functions from config strings require careful handling
@@ -139,9 +135,7 @@ class MigrationFactory(FactoryBase):
             reverse_fn = self._get_transform_function(op_config.get("reverse"))
 
             return TransformField(
-                field_name=field_name,
-                transform_fn=transform_fn,
-                reverse_fn=reverse_fn
+                field_name=field_name, transform_fn=transform_fn, reverse_fn=reverse_fn
             )
 
         elif op_type == "composite":
@@ -158,10 +152,10 @@ class MigrationFactory(FactoryBase):
 
     def _parse_field_type(self, type_str: str | None):
         """Parse field type from string.
-        
+
         Args:
             type_str: Field type string
-            
+
         Returns:
             FieldType or None
         """
@@ -178,13 +172,13 @@ class MigrationFactory(FactoryBase):
 
     def _get_transform_function(self, transform_spec: Any) -> Callable | None:
         """Get transform function from specification.
-        
+
         For security, we don't eval arbitrary code. Instead, we support
         predefined transform patterns.
-        
+
         Args:
             transform_spec: Transform specification
-            
+
         Returns:
             Transform function or None
         """
@@ -213,16 +207,16 @@ class MigrationFactory(FactoryBase):
 
 class TransformerFactory(FactoryBase):
     """Factory for creating transformers from configuration.
-    
+
     Configuration Options:
         rules (list): List of transformation rules
-        
+
     Rule Types:
         - map: Map field to another field with optional transformation
         - rename: Rename a field
         - exclude: Remove fields
         - add: Add new fields
-        
+
     Example Configuration:
         transformers:
           - name: cleanup_transformer
@@ -240,10 +234,10 @@ class TransformerFactory(FactoryBase):
 
     def create(self, **config) -> Transformer:
         """Create a Transformer instance from configuration.
-        
+
         Args:
             **config: Transformer configuration
-            
+
         Returns:
             Transformer instance
         """
@@ -260,7 +254,7 @@ class TransformerFactory(FactoryBase):
 
     def _add_rule(self, transformer: Transformer, rule_config: dict[str, Any]) -> None:
         """Add a rule to the transformer.
-        
+
         Args:
             transformer: Transformer to add rule to
             rule_config: Rule configuration
@@ -296,17 +290,17 @@ class TransformerFactory(FactoryBase):
 
 class MigratorFactory(FactoryBase):
     """Factory for creating migrators.
-    
+
     The Migrator doesn't require configuration, but this factory
     provides a consistent interface for the config system.
     """
 
     def create(self, **config) -> Migrator:
         """Create a Migrator instance.
-        
+
         Args:
             **config: Currently unused
-            
+
         Returns:
             Migrator instance
         """

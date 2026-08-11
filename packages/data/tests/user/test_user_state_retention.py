@@ -135,9 +135,7 @@ async def test_prune_document_section_rejected() -> None:
 
 async def test_prune_on_query_when_enabled() -> None:
     clock = _Clock(_START)
-    store = await AsyncUserStateStore.from_config(
-        _config(prune_on_query=True), now=clock
-    )
+    store = await AsyncUserStateStore.from_config(_config(prune_on_query=True), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
         clock.advance(days=40)
@@ -185,9 +183,7 @@ def test_retention_days_on_document_section_rejected() -> None:
         UserStateStoreConfig.from_dict(
             {
                 "namespace": "acme",
-                "sections": [
-                    {"name": "prefs", "kind": "document", "retention_days": 30}
-                ],
+                "sections": [{"name": "prefs", "kind": "document", "retention_days": 30}],
             }
         )
 
@@ -196,9 +192,7 @@ def test_retention_days_on_collection_section_allowed() -> None:
     cfg = UserStateStoreConfig.from_dict(
         {
             "namespace": "acme",
-            "sections": [
-                {"name": "activity", "kind": "collection", "retention_days": 30}
-            ],
+            "sections": [{"name": "activity", "kind": "collection", "retention_days": 30}],
         }
     )
     assert cfg.sections[0].retention_days == 30
@@ -214,9 +208,7 @@ def test_prune_method_parity() -> None:
 
     assert hasattr(AsyncUserStateStore, "prune")
     assert hasattr(UserStateStore, "prune")
-    assert inspect.signature(AsyncUserStateStore.prune) == inspect.signature(
-        UserStateStore.prune
-    )
+    assert inspect.signature(AsyncUserStateStore.prune) == inspect.signature(UserStateStore.prune)
 
 
 # --------------------------------------------------------------------- #
@@ -275,7 +267,9 @@ async def test_prune_tz_mismatch_does_not_crash_or_delete() -> None:
     cfg = UserStateStoreConfig.from_dict(_config())
     writer = AsyncUserStateStore.from_components(cfg, db=db)  # aware default
     pruner = AsyncUserStateStore.from_components(
-        cfg, db=db, now=lambda: datetime(2099, 1, 1),  # naive far future
+        cfg,
+        db=db,
+        now=lambda: datetime(2099, 1, 1),  # naive far future
     )
     try:
         await writer.add_record("u1", "activity", {"event": "keep"})

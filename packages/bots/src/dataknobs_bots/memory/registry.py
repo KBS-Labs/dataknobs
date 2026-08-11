@@ -137,9 +137,7 @@ def _resolve_memory_config_cls(
 # fires it. ``config_registries`` is a plain ``Registry`` -> ``allow_overwrite``
 # (NOT ``override=``, which is ``memory_backends``'/``PluginRegistry``'s param;
 # the two registries differ) keeps re-import idempotent.
-config_registries.register(
-    "memory", _resolve_memory_config_cls, allow_overwrite=True
-)
+config_registries.register("memory", _resolve_memory_config_cls, allow_overwrite=True)
 
 
 # ------------------------------------------------------------------

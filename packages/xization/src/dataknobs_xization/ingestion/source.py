@@ -101,9 +101,7 @@ class DocumentSource(Protocol):
     for pattern semantics that match :func:`pathlib.Path.glob`.
     """
 
-    async def iter_files(
-        self, patterns: Iterable[str]
-    ) -> AsyncIterator[DocumentFileRef]:
+    async def iter_files(self, patterns: Iterable[str]) -> AsyncIterator[DocumentFileRef]:
         """Yield :class:`DocumentFileRef` for each file matching any
         of ``patterns``. Deduplication across patterns is the caller's
         responsibility; implementations may yield the same file twice
@@ -137,9 +135,7 @@ class LocalDocumentSource:
         """The root directory this source wraps."""
         return self._root
 
-    async def iter_files(
-        self, patterns: Iterable[str]
-    ) -> AsyncIterator[DocumentFileRef]:
+    async def iter_files(self, patterns: Iterable[str]) -> AsyncIterator[DocumentFileRef]:
         """Enumerate files under ``root`` matching any of ``patterns``.
 
         Uses :meth:`Path.glob` for each pattern. Directories are
@@ -282,9 +278,7 @@ class BackendDocumentSource:
             return f"{backend_uri}/{self._domain_id}"
         return f"{type(self._backend).__name__}://{self._domain_id}"
 
-    async def iter_files(
-        self, patterns: Iterable[str]
-    ) -> AsyncIterator[DocumentFileRef]:
+    async def iter_files(self, patterns: Iterable[str]) -> AsyncIterator[DocumentFileRef]:
         """Enumerate files matching any of ``patterns``.
 
         Derives a common prefix from the pattern list (the literal
@@ -300,22 +294,16 @@ class BackendDocumentSource:
         patterns_list = list(patterns)
         prefix = self._common_prefix(patterns_list)
         if prefix:
-            files = await self._backend.list_files(
-                self._domain_id, prefix=prefix
-            )
+            files = await self._backend.list_files(self._domain_id, prefix=prefix)
         else:
             files = await self._backend.list_files(self._domain_id)
         base_uri = self._backend_uri()
 
         for kf in files:
             path = kf.path
-            if patterns_list and not any(
-                self._matches(path, p) for p in patterns_list
-            ):
+            if patterns_list and not any(self._matches(path, p) for p in patterns_list):
                 continue
-            if self._file_filter is not None and not self._file_filter(
-                kf
-            ):
+            if self._file_filter is not None and not self._file_filter(kf):
                 continue
             size = getattr(kf, "size_bytes", None)
             if size is None:
@@ -339,9 +327,7 @@ class BackendDocumentSource:
         """
         if not patterns:
             return ""
-        per_pattern = [
-            BackendDocumentSource._literal_prefix(p) for p in patterns
-        ]
+        per_pattern = [BackendDocumentSource._literal_prefix(p) for p in patterns]
         if not all(per_pattern):
             return ""
         common = per_pattern[0]
@@ -383,9 +369,7 @@ class BackendDocumentSource:
         """Read the full contents of ``ref`` from the backend."""
         data = await self._backend.get_file(self._domain_id, ref.path)
         if data is None:
-            raise FileNotFoundError(
-                f"Backend returned no data for {self._domain_id}/{ref.path}"
-            )
+            raise FileNotFoundError(f"Backend returned no data for {self._domain_id}/{ref.path}")
         return data
 
     async def read_streaming(
@@ -399,9 +383,7 @@ class BackendDocumentSource:
         """
         stream_fn = getattr(self._backend, "stream_file", None)
         if stream_fn is not None:
-            stream = await stream_fn(
-                self._domain_id, ref.path, chunk_size=chunk_size
-            )
+            stream = await stream_fn(self._domain_id, ref.path, chunk_size=chunk_size)
             if stream is not None:
                 async for piece in stream:
                     yield piece

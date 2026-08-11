@@ -92,9 +92,7 @@ class TestPatternsConfigsAreStructured:
     def test_is_frozen(self, config_cls):
         assert config_cls.__dataclass_params__.frozen
 
-    @pytest.mark.parametrize(
-        "config", ROUNDTRIP_INSTANCES, ids=lambda c: type(c).__name__
-    )
+    @pytest.mark.parametrize("config", ROUNDTRIP_INSTANCES, ids=lambda c: type(c).__name__)
     def test_roundtrip(self, config):
         # Uniform application of the canonical round-trip property across
         # the whole patterns-family, not just one class.
@@ -110,9 +108,9 @@ class TestErrorRecoveryConfigStructured:
         ) == CircuitBreakerConfig(failure_threshold=9, timeout=30.0)
 
     def test_fallback_construction_parity(self):
-        assert FallbackConfig.from_dict(
-            {"use_cache": True, "cache_ttl": 120.0}
-        ) == FallbackConfig(use_cache=True, cache_ttl=120.0)
+        assert FallbackConfig.from_dict({"use_cache": True, "cache_ttl": 120.0}) == FallbackConfig(
+            use_cache=True, cache_ttl=120.0
+        )
 
     def test_bulkhead_construction_parity(self):
         assert BulkheadConfig.from_dict(
@@ -297,9 +295,7 @@ class TestETLConfigStructured:
     def test_construction_parity(self):
         assert ETLConfig.from_dict(
             {"source_db": {"backend": "memory"}, "target_db": {"backend": "memory"}}
-        ) == ETLConfig(
-            source_db={"backend": "memory"}, target_db={"backend": "memory"}
-        )
+        ) == ETLConfig(source_db={"backend": "memory"}, target_db={"backend": "memory"})
 
     def test_roundtrip_with_enum_mode(self):
         cfg = ETLConfig(

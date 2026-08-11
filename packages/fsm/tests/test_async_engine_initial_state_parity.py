@@ -106,8 +106,7 @@ async def test_batch_items_run_initial_state_transform() -> None:
         assert len(values) == len(items)
         for value in values:
             assert value.get("seen_start") is True, (
-                "A batch item did not run its start-state transform — "
-                f"item result was {value!r}"
+                f"A batch item did not run its start-state transform — item result was {value!r}"
             )
     finally:
         await fsm.close()
@@ -206,17 +205,13 @@ def _assert_no_leaked_resources(manager: Any, *, mode: str) -> None:
     entry means a context acquired ``scratch_db`` and never released it.
     """
     leaked_resources = dict(manager._resources)
-    leaked_owners = {
-        name: owners for name, owners in manager._resource_owners.items() if owners
-    }
+    leaked_owners = {name: owners for name, owners in manager._resource_owners.items() if owners}
     assert not leaked_resources, (
         f"{mode} run leaked start-state resources: {leaked_resources!r} — the "
         "parent aggregate context entered its initial state but is never run "
         "through _execute_single, so its acquisition is never released"
     )
-    assert not leaked_owners, (
-        f"{mode} run leaked resource owners: {leaked_owners!r}"
-    )
+    assert not leaked_owners, f"{mode} run leaked resource owners: {leaked_owners!r}"
 
 
 @pytest.mark.asyncio

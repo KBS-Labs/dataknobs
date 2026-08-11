@@ -100,11 +100,7 @@ class TestPerTurnKeysConfig:
         # Simulate __init__ logic for ephemeral keys
         per_turn_keys = frozenset(["action", "intent_raw"])
         config_ephemeral: list[str] = []
-        ephemeral_keys = (
-            DEFAULT_EPHEMERAL_KEYS
-            | frozenset(config_ephemeral)
-            | per_turn_keys
-        )
+        ephemeral_keys = DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral) | per_turn_keys
 
         assert "action" in ephemeral_keys
         assert "intent_raw" in ephemeral_keys

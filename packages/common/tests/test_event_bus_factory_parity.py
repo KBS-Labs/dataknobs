@@ -56,9 +56,7 @@ from dataknobs_common.testing import (
     ],
     ids=["memory", "redis", "postgres", "sqs"],
 )
-def test_event_bus_dataclass_matches_ctor(
-    config_cls: type, target_cls: type
-) -> None:
+def test_event_bus_dataclass_matches_ctor(config_cls: type, target_cls: type) -> None:
     """Every config dataclass field is a ctor kwarg on its bus.
 
     The original drift mode was the inverse — a ctor kwarg missing
@@ -83,9 +81,7 @@ def test_event_bus_dataclass_matches_ctor(
     ],
     ids=["memory", "redis", "postgres", "sqs"],
 )
-def test_factory_uses_from_config(
-    factory: object, target_cls: type
-) -> None:
+def test_factory_uses_from_config(factory: object, target_cls: type) -> None:
     """Every registry factory routes through ``Bus.from_config``.
 
     The structural correction: factories no longer enumerate kwargs
@@ -144,9 +140,7 @@ def test_registered_backends_are_audited() -> None:
     registered = set(event_bus_backends.list_keys())
     missing_audit = builtin_backends - registered
     new_unaudited = registered - builtin_backends
-    assert not missing_audit, (
-        f"Built-in backends no longer registered: {missing_audit}"
-    )
+    assert not missing_audit, f"Built-in backends no longer registered: {missing_audit}"
     if new_unaudited:
         pytest.fail(
             f"New backends registered without parity coverage: "

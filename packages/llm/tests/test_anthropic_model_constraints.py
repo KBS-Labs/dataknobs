@@ -62,8 +62,6 @@ def _reset_model_limits_cache() -> Any:
     anthropic_mod._DISCOVERED_REJECTED_PARAMS.clear()
 
 
-
-
 # ---------------------------------------------------------------------------
 # End-to-end reproduce-first: rejected params are dropped before the API call
 # ---------------------------------------------------------------------------
@@ -74,9 +72,7 @@ class TestModelFamilyParamRejection:
 
     async def test_temperature_dropped_for_claude_5(self) -> None:
         """Claude 5 rejects ``temperature`` → it must not reach the API."""
-        provider, client = _provider_with_capture(
-            "claude-sonnet-5", temperature=0.3
-        )
+        provider, client = _provider_with_capture("claude-sonnet-5", temperature=0.3)
         await provider.complete("hi")
         assert "temperature" not in client.captured_kwargs
 
@@ -87,25 +83,19 @@ class TestModelFamilyParamRejection:
         family markers, so it was silently forwarding ``temperature`` and
         paying a 400 round-trip until the marker was added.
         """
-        provider, client = _provider_with_capture(
-            "claude-mythos-5", temperature=0.3
-        )
+        provider, client = _provider_with_capture("claude-mythos-5", temperature=0.3)
         await provider.complete("hi")
         assert "temperature" not in client.captured_kwargs
 
     async def test_temperature_kept_for_claude_4_5(self) -> None:
         """Claude 4.5 still accepts ``temperature`` → forwarded unchanged."""
-        provider, client = _provider_with_capture(
-            "claude-haiku-4-5-20251001", temperature=0.3
-        )
+        provider, client = _provider_with_capture("claude-haiku-4-5-20251001", temperature=0.3)
         await provider.complete("hi")
         assert client.captured_kwargs["temperature"] == 0.3
 
     async def test_temperature_kept_for_claude_opus_4_8(self) -> None:
         """Opus 4.8 is not Claude 5 → ``temperature`` forwarded."""
-        provider, client = _provider_with_capture(
-            "claude-opus-4-8", temperature=0.5
-        )
+        provider, client = _provider_with_capture("claude-opus-4-8", temperature=0.5)
         await provider.complete("hi")
         assert client.captured_kwargs["temperature"] == 0.5
 
@@ -192,9 +182,7 @@ class TestValidateModel:
     async def test_bare_alias_matches_dated_snapshot(self) -> None:
         """A configured bare alias validates against its dated snapshot id."""
         provider, client = _provider_with_capture("claude-haiku-4-5")
-        client.models.models = [
-            _ScriptedModel("claude-haiku-4-5-20251001", 64000, 200000)
-        ]
+        client.models.models = [_ScriptedModel("claude-haiku-4-5-20251001", 64000, 200000)]
         assert await provider.validate_model() is True
 
     async def test_unlisted_model_does_not_validate(self) -> None:
@@ -217,16 +205,12 @@ class TestModelConstraintsResolution:
     """The resolved ``ModelConstraints`` surface and its config override."""
 
     def test_claude_5_detected_rejects_temperature(self) -> None:
-        provider = AnthropicProvider(
-            LLMConfig(provider="anthropic", model="claude-sonnet-5")
-        )
+        provider = AnthropicProvider(LLMConfig(provider="anthropic", model="claude-sonnet-5"))
         constraints = provider.get_constraints()
         assert "temperature" in constraints.rejected_params
 
     def test_mythos_5_detected_rejects_temperature(self) -> None:
-        provider = AnthropicProvider(
-            LLMConfig(provider="anthropic", model="claude-mythos-5")
-        )
+        provider = AnthropicProvider(LLMConfig(provider="anthropic", model="claude-mythos-5"))
         constraints = provider.get_constraints()
         assert "temperature" in constraints.rejected_params
 
@@ -240,9 +224,7 @@ class TestModelConstraintsResolution:
     def test_anthropic_never_accepts_inline_system(self) -> None:
         """Every Anthropic model hoists system messages (read by #187)."""
         for model in ("claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-3-opus"):
-            provider = AnthropicProvider(
-                LLMConfig(provider="anthropic", model=model)
-            )
+            provider = AnthropicProvider(LLMConfig(provider="anthropic", model=model))
             assert provider.get_constraints().accepts_inline_system is False
 
     def test_config_override_adds_rejected_param(self) -> None:
@@ -292,12 +274,8 @@ class TestPerCallModelOverride:
     """
 
     async def test_override_to_claude_5_drops_temperature_up_front(self) -> None:
-        provider, client = _provider_with_capture(
-            "claude-haiku-4-5-20251001", temperature=0.3
-        )
-        await provider.complete(
-            "hi", config_overrides={"model": "claude-sonnet-5"}
-        )
+        provider, client = _provider_with_capture("claude-haiku-4-5-20251001", temperature=0.3)
+        await provider.complete("hi", config_overrides={"model": "claude-sonnet-5"})
         assert client.captured_kwargs.get("model") == "claude-sonnet-5"
         assert "temperature" not in client.captured_kwargs
 
@@ -418,9 +396,7 @@ class TestMaxTokensCeilingClamp:
                 max_tokens=500,
             )
         )
-        runtime = provider.config.clone(
-            constraints={"max_tokens_ceiling": 100}
-        )
+        runtime = provider.config.clone(constraints={"max_tokens_ceiling": 100})
         params = provider._build_api_kwargs(runtime)
         assert params["max_tokens"] == 100
         # self.config (no ceiling) is unaffected → passes through.
@@ -433,9 +409,7 @@ class TestMaxTokensCeilingClamp:
         resolves to ``None`` → no clamp, identical to pre-clamp behavior. This
         documents the safe default for an unrecognized model.
         """
-        provider = AnthropicProvider(
-            LLMConfig(provider="anthropic", model="some-unknown-model")
-        )
+        provider = AnthropicProvider(LLMConfig(provider="anthropic", model="some-unknown-model"))
         assert provider.get_constraints().max_tokens_ceiling is None
 
 
@@ -457,9 +431,7 @@ class TestModelConstraintsDataclass:
 
     def test_with_overrides_none_rejected_params_clears(self) -> None:
         base = ModelConstraints(rejected_params=frozenset({"temperature"}))
-        assert base.with_overrides(
-            {"rejected_params": None}
-        ).rejected_params == frozenset()
+        assert base.with_overrides({"rejected_params": None}).rejected_params == frozenset()
 
     def test_with_overrides_absent_key_preserved(self) -> None:
         base = ModelConstraints(
@@ -567,9 +539,7 @@ class TestDynamicMaxTokensResolution:
         to the live value through ``complete`` → ``messages.create``. FAILS on
         pre-FU7 HEAD (no dynamic ceiling → no clamp → ``max_tokens`` stays 500000).
         """
-        provider, client = _provider_with_capture(
-            "claude-sonnet-5", max_tokens=500_000
-        )
+        provider, client = _provider_with_capture("claude-sonnet-5", max_tokens=500_000)
         client.models.models = [_ScriptedModel("claude-sonnet-5", 128000)]
         await provider.complete("hi")
         assert client.captured_kwargs["max_tokens"] == 128000
@@ -623,9 +593,7 @@ class TestDynamicMaxInputTokensResolution:
     async def test_input_and_output_share_one_fetch(self) -> None:
         """One Models-API poll populates both ceilings from the same model."""
         provider, client = _provider_with_capture("claude-sonnet-5")
-        client.models.models = [
-            _ScriptedModel("claude-sonnet-5", 128000, max_input_tokens=200000)
-        ]
+        client.models.models = [_ScriptedModel("claude-sonnet-5", 128000, max_input_tokens=200000)]
         await provider.refresh_model_limits()
         assert client.models.list_calls == 1
         constraints = provider.get_constraints()
@@ -635,9 +603,7 @@ class TestDynamicMaxInputTokensResolution:
     async def test_input_only_model_is_cached(self) -> None:
         """A model returning input-only (no output) still resolves its input."""
         provider, client = _provider_with_capture("claude-sonnet-5")
-        client.models.models = [
-            _ScriptedModel("claude-sonnet-5", None, max_input_tokens=200000)
-        ]
+        client.models.models = [_ScriptedModel("claude-sonnet-5", None, max_input_tokens=200000)]
         await provider.refresh_model_limits()
         constraints = provider.get_constraints()
         # Output falls back to the resource; input comes from the live value.
@@ -734,7 +700,9 @@ class TestModelLimitsTooling:
             _ScriptedModel("claude-in", None, max_input_tokens=200000),
         ]
         rc = model_limits.main(
-            ["--update"], client=client, resource_path=path,
+            ["--update"],
+            client=client,
+            resource_path=path,
             verified_date="2026-07-24",
         )
         assert rc == 0
@@ -797,27 +765,30 @@ class TestMatchCeilingUnification:
     """
 
     def test_exact_match_wins(self) -> None:
-        assert _claude_shared.match_ceiling(
-            "claude-x", [("claude-x", 42), ("claude", 7)]
-        ) == 42
+        assert _claude_shared.match_ceiling("claude-x", [("claude-x", 42), ("claude", 7)]) == 42
 
     def test_family_alias_short_key_in_long_request(self) -> None:
         # Resource-style: short family key matches a longer dated request.
-        assert _claude_shared.match_ceiling(
-            "claude-sonnet-5-20260514", [("claude-sonnet-5", 128000)]
-        ) == 128000
+        assert (
+            _claude_shared.match_ceiling("claude-sonnet-5-20260514", [("claude-sonnet-5", 128000)])
+            == 128000
+        )
 
     def test_bare_alias_request_in_long_dated_key(self) -> None:
         # Dynamic-style: bare request matches a longer dated cache key.
-        assert _claude_shared.match_ceiling(
-            "claude-sonnet-5", [("claude-sonnet-5-20260514", 200000)]
-        ) == 200000
+        assert (
+            _claude_shared.match_ceiling("claude-sonnet-5", [("claude-sonnet-5-20260514", 200000)])
+            == 200000
+        )
 
     def test_longest_family_wins_over_shorter_prefix(self) -> None:
-        assert _claude_shared.match_ceiling(
-            "claude-sonnet-5-x",
-            [("claude", 1), ("claude-sonnet-5", 128000)],
-        ) == 128000
+        assert (
+            _claude_shared.match_ceiling(
+                "claude-sonnet-5-x",
+                [("claude", 1), ("claude-sonnet-5", 128000)],
+            )
+            == 128000
+        )
 
     def test_no_match_is_none(self) -> None:
         assert _claude_shared.match_ceiling("gpt-4", [("claude", 1)]) is None
@@ -831,9 +802,7 @@ class TestMatchCeilingUnification:
         exact-only cache lookup → resolved to the resource value.
         """
         provider, client = _provider_with_capture("claude-sonnet-5")
-        client.models.models = [
-            _ScriptedModel("claude-sonnet-5-20260930", 200000)
-        ]
+        client.models.models = [_ScriptedModel("claude-sonnet-5-20260930", 200000)]
         await provider.refresh_model_limits()
         assert provider.get_constraints().max_tokens_ceiling == 200000
 
@@ -886,9 +855,7 @@ class TestAnthropicParamRemaps:
         """
         provider, _ = _provider_with_capture(
             "claude-sonnet-4-5",
-            model_profile_overrides={
-                "param_remaps": {"max_tokens": "max_completion_tokens"}
-            },
+            model_profile_overrides={"param_remaps": {"max_tokens": "max_completion_tokens"}},
         )
         constraints = provider.get_constraints()
         assert constraints.param_remaps == {"max_tokens": "max_completion_tokens"}

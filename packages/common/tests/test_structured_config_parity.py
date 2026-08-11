@@ -91,9 +91,7 @@ class TestAssertStructuredConfigConsumer:
             assert_structured_config_consumer(_NoConfigCls)
 
     def test_wrong_config_cls_type_raises(self) -> None:
-        with pytest.raises(
-            AssertionError, match="not a StructuredConfig subclass"
-        ):
+        with pytest.raises(AssertionError, match="not a StructuredConfig subclass"):
             assert_structured_config_consumer(_WrongConfigCls)
 
     def test_field_drift_raises(self) -> None:
@@ -103,9 +101,7 @@ class TestAssertStructuredConfigConsumer:
 
     def test_factory_delegation_passes(self) -> None:
         """``expected_factory`` arg accepts a from_config-delegating factory."""
-        assert_structured_config_consumer(
-            _GoodConsumer, expected_factory=_good_factory
-        )
+        assert_structured_config_consumer(_GoodConsumer, expected_factory=_good_factory)
 
     def test_factory_allowlist_drift_passes_when_kwargs_valid(self) -> None:
         """Allowlist factory only flagged when it passes invalid kwargs.
@@ -115,9 +111,7 @@ class TestAssertStructuredConfigConsumer:
         contract is "factories that pass kwargs unknown to the ctor"
         — not "factories that don't use ``from_config``."
         """
-        assert_structured_config_consumer(
-            _GoodConsumer, expected_factory=_allowlist_factory
-        )
+        assert_structured_config_consumer(_GoodConsumer, expected_factory=_allowlist_factory)
 
 
 class _PlainMixinBase:
@@ -161,9 +155,7 @@ class _GoodAsync(StructuredConfigConsumer[_GoodCfg]):
     CONFIG_CLS: ClassVar[type[_GoodCfg]] = _GoodCfg
 
     @classmethod
-    async def from_config_async(
-        cls, config: Mapping[str, object] | StructuredConfig
-    ) -> Self:
+    async def from_config_async(cls, config: Mapping[str, object] | StructuredConfig) -> Self:
         obj = cls(cls._coerce_config(config))
         await obj._ainit()
         return obj
@@ -175,9 +167,7 @@ class _BadAsync(StructuredConfigConsumer[_GoodCfg]):
     CONFIG_CLS: ClassVar[type[_GoodCfg]] = _GoodCfg
 
     @classmethod
-    async def from_config_async(
-        cls, config: Mapping[str, object] | StructuredConfig
-    ) -> Self:
+    async def from_config_async(cls, config: Mapping[str, object] | StructuredConfig) -> Self:
         return cls(config)  # type: ignore[arg-type]
 
 

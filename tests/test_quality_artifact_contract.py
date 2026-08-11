@@ -24,6 +24,8 @@ import ast
 import json
 import re
 import subprocess
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from tests._workspace import ROOT
@@ -115,7 +117,9 @@ def test_consumer_does_not_let_a_warning_shadow_the_verdict():
     package is also dirty.
     """
     lines = CONSUMER.read_text(encoding="utf-8").splitlines()
-    branches = [ln.strip() for ln in lines if "HASH_WARNING" in ln and re.match(r"^\s*(el)?if ", ln)]
+    branches = [
+        ln.strip() for ln in lines if "HASH_WARNING" in ln and re.match(r"^\s*(el)?if ", ln)
+    ]
     assert branches, (
         f"{CONSUMER.name} no longer branches on HASH_WARNING at all — if the "
         "variable was renamed, update this guard rather than deleting it"
@@ -248,10 +252,7 @@ def test_no_committed_artifact_is_one_gitignore_excludes():
     while the rule excluding it sat right there. Reproduced with ``git add -f``:
     all twenty artifact guards passed over it.
 
-    Only this direction is asserted. The other — every allowlisted name is
-    tracked — is legitimately false: ``lint-report.json`` is un-ignored and
-    never produced, and un-ignoring a file the gate does not always write is a
-    reasonable thing to do.
+    The other direction is asserted separately, below.
     """
     tracked = _tracked_artifacts(ROOT)
     assert tracked, (
@@ -267,6 +268,172 @@ def test_no_committed_artifact_is_one_gitignore_excludes():
         + "\n\nEither add a '!' un-ignore rule for each, if it belongs in the "
         "repository, or 'git rm --cached' it, if it does not. Leaving it is the "
         "state that costs the most: it stays committed regardless of the rule."
+    )
+
+
+def _un_ignored_artifact_names() -> list[str]:
+    """Every ``.quality-artifacts/`` path ``.gitignore`` un-ignores, in order."""
+    prefix = "!.quality-artifacts/"
+    return [
+        line.strip().removeprefix("!")
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(prefix)
+    ]
+
+
+def test_every_un_ignored_artifact_is_one_something_writes():
+    """An allowance with no producer is a slot, and the slot is signed.
+
+    The reverse of the guard above, and it used to be legitimately false, which
+    is how it went unasserted: ``lint-report.json`` was un-ignored for a writer
+    that never existed. A reader in ``bin/diagnose-quality-failures.sh``, an
+    allowance here, and nothing in between — so the lint half of that tool
+    returned at its first line on every run it ever made, reporting nothing and
+    looking exactly like a run with no lint findings.
+
+    The cost is not the dead read. It is that the signature enumerates this
+    directory by glob — ``git ls-files --cached --others --exclude-standard --
+    '*.json' '*.xml'`` — so an un-ignored name is not merely permitted to be
+    committed, it joins *what CI attests* the moment anything writes it. An
+    allowance nobody is maintaining is a place a future write lands in the
+    signed set without a decision.
+
+    Tracked is the test for "something writes it", because the gate writes all
+    six on every run and commits them. A file the gate wrote only sometimes
+    would fail here — correctly: it would be a name that changes the attested
+    set depending on the run, which is the condition the signature exists to
+    detect and the last thing to encode in an ignore rule.
+    """
+    allowed = _un_ignored_artifact_names()
+    assert allowed, (
+        "no '!' un-ignore rules found under .quality-artifacts/ — the parse "
+        "broke, and this guard would pass by checking nothing"
+    )
+
+    tracked = set(_tracked_artifacts(ROOT))
+    orphans = [name for name in allowed if name not in tracked]
+
+    assert not orphans, (
+        ".gitignore un-ignores these, and git tracks none of them:\n"
+        + "\n".join(f"  - {name}" for name in orphans)
+        + "\n\nEither something should be writing and committing it — in which "
+        "case the producer is missing — or the allowance is dead and should be "
+        "removed. Leaving it is the state that costs the most: the signature "
+        "enumerates this directory by glob, so the name is a slot a future "
+        "write joins the attested set through, without anyone deciding to."
+    )
+
+
+def _summary_check_names() -> set[str]:
+    """The ``checks`` keys ``run-quality-checks.sh`` writes into the summary.
+
+    Gathered from the ``record_check`` calls, because that is where each name is
+    stated now: the summary is assembled from records the checks write as they
+    run, so there is no longer one block that names all eight. The name is the
+    call's first argument, so the definition line — ``record_check() {`` — does
+    not match, having no space after the name.
+    """
+    source = (ROOT / "bin" / "run-quality-checks.sh").read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*record_check\s+([a-z_]+)\b", source, re.MULTILINE))
+
+
+#: How each reader spells a reference to one check. Data, because the two do not
+#: spell it the same way and each does it two ways.
+#:
+#: ``("regex", ...)`` captures the name in group 1. ``("case", ...)`` names the
+#: subject line of a ``case`` over a check name and takes its arms, which
+#: alternate (``unit_tests|integration_tests|validation)``). Keyed on the subject
+#: rather than matched as bare arms: every shell ``case`` has arms, and a
+#: pattern that took all of them would read ``yes)`` as a check name.
+#:
+#: Every idiom must match something. An entry matching nothing is the state this
+#: table was found in — it held one pattern, ``\\.checks\\.<name>``, which both
+#: readers had stopped using when they moved to the ``\\x1f`` projection, so the
+#: comparison ran against an empty set on both files while both went on naming
+#: checks by literal. A dead pattern is worse than a missing one, because the
+#: guard still reports green.
+CHECK_REFERENCES = {
+    "diagnose-quality-failures.sh": (
+        ("regex", r"\bcheck_field\s+([a-z_]+)\b"),
+        ("case", 'case "$name" in'),
+    ),
+    "validate-quality-artifacts.sh": (
+        ("regex", r'\*"\s+([a-z_]+)\s+"\*\)'),
+        ("case", 'case " $CHECKS_SEEN " in'),
+    ),
+}
+
+
+def _case_arm_names(code: str, subject: str) -> set[str]:
+    """Names listed in the arms of a ``case`` over a check name."""
+    found: set[str] = set()
+    lines = code.splitlines()
+    for index, line in enumerate(lines):
+        if subject not in line:
+            continue
+        for arm in lines[index + 1 :]:
+            if arm.strip().startswith("esac"):
+                break
+            match = re.match(r"\s*\*?\"?\s*([a-z_|]+)\s*\"?\*?\)", arm)
+            if match:
+                found.update(match.group(1).split("|"))
+    return found
+
+
+def test_no_reader_names_a_check_the_summary_does_not_record():
+    """A reader asking for a key nobody writes gets a value, and it is wrong.
+
+    ``jq -r '.checks.lint.status'`` on a summary with no ``lint`` check prints
+    ``null`` and exits 0 — so the read succeeds, the value is not ``"pass"``,
+    and the caller renders a warning. ``bin/diagnose-quality-failures.sh`` did
+    that for ``lint`` and ``style``, neither of which the producer has ever
+    emitted, and showed two amber rows on every run it ever made. A row that is
+    always amber carries no information, and it costs more than a missing row:
+    it is indistinguishable from one that is amber for a reason.
+
+    The same shape as the ``lint-report.json`` allowance and the
+    permanently-mismatching signature before it — a reader, no writer, and a
+    result too plausible to look wrong.
+
+    Comment lines are skipped. This scans source text, so without that it also
+    matches the note left behind at a site where the defect was *removed*,
+    making the guard fire on the sentence explaining why it no longer can. A
+    guard that punishes describing the bug it guards against gets the
+    description deleted, which is the opposite of what it is for.
+
+    The idioms are enumerated in ``CHECK_REFERENCES``, and each is asserted to
+    match something. Non-vacuity per *idiom* rather than per file: when one of
+    two dies the other keeps the file's set non-empty, so a check-per-file
+    assertion passes while half the reader goes unexamined — which is how the
+    single ``.checks.<name>`` pattern came to match neither reader without
+    anyone noticing.
+    """
+    emitted = _summary_check_names()
+    assert emitted, "no check names extracted from the gate's record_check calls"
+
+    unknown: list[str] = []
+    for name, idioms in sorted(CHECK_REFERENCES.items()):
+        code = "\n".join(
+            line
+            for line in (ROOT / "bin" / name).read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for kind, spec in idioms:
+            referenced = (
+                set(re.findall(spec, code)) if kind == "regex" else _case_arm_names(code, spec)
+            )
+            assert referenced, (
+                f"{name}: the {kind} idiom {spec!r} matches nothing, so this "
+                "guard reads that half of the file as clean without looking at "
+                "it. Re-point the entry at how the reader names checks now."
+            )
+            unknown += [f"{name}: {key}" for key in sorted(referenced - emitted)]
+
+    assert not unknown, (
+        "these read a check the summary does not record, so they read null and "
+        "render it as a verdict:\n"
+        + "\n".join(f"  - {u}" for u in unknown)
+        + f"\n\n  Recorded checks: {sorted(emitted)}"
     )
 
 
@@ -303,8 +470,7 @@ def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path):
     probe = [".quality-artifacts/kept.json", ".quality-artifacts/dropped.xml"]
 
     assert _excluded_by_gitignore(tmp_path, probe) == [".quality-artifacts/dropped.xml"], (
-        "with --no-index, check-ignore must report the tracked-and-ignored file "
-        "and only that one"
+        "with --no-index, check-ignore must report the tracked-and-ignored file and only that one"
     )
     assert _excluded_by_gitignore(tmp_path, probe, no_index=False) == [], (
         "without --no-index, check-ignore reports nothing for tracked paths — "
@@ -344,7 +510,9 @@ def test_the_committed_style_artifact_is_a_result_and_not_an_accident():
             f"captured as the result:\n{raw[:400]}"
         ) from exc
 
-    assert isinstance(findings, list), f"{artifact.name} holds {type(findings).__name__}, not a list"
+    assert isinstance(findings, list), (
+        f"{artifact.name} holds {type(findings).__name__}, not a list"
+    )
 
     unreadable = sorted(
         {
@@ -401,13 +569,307 @@ def test_the_merge_driver_gitattributes_names_is_actually_defined():
     )
 
     setup = GIT_SETUP.read_text(encoding="utf-8")
-    undefined = sorted(
-        driver for driver in named if f'"merge.{driver}.driver"' not in setup
-    )
+    undefined = sorted(driver for driver in named if f'"merge.{driver}.driver"' not in setup)
     assert not undefined, (
         f"{GITATTRIBUTES.name} uses merge drivers {undefined} that "
         f"{GIT_SETUP.name} never configures. Git falls back to a text merge "
         "without warning, so the attribute would do nothing at all."
+    )
+
+
+GATE = ROOT / "bin" / "run-quality-checks.sh"
+
+#: The scripts the gate runs to *check* something, by the basename it invokes
+#: them under. Each must match a line or this guard measures "before the first
+#: check" against a boundary that is not there — the per-entry non-vacuity that
+#: ``CHECK_REFERENCES`` above exists to enforce, for the same reason.
+#:
+#: Service management and package sync are deliberately absent: they run before
+#: any check and read no verdict, so including them would pin the hashes ahead
+#: of setup rather than ahead of checking.
+CHECKER_INVOCATIONS = (
+    "lint-workflows.sh",
+    "lint-shell.sh",
+    "validate.sh",
+    "docs-checks.sh",
+    "test.sh",
+)
+
+
+def _gate_lines() -> list[str]:
+    return GATE.read_text(encoding="utf-8").splitlines()
+
+
+def _first_matching(lines: list[str], predicate: Callable[[str], bool]) -> int:
+    """1-based line number of the first match, or -1."""
+    return next((n for n, line in enumerate(lines, 1) if predicate(line.strip())), -1)
+
+
+def _last_matching(lines: list[str], predicate: Callable[[str], bool]) -> int:
+    """1-based line number of the last match, or -1."""
+    return next(
+        (n for n, line in reversed(list(enumerate(lines, 1))) if predicate(line.strip())),
+        -1,
+    )
+
+
+def test_the_recorded_hashes_describe_the_tree_that_was_checked() -> None:
+    """The attestation must hash what ran, not whatever is on disk at the end.
+
+    The hashes were computed after every check had finished, so the recorded
+    digest described the tree at the *end* of the run rather than the tree the
+    checks read. Walk it through: a file is checked at minute 1 holding content
+    A, edited to B at minute 2, and the run ends and hashes it as B. The
+    validator later compares disk (B) against recorded (B), they agree, and the
+    artifact attests content that no check ever saw.
+
+    Hashing at the start makes that edit surface as the ordinary "Package
+    content has changed since quality checks were run" the validator already
+    prints — no new mechanism, no new failure mode, and it fails closed, which
+    the end-hash version structurally cannot.
+
+    The re-check is the other half: hashing at both ends and requiring equality
+    is what lets the gate say *the tree moved while I was reading it* rather
+    than silently attesting a mixture. Note what it is — an equality of two
+    hashes, not an ordering of two clocks. The ``.run-in-progress`` marker
+    already carries a start timestamp, so comparing file mtimes against it
+    would be free; but mtime is settable, checkouts and rebases rewrite it, and
+    editors and formatters rewrite it on saves that change nothing. More
+    *sensitive* and less *reliable*, and a check that fails spuriously gets
+    suppressed — which is the whole subject of G4.
+
+    One case stays open and is recorded rather than closed: edit A→B→A entirely
+    within one run and both hashes agree while some check may have seen B. Only
+    a timestamp catches that, and it is the rarest case at the highest
+    flakiness cost.
+
+    Structural rather than behavioural, for the reason the marker guard in
+    ``test_quality_diagnostics.py`` is: exercising it for real means running
+    the gate from inside the gate's own test suite.
+    """
+    lines = _gate_lines()
+
+    def computes(line: str) -> bool:
+        return "package-hashes.py" in line and ("compute" in line)
+
+    first_hash = _first_matching(lines, computes)
+    assert first_hash > 0, (
+        f"nothing in {GATE.name} computes content hashes — if the command was "
+        "renamed, re-point this guard rather than deleting it"
+    )
+
+    # The earliest point at which the tree has been read for a verdict. Two
+    # independent sources, because either alone can be renamed out from under
+    # this: a checker invocation, and the first outcome a check records.
+    def invokes(basename: str) -> Callable[[str], bool]:
+        """A predicate for one checker, bound rather than captured.
+
+        A lambda closing over the loop variable would read whatever it held at
+        call time; a default argument would fix that but leaves the type
+        uninferable. A named factory says the same thing and stays checkable.
+        """
+        return lambda line: f"/{basename}" in line
+
+    boundaries: list[int] = []
+    for basename in CHECKER_INVOCATIONS:
+        found = _first_matching(lines, invokes(basename))
+        assert found > 0, (
+            f"{GATE.name} no longer invokes {basename}, so 'before the first "
+            "check' is being measured against a boundary that is not there"
+        )
+        boundaries.append(found)
+
+    first_record = _first_matching(
+        lines, lambda ln: re.match(r"record_check\s+[a-z_]+\b", ln) is not None
+    )
+    assert first_record > 0, f"no record_check calls found in {GATE.name}"
+    boundaries.append(first_record)
+
+    first_check = min(boundaries)
+    assert first_hash < first_check, (
+        f"{GATE.name} computes content hashes at line {first_hash}, after the "
+        f"first check reads the tree at line {first_check}. The recorded digest "
+        "then describes the tree at the end of the run rather than the one the "
+        "checks ran against, and an edit made mid-run is attested instead of "
+        "reported. Move the computation above the first check."
+    )
+
+    # And the far end: recompute, compare, refuse to attest a mixture.
+    recheck = _last_matching(lines, lambda ln: "package-hashes.py" in ln and "changed-since" in ln)
+    summary = _first_matching(lines, lambda ln: 'quality-summary.py" build' in ln)
+    last_record = _last_matching(
+        lines, lambda ln: re.match(r"record_check\s+[a-z_]+\b", ln) is not None
+    )
+    assert summary > 0, "the summary write moved; this guard needs its new shape"
+    assert recheck > 0, (
+        f"{GATE.name} never re-checks the hashes it recorded at line "
+        f"{first_hash}. Without it a tree edited mid-run is attested with the "
+        "start digest and no one is told the two halves disagree."
+    )
+    assert last_record < recheck < summary, (
+        f"the re-check sits at line {recheck}, outside the window between the "
+        f"last check ({last_record}) and the summary write ({summary}). Before "
+        "the last check it cannot see an edit made during one; after the "
+        "summary it reports on an artifact already written."
+    )
+
+    # The re-check answers three ways and the gate has to keep two of them
+    # apart. A bare ``if !`` collapses "the tree moved" into "the comparison
+    # could not be made", and the second then prints the first's message over
+    # an empty list of names — a failure announced with nothing named under it,
+    # which is the shape the documentation rows and the diagnose tool were both
+    # found in. Reading the code into a variable is what makes the two branches
+    # expressible at all, so that is what this asserts.
+    region = "\n".join(lines[recheck - 1 : summary - 1])
+    captured = re.search(r"(\w+)=\$\?", region)
+    assert captured, (
+        f"{GATE.name} never captures the re-check's exit code between lines "
+        f"{recheck} and {summary}, so it cannot tell 'the tree moved' from "
+        "'the comparison could not be made'. The second would then be reported "
+        "as the first, with no names under it."
+    )
+    variable = captured.group(1)
+    tested = re.findall(r'\[\s*"\$' + re.escape(variable) + r'"\s*-(?:eq|ne)\s*(\d+)', region)
+    assert len(set(tested)) > 1, (
+        f"{GATE.name} captures the re-check's exit code into ${variable} and "
+        f"then tests it against {sorted(set(tested))} — one outcome, so the "
+        "capture buys nothing. Branch on 'moved' separately from every other "
+        "non-zero, or the unusable-document case is reported as a changed tree."
+    )
+
+
+def test_the_gate_refuses_to_sign_over_an_empty_digest_set() -> None:
+    """A failed hash computation must not become a comparison that passes.
+
+    Both computations fall back to ``{}`` when they fail, and an empty document
+    compares clean against anything — so in the gate that fallback would put a
+    signature on the far side of a comparison that never happened. The
+    diagnostics tier attests nothing, so there the same fallback is a tolerable
+    degradation and the run should finish; the refusal is therefore gated on
+    ``--emit-artifacts`` rather than applied to both roles.
+
+    Structural, like the ordering guard above, because exercising it for real
+    means running the gate from inside the gate's own test suite. What it
+    protects against is deletion: the refusal is a compensating control whose
+    absence is silent, and this program has already removed one of those on the
+    strength of its own docstring.
+    """
+    lines = _gate_lines()
+
+    first_hash = _first_matching(lines, lambda ln: "package-hashes.py" in ln and "compute" in ln)
+    assert first_hash > 0, "nothing computes content hashes; re-point this guard"
+
+    refusal = _first_matching(lines, lambda ln: re.search(r'=\s*"\{\}"\s*\]', ln) is not None)
+    assert refusal > first_hash, (
+        "nothing in the gate compares a hash document against the empty "
+        f"fallback after computing it at line {first_hash}. Without that, a "
+        "failed computation is signed over as though it had succeeded — the "
+        "comparison passes because there is nothing in it."
+    )
+
+    guarded = _last_matching(lines[:refusal], lambda ln: 'EMIT_ARTIFACTS" = "yes"' in ln)
+    assert guarded > first_hash, (
+        f"the empty-digest refusal at line {refusal} is not inside an "
+        "--emit-artifacts branch, so it would also abort the diagnostics tier, "
+        "which signs nothing and has no artifact to protect."
+    )
+
+
+def _hashes(command: str) -> str:
+    """One of the producer's hash documents, as it prints it."""
+    return subprocess.run(
+        [sys.executable, str(PRODUCER), command],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _changed_since(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run the re-check the gate runs, over documents the caller supplies."""
+    return subprocess.run(
+        [sys.executable, str(PRODUCER), "changed-since", *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_still_tree_re_checks_clean() -> None:
+    """The ordinary run: the digests taken at the start still hold at the end.
+
+    Non-vacuity for the three tests below, and the case that decides whether
+    this mechanism is usable at all. A re-check that reported movement over an
+    untouched tree would fail every run, and a check that fails spuriously is
+    one that gets suppressed.
+    """
+    result = _changed_since(
+        "--packages", _hashes("compute"), "--workspace", _hashes("compute-workspace")
+    )
+    assert result.returncode == 0, (
+        "the re-check reported movement over a tree nothing touched:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+    assert not result.stdout.strip(), f"expected no names, got:\n{result.stdout}"
+
+
+def test_a_digest_that_stopped_describing_the_tree_is_named() -> None:
+    """The whole point: a recorded digest the tree has moved out from under.
+
+    Mutating a recorded value rather than editing a file, because the two are
+    indistinguishable to this comparison and only one of them leaves the
+    developer's working tree dirty when the assertion fails.
+    """
+    recorded = json.loads(_hashes("compute"))
+    package = next(name for name in recorded if name != "_algorithm_version")
+    recorded[package] = "0" * 64
+
+    result = _changed_since("--packages", json.dumps(recorded))
+
+    assert result.returncode == 1, (
+        f"a moved digest exited {result.returncode}, so the gate would have "
+        f"attested it:\n{result.stdout}{result.stderr}"
+    )
+    assert result.stdout.split() == [f"packages/{package}"], (
+        f"expected the moved package named on its own, got:\n{result.stdout}"
+    )
+
+
+def test_a_half_with_no_recorded_digests_is_reported_rather_than_passed() -> None:
+    """An absent digest set must not read as a verified one.
+
+    The gate falls back to ``{}`` when a hash computation fails, so this is
+    reachable rather than hypothetical. Returning "nothing moved" for it would
+    be this repository's own defect class in a new place: an absence rendered
+    as a pass, and the exit code says pass either way — so what distinguishes
+    them has to be said out loud.
+    """
+    result = _changed_since("--packages", "{}", "--workspace", "{}")
+
+    assert result.returncode == 0, "an empty document is not itself a failure"
+    assert not result.stdout.strip(), "nothing moved, so nothing should be named"
+    for half in ("packages", "workspace"):
+        assert half in result.stderr, (
+            f"no {half} digests were recorded and nothing said so — the run "
+            f"reads as re-checked:\n{result.stderr}"
+        )
+
+
+def test_an_unusable_document_does_not_read_as_a_moved_tree() -> None:
+    """Exit 2, not 1: the two send a developer to different programs.
+
+    "The tree moved" means re-run the gate. "The comparison could not be made"
+    means the gate handed this something unusable, and telling them to re-run
+    would be advice about the wrong program — they would do it, get the same
+    result, and have no more information than before.
+    """
+    result = _changed_since("--packages", "this is not json")
+
+    assert result.returncode == 2, (
+        f"an unreadable document exited {result.returncode}; 1 would have been "
+        "reported to the developer as a tree that changed under them"
     )
 
 

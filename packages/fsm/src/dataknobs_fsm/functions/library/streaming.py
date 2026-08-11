@@ -24,7 +24,7 @@ class ChunkReader(ITransformFunction):
         format: str = "auto",  # "auto", "json", "csv", "lines"
     ):
         """Initialize the chunk reader.
-        
+
         Args:
             source: Data source (file path or stream source).
             chunk_size: Number of records per chunk.
@@ -36,28 +36,28 @@ class ChunkReader(ITransformFunction):
 
     async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by reading next chunk from source.
-        
+
         Args:
             data: Input data (may contain chunk state).
-            
+
         Returns:
             Data with next chunk of records.
         """
         # Get or initialize chunk state
         chunk_state = data.get("_chunk_state", {})
-        
+
         if isinstance(self.source, str):
             # File source
             file_path = Path(self.source)
             # Offload the existence stat — it is blocking disk I/O.
             if not await asyncio.to_thread(file_path.exists):
                 raise TransformError(f"File not found: {self.source}")
-            
+
             # Determine format
             format = self.format
             if format == "auto":
                 format = self._detect_format(file_path)
-            
+
             # Read chunk based on format
             if format == "json":
                 chunk = await self._read_json_chunk(file_path, chunk_state)
@@ -67,11 +67,11 @@ class ChunkReader(ITransformFunction):
                 chunk = await self._read_lines_chunk(file_path, chunk_state)
             else:
                 raise TransformError(f"Unsupported format: {format}")
-        
+
         else:
             # Stream source
             chunk = await self._read_stream_chunk(self.source, chunk_state)
-        
+
         return {
             **data,
             "chunk": chunk["records"],
@@ -94,9 +94,7 @@ class ChunkReader(ITransformFunction):
         source_str = str(self.source) if isinstance(self.source, str) else "stream"
         return f"Read {self.chunk_size} records from {source_str} in {self.format} format"
 
-    async def _read_json_chunk(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _read_json_chunk(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Read chunk from JSON file.
 
         The whole bounded read runs on a worker thread via
@@ -105,9 +103,7 @@ class ChunkReader(ITransformFunction):
         """
         return await asyncio.to_thread(self._read_json_chunk_sync, file_path, state)
 
-    def _read_json_chunk_sync(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _read_json_chunk_sync(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous JSON chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
 
@@ -116,7 +112,7 @@ class ChunkReader(ITransformFunction):
             data = json.load(f)
 
         if isinstance(data, list):
-            chunk = data[offset:offset + self.chunk_size]
+            chunk = data[offset : offset + self.chunk_size]
             has_more = offset + self.chunk_size < len(data)
             new_offset = offset + len(chunk)
         else:
@@ -129,16 +125,14 @@ class ChunkReader(ITransformFunction):
                 chunk = []
                 has_more = False
                 new_offset = offset
-        
+
         return {
             "records": chunk,
             "has_more": has_more,
             "state": {"offset": new_offset},
         }
 
-    async def _read_csv_chunk(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _read_csv_chunk(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Read chunk from CSV file.
 
         The bounded read runs on a worker thread via
@@ -147,42 +141,38 @@ class ChunkReader(ITransformFunction):
         """
         return await asyncio.to_thread(self._read_csv_chunk_sync, file_path, state)
 
-    def _read_csv_chunk_sync(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _read_csv_chunk_sync(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous CSV chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
         records = []
 
         with open(file_path) as f:
             reader = csv.DictReader(f)
-            
+
             # Skip to offset
             for _ in range(offset):
                 try:
                     next(reader)
                 except StopIteration:
                     break
-            
+
             # Read chunk
             for _ in range(self.chunk_size):
                 try:
                     records.append(next(reader))
                 except StopIteration:
                     break
-        
+
         has_more = len(records) == self.chunk_size
         new_offset = offset + len(records)
-        
+
         return {
             "records": records,
             "has_more": has_more,
             "state": {"offset": new_offset},
         }
 
-    async def _read_lines_chunk(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _read_lines_chunk(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Read chunk of lines from file.
 
         The bounded read runs on a worker thread via
@@ -191,9 +181,7 @@ class ChunkReader(ITransformFunction):
         """
         return await asyncio.to_thread(self._read_lines_chunk_sync, file_path, state)
 
-    def _read_lines_chunk_sync(
-        self, file_path: Path, state: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _read_lines_chunk_sync(self, file_path: Path, state: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous line chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
         records = []
@@ -203,17 +191,17 @@ class ChunkReader(ITransformFunction):
             for _ in range(offset):
                 if not f.readline():
                     break
-            
+
             # Read chunk
             for _ in range(self.chunk_size):
                 line = f.readline()
                 if not line:
                     break
                 records.append({"line": line.strip()})
-        
+
         has_more = len(records) == self.chunk_size
         new_offset = offset + len(records)
-        
+
         return {
             "records": records,
             "has_more": has_more,
@@ -225,12 +213,12 @@ class ChunkReader(ITransformFunction):
     ) -> Dict[str, Any]:
         """Read chunk from stream source."""
         records = []
-        
+
         async for record in source.read(self.chunk_size):
             records.append(record)
-        
+
         has_more = len(records) == self.chunk_size
-        
+
         return {
             "records": records,
             "has_more": has_more,
@@ -249,7 +237,7 @@ class RecordParser(ITransformFunction):
         options: Dict[str, Any] | None = None,
     ):
         """Initialize the record parser.
-        
+
         Args:
             format: Format to parse ("json", "csv", "xml", "yaml").
             field: Field containing raw data to parse.
@@ -263,17 +251,17 @@ class RecordParser(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by parsing records.
-        
+
         Args:
             data: Input data containing raw records.
-            
+
         Returns:
             Data with parsed records.
         """
         raw_data = data.get(self.field)
         if raw_data is None:
             return data
-        
+
         try:
             if self.format == "json":
                 parsed = self._parse_json(raw_data)
@@ -285,16 +273,14 @@ class RecordParser(ITransformFunction):
                 parsed = self._parse_xml(raw_data)
             else:
                 raise TransformError(f"Unsupported format: {self.format}")
-            
+
             return {
                 **data,
                 self.output_field: parsed,
             }
-        
+
         except Exception as e:
-            raise TransformError(
-                f"Failed to parse {self.format} ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Failed to parse {self.format} ({type(e).__name__})") from e
 
     def _parse_json(self, raw: Union[str, bytes]) -> Any:
         """Parse JSON data."""
@@ -306,14 +292,16 @@ class RecordParser(ITransformFunction):
         """Parse CSV data."""
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
-        
+
         import io
+
         reader = csv.DictReader(io.StringIO(raw), **self.options)
         return list(reader)
 
     def _parse_yaml(self, raw: Union[str, bytes]) -> Any:
         """Parse YAML data."""
         import yaml
+
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         return yaml.safe_load(raw)
@@ -321,9 +309,10 @@ class RecordParser(ITransformFunction):
     def _parse_xml(self, raw: Union[str, bytes]) -> Dict[str, Any]:
         """Parse XML data."""
         import xml.etree.ElementTree as ET
+
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
-        
+
         root = ET.fromstring(raw)
         return self._xml_to_dict(root)
 
@@ -369,7 +358,7 @@ class FileAppender(ITransformFunction):
         create_if_missing: bool = True,
     ):
         """Initialize the file appender.
-        
+
         Args:
             file_path: Path to file to append to.
             format: Format to write data in.
@@ -386,28 +375,28 @@ class FileAppender(ITransformFunction):
 
     async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by appending to file.
-        
+
         Args:
             data: Input data containing records to append.
-            
+
         Returns:
             Data with append status.
         """
         records = data.get(self.field)
         if records is None:
             return data
-        
+
         # Add to buffer
         if isinstance(records, list):
             self._buffer.extend(records)
         else:
             self._buffer.append(records)
-        
+
         # Write if buffer is full
         written = 0
         if len(self._buffer) >= self.buffer_size:
             written = await self._write_buffer()
-        
+
         return {
             **data,
             "appended_count": written,
@@ -443,18 +432,18 @@ class FileAppender(ITransformFunction):
             if self.file_path.exists() and self.file_path.stat().st_size > 0:
                 with open(self.file_path) as f:
                     existing = json.load(f)
-            
+
             existing.extend(self._buffer)
-            
+
             with open(self.file_path, "w") as f:
                 json.dump(existing, f, indent=2)
-        
+
         elif self.format == "csv":
             # Append to CSV
             import csv
-            
+
             file_exists = self.file_path.exists() and self.file_path.stat().st_size > 0
-            
+
             with open(self.file_path, "a", newline="") as f:
                 if self._buffer and isinstance(self._buffer[0], dict):
                     writer = csv.DictWriter(f, fieldnames=self._buffer[0].keys())
@@ -464,7 +453,7 @@ class FileAppender(ITransformFunction):
                 else:
                     writer = csv.writer(f)
                     writer.writerows(self._buffer)
-        
+
         elif self.format == "lines":
             # Append lines
             with open(self.file_path, "a") as f:
@@ -473,7 +462,7 @@ class FileAppender(ITransformFunction):
                         f.write(json.dumps(record) + "\n")
                     else:
                         f.write(str(record) + "\n")
-        
+
         else:
             raise TransformError(f"Unsupported format: {self.format}")
 
@@ -496,7 +485,7 @@ class StreamAggregator(ITransformFunction):
         window_size: int | None = None,
     ):
         """Initialize the stream aggregator.
-        
+
         Args:
             aggregations: Dictionary of aggregation specifications.
                          Keys are output field names, values are:
@@ -512,16 +501,16 @@ class StreamAggregator(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by aggregating stream.
-        
+
         Args:
             data: Input data (single record or batch).
-            
+
         Returns:
             Data with aggregation results.
         """
         # Add to window/groups
         records = data.get("records", [data])
-        
+
         if self.group_by:
             # Group-based aggregation
             for record in records:
@@ -529,11 +518,11 @@ class StreamAggregator(ITransformFunction):
                 if key not in self._groups:
                     self._groups[key] = []
                 self._groups[key].append(record)
-                
+
                 # Apply window size per group
                 if self.window_size and len(self._groups[key]) > self.window_size:
-                    self._groups[key] = self._groups[key][-self.window_size:]
-            
+                    self._groups[key] = self._groups[key][-self.window_size :]
+
             # Compute aggregations per group
             results = []
             for key, group_records in self._groups.items():
@@ -541,42 +530,40 @@ class StreamAggregator(ITransformFunction):
                 for output_field, agg_spec in self.aggregations.items():
                     result[output_field] = self._compute_aggregation(group_records, agg_spec)
                 results.append(result)
-            
+
             return {**data, "aggregations": results}
-        
+
         else:
             # Global aggregation
             self._window.extend(records)
-            
+
             # Apply window size
             if self.window_size and len(self._window) > self.window_size:
-                self._window = self._window[-self.window_size:]
-            
+                self._window = self._window[-self.window_size :]
+
             # Compute aggregations
             result = {}
             for output_field, agg_spec in self.aggregations.items():
                 result[output_field] = self._compute_aggregation(self._window, agg_spec)
-            
+
             return {**data, "aggregation": result}
 
-    def _compute_aggregation(
-        self, records: List[Dict[str, Any]], spec: Dict[str, Any]
-    ) -> Any:
+    def _compute_aggregation(self, records: List[Dict[str, Any]], spec: Dict[str, Any]) -> Any:
         """Compute a single aggregation."""
         func = spec["function"]
         field = spec.get("field")
-        
+
         if func == "count":
             return len(records)
-        
+
         if not field:
             raise TransformError(f"Field required for {func} aggregation")
-        
+
         values: List[Any] = [r.get(field) for r in records if r.get(field) is not None]
-        
+
         if not values:
             return None
-        
+
         if func == "sum":
             return sum(values)  # type: ignore
         elif func == "avg":

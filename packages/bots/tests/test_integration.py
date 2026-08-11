@@ -112,9 +112,7 @@ class TestDynaBotWithKnowledgeBase:
         }
 
         bot = await DynaBot.from_config(config)
-        context = BotContext(
-            conversation_id="conv-no-kb", client_id="test-client"
-        )
+        context = BotContext(conversation_id="conv-no-kb", client_id="test-client")
 
         # Should work fine without knowledge base
         response = await bot.chat("Hello", context)

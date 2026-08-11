@@ -94,13 +94,15 @@ class MigrationStatus:
 
     def add_checkpoint(self, name: str, record_id: str | None = None) -> None:
         """Add a checkpoint to the migration."""
-        self.checkpoints.append({
-            "name": name,
-            "record_id": record_id,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "migrated": self.migrated_records,
-            "failed": self.failed_records,
-        })
+        self.checkpoints.append(
+            {
+                "name": name,
+                "record_id": record_id,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "migrated": self.migrated_records,
+                "failed": self.failed_records,
+            }
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
@@ -127,7 +129,8 @@ class VectorMigration:
         self,
         source_db: Database,
         target_db: Database | None = None,
-        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]] = None,
+        embedding_fn: Callable[[str], np.ndarray]
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]] = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -139,7 +142,7 @@ class VectorMigration:
         config: MigrationConfig | None = None,
     ):
         """Initialize the migration manager with simplified API.
-        
+
         Args:
             source_db: Source database to migrate from
             target_db: Target database (None to migrate in-place)
@@ -184,14 +187,13 @@ class VectorMigration:
         self._rollback_data: dict[str, dict[str, Any]] = {}
 
     async def run(
-        self,
-        progress_callback: Callable[[MigrationStatus], None] | None = None
+        self, progress_callback: Callable[[MigrationStatus], None] | None = None
     ) -> MigrationStatus:
         """Run the complete migration.
-        
+
         Args:
             progress_callback: Optional callback for progress updates
-            
+
         Returns:
             Migration status
         """
@@ -204,7 +206,7 @@ class VectorMigration:
 
             # Process in batches
             for i in range(0, len(all_records), self.batch_size):
-                batch = all_records[i:i + self.batch_size]
+                batch = all_records[i : i + self.batch_size]
 
                 for record in batch:
                     try:
@@ -226,10 +228,13 @@ class VectorMigration:
 
                             # Create VectorField
                             from ..fields import VectorField
+
                             vector_field_obj = VectorField(
                                 value=embedding,
                                 name=self.vector_field,
-                                source_field=self.text_fields[0] if len(self.text_fields) == 1 else None,
+                                source_field=self.text_fields[0]
+                                if len(self.text_fields) == 1
+                                else None,
                                 model_name=self.model_name,
                                 model_version=self.model_version,
                             )
@@ -263,7 +268,9 @@ class VectorMigration:
         # Migration runs synchronously in run() method
         pass
 
-    async def wait_for_completion(self, progress_callback: Callable[[MigrationStatus], None] | None = None) -> MigrationStatus:
+    async def wait_for_completion(
+        self, progress_callback: Callable[[MigrationStatus], None] | None = None
+    ) -> MigrationStatus:
         """Wait for migration completion (for compatibility)."""
         # Since run() is synchronous, just return current status
         return self.status
@@ -275,12 +282,12 @@ class VectorMigration:
         progress_callback: Callable[[MigrationStatus], None] | None = None,
     ) -> MigrationStatus:
         """Add vector fields to existing records.
-        
+
         Args:
             vector_fields: Mapping of vector field names to source text fields
             filter_query: Optional filter to select records to migrate
             progress_callback: Callback for progress updates
-            
+
         Returns:
             Migration status
         """
@@ -336,7 +343,7 @@ class VectorMigration:
             # Process in batches
             consecutive_batch_failures = 0
             for i in range(0, len(records), self.config.batch_size):
-                batch = records[i:i + self.config.batch_size]
+                batch = records[i : i + self.config.batch_size]
 
                 # Process batch with workers
                 tasks = []
@@ -369,7 +376,7 @@ class VectorMigration:
                                         metadata={
                                             "dimensions": dimensions,
                                             "source_field": source_field,
-                                        }
+                                        },
                                     )
                                     self.target_db.add_field_schema(field_schema)
 
@@ -453,7 +460,7 @@ class VectorMigration:
         status: MigrationStatus,
     ) -> bool:
         """Migrate a single record.
-        
+
         Returns:
             True if migration succeeded, False otherwise
         """
@@ -468,18 +475,22 @@ class VectorMigration:
                 return True
             else:
                 status.failed_records += 1
-                status.errors.append({
-                    "record_id": record.id,
-                    "error": "Failed to generate vectors",
-                })
+                status.errors.append(
+                    {
+                        "record_id": record.id,
+                        "error": "Failed to generate vectors",
+                    }
+                )
                 return False
 
         except Exception as e:
             status.failed_records += 1
-            status.errors.append({
-                "record_id": record.id,
-                "error": str(e),
-            })
+            status.errors.append(
+                {
+                    "record_id": record.id,
+                    "error": str(e),
+                }
+            )
             logger.error(f"Failed to migrate record {record.id}: {e}")
             return False
 
@@ -510,6 +521,7 @@ class VectorMigration:
 
                         # For VectorField objects, check the value
                         from ..fields import VectorField
+
                         if isinstance(migrated.fields.get(vector_field), VectorField):
                             vector_data = migrated.fields[vector_field].value
 
@@ -546,12 +558,12 @@ class VectorMigration:
         progress_callback: Callable[[MigrationStatus], None] | None = None,
     ) -> MigrationStatus:
         """Migrate vector data between different backends.
-        
+
         Args:
             field_mapping: Optional field name mapping
             transform_fn: Optional record transformation function
             progress_callback: Callback for progress updates
-            
+
         Returns:
             Migration status
         """
@@ -570,7 +582,7 @@ class VectorMigration:
 
             # Process in batches
             for i in range(0, len(records), self.config.batch_size):
-                batch = records[i:i + self.config.batch_size]
+                batch = records[i : i + self.config.batch_size]
 
                 for original_record in batch:
                     try:
@@ -596,10 +608,12 @@ class VectorMigration:
 
                     except Exception as e:
                         status.failed_records += 1
-                        status.errors.append({
-                            "record_id": record.id,
-                            "error": str(e),
-                        })
+                        status.errors.append(
+                            {
+                                "record_id": record.id,
+                                "error": str(e),
+                            }
+                        )
                         logger.error(f"Failed to migrate record {record.id}: {e}")
 
                 # Progress update
@@ -616,7 +630,8 @@ class VectorMigration:
         cls,
         source_db: Database,
         target_db: Database | None,
-        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        embedding_fn: Callable[[str], np.ndarray]
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         config: MigrationConfig,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
@@ -624,7 +639,7 @@ class VectorMigration:
         model_version: str | None = None,
     ) -> VectorMigration:
         """Create migration from a config object for advanced use cases.
-        
+
         Args:
             source_db: Source database
             target_db: Target database (None for in-place)
@@ -634,7 +649,7 @@ class VectorMigration:
             vector_field: Name of the vector field
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             Configured VectorMigration instance
         """
@@ -683,7 +698,8 @@ class IncrementalVectorizer:
     def __init__(
         self,
         database: Database,
-        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        embedding_fn: Callable[[str], np.ndarray]
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         text_fields: list[str] | str | None = None,  # Support multiple fields
         vector_field: str = "embedding",  # Sensible default
         field_separator: str = " ",
@@ -694,7 +710,7 @@ class IncrementalVectorizer:
         model_version: str | None = None,
     ):
         """Initialize the incremental vectorizer with simplified parameters.
-        
+
         Args:
             database: Database to vectorize
             embedding_fn: Function to generate embeddings
@@ -743,7 +759,7 @@ class IncrementalVectorizer:
     def _detect_text_fields(self) -> list[str]:
         """Auto-detect text fields from database schema."""
         text_fields = []
-        if hasattr(self.database, 'schema') and self.database.schema:
+        if hasattr(self.database, "schema") and self.database.schema:
             for field_name, field_schema in self.database.schema.fields.items():
                 if field_schema.type in (FieldType.STRING, FieldType.TEXT):
                     text_fields.append(field_name)
@@ -762,10 +778,7 @@ class IncrementalVectorizer:
             try:
                 # Get record from queue with timeout
                 try:
-                    record = await asyncio.wait_for(
-                        self._queue.get(),
-                        timeout=1.0
-                    )
+                    record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
                 except TimeoutError:
                     continue
 
@@ -811,7 +824,9 @@ class IncrementalVectorizer:
 
             # Update record
             update_data = {
-                self.vector_field: embedding.tolist() if isinstance(embedding, np.ndarray) else embedding,
+                self.vector_field: embedding.tolist()
+                if isinstance(embedding, np.ndarray)
+                else embedding,
             }
 
             # Add metadata
@@ -843,10 +858,7 @@ class IncrementalVectorizer:
         self._shutdown_event.clear()
 
         # Start workers
-        self._workers = [
-            asyncio.create_task(self._worker(i))
-            for i in range(self.max_workers)
-        ]
+        self._workers = [asyncio.create_task(self._worker(i)) for i in range(self.max_workers)]
 
         # Start queue loader
         self._processing_task = asyncio.create_task(self._load_queue())
@@ -860,10 +872,7 @@ class IncrementalVectorizer:
                 # Get records without vectors that have at least one text field
                 filter_query = {
                     self.vector_field: {"$exists": False},
-                    "$or": [
-                        {field: {"$exists": True, "$ne": ""}}
-                        for field in self.text_fields
-                    ],
+                    "$or": [{field: {"$exists": True, "$ne": ""}} for field in self.text_fields],
                 }
 
                 records = await self.database.filter(filter_query, limit=self.batch_size)
@@ -884,7 +893,7 @@ class IncrementalVectorizer:
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Stop incremental vectorization.
-        
+
         Args:
             timeout: Maximum time to wait for graceful shutdown
         """
@@ -903,10 +912,7 @@ class IncrementalVectorizer:
 
         # Wait for workers to finish
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*self._workers),
-                timeout=timeout
-            )
+            await asyncio.wait_for(asyncio.gather(*self._workers), timeout=timeout)
         except TimeoutError:
             logger.warning("Workers did not stop gracefully, cancelling")
             for worker in self._workers:
@@ -923,11 +929,11 @@ class IncrementalVectorizer:
         max_workers: int | None = None,
     ) -> dict[str, Any]:
         """Run the complete vectorization.
-        
+
         Args:
             progress_callback: Optional callback (completed, total, current_batch)
             max_workers: Override default max_workers
-            
+
         Returns:
             Results dictionary
         """
@@ -936,6 +942,7 @@ class IncrementalVectorizer:
 
         # Get all records that need vectors
         from ..query import Query
+
         all_records = await self.database.search(Query())
 
         to_process = []
@@ -957,7 +964,7 @@ class IncrementalVectorizer:
 
         # Process in batches
         for i in range(0, total, self.batch_size):
-            batch = to_process[i:i + self.batch_size]
+            batch = to_process[i : i + self.batch_size]
 
             for record in batch:
                 try:
@@ -981,12 +988,13 @@ class IncrementalVectorizer:
 
     async def get_status(self) -> dict[str, Any]:
         """Get current vectorization status.
-        
+
         Returns:
             Status dictionary
         """
         # Count records with and without vectors
         from ..query import Query
+
         all_records = await self.database.search(Query())
 
         total = 0
@@ -1014,7 +1022,7 @@ class IncrementalVectorizer:
 
     def get_stats(self) -> dict[str, Any]:
         """Get vectorization statistics.
-        
+
         Returns:
             Dictionary of statistics
         """
@@ -1022,14 +1030,12 @@ class IncrementalVectorizer:
             **self._stats,
             "queue_size": self._queue.qsize(),
             "workers": len(self._workers),
-            "is_running": bool(
-                self._processing_task and not self._processing_task.done()
-            ),
+            "is_running": bool(self._processing_task and not self._processing_task.done()),
         }
 
     async def wait_for_completion(self, check_interval: float = 5.0) -> None:
         """Wait for all queued records to be processed.
-        
+
         Args:
             check_interval: Seconds between queue checks
         """
@@ -1040,10 +1046,10 @@ class IncrementalVectorizer:
 
     async def run_with_checkpoint(self, resume_from: str | None = None) -> VectorizationResult:
         """Run the complete vectorization with checkpoint support.
-        
+
         Args:
             resume_from: Optional checkpoint ID to resume from
-            
+
         Returns:
             Vectorization result with statistics
         """
@@ -1058,10 +1064,10 @@ class IncrementalVectorizer:
 
     async def run_batch(self, limit: int | None = None) -> VectorizationResult:
         """Process a limited number of records.
-        
+
         Args:
             limit: Maximum number of records to process
-            
+
         Returns:
             Vectorization result with statistics
         """
@@ -1074,7 +1080,7 @@ class IncrementalVectorizer:
             await self.start()
 
             # Wait for limited processing
-            while self._stats["processed"] < (limit or float('inf')):
+            while self._stats["processed"] < (limit or float("inf")):
                 if self._queue.empty() and self._processing_task.done():
                     break
                 await asyncio.sleep(0.1)
@@ -1110,6 +1116,7 @@ class IncrementalVectorizer:
 @dataclass
 class VectorizationResult:
     """Result of a vectorization operation."""
+
     processed: int
     failed: int
     checkpoint: str | None = None
@@ -1118,6 +1125,7 @@ class VectorizationResult:
 @dataclass
 class VectorizationProgress:
     """Current progress of vectorization."""
+
     total_records: int
     processed_records: int
     failed_records: int

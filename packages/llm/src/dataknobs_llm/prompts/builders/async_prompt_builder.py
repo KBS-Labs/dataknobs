@@ -143,7 +143,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         library: AbstractPromptLibrary,
         adapters: Dict[str, AsyncResourceAdapter] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
-        raise_on_rag_error: bool = False
+        raise_on_rag_error: bool = False,
     ):
         """Initialize the asynchronous prompt builder.
 
@@ -171,8 +171,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         for name, adapter in self.adapters.items():
             if not adapter.is_async():
                 raise TypeError(
-                    f"Adapter '{name}' is synchronous. "
-                    "Use PromptBuilder for sync adapters."
+                    f"Adapter '{name}' is synchronous. Use PromptBuilder for sync adapters."
                 )
 
     async def render_system_prompt(
@@ -183,7 +182,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Render a system prompt with parameters and optional RAG content.
 
@@ -236,7 +235,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
             validation_override=validation_override,
             return_rag_metadata=return_rag_metadata,
             cached_rag=cached_rag,
-            **kwargs
+            **kwargs,
         )
 
     async def render_user_prompt(
@@ -247,7 +246,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Render a user prompt with parameters and optional RAG content.
 
@@ -284,7 +283,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
             validation_override=validation_override,
             return_rag_metadata=return_rag_metadata,
             cached_rag=cached_rag,
-            **kwargs
+            **kwargs,
         )
 
     async def render_inline_system_prompt(
@@ -419,7 +418,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Internal method to render a prompt template asynchronously.
 
@@ -465,7 +464,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
                     params=all_params,
                     capture_metadata=return_rag_metadata,
                     rag_configs_override=inline_rag_configs,
-                    **kwargs
+                    **kwargs,
                 )
 
             # Merge RAG content into parameters
@@ -479,7 +478,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
             template=template,
             params=all_params,
             validation=validation_config,
-            template_metadata=template_metadata
+            template_metadata=template_metadata,
         )
 
         # Attach RAG metadata if requested
@@ -487,12 +486,14 @@ class AsyncPromptBuilder(BasePromptBuilder):
             result.rag_metadata = rag_metadata
 
         # Add builder metadata
-        result.metadata.update({
-            "prompt_name": prompt_name,
-            "prompt_type": prompt_type,
-            "include_rag": include_rag,
-            "used_cached_rag": cached_rag is not None,
-        })
+        result.metadata.update(
+            {
+                "prompt_name": prompt_name,
+                "prompt_type": prompt_type,
+                "include_rag": include_rag,
+                "used_cached_rag": cached_rag is not None,
+            }
+        )
 
         return result
 
@@ -503,7 +504,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         params: Dict[str, Any],
         capture_metadata: bool = False,
         rag_configs_override: list[RAGConfig] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> tuple[Dict[str, str], Dict[str, Any] | None]:
         """Execute RAG searches in parallel and format results for injection.
 
@@ -526,9 +527,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
             rag_configs = rag_configs_override
         else:
             rag_configs = self.library.get_prompt_rag_configs(
-                prompt_name=prompt_name,
-                prompt_type=prompt_type,
-                **kwargs
+                prompt_name=prompt_name, prompt_type=prompt_type, **kwargs
             )
 
         if not rag_configs:
@@ -543,7 +542,9 @@ class AsyncPromptBuilder(BasePromptBuilder):
                 self._execute_single_rag_with_metadata(rag_config, params)
                 for rag_config in rag_configs
             ]
-            results_with_metadata = await asyncio.gather(*tasks_with_metadata, return_exceptions=True)
+            results_with_metadata = await asyncio.gather(
+                *tasks_with_metadata, return_exceptions=True
+            )
 
             for rag_config, result in zip(rag_configs, results_with_metadata, strict=True):
                 placeholder = rag_config.get("placeholder", "RAG_CONTENT")
@@ -557,9 +558,10 @@ class AsyncPromptBuilder(BasePromptBuilder):
                         rag_content[placeholder] = ""
                         if rag_metadata is not None:
                             from datetime import datetime
+
                             rag_metadata[placeholder] = {
                                 "error": str(result),
-                                "timestamp": datetime.now().isoformat()
+                                "timestamp": datetime.now().isoformat(),
                             }
                 else:
                     formatted_content, metadata = result
@@ -589,9 +591,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         return rag_content, rag_metadata
 
     async def _execute_single_rag_search_safe(
-        self,
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
+        self, rag_config: RAGConfig, params: Dict[str, Any]
     ) -> str:
         """Safely execute a single RAG search (for use with asyncio.gather).
 
@@ -608,9 +608,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         return await self._execute_single_rag_search(rag_config, params)
 
     async def _execute_single_rag_search(
-        self,
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
+        self, rag_config: RAGConfig, params: Dict[str, Any]
     ) -> str:
         """Execute a single RAG search and format results asynchronously.
 
@@ -649,17 +647,13 @@ class AsyncPromptBuilder(BasePromptBuilder):
 
         # Format results
         formatted_content = self._format_rag_results(
-            results=search_results,
-            rag_config=rag_config,
-            params=params
+            results=search_results, rag_config=rag_config, params=params
         )
 
         return formatted_content
 
     async def _execute_single_rag_with_metadata(
-        self,
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
+        self, rag_config: RAGConfig, params: Dict[str, Any]
     ) -> tuple[str, Dict[str, Any]]:
         """Execute a single RAG search with metadata capture.
 
@@ -718,9 +712,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
 
         # Format results
         formatted_content = self._format_rag_results(
-            results=search_results,
-            rag_config=rag_config,
-            params=params
+            results=search_results, rag_config=rag_config, params=params
         )
 
         # Build metadata

@@ -410,14 +410,11 @@ class TestPostgresKeyspace:
         import hashlib
 
         key = "ingest:my-domain"
-        expected = (
-            int.from_bytes(
-                hashlib.blake2b(key.encode(), digest_size=8).digest(),
-                "big",
-                signed=False,
-            )
-            - (1 << 63)
-        )
+        expected = int.from_bytes(
+            hashlib.blake2b(key.encode(), digest_size=8).digest(),
+            "big",
+            signed=False,
+        ) - (1 << 63)
         assert PostgresAdvisoryLock._key_to_bigint(key) == expected
 
 
@@ -433,10 +430,7 @@ def pg_dsn(
     needed). Mirrors ``postgres_fixtures._pg_conn_str``.
     """
     p = postgres_connection_params
-    return (
-        f"postgresql://{p['user']}:{p['password']}"
-        f"@{p['host']}:{p['port']}/{p['database']}"
-    )
+    return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
 
 
 class TestPostgresAdvisoryLock:
@@ -521,9 +515,7 @@ class TestPostgresAdvisoryLock:
 
     async def test_create_lock_round_trip(self, pg_dsn: str) -> None:
         """Factory-built postgres lock acquires and releases for real."""
-        lock = create_lock(
-            {"backend": "postgres", "connection_string": pg_dsn}
-        )
+        lock = create_lock({"backend": "postgres", "connection_string": pg_dsn})
         assert isinstance(lock, PostgresAdvisoryLock)
         key = f"it:factory:{os.getpid()}"
         try:

@@ -98,9 +98,7 @@ class TestWizardReasoningConfig:
         cfg = WizardReasoningConfig(
             wizard_config={
                 "name": "w",
-                "stages": [
-                    {"name": "s", "prompt": "p", "is_start": True, "is_end": True}
-                ],
+                "stages": [{"name": "s", "prompt": "p", "is_start": True, "is_end": True}],
             },
             hooks={"on_complete": ["myapp.hooks:save"]},
             initial_data={"seed": 1},
@@ -172,18 +170,14 @@ class TestNavigationCommandConfig:
     """The single-command leaf config."""
 
     def test_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            NavigationCommandConfig(keywords=("a", "b"))
-        )
+        assert_structured_config_roundtrip(NavigationCommandConfig(keywords=("a", "b")))
 
     def test_keywords_coerced_to_tuple(self) -> None:
         cfg = NavigationCommandConfig(keywords=["a", "b"])  # type: ignore[arg-type]
         assert cfg.keywords == ("a", "b")
 
     def test_from_dict_coerces_list(self) -> None:
-        cfg = NavigationCommandConfig.from_dict(
-            {"keywords": ["x", "y"], "enabled": False}
-        )
+        cfg = NavigationCommandConfig.from_dict({"keywords": ["x", "y"], "enabled": False})
         assert cfg.keywords == ("x", "y")
         assert cfg.enabled is False
 
@@ -215,9 +209,7 @@ class TestNavigationConfig:
         assert nav.restart.keywords == DEFAULT_RESTART_KEYWORDS
 
     def test_keywords_lowercased(self) -> None:
-        nav = NavigationConfig.from_dict(
-            {"back": {"keywords": ["BACK", "Go Back"]}}
-        )
+        nav = NavigationConfig.from_dict({"back": {"keywords": ["BACK", "Go Back"]}})
         assert nav.back.keywords == ("back", "go back")
 
     def test_enabled_false_keeps_default_keywords(self) -> None:
@@ -271,9 +263,7 @@ class TestToolResultMappingEntry:
 
     def test_invalid_on_error_rejected(self) -> None:
         with pytest.raises(ValueError, match="on_error"):
-            ToolResultMappingEntry(
-                tool_name="t", params={}, mapping={}, on_error="bogus"
-            )
+            ToolResultMappingEntry(tool_name="t", params={}, mapping={}, on_error="bogus")
 
     def test_from_dict(self) -> None:
         entry = ToolResultMappingEntry.from_dict(

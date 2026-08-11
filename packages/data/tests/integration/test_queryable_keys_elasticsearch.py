@@ -62,9 +62,10 @@ def test_sync_id_prefix_and_operators(elasticsearch_test_index) -> None:
         assert _ids(db.search(Query(filters=[Filter("id", Operator.EQ, "orders/1")]))) == {
             "orders/1"
         }
-        assert _ids(
-            db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "orders/")]))
-        ) == {"orders/1", "orders/2"}
+        assert _ids(db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "orders/")]))) == {
+            "orders/1",
+            "orders/2",
+        }
     finally:
         db.close()
 
@@ -79,9 +80,7 @@ async def test_async_id_resolves_to_storage_key(elasticsearch_test_index) -> Non
         prefix = await db.search(
             Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/alice/")])
         )
-        in_ = await db.search(
-            Query(filters=[Filter("id", Operator.IN, ["orders/1", "orders/2"])])
-        )
+        in_ = await db.search(Query(filters=[Filter("id", Operator.IN, ["orders/1", "orders/2"])]))
         assert _ids(eq) == {"orders/1"}
         assert _ids(prefix) == {
             "artifacts/alice/report/final",
@@ -139,9 +138,7 @@ async def test_async_minted_id_is_filterable(elasticsearch_test_index) -> None:
         assert minted  # create() minted and returned a uuid
         eq = await db.search(Query(filters=[Filter("id", Operator.EQ, minted)]))
         assert _ids(eq) == {minted}
-        prefix = await db.search(
-            Query(filters=[Filter("id", Operator.STARTS_WITH, minted[:8])])
-        )
+        prefix = await db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, minted[:8])]))
         assert _ids(prefix) == {minted}
         in_ = await db.search(Query(filters=[Filter("id", Operator.IN, [minted])]))
         assert _ids(in_) == {minted}
@@ -161,14 +158,10 @@ async def test_async_batch_minted_ids_are_filterable(elasticsearch_test_index) -
     await db.connect()
     try:
         # create_batch mints a uuid per id-less record.
-        created = await db.create_batch(
-            [Record({"payload": "a"}), Record({"payload": "b"})]
-        )
+        created = await db.create_batch([Record({"payload": "a"}), Record({"payload": "b"})])
         assert len(created) == 2
         for rid in created:
-            assert _ids(
-                await db.search(Query(filters=[Filter("id", Operator.EQ, rid)]))
-            ) == {rid}
+            assert _ids(await db.search(Query(filters=[Filter("id", Operator.EQ, rid)]))) == {rid}
 
         # upsert_batch mints too, and the id remains prefix-filterable.
         upserted = await db.upsert_batch([Record({"payload": "c"})])
@@ -180,9 +173,9 @@ async def test_async_batch_minted_ids_are_filterable(elasticsearch_test_index) -
 
         # upsert(record) with no id mints and must stay filterable.
         single_id = await db.upsert(Record({"payload": "d"}))
-        assert _ids(
-            await db.search(Query(filters=[Filter("id", Operator.EQ, single_id)]))
-        ) == {single_id}
+        assert _ids(await db.search(Query(filters=[Filter("id", Operator.EQ, single_id)]))) == {
+            single_id
+        }
     finally:
         await db.close()
 
@@ -195,9 +188,7 @@ def test_sync_minted_id_is_filterable(elasticsearch_test_index) -> None:
     db.connect()
     try:
         minted = db.create(Record({"payload": "no-id"}))
-        assert _ids(
-            db.search(Query(filters=[Filter("id", Operator.EQ, minted)]))
-        ) == {minted}
+        assert _ids(db.search(Query(filters=[Filter("id", Operator.EQ, minted)]))) == {minted}
     finally:
         db.close()
 
@@ -215,9 +206,7 @@ async def test_async_sort_by_id(elasticsearch_test_index) -> None:
         await _seed_async(db)
         asc = await db.search(Query(sort_specs=[SortSpec("id")]))
         assert [r.id for r in asc] == sorted(_KEYS)
-        desc = await db.search(
-            Query(sort_specs=[SortSpec("id", SortOrder.DESC)])
-        )
+        desc = await db.search(Query(sort_specs=[SortSpec("id", SortOrder.DESC)]))
         assert [r.id for r in desc] == sorted(_KEYS, reverse=True)
     finally:
         await db.close()
@@ -291,7 +280,9 @@ def _seed_matrix_sync(db: SyncElasticsearchDatabase) -> None:
         db.create(record)
 
 
-@pytest.mark.parametrize("query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field)
+@pytest.mark.parametrize(
+    "query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field
+)
 async def test_sync_async_search_parity(elasticsearch_test_index, query) -> None:
     """Sync and async ES return identical id sets for every operator."""
     sync_db = SyncElasticsearchDatabase(elasticsearch_test_index)
@@ -306,7 +297,9 @@ async def test_sync_async_search_parity(elasticsearch_test_index, query) -> None
         await async_db.close()
 
 
-@pytest.mark.parametrize("query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field)
+@pytest.mark.parametrize(
+    "query", _MATRIX_QUERIES, ids=lambda q: q.filters[0].operator.name + ":" + q.filters[0].field
+)
 async def test_sync_async_count_parity(elasticsearch_test_index, query) -> None:
     """Sync and async ``count`` agree for every operator (the class of the
     BETWEEN-only count-drop bug).

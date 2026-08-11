@@ -110,9 +110,7 @@ class TestConfigHierarchy:
     def test_from_dict_ignores_routing_keys(self) -> None:
         # The factory passes the whole config dict, including the
         # ``backend`` routing key — unknown keys must pass through.
-        cfg = MemoryVectorStoreConfig.from_dict(
-            {"backend": "memory", "dimensions": 16}
-        )
+        cfg = MemoryVectorStoreConfig.from_dict({"backend": "memory", "dimensions": 16})
         assert cfg.dimensions == 16
 
     def test_nested_timestamp_config_composes(self) -> None:
@@ -159,9 +157,7 @@ class TestMemoryConstructionParity:
 
     def test_dict_and_typed_reach_identical_state(self) -> None:
         from_dict = MemoryVectorStore({"dimensions": 8, "metric": "euclidean"})
-        from_typed = MemoryVectorStore(
-            MemoryVectorStoreConfig(dimensions=8, metric="euclidean")
-        )
+        from_typed = MemoryVectorStore(MemoryVectorStoreConfig(dimensions=8, metric="euclidean"))
         for store in (from_dict, from_typed):
             assert store.dimensions == 8
             assert store.metric == DistanceMetric.EUCLIDEAN
@@ -175,9 +171,7 @@ class TestMemoryConstructionParity:
 
     def test_mixing_typed_config_with_kwargs_raises(self) -> None:
         with pytest.raises(TypeError):
-            MemoryVectorStore(
-                MemoryVectorStoreConfig(dimensions=8), dimensions=16
-            )
+            MemoryVectorStore(MemoryVectorStoreConfig(dimensions=8), dimensions=16)
 
     def test_derived_metric_enum(self) -> None:
         store = MemoryVectorStore({"dimensions": 4, "metric": "dot_product"})
@@ -257,9 +251,7 @@ class TestChromaConfig:
         assert cfg.dimensions == 512
 
     def test_scalar_metadata_keys_normalized_to_frozenset(self) -> None:
-        cfg = ChromaVectorStoreConfig.from_dict(
-            {"scalar_metadata_keys": ["domain_id", "tenant"]}
-        )
+        cfg = ChromaVectorStoreConfig.from_dict({"scalar_metadata_keys": ["domain_id", "tenant"]})
         assert cfg.scalar_metadata_keys == frozenset({"domain_id", "tenant"})
 
     def test_config_roundtrip(self) -> None:
@@ -283,10 +275,7 @@ class TestChromaConfig:
         """Redaction is display-only — serialization keeps the real key."""
         cfg = ChromaVectorStoreConfig.from_dict({"openai_api_key": "sk-live-XYZ"})
         assert cfg.to_dict()["openai_api_key"] == "sk-live-XYZ"
-        assert (
-            ChromaVectorStoreConfig.from_dict(cfg.to_dict()).openai_api_key
-            == "sk-live-XYZ"
-        )
+        assert ChromaVectorStoreConfig.from_dict(cfg.to_dict()).openai_api_key == "sk-live-XYZ"
 
     @requires_chromadb
     def test_construct_sets_collection_and_metric(self) -> None:
@@ -311,28 +300,20 @@ class TestPgVectorConfig:
         assert PgVectorStore.CONFIG_CLS is PgVectorStoreConfig
 
     def test_connection_string_resolved(self) -> None:
-        cfg = PgVectorStoreConfig.from_dict(
-            {"connection_string": _PG_DSN, "dimensions": 768}
-        )
+        cfg = PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN, "dimensions": 768})
         assert cfg.connection_string == _PG_DSN
 
-    def test_missing_connection_raises_value_error(
-        self, clear_postgres_env: None
-    ) -> None:
+    def test_missing_connection_raises_value_error(self, clear_postgres_env: None) -> None:
         with pytest.raises(ValueError, match="requires a postgres connection"):
             PgVectorStoreConfig.from_dict({"dimensions": 768})
 
     def test_invalid_id_type_raises(self) -> None:
         with pytest.raises(ValueError, match="id_type"):
-            PgVectorStoreConfig.from_dict(
-                {"connection_string": _PG_DSN, "id_type": "bogus"}
-            )
+            PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN, "id_type": "bogus"})
 
     def test_invalid_index_type_raises(self) -> None:
         with pytest.raises(ValueError, match="index_type"):
-            PgVectorStoreConfig.from_dict(
-                {"connection_string": _PG_DSN, "index_type": "bogus"}
-            )
+            PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN, "index_type": "bogus"})
 
     def test_config_roundtrip(self) -> None:
         assert_structured_config_roundtrip(
@@ -381,9 +362,7 @@ class TestPgVectorConfig:
 
         from_dict = PgVectorStore({"connection_string": _PG_DSN, "dimensions": 768})
         from_typed = PgVectorStore(
-            PgVectorStoreConfig.from_dict(
-                {"connection_string": _PG_DSN, "dimensions": 768}
-            )
+            PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN, "dimensions": 768})
         )
         for store in (from_dict, from_typed):
             assert store.connection_string == _PG_DSN

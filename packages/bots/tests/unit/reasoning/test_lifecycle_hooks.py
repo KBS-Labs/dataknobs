@@ -9,6 +9,7 @@ the trigger signature. See the
 :mod:`dataknobs_bots.reasoning.lifecycle` module docstring for
 canonical event keys.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -25,6 +26,7 @@ def _import_lifecycle():
         LifecycleHooks,
         TurnHookCallback,
     )
+
     return LifecycleHooks, TurnHookCallback
 
 
@@ -185,6 +187,7 @@ async def test_from_config_loads_dotted_path_callbacks(monkeypatch) -> None:
         fired.append(event["stage"])
 
     import sys
+
     sys.modules[__name__]._registered_hook = _registered_hook  # type: ignore[attr-defined]
 
     config = {
@@ -290,9 +293,7 @@ def test_a_dot_separated_path_is_accepted() -> None:
 
     hooks = LifecycleHooks.from_config(
         {
-            "on_turn_start": [
-                dotted_path(_a_valid_hook)
-            ],
+            "on_turn_start": [dotted_path(_a_valid_hook)],
         },
     )
 
@@ -312,6 +313,7 @@ async def test_from_config_with_stage_scoping_round_trips() -> None:
         fired.append(event["stage"])
 
     import sys
+
     sys.modules[__name__]._registered_hook_for_stage = _registered_hook_for_stage  # type: ignore[attr-defined]
 
     config = {

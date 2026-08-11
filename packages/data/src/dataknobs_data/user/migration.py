@@ -58,9 +58,7 @@ class SectionMigrator:
     section: str
     upgraders: Mapping[int, SectionUpgrader] = field(default_factory=dict)
 
-    def with_step(
-        self, from_version: int, fn: SectionUpgrader
-    ) -> SectionMigrator:
+    def with_step(self, from_version: int, fn: SectionUpgrader) -> SectionMigrator:
         """Return a new migrator with a ``from_version -> from_version+1`` step.
 
         A later registration of the same ``from_version`` replaces the earlier
@@ -79,9 +77,7 @@ class SectionMigrator:
         merged[from_version] = fn
         return replace(self, upgraders=merged)
 
-    def chain(
-        self, from_version: int, to_version: int
-    ) -> list[SectionUpgrader]:
+    def chain(self, from_version: int, to_version: int) -> list[SectionUpgrader]:
         """Return the ordered upgraders taking ``from_version`` to ``to_version``.
 
         An empty chain is returned for a no-op or backwards window
@@ -114,14 +110,10 @@ class SectionMigrator:
 #: Mirrors the ``stage_synthesizer_backends`` / ``intent_classifier_backends``
 #: registries: a consumer registers its upgraders once at import time and every
 #: store built for that section applies them.
-section_migrators: Registry[SectionMigrator] = Registry(
-    name="user_state_section_migrators"
-)
+section_migrators: Registry[SectionMigrator] = Registry(name="user_state_section_migrators")
 
 
-def register_section_migrator(
-    section: str, from_version: int, fn: SectionUpgrader
-) -> None:
+def register_section_migrator(section: str, from_version: int, fn: SectionUpgrader) -> None:
     """Register a ``v_n -> v_{n+1}`` upgrader for ``section``.
 
     Accumulates onto the section's existing migrator (creating one on first
@@ -149,14 +141,10 @@ def register_section_migrator(
     """
     existing = section_migrators.get_optional(section)
     migrator = existing if existing is not None else SectionMigrator(section)
-    section_migrators.register(
-        section, migrator.with_step(from_version, fn), allow_overwrite=True
-    )
+    section_migrators.register(section, migrator.with_step(from_version, fn), allow_overwrite=True)
 
 
-def resolve_chain(
-    section: str, from_version: int, to_version: int
-) -> list[SectionUpgrader]:
+def resolve_chain(section: str, from_version: int, to_version: int) -> list[SectionUpgrader]:
     """Return the upgrader chain for ``section`` from ``from_version`` on.
 
     A no-op or backwards window (``to_version <= from_version``) returns an

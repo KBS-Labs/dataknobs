@@ -73,9 +73,7 @@ def normalize_ingestion_status(
         return IngestionStatus(status)
     except ValueError as e:
         valid = [s.value for s in IngestionStatus]
-        raise ValidationError(
-            f"Unknown ingestion status {status!r}; valid: {valid}"
-        ) from e
+        raise ValidationError(f"Unknown ingestion status {status!r}; valid: {valid}") from e
 
 
 class InvalidVersionError(ValueError):

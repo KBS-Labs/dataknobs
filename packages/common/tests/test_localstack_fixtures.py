@@ -92,9 +92,7 @@ def _client_error(code: str, op: str = "HeadBucket") -> ClientError:
     )
 
 
-def _patch_session(
-    monkeypatch: Any, fake: _FakeSession
-) -> None:
+def _patch_session(monkeypatch: Any, fake: _FakeSession) -> None:
     """Patch ``aioboto3.Session`` (which the helper instantiates) to
     return our fake session."""
     import aioboto3
@@ -166,9 +164,7 @@ async def test_bucket_already_owned_by_you_is_swallowed(
     """Race: head says missing, create races with a concurrent setup."""
     client = _FakeS3Client(
         head_error=_client_error("404"),
-        create_error=_client_error(
-            "BucketAlreadyOwnedByYou", op="CreateBucket"
-        ),
+        create_error=_client_error("BucketAlreadyOwnedByYou", op="CreateBucket"),
     )
     fake = _FakeSession(client)
     _patch_session(monkeypatch, fake)
@@ -184,9 +180,7 @@ async def test_bucket_already_exists_is_swallowed(monkeypatch: Any) -> None:
     """Race: create_bucket reports ``BucketAlreadyExists`` — also swallowed."""
     client = _FakeS3Client(
         head_error=_client_error("404"),
-        create_error=_client_error(
-            "BucketAlreadyExists", op="CreateBucket"
-        ),
+        create_error=_client_error("BucketAlreadyExists", op="CreateBucket"),
     )
     fake = _FakeSession(client)
     _patch_session(monkeypatch, fake)
@@ -206,9 +200,7 @@ async def test_unexpected_head_client_error_propagates(
     _patch_session(monkeypatch, fake)
 
     with pytest.raises(ClientError) as exc:
-        await ensure_localstack_s3_bucket(
-            "test-bucket", endpoint="http://x:1"
-        )
+        await ensure_localstack_s3_bucket("test-bucket", endpoint="http://x:1")
     assert exc.value.response["Error"]["Code"] == "AccessDenied"
     assert client.create_calls == []
 
@@ -220,17 +212,13 @@ async def test_unexpected_create_client_error_propagates(
     """A non-race create_bucket error (e.g. ServiceUnavailable) propagates."""
     client = _FakeS3Client(
         head_error=_client_error("404"),
-        create_error=_client_error(
-            "ServiceUnavailable", op="CreateBucket"
-        ),
+        create_error=_client_error("ServiceUnavailable", op="CreateBucket"),
     )
     fake = _FakeSession(client)
     _patch_session(monkeypatch, fake)
 
     with pytest.raises(ClientError) as exc:
-        await ensure_localstack_s3_bucket(
-            "test-bucket", endpoint="http://x:1"
-        )
+        await ensure_localstack_s3_bucket("test-bucket", endpoint="http://x:1")
     assert exc.value.response["Error"]["Code"] == "ServiceUnavailable"
 
 
@@ -241,9 +229,7 @@ async def test_explicit_endpoint_is_forwarded(monkeypatch: Any) -> None:
     fake = _FakeSession(client)
     _patch_session(monkeypatch, fake)
 
-    await ensure_localstack_s3_bucket(
-        "test-bucket", endpoint="http://probe-target:9999"
-    )
+    await ensure_localstack_s3_bucket("test-bucket", endpoint="http://probe-target:9999")
 
     assert fake.client_service == "s3"
     assert fake.client_kwargs["endpoint_url"] == "http://probe-target:9999"
@@ -288,9 +274,7 @@ async def test_explicit_region_is_forwarded(monkeypatch: Any) -> None:
     fake = _FakeSession(client)
     _patch_session(monkeypatch, fake)
 
-    await ensure_localstack_s3_bucket(
-        "test-bucket", endpoint="http://x:1", region="eu-west-1"
-    )
+    await ensure_localstack_s3_bucket("test-bucket", endpoint="http://x:1", region="eu-west-1")
 
     assert fake.client_kwargs["region_name"] == "eu-west-1"
 
@@ -316,14 +300,11 @@ def test_make_localstack_s3_bucket_yields_config(
     # Patch the helper to a no-op so we don't actually try to reach LocalStack.
     calls: list[tuple[str, str | None]] = []
 
-    async def _fake_ensure(
-        bucket: str, endpoint: str | None = None, **_: Any
-    ) -> None:
+    async def _fake_ensure(bucket: str, endpoint: str | None = None, **_: Any) -> None:
         calls.append((bucket, endpoint))
 
     monkeypatch.setattr(
-        "dataknobs_common.testing.localstack_fixtures."
-        "ensure_localstack_s3_bucket",
+        "dataknobs_common.testing.localstack_fixtures.ensure_localstack_s3_bucket",
         _fake_ensure,
     )
 

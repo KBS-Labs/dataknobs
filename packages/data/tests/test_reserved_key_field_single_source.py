@@ -36,9 +36,7 @@ _SRC = Path(dataknobs_data.__file__).parent
 # prefix so a dotted receiver is not silently missed. Does not match
 # ``field.startswith("metadata.")`` (a distinct metadata-column policy) or
 # ``field_name == RESERVED_KEY_FIELD`` (the predicate itself).
-_LITERAL = re.compile(
-    r"""\bfield\s*==\s*['"]id['"]|['"]id['"]\s*==\s*(?:\w+\.)*field\b"""
-)
+_LITERAL = re.compile(r"""\bfield\s*==\s*['"]id['"]|['"]id['"]\s*==\s*(?:\w+\.)*field\b""")
 
 
 def test_no_backend_open_codes_the_reserved_field_literal() -> None:
@@ -82,7 +80,7 @@ def test_literal_regex_catches_forward_and_reversed_dotted_forms() -> None:
     should_not_match = [
         "return field_name == RESERVED_KEY_FIELD",
         'if field.startswith("metadata."):',
-        'if is_storage_key_field(filter.field):',
+        "if is_storage_key_field(filter.field):",
     ]
     for line in should_match:
         assert _LITERAL.search(line), f"guard regex should match: {line!r}"

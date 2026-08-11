@@ -127,13 +127,11 @@ class RedisEventBus(StructuredConfigConsumer[RedisEventBusConfig]):
             ) from e
 
         async with self._lock:
-            ssl_context = True if self._config.ssl else None
-
             self._redis = redis.Redis(
                 host=self._config.host,
                 port=self._config.port,
                 password=self._config.password,
-                ssl=ssl_context,
+                ssl=self._config.ssl,
                 decode_responses=True,
             )
 

@@ -302,9 +302,7 @@ def test_a_whole_workspace_collection_reports_no_errors() -> None:
     agreeing with itself while the real run still aborts.
     """
     result = _collect()
-    errors = sorted(
-        line for line in result.stdout.splitlines() if line.startswith("ERROR ")
-    )
+    errors = sorted(line for line in result.stdout.splitlines() if line.startswith("ERROR "))
     assert not errors, (
         "a bare `pytest` at the repo root does not collect:\n  "
         + "\n  ".join(errors)
@@ -361,8 +359,7 @@ def test_the_claim_map_sees_namespace_portions_not_only_packages() -> None:
         where
         for supplied in _top_level_package_claims().values()
         for where in supplied
-        if (ROOT / where).resolve().parent in roots
-        and not (ROOT / where / "__init__.py").exists()
+        if (ROOT / where).resolve().parent in roots and not (ROOT / where / "__init__.py").exists()
     )
     assert portions, (
         "no claimed directory is a namespace portion under a declared import "

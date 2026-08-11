@@ -326,20 +326,14 @@ class TestCheckpointCap:
             # turns_to_undo would instead exhaust the retained entries and
             # raise the wrong "Nothing to undo" — hence matching the specific
             # message.)
-            with pytest.raises(
-                ValueError, match="beyond the retained undo window"
-            ):
+            with pytest.raises(ValueError, match="beyond the retained undo window"):
                 await bot.rewind_to_turn(ctx, 0)
-            with pytest.raises(
-                ValueError, match="beyond the retained undo window"
-            ):
+            with pytest.raises(ValueError, match="beyond the retained undo window"):
                 await bot.rewind_to_turn(ctx, -1)
 
             # An out-of-range-high turn still reports the true (absolute)
             # conversation length, unaffected by the front trim.
-            with pytest.raises(
-                ValueError, match="conversation has 5 turns"
-            ):
+            with pytest.raises(ValueError, match="conversation has 5 turns"):
                 await bot.rewind_to_turn(ctx, 9)
 
             # Relative undo pops the tail and leaves the dropped offset intact.
@@ -418,10 +412,7 @@ class TestCompactionUndoInteroperation:
         # loop whose body compaction trims.
         main_responses = [
             text_response("turn one done"),
-            *(
-                tool_call_response("echo", {"text": f"step {i}"})
-                for i in range(5)
-            ),
+            *(tool_call_response("echo", {"text": f"step {i}"}) for i in range(5)),
             text_response("turn two done"),
             text_response("branched follow-up"),  # the post-undo turn
         ]
@@ -452,9 +443,7 @@ class TestCompactionUndoInteroperation:
                 "below would no longer prove compaction fired"
             )
             tool_msgs = [m for m in history if m.role == "tool"]
-            assert len(tool_msgs) < 5, (
-                "compaction did not fire -> the guard would be vacuous"
-            )
+            assert len(tool_msgs) < 5, "compaction did not fire -> the guard would be vacuous"
 
             # The checkpoint recorded for turn 1 is turn 0's terminal node,
             # which lives in the retained head of turn 1's compaction. It must
@@ -465,10 +454,9 @@ class TestCompactionUndoInteroperation:
             # always-resolvable root — the guard exercises a node compaction
             # could plausibly have touched.
             assert checkpoint_node_id != ""
-            assert (
-                get_node_by_id(manager.state.message_tree, checkpoint_node_id)
-                is not None
-            ), "compaction dangled the undo checkpoint node"
+            assert get_node_by_id(manager.state.message_tree, checkpoint_node_id) is not None, (
+                "compaction dangled the undo checkpoint node"
+            )
 
             # End to end: undo navigates to that checkpoint node without
             # raising "Node not found" -> the anchor is resolvable post-compaction.
@@ -492,9 +480,7 @@ class TestDefaultUnboundedNoRegression:
             assert bot._conversation_managers.max_size is None
 
             for i in range(10):
-                ctx = BotContext(
-                    conversation_id=f"conv-{i}", client_id="test"
-                )
+                ctx = BotContext(conversation_id=f"conv-{i}", client_id="test")
                 await bot.chat("hello", ctx)
 
             # Nothing evicted — every conversation is retained in both caches.

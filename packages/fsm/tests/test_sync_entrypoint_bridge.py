@@ -44,6 +44,7 @@ from dataknobs_fsm.execution.batch import BatchExecutor
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline
 from dataknobs_fsm.streaming.core import IStreamSource, StreamChunk
 
+
 def _trivial_fsm() -> Any:
     """A minimal start→end FSM (no transforms, no resources)."""
     config = FSMConfig(
@@ -53,9 +54,7 @@ def _trivial_fsm() -> Any:
             NetworkConfig(
                 name="main",
                 states=[
-                    StateConfig(
-                        name="start", is_start=True, arcs=[ArcConfig(target="end")]
-                    ),
+                    StateConfig(name="start", is_start=True, arcs=[ArcConfig(target="end")]),
                     StateConfig(name="end", is_end=True),
                 ],
             )
@@ -178,9 +177,7 @@ def test_fsm_execute_enters_push_subnetwork() -> None:
                         arcs=[
                             ArcConfig(
                                 target="s2",
-                                transform=FunctionReference(
-                                    type="registered", name="sub_mark"
-                                ),
+                                transform=FunctionReference(type="registered", name="sub_mark"),
                             )
                         ],
                     ),
@@ -228,9 +225,7 @@ def test_fsm_execute_runs_async_transform() -> None:
                         arcs=[
                             ArcConfig(
                                 target="end",
-                                transform=FunctionReference(
-                                    type="registered", name="async_t"
-                                ),
+                                transform=FunctionReference(type="registered", name="async_t"),
                             )
                         ],
                     ),
@@ -347,8 +342,6 @@ def test_simple_fsm_process_batch_timeout_is_bounded() -> None:
         with pytest.raises(TimeoutError):
             fsm.process_batch([{"id": 1}, {"id": 2}], timeout=0.3)
         elapsed = time.monotonic() - start
-        assert elapsed < 3.0, (
-            f"process_batch(timeout=0.3) was not bounded — it took {elapsed:.2f}s"
-        )
+        assert elapsed < 3.0, f"process_batch(timeout=0.3) was not bounded — it took {elapsed:.2f}s"
     finally:
         fsm.close()

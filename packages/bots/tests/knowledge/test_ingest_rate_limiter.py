@@ -38,11 +38,7 @@ class RecordingRateLimiter(InMemoryRateLimiter):
     actual limiter."""
 
     def __init__(self) -> None:
-        super().__init__(
-            RateLimiterConfig(
-                default_rates=[RateLimit(limit=10_000, interval=60.0)]
-            )
-        )
+        super().__init__(RateLimiterConfig(default_rates=[RateLimit(limit=10_000, interval=60.0)]))
         self.acquired: list[str] = []
 
     async def acquire(
@@ -82,9 +78,7 @@ async def test_manager_rate_limiter_acquired_once_per_embedded_chunk(
     """Every ingest-path embed is preceded by ``acquire("embed")``."""
     kb = await _make_kb()
     rl = RecordingRateLimiter()
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, rate_limiter=rl
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, rate_limiter=rl)
 
     result = await mgr.ingest("d1")
 
@@ -102,9 +96,7 @@ async def test_ingest_from_backend_accepts_rate_limiter(
     kb = await _make_kb()
     rl = RecordingRateLimiter()
 
-    stats = await kb.ingest_from_backend(
-        backend, "d1", rate_limiter=rl
-    )
+    stats = await kb.ingest_from_backend(backend, "d1", rate_limiter=rl)
 
     assert stats["total_chunks"] >= 2
     assert rl.acquired == ["embed"] * stats["total_chunks"]
@@ -119,9 +111,7 @@ async def test_real_inmemory_rate_limiter_consumes_capacity(
     assertion (deterministic)."""
     kb = await _make_kb()
     rl = create_rate_limiter({"rates": [{"limit": 1000, "interval": 60}]})
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, rate_limiter=rl
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, rate_limiter=rl)
 
     result = await mgr.ingest("d1")
 

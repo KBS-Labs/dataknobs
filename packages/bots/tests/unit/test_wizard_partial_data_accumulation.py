@@ -35,8 +35,7 @@ def _gather_config() -> dict:
         .field("level", field_type="string", required=True)
         .transition(
             "done",
-            "data.get('name') and data.get('topic') "
-            "and data.get('level')",
+            "data.get('name') and data.get('topic') and data.get('level')",
         )
         .stage("done", is_end=True, prompt="All done!")
         .build()
@@ -57,8 +56,7 @@ def _gather_with_defaults_config() -> dict:
         .field("level", field_type="string", required=True, default="beginner")
         .transition(
             "done",
-            "data.get('name') and data.get('topic') "
-            "and data.get('level')",
+            "data.get('name') and data.get('topic') and data.get('level')",
         )
         .stage("done", is_end=True, prompt="All done!")
         .build()

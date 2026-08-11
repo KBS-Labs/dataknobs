@@ -116,9 +116,7 @@ class ListTemplatesTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "list_templates",
-            "description": (
-                "List available bot configuration templates."
-            ),
+            "description": ("List available bot configuration templates."),
             "tags": ("configbot",),
             "requires": ("template_registry",),
             "default_params": {"template_dir": "configs/templates"},
@@ -204,9 +202,7 @@ class ListTemplatesTool(ContextAwareTool):
                     "version": t.version,
                     "tags": t.tags,
                     "variables_count": len(t.variables),
-                    "required_variables": [
-                        v.name for v in t.get_required_variables()
-                    ],
+                    "required_variables": [v.name for v in t.get_required_variables()],
                 }
                 for t in templates
             ],
@@ -229,10 +225,7 @@ class GetTemplateDetailsTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "get_template_details",
-            "description": (
-                "Get detailed information about a specific "
-                "configuration template."
-            ),
+            "description": ("Get detailed information about a specific configuration template."),
             "tags": ("configbot",),
             "requires": ("template_registry",),
             "default_params": {"template_dir": "configs/templates"},
@@ -304,9 +297,7 @@ class GetTemplateDetailsTool(ContextAwareTool):
         if template is None:
             return {
                 "error": f"Template not found: {template_name}",
-                "available": [
-                    t.name for t in self._registry.list_templates()
-                ],
+                "available": [t.name for t in self._registry.list_templates()],
             }
 
         logger.debug(
@@ -321,12 +312,8 @@ class GetTemplateDetailsTool(ContextAwareTool):
             "version": template.version,
             "tags": template.tags,
             "variables": [v.to_dict() for v in template.variables],
-            "required_variables": [
-                v.to_dict() for v in template.get_required_variables()
-            ],
-            "optional_variables": [
-                v.to_dict() for v in template.get_optional_variables()
-            ],
+            "required_variables": [v.to_dict() for v in template.get_required_variables()],
+            "optional_variables": [v.to_dict() for v in template.get_optional_variables()],
         }
 
 
@@ -348,8 +335,7 @@ class PreviewConfigTool(ContextAwareTool):
         return {
             "name": "preview_config",
             "description": (
-                "Preview the bot configuration being built from "
-                "the current wizard data."
+                "Preview the bot configuration being built from the current wizard data."
             ),
             "tags": ("configbot",),
             "requires": ("builder_factory",),
@@ -462,9 +448,7 @@ class ValidateConfigTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "validate_config",
-            "description": (
-                "Validate the bot configuration being built."
-            ),
+            "description": ("Validate the bot configuration being built."),
             "tags": ("configbot",),
             "requires": ("validator",),
         }
@@ -583,9 +567,7 @@ class SaveConfigTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "save_config",
-            "description": (
-                "Save and finalize the bot configuration."
-            ),
+            "description": ("Save and finalize the bot configuration."),
             "tags": ("configbot",),
             "requires": ("draft_manager",),
         }
@@ -723,16 +705,12 @@ class SaveConfigTool(ContextAwareTool):
             except Exception as e:
                 return {"success": False, "error": f"Failed to build configuration: {e}"}
         else:
-            config = {
-                k: v for k, v in wizard_data.items() if not k.startswith("_")
-            }
+            config = {k: v for k, v in wizard_data.items() if not k.startswith("_")}
 
         # Finalizing the draft and writing the config are blocking disk I/O;
         # offload the whole persist tail so the tool never stalls the loop.
         draft_id = wizard_data.get("_draft_id")
-        final_path = await asyncio.to_thread(
-            self._persist_config, name, draft_id, config
-        )
+        final_path = await asyncio.to_thread(self._persist_config, name, draft_id, config)
 
         logger.info(
             "Saved configuration '%s' to %s",
@@ -782,9 +760,7 @@ class SaveConfigTool(ContextAwareTool):
         # Defense in depth: the name is validated at the entry point, but
         # re-check the composed path never escapes the output directory.
         if not final_path.resolve().is_relative_to(output_dir.resolve()):
-            raise ValueError(
-                f"Refusing to write config outside the output directory: {name}"
-            )
+            raise ValueError(f"Refusing to write config outside the output directory: {name}")
         with open(final_path, "w") as f:
             yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)
         return final_path
@@ -806,9 +782,7 @@ class ListAvailableToolsTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "list_available_tools",
-            "description": (
-                "List tools that can be added to the bot configuration."
-            ),
+            "description": ("List tools that can be added to the bot configuration."),
             "tags": ("configbot",),
         }
 
@@ -838,8 +812,7 @@ class ListAvailableToolsTool(ContextAwareTool):
                 "category": {
                     "type": "string",
                     "description": (
-                        "Optional category to filter tools by. "
-                        "Omit to list all tools."
+                        "Optional category to filter tools by. Omit to list all tools."
                     ),
                 },
             },
@@ -861,16 +834,11 @@ class ListAvailableToolsTool(ContextAwareTool):
             Dict with matching tools, count, and available categories.
         """
         if category:
-            filtered = [
-                t for t in self._tools
-                if t.get("category", "").lower() == category.lower()
-            ]
+            filtered = [t for t in self._tools if t.get("category", "").lower() == category.lower()]
         else:
             filtered = list(self._tools)
 
-        categories = sorted({
-            t["category"] for t in self._tools if "category" in t
-        })
+        categories = sorted({t["category"] for t in self._tools if "category" in t})
 
         logger.debug(
             "Listed %d available tools (category=%s)",
@@ -900,15 +868,11 @@ def _build_summary(config: dict[str, Any]) -> dict[str, Any]:
     llm = config.get("llm", {})
     if isinstance(llm, dict):
         if "$resource" in llm:
-            summary["sections"].append(
-                {"name": "LLM", "value": f"$resource: {llm['$resource']}"}
-            )
+            summary["sections"].append({"name": "LLM", "value": f"$resource: {llm['$resource']}"})
         else:
             provider = llm.get("provider", "unknown")
             model = llm.get("model", "default")
-            summary["sections"].append(
-                {"name": "LLM", "value": f"{provider}/{model}"}
-            )
+            summary["sections"].append({"name": "LLM", "value": f"{provider}/{model}"})
 
     storage = config.get("conversation_storage", {})
     if isinstance(storage, dict):
@@ -923,9 +887,7 @@ def _build_summary(config: dict[str, Any]) -> dict[str, Any]:
 
     memory = config.get("memory", {})
     if isinstance(memory, dict) and memory:
-        summary["sections"].append(
-            {"name": "Memory", "value": memory.get("type", "default")}
-        )
+        summary["sections"].append({"name": "Memory", "value": memory.get("type", "default")})
 
     reasoning = config.get("reasoning", {})
     if isinstance(reasoning, dict) and reasoning:
@@ -935,22 +897,16 @@ def _build_summary(config: dict[str, Any]) -> dict[str, Any]:
 
     kb = config.get("knowledge_base", {})
     if isinstance(kb, dict) and kb.get("enabled"):
-        summary["sections"].append(
-            {"name": "Knowledge Base", "value": "enabled"}
-        )
+        summary["sections"].append({"name": "Knowledge Base", "value": "enabled"})
 
     tools = config.get("tools", [])
     if isinstance(tools, list) and tools:
-        summary["sections"].append(
-            {"name": "Tools", "value": f"{len(tools)} configured"}
-        )
+        summary["sections"].append({"name": "Tools", "value": f"{len(tools)} configured"})
 
     prompt = config.get("system_prompt")
     if prompt:
         if isinstance(prompt, str):
-            summary["sections"].append(
-                {"name": "System Prompt", "value": f"{len(prompt)} chars"}
-            )
+            summary["sections"].append({"name": "System Prompt", "value": f"{len(prompt)} chars"})
         elif isinstance(prompt, dict):
             if "name" in prompt:
                 summary["sections"].append(

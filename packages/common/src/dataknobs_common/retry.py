@@ -148,6 +148,12 @@ def compute_backoff_delay(
     Returns:
         Delay in seconds, capped at ``max_delay``.
     """
+    # Seeded rather than defaulted in a trailing ``else``: the chain below
+    # covers every BackoffStrategy member, so mypy proves such an else
+    # unreachable -- while at runtime a caller passing something outside the
+    # enum still needs a delay rather than an UnboundLocalError.
+    delay = initial_delay
+
     if strategy == BackoffStrategy.FIXED:
         delay = initial_delay
 
@@ -167,9 +173,6 @@ def compute_backoff_delay(
             delay = initial_delay
         else:
             delay = random.uniform(initial_delay, previous_delay * 3)
-
-    else:
-        delay = initial_delay
 
     return min(delay, max_delay)
 
@@ -217,9 +220,7 @@ class RetryExecutor:
     def __init__(self, config: RetryConfig) -> None:
         self.config = config
 
-    def _calculate_delay(
-        self, attempt: int, previous_delay: float | None = None
-    ) -> float:
+    def _calculate_delay(self, attempt: int, previous_delay: float | None = None) -> float:
         """Calculate delay for the next retry attempt.
 
         Args:
@@ -267,14 +268,10 @@ class RetryExecutor:
         if self.config.retry_on_exception is not None:
             return bool(self.config.retry_on_exception(e))
         if self.config.retry_on_exceptions:
-            return any(
-                isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions
-            )
+            return any(isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions)
         return True
 
-    def _delay_before_retry_on_result(
-        self, attempt: int, previous_delay: float | None
-    ) -> float:
+    def _delay_before_retry_on_result(self, attempt: int, previous_delay: float | None) -> float:
         """Compute and log the delay before a result-triggered retry.
 
         Result-based retries fire no ``on_retry`` hook (that hook is
@@ -283,7 +280,9 @@ class RetryExecutor:
         delay = self._calculate_delay(attempt, previous_delay)
         logger.debug(
             "Retry on result (attempt %d/%d), delay=%.2fs",
-            attempt, self.config.max_attempts, delay,
+            attempt,
+            self.config.max_attempts,
+            delay,
         )
         return delay
 
@@ -308,7 +307,10 @@ class RetryExecutor:
             self.config.on_retry(attempt, e)
         logger.debug(
             "Retry after exception (attempt %d/%d), delay=%.2fs: %s",
-            attempt, self.config.max_attempts, delay, e,
+            attempt,
+            self.config.max_attempts,
+            delay,
+            e,
         )
         return delay
 
@@ -338,13 +340,9 @@ class RetryExecutor:
                     result = await result
                 if not self._should_retry_on_result(attempt, result):
                     return result
-                previous_delay = self._delay_before_retry_on_result(
-                    attempt, previous_delay
-                )
+                previous_delay = self._delay_before_retry_on_result(attempt, previous_delay)
             except Exception as e:
-                previous_delay = self._delay_before_retry_on_exception(
-                    attempt, e, previous_delay
-                )
+                previous_delay = self._delay_before_retry_on_exception(attempt, e, previous_delay)
             await asyncio.sleep(previous_delay)
 
         # The final attempt always returns (a good result, or a bad result at
@@ -352,9 +350,7 @@ class RetryExecutor:
         # loop never falls through. This satisfies the type checker only.
         raise RuntimeError("retry loop exited without return or raise")
 
-    def execute_sync(
-        self, func: Callable[..., Any], *args: Any, **kwargs: Any
-    ) -> Any:
+    def execute_sync(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute a synchronous callable with retry logic, blocking the thread.
 
         The synchronous twin of :meth:`execute`: same bounded-retry, backoff,
@@ -392,9 +388,7 @@ class RetryExecutor:
             try:
                 result = func(*args, **kwargs)
             except Exception as e:
-                previous_delay = self._delay_before_retry_on_exception(
-                    attempt, e, previous_delay
-                )
+                previous_delay = self._delay_before_retry_on_exception(attempt, e, previous_delay)
                 time.sleep(previous_delay)
                 continue
 
@@ -411,9 +405,7 @@ class RetryExecutor:
                 )
             if not self._should_retry_on_result(attempt, result):
                 return result
-            previous_delay = self._delay_before_retry_on_result(
-                attempt, previous_delay
-            )
+            previous_delay = self._delay_before_retry_on_result(attempt, previous_delay)
             time.sleep(previous_delay)
 
         # Unreachable — see execute(); satisfies the type checker only.

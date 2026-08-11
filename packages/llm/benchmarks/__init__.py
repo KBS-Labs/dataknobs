@@ -14,6 +14,7 @@ from .rag_benchmark import RAGBenchmark
 # Conversation benchmarks are optional (require dataknobs-common)
 try:
     from .conversation_benchmark import ConversationBenchmark
+
     CONVERSATION_BENCHMARKS_AVAILABLE = True
 except ImportError:
     ConversationBenchmark = None

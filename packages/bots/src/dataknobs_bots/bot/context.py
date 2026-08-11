@@ -93,10 +93,6 @@ class BotContext:
             conversation_id=overrides.get("conversation_id", self.conversation_id),
             client_id=overrides.get("client_id", self.client_id),
             user_id=overrides.get("user_id", self.user_id),
-            session_metadata=overrides.get(
-                "session_metadata", dict(self.session_metadata)
-            ),
-            request_metadata=overrides.get(
-                "request_metadata", dict(self.request_metadata)
-            ),
+            session_metadata=overrides.get("session_metadata", dict(self.session_metadata)),
+            request_metadata=overrides.get("request_metadata", dict(self.request_metadata)),
         )

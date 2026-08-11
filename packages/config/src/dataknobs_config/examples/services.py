@@ -1,6 +1,6 @@
 """Example service classes for configuration."""
 
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Self
 
 from dataknobs_config import ConfigurableBase
 
@@ -12,7 +12,7 @@ class ServiceManager(ConfigurableBase):
     multiple services.
     """
 
-    def __init__(self, name: str, **kwargs):
+    def __init__(self, name: str, **kwargs: Any):
         """Initialize service manager.
 
         Args:
@@ -47,15 +47,21 @@ class ServiceRegistry:
     Demonstrates a singleton-like pattern for service registration.
     """
 
-    _instance: Optional["ServiceRegistry"] = None
+    #: One instance per class, not one for the hierarchy. A single shared slot
+    #: hands a subclass the base class's instance — which is why annotating
+    #: ``__new__`` at all made both checkers object, mypy to the return type and
+    #: ruff to the pattern. This is example code, so it demonstrates the form
+    #: that survives being subclassed.
+    _instances: ClassVar[dict[type, Any]] = {}
 
-    def __new__(cls, **kwargs):
+    def __new__(cls, **kwargs: Any) -> Self:
         """Ensure single instance."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__new__(cls)
+        instance: Self = cls._instances[cls]
+        return instance
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any):
         """Initialize registry."""
         if not hasattr(self, "initialized"):
             self.services: Dict[str, Any] = {}

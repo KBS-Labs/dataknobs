@@ -54,7 +54,8 @@ class TestPostgresFactoryPath:
 
     @pytest.mark.asyncio
     async def test_factory_path_initializes_against_postgres(
-        self, postgres_factory_path_config: StorageConfig,
+        self,
+        postgres_factory_path_config: StorageConfig,
     ) -> None:
         """Factory path produces ``AsyncPostgresDatabase``
         and ``initialize()`` succeeds against a real PG.
@@ -79,7 +80,8 @@ class TestPostgresFactoryPath:
 
     @pytest.mark.asyncio
     async def test_factory_path_save_and_query_round_trip(
-        self, postgres_factory_path_config: StorageConfig,
+        self,
+        postgres_factory_path_config: StorageConfig,
     ) -> None:
         """Round-trip: factory-path PG storage actually persists.
 
@@ -115,12 +117,13 @@ class TestPostgresFactoryPath:
             )
             history.end_time = 1002.0
             await storage.save_history(
-                history, metadata={"source": "test_116_117"},
+                history,
+                metadata={"source": "test_116_117"},
             )
 
             results: list[dict[str, Any]] = await storage.query_histories({})
-            assert any(
-                r.get("id") == "test-exec-116-117" for r in results
-            ), "History saved via factory path did not persist"
+            assert any(r.get("id") == "test-exec-116-117" for r in results), (
+                "History saved via factory path did not persist"
+            )
         finally:
             await storage.close()

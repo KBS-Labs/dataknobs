@@ -39,9 +39,7 @@ if is_chromadb_available():
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-requires_chromadb = pytest.mark.skipif(
-    not is_chromadb_available(), reason="chromadb not installed"
-)
+requires_chromadb = pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed")
 
 pytestmark = [pytest.mark.asyncio, requires_chromadb]
 
@@ -109,9 +107,7 @@ async def test_initialize_does_not_block(make_store, tmp_path) -> None:
 async def test_add_and_search_round_trip(make_store, tmp_path) -> None:
     store = make_store(persist_path=str(tmp_path / "rt"))
     await store.initialize()
-    await store.add_vectors(
-        [_vec(1), _vec(2)], ids=["a", "b"], metadata=[{"k": "v"}, {"k": "w"}]
-    )
+    await store.add_vectors([_vec(1), _vec(2)], ids=["a", "b"], metadata=[{"k": "v"}, {"k": "w"}])
     results = await store.search(_vec(1), k=2)
     assert {r[0] for r in results} == {"a", "b"}
 
@@ -120,7 +116,7 @@ async def test_get_vectors_returns_metadata(make_store, tmp_path) -> None:
     store = make_store(persist_path=str(tmp_path / "get"))
     await store.initialize()
     await store.add_vectors([_vec(1)], ids=["a"], metadata=[{"k": "v"}])
-    (vec, meta), = await store.get_vectors(["a"])
+    ((vec, meta),) = await store.get_vectors(["a"])
     assert vec is not None
     assert meta == {"k": "v"}
 

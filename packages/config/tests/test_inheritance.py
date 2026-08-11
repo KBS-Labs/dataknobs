@@ -202,10 +202,12 @@ class TestSubstituteEnvVars:
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         monkeypatch.setenv("HTTP_URL", "https://api.example.com/v1")
 
-        result = substitute_env_vars({
-            "redis": "${REDIS_URL}",
-            "api": "${HTTP_URL}",
-        })
+        result = substitute_env_vars(
+            {
+                "redis": "${REDIS_URL}",
+                "api": "${HTTP_URL}",
+            }
+        )
         assert result["redis"] == "redis://localhost:6379/0"
         assert result["api"] == "https://api.example.com/v1"
 
@@ -286,9 +288,7 @@ class TestSubstituteEnvVars:
     def test_question_mark_uses_var_name_when_msg_empty(self, monkeypatch):
         """${VAR:?} (empty message) raises using the variable name."""
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        with pytest.raises(
-            ValueError, match="Required environment variable not set: MISSING_VAR"
-        ):
+        with pytest.raises(ValueError, match="Required environment variable not set: MISSING_VAR"):
             substitute_env_vars({"k": "${MISSING_VAR:?}"})
 
     def test_question_mark_returns_value_when_set(self, monkeypatch):
@@ -337,9 +337,7 @@ class TestSubstituteEnvVars:
         """
         monkeypatch.setenv("ZERO", "0")
         monkeypatch.setenv("ONE", "1")
-        result = substitute_env_vars(
-            {"z": "${ZERO}", "o": "${ONE}"}, type_coerce=True
-        )
+        result = substitute_env_vars({"z": "${ZERO}", "o": "${ONE}"}, type_coerce=True)
         assert result == {"z": 0, "o": 1}
         assert type(result["z"]) is int
         assert type(result["o"]) is int
@@ -371,9 +369,7 @@ class TestSubstituteEnvVars:
     def test_expand_user_paths_off(self, monkeypatch):
         """expand_user_paths=False leaves ~ literals intact."""
         monkeypatch.setenv("P", "~/data")
-        result = substitute_env_vars(
-            {"path": "${P}"}, expand_user_paths=False
-        )
+        result = substitute_env_vars({"path": "${P}"}, expand_user_paths=False)
         assert result == {"path": "~/data"}
 
     def test_expand_user_paths_fast_path_tilde(self, monkeypatch, tmp_path):
@@ -427,9 +423,7 @@ class TestSubstituteEnvVars:
     def test_question_mark_msg_starting_with_colon(self, monkeypatch):
         """${VAR:?:foo} uses ':foo' as the error message when VAR is unset."""
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        with pytest.raises(
-            ValueError, match=r"Required environment variable not set: :foo"
-        ):
+        with pytest.raises(ValueError, match=r"Required environment variable not set: :foo"):
             substitute_env_vars({"k": "${MISSING_VAR:?:foo}"})
 
     def test_required_env_var_error_is_public_and_introspectable(self, monkeypatch):
@@ -807,8 +801,7 @@ class TestCacheSubstitutionProvenance:
 
         assert child["secret"] == SECRET_WITH_VAR_SYNTAX
         assert child["secret"] != "pINJECTEDss", (
-            "the secret's content was expanded as a template, disclosing "
-            "GUARD_INNER into the value"
+            "the secret's content was expanded as a template, disclosing GUARD_INNER into the value"
         )
 
     def test_load_order_does_not_change_result(self, parent_and_child):
@@ -903,9 +896,7 @@ class TestCacheParticipationIsAllOrNothing:
 
         assert loader.load("svc")["port"] == 2
 
-    def test_load_from_file_does_not_answer_for_another_directory(
-        self, tmp_path
-    ):
+    def test_load_from_file_does_not_answer_for_another_directory(self, tmp_path):
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         configured = tmp_path / "configured"
@@ -918,20 +909,14 @@ class TestCacheParticipationIsAllOrNothing:
 
         assert loader.load("svc")["origin"] == "configured"
 
-    def test_a_parent_pulled_in_by_load_from_file_is_not_cached_either(
-        self, tmp_path
-    ):
+    def test_a_parent_pulled_in_by_load_from_file_is_not_cached_either(self, tmp_path):
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         configured = tmp_path / "configured"
         configured.mkdir()
         (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
-        (elsewhere / "svc.yaml").write_text(
-            yaml.dump({"extends": "base", "port": 1})
-        )
-        (configured / "base.yaml").write_text(
-            yaml.dump({"origin": "configured"})
-        )
+        (elsewhere / "svc.yaml").write_text(yaml.dump({"extends": "base", "port": 1}))
+        (configured / "base.yaml").write_text(yaml.dump({"origin": "configured"}))
 
         loader = InheritableConfigLoader(config_dir=configured)
         loader.load_from_file(elsewhere / "svc.yaml")
@@ -939,9 +924,7 @@ class TestCacheParticipationIsAllOrNothing:
         # Read back in the form the recursion would have stored: it loads a
         # parent with substitute_vars=False, so asserting through the default
         # True would miss on the key alone and pass without the write gate.
-        assert (
-            loader.load("base", substitute_vars=False)["origin"] == "configured"
-        )
+        assert loader.load("base", substitute_vars=False)["origin"] == "configured"
 
     def test_a_bypassing_load_records_no_inheritance_edge(self, tmp_path):
         """Not participating in the cache means not recording edges for it.
@@ -956,9 +939,7 @@ class TestCacheParticipationIsAllOrNothing:
         configured = tmp_path / "configured"
         configured.mkdir()
         (elsewhere / "base.yaml").write_text(yaml.dump({"origin": "elsewhere"}))
-        (elsewhere / "svc.yaml").write_text(
-            yaml.dump({"extends": "base", "port": 1})
-        )
+        (elsewhere / "svc.yaml").write_text(yaml.dump({"extends": "base", "port": 1}))
         (configured / "base.yaml").write_text(yaml.dump({"origin": "conf"}))
         (configured / "svc.yaml").write_text(yaml.dump({"port": 9}))
 
@@ -980,9 +961,7 @@ class TestClearingAParentClearsWhatInheritedFromIt:
 
     def test_clearing_a_parent_reloads_the_child(self, tmp_path):
         (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
-        (tmp_path / "svc.yaml").write_text(
-            yaml.dump({"extends": "base", "port": 8080})
-        )
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"extends": "base", "port": 8080}))
         loader = InheritableConfigLoader(config_dir=tmp_path)
 
         assert loader.load("svc")["timeout"] == 30
@@ -994,12 +973,8 @@ class TestClearingAParentClearsWhatInheritedFromIt:
 
     def test_clearing_a_grandparent_reaches_the_grandchild(self, tmp_path):
         (tmp_path / "root.yaml").write_text(yaml.dump({"region": "us-east"}))
-        (tmp_path / "mid.yaml").write_text(
-            yaml.dump({"extends": "root", "tier": "std"})
-        )
-        (tmp_path / "leaf.yaml").write_text(
-            yaml.dump({"extends": "mid", "name": "leaf"})
-        )
+        (tmp_path / "mid.yaml").write_text(yaml.dump({"extends": "root", "tier": "std"}))
+        (tmp_path / "leaf.yaml").write_text(yaml.dump({"extends": "mid", "name": "leaf"}))
         loader = InheritableConfigLoader(config_dir=tmp_path)
 
         assert loader.load("leaf")["region"] == "us-east"
@@ -1012,9 +987,7 @@ class TestClearingAParentClearsWhatInheritedFromIt:
     def test_clearing_a_child_leaves_its_parent_cached(self, tmp_path):
         """Invalidation runs down the inheritance edges, not up them."""
         (tmp_path / "base.yaml").write_text(yaml.dump({"timeout": 30}))
-        (tmp_path / "svc.yaml").write_text(
-            yaml.dump({"extends": "base", "port": 8080})
-        )
+        (tmp_path / "svc.yaml").write_text(yaml.dump({"extends": "base", "port": 8080}))
         loader = InheritableConfigLoader(config_dir=tmp_path)
         loader.load("svc")
 
@@ -1053,12 +1026,8 @@ class TestNameResolution:
     def domains(self, tmp_path):
         """A `domains/` layout: parents named bare inside the child."""
         (tmp_path / "domains").mkdir()
-        (tmp_path / "domains" / "parent.yaml").write_text(
-            yaml.dump({"a": 1, "shared": {"x": 1}})
-        )
-        (tmp_path / "domains" / "child.yaml").write_text(
-            yaml.dump({"extends": "parent", "b": 2})
-        )
+        (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"a": 1, "shared": {"x": 1}}))
+        (tmp_path / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 2}))
         return tmp_path
 
     def test_extends_resolves_through_resolver(self, domains):
@@ -1087,9 +1056,7 @@ class TestNameResolution:
         """``None`` is the ResourceResolver contract for "no mapping"."""
         (tmp_path / "known.yaml").write_text(yaml.dump({"k": 1}))
         (tmp_path / "unmapped.yaml").write_text(yaml.dump({"k": 2}))
-        loader = InheritableConfigLoader(
-            tmp_path, resolver=MappingResolver({"known": "known"})
-        )
+        loader = InheritableConfigLoader(tmp_path, resolver=MappingResolver({"known": "known"}))
 
         assert loader.resolve_name("unmapped") == "unmapped"
         assert loader.load("unmapped") == {"k": 2}
@@ -1098,9 +1065,7 @@ class TestNameResolution:
         """A shipped resolver, no consumer class: an alias to a real file."""
         loader = InheritableConfigLoader(
             domains,
-            resolver=MappingResolver(
-                {"tutor": "domains/child", "parent": "domains/parent"}
-            ),
+            resolver=MappingResolver({"tutor": "domains/child", "parent": "domains/parent"}),
         )
 
         assert loader.load("tutor") == {"a": 1, "shared": {"x": 1}, "b": 2}
@@ -1132,9 +1097,7 @@ class TestNameResolution:
                 return f"domains/{name}"
 
         with pytest.warns(UserWarning, match="alternatives, not layers"):
-            loader = DomainAware(
-                domains, resolver=MappingResolver({"child": "somewhere-else"})
-            )
+            loader = DomainAware(domains, resolver=MappingResolver({"child": "somewhere-else"}))
 
         assert loader.resolve_name("child") == "domains/child"
 
@@ -1146,9 +1109,7 @@ class TestNameResolution:
                 return f"domains/{super().resolve_name(name)}"
 
         with pytest.warns(UserWarning, match="alternatives, not layers"):
-            loader = Stacked(
-                tmp_path, resolver=CallableResolver(lambda n: f"domains/{n}")
-            )
+            loader = Stacked(tmp_path, resolver=CallableResolver(lambda n: f"domains/{n}"))
 
         assert loader.resolve_name("child") == "domains/domains/child"
 
@@ -1167,9 +1128,7 @@ class TestResolvedNameIsTheOneIdentity:
         """`c` and `child` both name domains/child.yaml."""
         (tmp_path / "domains").mkdir()
         (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"t": 30}))
-        (tmp_path / "domains" / "child.yaml").write_text(
-            yaml.dump({"extends": "parent", "b": 2})
-        )
+        (tmp_path / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 2}))
         return tmp_path
 
     def _loader(self, root):
@@ -1205,9 +1164,7 @@ class TestResolvedNameIsTheOneIdentity:
         loader = self._loader(aliased)
         loader.load("child")
 
-        (aliased / "domains" / "child.yaml").write_text(
-            yaml.dump({"extends": "parent", "b": 99})
-        )
+        (aliased / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 99}))
         loader.clear_cache("c")
 
         assert loader.load("child")["b"] == 99
@@ -1264,9 +1221,7 @@ class TestResolvedNameIsTheOneIdentity:
         config is read twice, and a longer alias chain is re-read in full.
         """
         (tmp_path / "domains").mkdir()
-        (tmp_path / "domains" / "a.yaml").write_text(
-            yaml.dump({"extends": "alias-of-a", "v": 1})
-        )
+        (tmp_path / "domains" / "a.yaml").write_text(yaml.dump({"extends": "alias-of-a", "v": 1}))
 
         class Counting(InheritableConfigLoader):
             reads = 0
@@ -1277,9 +1232,7 @@ class TestResolvedNameIsTheOneIdentity:
 
         loader = Counting(
             tmp_path,
-            resolver=MappingResolver(
-                {"a": "domains/a", "alias-of-a": "domains/a"}
-            ),
+            resolver=MappingResolver({"a": "domains/a", "alias-of-a": "domains/a"}),
         )
 
         with pytest.raises(InheritanceError, match="domains/a"):
@@ -1299,18 +1252,12 @@ class TestLoadFromFileIgnoresResolution:
     @pytest.fixture
     def tree(self, tmp_path):
         (tmp_path / "domains").mkdir()
-        (tmp_path / "domains" / "parent.yaml").write_text(
-            yaml.dump({"a": 1, "shared": {"x": 1}})
-        )
-        (tmp_path / "domains" / "child.yaml").write_text(
-            yaml.dump({"extends": "parent", "b": 2})
-        )
+        (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"a": 1, "shared": {"x": 1}}))
+        (tmp_path / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 2}))
         return tmp_path
 
     def _prefixing(self, root):
-        return InheritableConfigLoader(
-            root, resolver=CallableResolver(lambda n: f"domains/{n}")
-        )
+        return InheritableConfigLoader(root, resolver=CallableResolver(lambda n: f"domains/{n}"))
 
     def test_load_from_file_ignores_resolver(self, tree):
         loader = self._prefixing(tree)
@@ -1409,9 +1356,7 @@ class TestEnumerationIsTheOtherHalfOfTheMapping:
     def nested(self, tmp_path):
         (tmp_path / "domains").mkdir()
         (tmp_path / "domains" / "parent.yaml").write_text(yaml.dump({"a": 1}))
-        (tmp_path / "domains" / "child.yaml").write_text(
-            yaml.dump({"extends": "parent", "b": 2})
-        )
+        (tmp_path / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 2}))
         # Not YAML: `load` accepts every extension in the shared list, so an
         # override enumerating only one of them reports a subset.
         (tmp_path / "domains" / "extra.json").write_text('{"c": 3}')

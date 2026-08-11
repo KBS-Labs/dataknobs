@@ -22,6 +22,7 @@ class VersionStatus(Enum):
         DEPRECATED: Version is deprecated but still available
         ARCHIVED: Version is archived and should not be used
     """
+
     DRAFT = "draft"
     ACTIVE = "active"
     PRODUCTION = "production"
@@ -48,6 +49,7 @@ class PromptVersion:
         tags: List of tags (e.g., ["production", "experiment-A"])
         status: Current status of this version
     """
+
     version_id: str
     name: str
     prompt_type: str
@@ -104,6 +106,7 @@ class PromptVariant:
         description: Human-readable description
         metadata: Additional variant metadata
     """
+
     version: str
     weight: float
     description: str = ""
@@ -145,6 +148,7 @@ class PromptExperiment:
         metrics: Aggregated metrics for the experiment
         metadata: Additional experiment metadata
     """
+
     experiment_id: str
     name: str
     prompt_type: str
@@ -161,8 +165,7 @@ class PromptExperiment:
         total = sum(self.traffic_split.values())
         if not (0.99 <= total <= 1.01):  # Allow small floating point error
             raise ValueError(
-                f"Traffic split must sum to 1.0, got {total}. "
-                f"Split: {self.traffic_split}"
+                f"Traffic split must sum to 1.0, got {total}. Split: {self.traffic_split}"
             )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -192,8 +195,7 @@ class PromptExperiment:
         # Parse variants
         if data.get("variants"):
             data["variants"] = [
-                PromptVariant.from_dict(v) if isinstance(v, dict) else v
-                for v in data["variants"]
+                PromptVariant.from_dict(v) if isinstance(v, dict) else v for v in data["variants"]
             ]
         return cls(**data)
 
@@ -213,6 +215,7 @@ class PromptMetrics:
         last_used: Timestamp of last use
         metadata: Additional custom metrics
     """
+
     version_id: str
     total_uses: int = 0
     success_count: int = 0
@@ -296,6 +299,7 @@ class MetricEvent:
         user_rating: User rating 1-5 (None if not provided)
         metadata: Additional event metadata
     """
+
     version_id: str
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     success: bool = True

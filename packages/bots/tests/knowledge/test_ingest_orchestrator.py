@@ -97,9 +97,7 @@ async def _make_bus() -> InMemoryEventBus:
     return bus
 
 
-async def _wait_for(
-    condition: Any, timeout: float = 1.0, interval: float = 0.01
-) -> None:
+async def _wait_for(condition: Any, timeout: float = 1.0, interval: float = 0.01) -> None:
     """Poll ``condition()`` until truthy or timeout elapses."""
     elapsed = 0.0
     while elapsed < timeout:
@@ -109,9 +107,7 @@ async def _wait_for(
         elapsed += interval
 
 
-def _trigger_event(
-    payload: dict[str, Any] | None, topic: str = TRIGGER_TOPIC
-) -> Event:
+def _trigger_event(payload: dict[str, Any] | None, topic: str = TRIGGER_TOPIC) -> Event:
     return Event(
         type=EventType.UPDATED,
         topic=topic,
@@ -254,9 +250,7 @@ async def test_trigger_without_domain_id_is_skipped_with_warning(
     orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
     await orch.start()
 
-    with caplog.at_level(
-        "WARNING", logger="dataknobs_bots.knowledge.orchestration"
-    ):
+    with caplog.at_level("WARNING", logger="dataknobs_bots.knowledge.orchestration"):
         await bus.publish(
             TRIGGER_TOPIC,
             _trigger_event({}),
@@ -265,9 +259,9 @@ async def test_trigger_without_domain_id_is_skipped_with_warning(
         await asyncio.sleep(0.05)
 
     assert manager.calls == []
-    assert any(
-        "without domain_id" in record.message for record in caplog.records
-    ), f"Expected warning about missing domain_id; got {caplog.records}"
+    assert any("without domain_id" in record.message for record in caplog.records), (
+        f"Expected warning about missing domain_id; got {caplog.records}"
+    )
 
     await orch.stop()
     await bus.close()
@@ -283,9 +277,7 @@ async def test_manager_failure_does_not_break_subscription(
     orch = IngestOrchestrator(failing_manager, bus)  # type: ignore[arg-type]
     await orch.start()
 
-    with caplog.at_level(
-        "ERROR", logger="dataknobs_bots.knowledge.orchestration"
-    ):
+    with caplog.at_level("ERROR", logger="dataknobs_bots.knowledge.orchestration"):
         await bus.publish(
             TRIGGER_TOPIC,
             _trigger_event({"domain_id": "d1"}),
@@ -293,10 +285,7 @@ async def test_manager_failure_does_not_break_subscription(
         await _wait_for(lambda: len(failing_manager.calls) >= 1)
 
     assert failing_manager.calls == [("d1", None)]
-    assert any(
-        "failed to process trigger" in record.message
-        for record in caplog.records
-    )
+    assert any("failed to process trigger" in record.message for record in caplog.records)
     # Subscription must still be alive — send a second event
     await bus.publish(
         TRIGGER_TOPIC,
@@ -332,9 +321,7 @@ async def test_end_to_end_with_real_manager() -> None:
             "embedding_model": "test",
         }
     )
-    manager = KnowledgeIngestionManager(
-        source=backend, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=backend, destination=rag, event_bus=bus)
     orch = IngestOrchestrator(manager, bus)
 
     completion_events: list[Event] = []
@@ -420,12 +407,8 @@ async def test_concurrent_triggers_same_domain_are_serialized() -> None:
     orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
     await orch.start()
 
-    pub1 = asyncio.create_task(
-        bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
-    )
-    pub2 = asyncio.create_task(
-        bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
-    )
+    pub1 = asyncio.create_task(bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"})))
+    pub2 = asyncio.create_task(bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"})))
 
     # Wait until the first invocation is inside the gate.
     await _wait_for(lambda: len(manager.started) >= 1, timeout=1.0)
@@ -434,8 +417,7 @@ async def test_concurrent_triggers_same_domain_are_serialized() -> None:
     await asyncio.sleep(0.05)
 
     assert manager.peak_concurrency.get("d1", 0) == 1, (
-        f"Expected serialization; peak concurrency for d1 was "
-        f"{manager.peak_concurrency.get('d1')}"
+        f"Expected serialization; peak concurrency for d1 was {manager.peak_concurrency.get('d1')}"
     )
     assert len(manager.started) == 1
     assert len(manager.finished) == 0
@@ -463,12 +445,8 @@ async def test_concurrent_triggers_different_domains_run_in_parallel() -> None:
     orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
     await orch.start()
 
-    pub1 = asyncio.create_task(
-        bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
-    )
-    pub2 = asyncio.create_task(
-        bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d2"}))
-    )
+    pub1 = asyncio.create_task(bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"})))
+    pub2 = asyncio.create_task(bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d2"})))
 
     # Both must start before either completes — proving they run in
     # parallel (neither is holding a cross-domain lock).
@@ -534,10 +512,7 @@ def pg_dsn(
 ) -> str:
     """libpq URI for the shared test DB (advisory locks are global)."""
     p = postgres_connection_params
-    return (
-        f"postgresql://{p['user']}:{p['password']}"
-        f"@{p['host']}:{p['port']}/{p['database']}"
-    )
+    return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
 
 
 @pytest.mark.asyncio
@@ -884,9 +859,7 @@ async def _make_real_manager(
             "embedding_model": "test",
         }
     )
-    manager = KnowledgeIngestionManager(
-        source=backend, destination=rag, event_bus=bus
-    )
+    manager = KnowledgeIngestionManager(source=backend, destination=rag, event_bus=bus)
     return manager, rag
 
 
@@ -902,9 +875,7 @@ class _RecordingResolver:
         self._mapping = mapping
         self.calls: list[tuple[str | None, str]] = []
 
-    async def __call__(
-        self, *, tenant_id: str | None, domain_id: str
-    ) -> Any:
+    async def __call__(self, *, tenant_id: str | None, domain_id: str) -> Any:
         self.calls.append((tenant_id, domain_id))
         return self._mapping[tenant_id]
 
@@ -915,9 +886,7 @@ class _RaisingResolver:
     def __init__(self) -> None:
         self.calls: list[tuple[str | None, str]] = []
 
-    async def __call__(
-        self, *, tenant_id: str | None, domain_id: str
-    ) -> Any:
+    async def __call__(self, *, tenant_id: str | None, domain_id: str) -> Any:
         self.calls.append((tenant_id, domain_id))
         raise RuntimeError("resolver boom")
 
@@ -1063,9 +1032,7 @@ async def test_lock_key_is_tenant_scoped() -> None:
     manager = _StubManager()
     resolver = _RecordingResolver({"acme": manager, "umbrella": manager})
     lock = RecordingLock()
-    orch = IngestOrchestrator(
-        None, bus, lock=lock, manager_resolver=resolver
-    )
+    orch = IngestOrchestrator(None, bus, lock=lock, manager_resolver=resolver)
     await orch.start()
 
     await bus.publish(
@@ -1114,18 +1081,14 @@ async def test_two_tenants_same_domain_run_in_parallel() -> None:
 
     # Both enter their critical section before either is released —
     # only possible if the lock keys differ.
-    await _wait_for(
-        lambda: gm_a.started and gm_b.started, timeout=1.0
-    )
+    await _wait_for(lambda: gm_a.started and gm_b.started, timeout=1.0)
     assert gm_a.started == ["d1"]
     assert gm_b.started == ["d1"]
     assert gm_a.finished == [] and gm_b.finished == []
 
     gm_a.gate_for("d1").set()
     gm_b.gate_for("d1").set()
-    await _wait_for(
-        lambda: gm_a.finished and gm_b.finished, timeout=1.0
-    )
+    await _wait_for(lambda: gm_a.finished and gm_b.finished, timeout=1.0)
 
     await asyncio.gather(pub1, pub2)
     await orch.stop()
@@ -1176,9 +1139,7 @@ async def test_constructor_rejects_both_manager_and_resolver() -> None:
     """``ingestion_manager`` and ``manager_resolver`` are mutually exclusive."""
     bus = await _make_bus()
     resolver = _RecordingResolver({})
-    with pytest.raises(
-        ValueError, match=r"ingestion_manager.*manager_resolver"
-    ):
+    with pytest.raises(ValueError, match=r"ingestion_manager.*manager_resolver"):
         IngestOrchestrator(
             _StubManager(),  # type: ignore[arg-type]
             bus,
@@ -1217,9 +1178,7 @@ async def test_resolver_exception_is_logged_not_raised(
         def __init__(self) -> None:
             self.calls: list[tuple[str | None, str]] = []
 
-        async def __call__(
-            self, *, tenant_id: str | None, domain_id: str
-        ) -> Any:
+        async def __call__(self, *, tenant_id: str | None, domain_id: str) -> Any:
             self.calls.append((tenant_id, domain_id))
             if tenant_id == "bad":
                 raise RuntimeError("resolver boom")
@@ -1229,19 +1188,14 @@ async def test_resolver_exception_is_logged_not_raised(
     orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
     await orch.start()
 
-    with caplog.at_level(
-        "ERROR", logger="dataknobs_bots.knowledge.orchestration"
-    ):
+    with caplog.at_level("ERROR", logger="dataknobs_bots.knowledge.orchestration"):
         await bus.publish(
             TRIGGER_TOPIC,
             _trigger_event({"domain_id": "d1", "tenant_id": "bad"}),
         )
         await _wait_for(lambda: len(resolver.calls) >= 1)
 
-    assert any(
-        "failed to process trigger" in record.message
-        for record in caplog.records
-    )
+    assert any("failed to process trigger" in record.message for record in caplog.records)
     # Subscription still alive — a good event for another tenant works.
     await bus.publish(
         TRIGGER_TOPIC,
@@ -1271,9 +1225,7 @@ async def test_static_path_unchanged_when_no_resolver() -> None:
 
     await bus.publish(
         TRIGGER_TOPIC,
-        _trigger_event(
-            {"domain_id": "d1", "tenant_id": "ignored", "last_version": "v1"}
-        ),
+        _trigger_event({"domain_id": "d1", "tenant_id": "ignored", "last_version": "v1"}),
     )
     await _wait_for(lambda: len(manager.calls) >= 1)
     assert manager.calls == [("d1", "v1")]
@@ -1290,9 +1242,7 @@ async def test_resolver_path_end_to_end_publishes_completion_event() -> None:
     ``test_end_to_end_with_real_manager`` through the resolver seam.
     """
     bus = await _make_bus()
-    manager, _rag = await _make_real_manager(
-        bus, "d1", "intro.md", b"# Intro\n\nHello.\n"
-    )
+    manager, _rag = await _make_real_manager(bus, "d1", "intro.md", b"# Intro\n\nHello.\n")
     completion_events: list[Event] = []
 
     async def completion_handler(event: Event) -> None:

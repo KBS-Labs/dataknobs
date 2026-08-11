@@ -161,9 +161,7 @@ class AssessmentSession:
             assessment_version=data.get("assessment_version", ""),
             started_at=data.get("started_at", _now_iso()),
             completed_at=data.get("completed_at"),
-            responses=[
-                StudentResponse.from_dict(r) for r in data.get("responses", [])
-            ],
+            responses=[StudentResponse.from_dict(r) for r in data.get("responses", [])],
             score=data.get("score"),
             rubric_evaluation_id=data.get("rubric_evaluation_id"),
         )
@@ -237,15 +235,12 @@ class CumulativePerformance:
         if session.score is not None:
             # Running average
             self.average_score = (
-                (self.average_score * (self.total_sessions - 1) + session.score)
-                / self.total_sessions
-            )
+                self.average_score * (self.total_sessions - 1) + session.score
+            ) / self.total_sessions
 
         # Simple mastery estimate based on correct rate
         if self.total_questions_attempted > 0:
-            self.mastery_estimate = (
-                self.correct_count / self.total_questions_attempted
-            )
+            self.mastery_estimate = self.correct_count / self.total_questions_attempted
 
 
 async def start_assessment_session(
@@ -325,9 +320,7 @@ async def record_response(
     session = AssessmentSession.from_dict(session_data)
 
     # Count existing responses for this question to determine attempt number
-    attempt = sum(
-        1 for r in session.responses if r.question_id == question_id
-    ) + 1
+    attempt = sum(1 for r in session.responses if r.question_id == question_id) + 1
 
     student_response = StudentResponse(
         question_id=question_id,

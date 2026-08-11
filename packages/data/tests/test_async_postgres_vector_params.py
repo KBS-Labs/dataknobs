@@ -12,9 +12,7 @@ from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 class TestBuildVectorParams:
     def test_empty_list(self):
-        cols, placeholders, values = AsyncPostgresDatabase._build_vector_params(
-            [], start_param=4
-        )
+        cols, placeholders, values = AsyncPostgresDatabase._build_vector_params([], start_param=4)
         assert cols == []
         assert placeholders == []
         assert values == []
@@ -55,20 +53,14 @@ class TestBuildVectorParams:
     def test_start_param_respected(self):
         """start_param controls the first $N — callers may have variable base args."""
         inserts = [('"vector_x"', "[1.0]")]
-        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(
-            inserts, start_param=1
-        )
+        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(inserts, start_param=1)
         assert placeholders == ["$1::vector"]
 
-        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(
-            inserts, start_param=7
-        )
+        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(inserts, start_param=7)
         assert placeholders == ["$7::vector"]
 
     def test_placeholder_always_has_vector_cast(self):
         """Every placeholder must end with ::vector regardless of field name."""
         inserts = [('"vector_foo"', "[0.0]")]
-        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(
-            inserts, start_param=4
-        )
+        _, placeholders, _ = AsyncPostgresDatabase._build_vector_params(inserts, start_param=4)
         assert all(p.endswith("::vector") for p in placeholders)

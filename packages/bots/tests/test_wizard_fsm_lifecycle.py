@@ -37,9 +37,7 @@ def _minimal_config(name: str = "lifecycle") -> dict:
                     "type": "object",
                     "properties": {"name": {"type": "string"}},
                 },
-                "transitions": [
-                    {"target": "done", "condition": "data.get('name')"}
-                ],
+                "transitions": [{"target": "done", "condition": "data.get('name')"}],
             },
             {"name": "done", "is_end": True, "prompt": "All done!"},
         ],

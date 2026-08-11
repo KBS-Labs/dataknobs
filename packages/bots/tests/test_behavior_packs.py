@@ -72,9 +72,7 @@ def test_two_packs_compose_across_every_field(
             name="observability",
             priority=20,
             middleware=({"class": _COST_MW},),
-            conversation_middleware=(
-                {"class": _REDACTION_MW, "params": {"redactions": []}},
-            ),
+            conversation_middleware=({"class": _REDACTION_MW, "params": {"redactions": []}},),
             strategy_overrides={"max_iterations": 5, "verbose": True},
             stage_synthesizers=("intent_confirm", "vendor_select"),
         )
@@ -116,14 +114,10 @@ def test_the_contested_override_key_is_reported(
 ) -> None:
     """A silently-won MERGE collision would be the defect; it warns."""
     registry.register_pack(
-        BehaviorPackSpec(
-            name="low", priority=1, strategy_overrides={"max_iterations": 3}
-        )
+        BehaviorPackSpec(name="low", priority=1, strategy_overrides={"max_iterations": 3})
     )
     registry.register_pack(
-        BehaviorPackSpec(
-            name="high", priority=2, strategy_overrides={"max_iterations": 5}
-        )
+        BehaviorPackSpec(name="high", priority=2, strategy_overrides={"max_iterations": 5})
     )
 
     resolution = registry.resolve({"low": {}, "high": {}})
@@ -143,12 +137,8 @@ def test_conflicting_required_strategy_raises(
     stated requirement — which is the failure this whole mechanism exists
     to make loud.
     """
-    registry.register_pack(
-        BehaviorPackSpec(name="wiz", priority=1, required_strategy="wizard")
-    )
-    registry.register_pack(
-        BehaviorPackSpec(name="react", priority=2, required_strategy="react")
-    )
+    registry.register_pack(BehaviorPackSpec(name="wiz", priority=1, required_strategy="wizard"))
+    registry.register_pack(BehaviorPackSpec(name="react", priority=2, required_strategy="react"))
 
     with pytest.raises(PackResolutionError) as excinfo:
         registry.resolve({"wiz": {}, "react": {}})
@@ -161,12 +151,8 @@ def test_agreeing_required_strategy_reconciles(
     registry: BehaviorPackRegistry,
 ) -> None:
     """Two packs asserting the *same* requirement is not a conflict."""
-    registry.register_pack(
-        BehaviorPackSpec(name="a", priority=1, required_strategy="wizard")
-    )
-    registry.register_pack(
-        BehaviorPackSpec(name="b", priority=2, required_strategy="wizard")
-    )
+    registry.register_pack(BehaviorPackSpec(name="a", priority=1, required_strategy="wizard"))
+    registry.register_pack(BehaviorPackSpec(name="b", priority=2, required_strategy="wizard"))
 
     assert registry.resolve({"a": {}, "b": {}}).spec.required_strategy == "wizard"
 
@@ -338,9 +324,7 @@ def test_verify_consumes_a_resolution_directly(
     registry: BehaviorPackRegistry, probe_synthesizer: str
 ) -> None:
     """The documented call shape — resolution field straight in."""
-    registry.register_pack(
-        BehaviorPackSpec(name="p", stage_synthesizers=(probe_synthesizer,))
-    )
+    registry.register_pack(BehaviorPackSpec(name="p", stage_synthesizers=(probe_synthesizer,)))
 
     resolution = registry.resolve({"p": {}})
 
@@ -432,9 +416,7 @@ async def test_composed_packs_reach_a_live_bot_and_run(
     resolution = registry.resolve({"inner": {}, "outer": {}})
 
     platform = build_middleware(resolution.spec.middleware)
-    platform_conv = build_conversation_middleware(
-        resolution.spec.conversation_middleware
-    )
+    platform_conv = build_conversation_middleware(resolution.spec.conversation_middleware)
 
     assert [type(mw).__name__ for mw in platform] == [
         "_RecordingMiddleware",
@@ -479,9 +461,7 @@ async def test_a_disabled_pack_does_not_install_its_middleware(
         )
     )
 
-    resolution = registry.resolve(
-        {"optional_audit": {"enabled": False}, "always": {}}
-    )
+    resolution = registry.resolve({"optional_audit": {"enabled": False}, "always": {}})
 
     async with await BotTestHarness.create(
         bot_config={
@@ -534,9 +514,7 @@ async def test_pack_middleware_is_additive_to_the_bots_own(
 # here, and a bots consumer builds their escalation table from this table.
 
 
-_BEHAVIOR_PACKS_GUIDE = (
-    pathlib.Path(__file__).parents[1] / "docs" / "BEHAVIOR_PACKS.md"
-)
+_BEHAVIOR_PACKS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "BEHAVIOR_PACKS.md"
 
 
 def _assert_documented_vocabulary_is_real(text: str) -> None:
@@ -567,8 +545,7 @@ def _assert_documented_vocabulary_is_real(text: str) -> None:
     unknown_codes = sorted(codes - {m.value for m in PackWarningCode})
 
     assert not unknown_reasons, (
-        f"guide documents PackResolutionError reasons that do not exist: "
-        f"{unknown_reasons}"
+        f"guide documents PackResolutionError reasons that do not exist: {unknown_reasons}"
     )
     assert not unknown_codes, (
         f"guide documents PackWarning codes that do not exist: {unknown_codes}"

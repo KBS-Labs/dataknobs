@@ -90,9 +90,7 @@ class _RaisingClient:
 
 
 def _provider(client: Any, **config_kwargs: Any) -> OpenAIProvider:
-    provider = OpenAIProvider(
-        LLMConfig(provider="openai", model="gpt-4", **config_kwargs)
-    )
+    provider = OpenAIProvider(LLMConfig(provider="openai", model="gpt-4", **config_kwargs))
     provider._client = client
     provider._is_initialized = True
     return provider
@@ -131,18 +129,14 @@ class _StreamingClient:
     """Minimal client whose ``chat.completions.create`` returns *stream*."""
 
     def __init__(self, stream: Any) -> None:
-        self.chat = types.SimpleNamespace(
-            completions=_StreamReturningCall(stream)
-        )
+        self.chat = types.SimpleNamespace(completions=_StreamReturningCall(stream))
 
 
 class TestVendorErrorTranslation:
     """Raw OpenAI errors become catchable dataknobs exceptions."""
 
     async def test_400_becomes_validation_error(self) -> None:
-        client = _RaisingClient(
-            [_status_error(openai.BadRequestError, 400, "malformed request")]
-        )
+        client = _RaisingClient([_status_error(openai.BadRequestError, 400, "malformed request")])
         provider = _provider(client)
         with pytest.raises(ValidationError) as excinfo:
             await provider.complete("hi")
@@ -166,17 +160,13 @@ class TestVendorErrorTranslation:
         assert isinstance(excinfo.value.__cause__, openai.RateLimitError)
 
     async def test_401_becomes_operation_error(self) -> None:
-        client = _RaisingClient(
-            [_status_error(openai.AuthenticationError, 401, "bad key")]
-        )
+        client = _RaisingClient([_status_error(openai.AuthenticationError, 401, "bad key")])
         provider = _provider(client)
         with pytest.raises(OperationError):
             await provider.complete("hi")
 
     async def test_403_becomes_operation_error(self) -> None:
-        client = _RaisingClient(
-            [_status_error(openai.PermissionDeniedError, 403, "denied")]
-        )
+        client = _RaisingClient([_status_error(openai.PermissionDeniedError, 403, "denied")])
         provider = _provider(client)
         with pytest.raises(OperationError):
             await provider.complete("hi")
@@ -190,9 +180,7 @@ class TestVendorErrorTranslation:
         assert isinstance(excinfo.value.__cause__, openai.APITimeoutError)
 
     async def test_connection_error_becomes_operation_error(self) -> None:
-        client = _RaisingClient(
-            [openai.APIConnectionError(request=_request())]
-        )
+        client = _RaisingClient([openai.APIConnectionError(request=_request())])
         provider = _provider(client)
         with pytest.raises(OperationError):
             await provider.complete("hi")
@@ -214,9 +202,7 @@ class TestVendorErrorTranslation:
         assert excinfo.value.retry_after == 5.0
 
     async def test_stream_error_is_translated(self) -> None:
-        client = _RaisingClient(
-            [_status_error(openai.BadRequestError, 400, "bad stream")]
-        )
+        client = _RaisingClient([_status_error(openai.BadRequestError, 400, "bad stream")])
         provider = _provider(client)
         with pytest.raises(ValidationError):
             async for _ in provider.stream_complete("hi"):

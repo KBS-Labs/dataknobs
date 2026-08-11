@@ -26,9 +26,16 @@ def test_create_support_flow():
 
     # Verify all expected states exist
     expected_states = {
-        "greeting", "collect_issue", "tech_support", "billing_support",
-        "account_support", "clarify_issue", "end_browsing", "end_resolved",
-        "end_escalate", "end_unclear"
+        "greeting",
+        "collect_issue",
+        "tech_support",
+        "billing_support",
+        "account_support",
+        "clarify_issue",
+        "end_browsing",
+        "end_resolved",
+        "end_escalate",
+        "end_unclear",
     }
     assert set(flow.states.keys()) == expected_states
 
@@ -72,15 +79,18 @@ def test_support_flow_validation():
     # We expect warnings about terminal states (this is normal)
     # Filter out expected warnings about terminal states
     terminal_state_warnings = [
-        w for w in warnings
-        if "no exit transitions" in w.lower() and any(
+        w
+        for w in warnings
+        if "no exit transitions" in w.lower()
+        and any(
             term in w for term in ["end_browsing", "end_resolved", "end_escalate", "end_unclear"]
         )
     ]
 
     # All warnings should be about terminal states
-    assert len(warnings) == len(terminal_state_warnings), \
+    assert len(warnings) == len(terminal_state_warnings), (
         "Flow has unexpected warnings beyond terminal state warnings"
+    )
 
     # Should have 4 warnings (one per terminal state)
     assert len(terminal_state_warnings) == 4
@@ -92,8 +102,9 @@ def test_support_flow_transitions():
 
     for state_name, state in flow.states.items():
         for target_state in state.transitions.values():
-            assert target_state in flow.states, \
+            assert target_state in flow.states, (
                 f"State '{state_name}' transitions to unknown state '{target_state}'"
+            )
 
 
 def test_support_flow_reachability():
@@ -112,8 +123,9 @@ def test_support_flow_reachability():
                 to_visit.append(next_state)
 
     # All states should be reachable
-    assert set(flow.states.keys()) == reachable, \
+    assert set(flow.states.keys()) == reachable, (
         f"Unreachable states: {set(flow.states.keys()) - reachable}"
+    )
 
 
 def test_create_sales_flow():
@@ -127,9 +139,16 @@ def test_create_sales_flow():
 
     # Verify all expected states exist
     expected_states = {
-        "introduce", "qualify_needs", "present_solution", "handle_objection",
-        "pricing_discussion", "end_no_interest", "end_poor_fit",
-        "end_follow_up", "end_think", "end_close"
+        "introduce",
+        "qualify_needs",
+        "present_solution",
+        "handle_objection",
+        "pricing_discussion",
+        "end_no_interest",
+        "end_poor_fit",
+        "end_follow_up",
+        "end_think",
+        "end_close",
     }
     assert set(flow.states.keys()) == expected_states
 
@@ -138,10 +157,7 @@ def test_sales_flow_terminal_states():
     """Test that sales flow terminal states are properly configured."""
     flow = create_sales_flow()
 
-    terminal_states = [
-        "end_no_interest", "end_poor_fit", "end_follow_up",
-        "end_think", "end_close"
-    ]
+    terminal_states = ["end_no_interest", "end_poor_fit", "end_follow_up", "end_think", "end_close"]
 
     for state_name in terminal_states:
         state = flow.states[state_name]
@@ -163,10 +179,7 @@ def test_sales_flow_validation():
     warnings = flow.validate_flow()
 
     # Filter out expected warnings about terminal states
-    terminal_state_warnings = [
-        w for w in warnings
-        if "no exit transitions" in w.lower()
-    ]
+    terminal_state_warnings = [w for w in warnings if "no exit transitions" in w.lower()]
 
     # All warnings should be about terminal states
     assert len(warnings) == len(terminal_state_warnings)
@@ -193,8 +206,9 @@ def test_condition_coverage():
         for state_name, state in flow.states.items():
             # Every transition must have a condition
             for cond_name in state.transitions.keys():
-                assert cond_name in state.transition_conditions, \
+                assert cond_name in state.transition_conditions, (
                     f"State '{state_name}' has transition '{cond_name}' without condition"
+                )
 
 
 @pytest.mark.asyncio
@@ -230,6 +244,5 @@ def test_prompt_names_are_consistent():
         # Terminal states should have goodbye-related or end-related prompts
         if state_name.startswith("end_"):
             assert any(
-                keyword in state.prompt_name
-                for keyword in ["goodbye", "escalation", "unclear"]
+                keyword in state.prompt_name for keyword in ["goodbye", "escalation", "unclear"]
             )

@@ -23,6 +23,7 @@ from dataknobs_data.query import Filter, Operator
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _builder(dialect: str, param_style: str = "numeric") -> SQLQueryBuilder:
     """Create a query builder for the given dialect."""
     return SQLQueryBuilder(
@@ -38,6 +39,7 @@ DIALECTS = ["postgres", "sqlite", "duckdb"]
 # ---------------------------------------------------------------------------
 # _build_json_field_expr — column routing and nested path extraction
 # ---------------------------------------------------------------------------
+
 
 class TestBuildJsonFieldExpr:
     """Tests for the low-level JSON field expression builder."""
@@ -74,7 +76,9 @@ class TestBuildJsonFieldExpr:
 
     def test_sqlite_nested_field(self) -> None:
         b = _builder("sqlite")
-        assert b._build_json_field_expr("config.timeout") == "json_extract(data, '$.config.timeout')"
+        assert (
+            b._build_json_field_expr("config.timeout") == "json_extract(data, '$.config.timeout')"
+        )
 
     def test_sqlite_metadata_column(self) -> None:
         b = _builder("sqlite")
@@ -117,6 +121,7 @@ class TestBuildJsonFieldExpr:
 # ---------------------------------------------------------------------------
 # _build_filter_clause — metadata.* routing
 # ---------------------------------------------------------------------------
+
 
 class TestMetadataFieldRouting:
     """Filters prefixed with ``metadata.`` target the metadata column."""
@@ -169,6 +174,7 @@ class TestMetadataFieldRouting:
 # _build_filter_clause — dot-notation in the data column
 # ---------------------------------------------------------------------------
 
+
 class TestDataFieldDotNotation:
     """Dot-notation in non-metadata fields targets the data column."""
 
@@ -200,6 +206,7 @@ class TestDataFieldDotNotation:
 # ---------------------------------------------------------------------------
 # Type casting with dot-notation fields
 # ---------------------------------------------------------------------------
+
 
 class TestTypeCastingWithDotNotation:
     """Type casts are applied correctly to dot-notation field expressions."""
@@ -243,6 +250,7 @@ class TestTypeCastingWithDotNotation:
 # ID field is unaffected by dot-notation logic
 # ---------------------------------------------------------------------------
 
+
 class TestIdFieldUnchanged:
     """The ``id`` field still maps to the ``id`` column directly."""
 
@@ -260,6 +268,7 @@ class TestIdFieldUnchanged:
 # ---------------------------------------------------------------------------
 # Operators work correctly through the refactored path
 # ---------------------------------------------------------------------------
+
 
 class TestOperatorsThroughRefactoredPath:
     """All operators produce correct SQL through the refactored methods."""
@@ -302,15 +311,14 @@ class TestOperatorsThroughRefactoredPath:
         f = Filter("metadata.tag", Operator.REGEX, "^v[0-9]+")
         clause, params = b._build_filter_clause(f, 1)
         # REGEX is string-only — guarded so non-string JSON values never match.
-        assert clause == (
-            "(jsonb_typeof(metadata->'tag') = 'string' AND metadata->>'tag' ~ $1)"
-        )
+        assert clause == ("(jsonb_typeof(metadata->'tag') = 'string' AND metadata->>'tag' ~ $1)")
         assert params == ["^v[0-9]+"]
 
 
 # ---------------------------------------------------------------------------
 # Sort expressions with dot-notation
 # ---------------------------------------------------------------------------
+
 
 class TestSortExprDotNotation:
     """Sort expressions handle dot-notation and metadata.* routing."""
@@ -347,6 +355,7 @@ class TestSortExprDotNotation:
 # Full search query integration
 # ---------------------------------------------------------------------------
 
+
 class TestSearchQueryIntegration:
     """End-to-end tests for build_search_query with dot-notation filters."""
 
@@ -364,11 +373,7 @@ class TestSearchQueryIntegration:
         from dataknobs_data.query import Query
 
         b = _builder("postgres")
-        query = (
-            Query()
-            .filter("status", "=", "active")
-            .filter("metadata.tenant_id", "=", "T-1")
-        )
+        query = Query().filter("status", "=", "active").filter("metadata.tenant_id", "=", "T-1")
         sql, params = b.build_search_query(query)
 
         assert "data->>'status' = $1" in sql
@@ -389,6 +394,7 @@ class TestSearchQueryIntegration:
 # ---------------------------------------------------------------------------
 # Field name validation (SQL injection prevention)
 # ---------------------------------------------------------------------------
+
 
 class TestFieldNameValidation:
     """Field name segments must be valid identifiers."""
@@ -442,6 +448,7 @@ class TestFieldNameValidation:
 # ---------------------------------------------------------------------------
 # DuckDB as_text parameter
 # ---------------------------------------------------------------------------
+
 
 class TestDuckDBAsTextParameter:
     """DuckDB branch must respect the as_text parameter."""

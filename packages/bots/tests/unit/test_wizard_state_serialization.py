@@ -716,9 +716,7 @@ class TestPartitionData:
         )
         stage = fsm.current_metadata
 
-        result = reasoning._render_response_template(
-            stage["response_template"], stage, state
-        )
+        result = reasoning._render_response_template(stage["response_template"], stage, state)
 
         assert "Topic: Math" in result
         assert "Error: LLM timeout" in result

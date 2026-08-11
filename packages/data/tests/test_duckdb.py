@@ -12,8 +12,14 @@ try:
     import duckdb
     from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
     from dataknobs_data.query import Filter, Operator, Query, SortOrder
-    from dataknobs_data.query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
+    from dataknobs_data.query_logic import (
+        ComplexQuery,
+        FilterCondition,
+        LogicCondition,
+        LogicOperator,
+    )
     from dataknobs_data.records import Record
+
     DUCKDB_AVAILABLE = True
 except ImportError:
     DUCKDB_AVAILABLE = False
@@ -25,8 +31,7 @@ except ImportError:
 
 # Skip all tests if DuckDB is not installed
 pytestmark = pytest.mark.skipif(
-    not DUCKDB_AVAILABLE,
-    reason="DuckDB tests require duckdb package (pip install duckdb)"
+    not DUCKDB_AVAILABLE, reason="DuckDB tests require duckdb package (pip install duckdb)"
 )
 
 
@@ -185,8 +190,8 @@ class TestAsyncDuckDBDatabase:
                 operator=LogicOperator.OR,
                 conditions=[
                     FilterCondition(Filter("city", Operator.EQ, "NYC")),
-                    FilterCondition(Filter("age", Operator.GT, 30))
-                ]
+                    FilterCondition(Filter("age", Operator.GT, 30)),
+                ],
             )
         )
         results = await memory_db.search(query)
@@ -201,11 +206,11 @@ class TestAsyncDuckDBDatabase:
                         operator=LogicOperator.OR,
                         conditions=[
                             FilterCondition(Filter("city", Operator.EQ, "NYC")),
-                            FilterCondition(Filter("city", Operator.EQ, "LA"))
-                        ]
+                            FilterCondition(Filter("city", Operator.EQ, "LA")),
+                        ],
                     ),
-                    FilterCondition(Filter("age", Operator.LT, 30))
-                ]
+                    FilterCondition(Filter("age", Operator.LT, 30)),
+                ],
             )
         )
         results = await memory_db.search(query)
@@ -275,10 +280,7 @@ class TestAsyncDuckDBDatabase:
     @pytest.mark.asyncio
     async def test_batch_create(self, memory_db):
         """Test batch create functionality."""
-        records = [
-            Record(data={"name": f"User{i}", "value": i})
-            for i in range(100)
-        ]
+        records = [Record(data={"name": f"User{i}", "value": i}) for i in range(100)]
 
         ids = await memory_db.create_batch(records)
         assert len(ids) == 100
@@ -335,6 +337,7 @@ class TestAsyncDuckDBDatabase:
 
         # Stream read
         from dataknobs_data.streaming import StreamConfig
+
         config = StreamConfig(batch_size=10)
 
         count = 0
@@ -394,12 +397,9 @@ class TestAsyncDuckDBDatabase:
     async def test_field_projection(self, memory_db):
         """Test field projection in queries."""
         # Create record with multiple fields
-        await memory_db.create(Record(data={
-            "name": "Alice",
-            "age": 30,
-            "city": "NYC",
-            "country": "USA"
-        }))
+        await memory_db.create(
+            Record(data={"name": "Alice", "age": 30, "city": "NYC", "country": "USA"})
+        )
 
         # Query with field projection
         query = Query()
@@ -415,10 +415,7 @@ class TestAsyncDuckDBDatabase:
     @pytest.mark.asyncio
     async def test_metadata_storage(self, memory_db):
         """Test metadata storage and retrieval."""
-        record = Record(
-            data={"name": "Alice"},
-            metadata={"source": "test", "version": 1}
-        )
+        record = Record(data={"name": "Alice"}, metadata={"source": "test", "version": 1})
 
         record_id = await memory_db.create(record)
         retrieved = await memory_db.read(record_id)
@@ -430,10 +427,7 @@ class TestAsyncDuckDBDatabase:
     async def test_concurrent_operations(self, memory_db):
         """Test concurrent database operations."""
         # Create multiple records concurrently
-        tasks = [
-            memory_db.create(Record(data={"value": i}))
-            for i in range(20)
-        ]
+        tasks = [memory_db.create(Record(data={"value": i})) for i in range(20)]
         ids = await asyncio.gather(*tasks)
         assert len(ids) == 20
 
@@ -448,12 +442,9 @@ class TestAsyncDuckDBDatabase:
         """Test performance with larger datasets."""
         # Create a larger dataset
         records = [
-            Record(data={
-                "id": i,
-                "name": f"User{i}",
-                "age": 20 + (i % 50),
-                "category": f"Cat{i % 10}"
-            })
+            Record(
+                data={"id": i, "name": f"User{i}", "age": 20 + (i % 50), "category": f"Cat{i % 10}"}
+            )
             for i in range(1000)
         ]
 

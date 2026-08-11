@@ -177,9 +177,7 @@ class TestToolExecutionContext:
 
     def test_get_from_extra(self) -> None:
         """Test dict-like access to extra values."""
-        context = ToolExecutionContext(
-            extra={"key1": "value1", "key2": 42}
-        )
+        context = ToolExecutionContext(extra={"key1": "value1", "key2": 42})
 
         assert context.get("key1") == "value1"
         assert context.get("key2") == 42

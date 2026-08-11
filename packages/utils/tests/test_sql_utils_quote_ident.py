@@ -58,7 +58,7 @@ def test_quote_ident_is_not_idempotent():
     Callers must not pre-quote and then pass the result to quote_ident again,
     or the identifier will contain literal double-quote characters and be wrong.
     """
-    once = quote_ident("records")       # '"records"'
-    twice = quote_ident(once)           # '"""records"""'
+    once = quote_ident("records")  # '"records"'
+    twice = quote_ident(once)  # '"""records"""'
     assert twice != once
     assert twice == '"""records"""'

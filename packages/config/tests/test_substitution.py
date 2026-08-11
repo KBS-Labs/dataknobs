@@ -25,44 +25,44 @@ class TestVariableSubstitution:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             return VariableSubstitution()
-    
+
     def test_simple_substitution(self, substitution, monkeypatch):
         """Test simple variable substitution."""
         monkeypatch.setenv("TEST_VAR", "test_value")
-        
+
         result = substitution.substitute("${TEST_VAR}")
         assert result == "test_value"
-    
+
     def test_substitution_with_default(self, substitution, monkeypatch):
         """Test substitution with default value."""
         # Ensure variable doesn't exist
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        
+
         result = substitution.substitute("${MISSING_VAR:default_value}")
         assert result == "default_value"
-    
+
     def test_substitution_with_dash_default(self, substitution, monkeypatch):
         """Test bash-style substitution with default."""
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        
+
         result = substitution.substitute("${MISSING_VAR:-default_value}")
         assert result == "default_value"
-    
+
     def test_missing_variable_error(self, substitution, monkeypatch):
         """Test that missing variable without default raises error."""
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        
+
         with pytest.raises(ValueError, match="Environment variable 'MISSING_VAR' not found"):
             substitution.substitute("${MISSING_VAR}")
-    
+
     def test_mixed_content(self, substitution, monkeypatch):
         """Test substitution in mixed content."""
         monkeypatch.setenv("HOST", "localhost")
         monkeypatch.setenv("PORT", "5432")
-        
+
         result = substitution.substitute("postgresql://${HOST}:${PORT}/mydb")
         assert result == "postgresql://localhost:5432/mydb"
-    
+
     def test_type_conversion(self, substitution, monkeypatch):
         """Test that single variables can be converted to appropriate types."""
         monkeypatch.setenv("INT_VAR", "42")
@@ -70,84 +70,73 @@ class TestVariableSubstitution:
         monkeypatch.setenv("BOOL_TRUE", "true")
         monkeypatch.setenv("BOOL_FALSE", "false")
         monkeypatch.setenv("STRING_VAR", "hello")
-        
+
         assert substitution.substitute("${INT_VAR}") == 42
         assert substitution.substitute("${FLOAT_VAR}") == 3.14
         assert substitution.substitute("${BOOL_TRUE}") is True
         assert substitution.substitute("${BOOL_FALSE}") is False
         assert substitution.substitute("${STRING_VAR}") == "hello"
-    
+
     def test_dict_substitution(self, substitution, monkeypatch):
         """Test substitution in dictionary."""
         monkeypatch.setenv("DB_HOST", "localhost")
         monkeypatch.setenv("DB_PORT", "5432")
         monkeypatch.setenv("DB_NAME", "testdb")
-        
-        config = {
-            "host": "${DB_HOST}",
-            "port": "${DB_PORT}",
-            "database": "${DB_NAME}",
-            "ssl": True
-        }
-        
+
+        config = {"host": "${DB_HOST}", "port": "${DB_PORT}", "database": "${DB_NAME}", "ssl": True}
+
         result = substitution.substitute(config)
         assert result == {
             "host": "localhost",
             "port": 5432,  # Converted to int
             "database": "testdb",
-            "ssl": True
+            "ssl": True,
         }
-    
+
     def test_list_substitution(self, substitution, monkeypatch):
         """Test substitution in list."""
         monkeypatch.setenv("HOST1", "server1")
         monkeypatch.setenv("HOST2", "server2")
-        
+
         config = ["${HOST1}", "${HOST2}", "server3"]
-        
+
         result = substitution.substitute(config)
         assert result == ["server1", "server2", "server3"]
-    
+
     def test_nested_substitution(self, substitution, monkeypatch):
         """Test substitution in nested structures."""
         monkeypatch.setenv("ENV", "production")
         monkeypatch.setenv("DB_HOST", "prod.db.com")
         monkeypatch.setenv("CACHE_SIZE", "1000")
-        
+
         config = {
             "environment": "${ENV}",
             "database": {
                 "host": "${DB_HOST}",
                 "port": "${DB_PORT:5432}",
-                "options": {
-                    "timeout": 30,
-                    "cache_size": "${CACHE_SIZE}"
-                }
+                "options": {"timeout": 30, "cache_size": "${CACHE_SIZE}"},
             },
-            "servers": ["${HOST1:server1}", "${HOST2:server2}"]
+            "servers": ["${HOST1:server1}", "${HOST2:server2}"],
         }
-        
+
         result = substitution.substitute(config)
         assert result == {
             "environment": "production",
             "database": {
                 "host": "prod.db.com",
                 "port": 5432,
-                "options": {
-                    "timeout": 30,
-                    "cache_size": 1000
-                }
+                "options": {"timeout": 30, "cache_size": 1000},
             },
-            "servers": ["server1", "server2"]
+            "servers": ["server1", "server2"],
         }
-    
+
     def test_empty_default(self, substitution, monkeypatch):
         """Test substitution with empty default value."""
         monkeypatch.delenv("OPTIONAL_VAR", raising=False)
-        
+
         result = substitution.substitute("${OPTIONAL_VAR:}")
         assert result == ""
-    
+
     def test_has_variables(self, substitution):
         """Test detection of variable patterns."""
         assert substitution.has_variables("${VAR}") is True
@@ -165,13 +154,9 @@ class TestVariableSubstitution:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             VariableSubstitution()
-        deprecation_warnings = [
-            w for w in caught if issubclass(w.category, DeprecationWarning)
-        ]
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert deprecation_warnings, "expected a DeprecationWarning"
-        assert any(
-            "substitute_env_vars" in str(w.message) for w in deprecation_warnings
-        )
+        assert any("substitute_env_vars" in str(w.message) for w in deprecation_warnings)
 
     def test_question_mark_msg_passes_through_canonical(self, substitution, monkeypatch):
         """${VAR:?multi word msg} preserves the canonical helper's wording.
@@ -210,9 +195,7 @@ class TestVariableSubstitution:
         ):
             substitution.substitute("${PORT:?Required}")
 
-    def test_question_mark_empty_msg_uses_var_name_canonical(
-        self, substitution, monkeypatch
-    ):
+    def test_question_mark_empty_msg_uses_var_name_canonical(self, substitution, monkeypatch):
         """${VAR:?} with empty msg falls back to the var name + canonical wording.
 
         ``${FOO:?}`` is bash-style with an empty error message. The
@@ -328,9 +311,7 @@ class TestSubstituteOncePerSource:
         monkeypatch.setenv("GUARD_INNER", INNER_VALUE)
 
     @pytest.mark.parametrize("access_path", ACCESS_PATHS)
-    def test_value_containing_var_syntax_is_substituted_exactly_once(
-        self, access_path
-    ):
+    def test_value_containing_var_syntax_is_substituted_exactly_once(self, access_path):
         """The literal value of ``$GUARD_PW`` arrives intact on every path."""
         resolved = access_path(_environment())
 
@@ -341,9 +322,7 @@ class TestSubstituteOncePerSource:
         )
 
     @pytest.mark.parametrize("access_path", RESOLUTION_PATHS)
-    def test_unsubstituted_environment_still_substitutes_exactly_once(
-        self, access_path
-    ):
+    def test_unsubstituted_environment_still_substitutes_exactly_once(self, access_path):
         """``substitute_vars=False`` keeps the downstream pass load-bearing.
 
         A directly-constructed (or explicitly unsubstituted) environment has
@@ -407,9 +386,7 @@ class TestSubstituteOncePerSource:
 
         assert built["dsn"] == "postgresql://u:p@h/db"
         assert built["port"] == "5432"
-        assert env.get_resource("databases", "main")["dsn"] == (
-            "postgresql://u:p@h/db"
-        )
+        assert env.get_resource("databases", "main")["dsn"] == ("postgresql://u:p@h/db")
 
 
 class TestToDictRoundTripHazard:
@@ -435,20 +412,12 @@ class TestToDictRoundTripHazard:
         self,
     ):
         original = _environment()
-        assert original.get_resource("databases", "main")["password"] == (
-            SECRET_WITH_VAR_SYNTAX
-        )
+        assert original.get_resource("databases", "main")["password"] == (SECRET_WITH_VAR_SYNTAX)
 
         # The naive round-trip: WRONG. Pinned so it cannot silently worsen.
         naive = EnvironmentConfig.from_dict(original.to_dict())
-        assert naive.get_resource("databases", "main")["password"] == (
-            f"p{INNER_VALUE}ss"
-        )
+        assert naive.get_resource("databases", "main")["password"] == (f"p{INNER_VALUE}ss")
 
         # The correct spelling, available today.
-        correct = EnvironmentConfig.from_dict(
-            original.to_dict(), substitute_vars=False
-        )
-        assert correct.get_resource("databases", "main")["password"] == (
-            SECRET_WITH_VAR_SYNTAX
-        )
+        correct = EnvironmentConfig.from_dict(original.to_dict(), substitute_vars=False)
+        assert correct.get_resource("databases", "main")["password"] == (SECRET_WITH_VAR_SYNTAX)

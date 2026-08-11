@@ -153,9 +153,7 @@ class TestListBankRecordsTool:
         context = _make_context(banks={"ingredients": bank})
         tool = ListBankRecordsTool()
 
-        result = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
+        result = await tool.execute_with_context(context, bank_name="ingredients")
 
         assert result["count"] == 0
         assert result["records"] == []
@@ -169,9 +167,7 @@ class TestListBankRecordsTool:
         context = _make_context(banks={"ingredients": bank})
         tool = ListBankRecordsTool()
 
-        result = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
+        result = await tool.execute_with_context(context, bank_name="ingredients")
 
         assert result["count"] == 2
         assert len(result["records"]) == 2
@@ -270,9 +266,7 @@ class TestAddBankRecordTool:
         bank = _make_bank()
         context = _make_context(banks={"ingredients": bank})
 
-        result = await tool.execute_with_context(
-            context, data={"name": "flour"}
-        )
+        result = await tool.execute_with_context(context, data={"name": "flour"})
 
         assert result["success"] is False
         assert "bank_name" in result["error"]
@@ -283,9 +277,7 @@ class TestAddBankRecordTool:
         bank = _make_bank()
         context = _make_context(banks={"ingredients": bank})
 
-        result = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
+        result = await tool.execute_with_context(context, bank_name="ingredients")
 
         assert result["success"] is False
         assert "data" in result["error"]
@@ -328,7 +320,8 @@ class TestUpdateBankRecordTool:
     async def test_update_single_field_record(self) -> None:
         """Updating the only field (e.g. instruction) works via record_id."""
         bank = _make_bank(
-            "instructions", required=["instruction"],
+            "instructions",
+            required=["instruction"],
         )
         rec_id = bank.add({"instruction": "Mix dry and wet ingredients"})
         context = _make_context(banks={"instructions": bank})
@@ -342,13 +335,9 @@ class TestUpdateBankRecordTool:
         )
 
         assert result["success"] is True
-        assert result["updated_data"]["instruction"] == (
-            "Mix dry and wet ingredients separately"
-        )
+        assert result["updated_data"]["instruction"] == ("Mix dry and wet ingredients separately")
         records = bank.all()
-        assert records[0].data["instruction"] == (
-            "Mix dry and wet ingredients separately"
-        )
+        assert records[0].data["instruction"] == ("Mix dry and wet ingredients separately")
 
     @pytest.mark.asyncio
     async def test_record_not_found(self) -> None:
@@ -483,9 +472,7 @@ class TestFinalizeBankTool:
         context = _make_context(banks={"ingredients": bank})
         tool = FinalizeBankTool()
 
-        result = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
+        result = await tool.execute_with_context(context, bank_name="ingredients")
 
         assert result["success"] is True
         assert result["finalized"] is True
@@ -499,9 +486,7 @@ class TestFinalizeBankTool:
         context = _make_context(banks={"ingredients": bank})
         tool = FinalizeBankTool()
 
-        result = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
+        result = await tool.execute_with_context(context, bank_name="ingredients")
 
         assert result["success"] is True
         assert result["record_count"] == 0
@@ -535,9 +520,7 @@ class TestMultiBankContext:
         inst_bank = _make_bank(
             "instructions", required=["instruction"], match_fields=["instruction"]
         )
-        context = _make_context(
-            banks={"ingredients": ing_bank, "instructions": inst_bank}
-        )
+        context = _make_context(banks={"ingredients": ing_bank, "instructions": inst_bank})
         tool = AddBankRecordTool()
 
         r1 = await tool.execute_with_context(
@@ -562,17 +545,11 @@ class TestMultiBankContext:
         ing_bank.add({"name": "flour"})
         inst_bank = _make_bank("instructions", required=["instruction"])
         inst_bank.add({"instruction": "Mix dry ingredients"})
-        context = _make_context(
-            banks={"ingredients": ing_bank, "instructions": inst_bank}
-        )
+        context = _make_context(banks={"ingredients": ing_bank, "instructions": inst_bank})
         tool = ListBankRecordsTool()
 
-        r1 = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
-        r2 = await tool.execute_with_context(
-            context, bank_name="instructions"
-        )
+        r1 = await tool.execute_with_context(context, bank_name="ingredients")
+        r2 = await tool.execute_with_context(context, bank_name="instructions")
 
         assert r1["count"] == 1
         assert r1["records"][0]["name"] == "flour"
@@ -586,17 +563,11 @@ class TestMultiBankContext:
         inst_bank = _make_bank("instructions", required=["instruction"])
         inst_bank.add({"instruction": "Step 1"})
         inst_bank.add({"instruction": "Step 2"})
-        context = _make_context(
-            banks={"ingredients": ing_bank, "instructions": inst_bank}
-        )
+        context = _make_context(banks={"ingredients": ing_bank, "instructions": inst_bank})
         tool = FinalizeBankTool()
 
-        r1 = await tool.execute_with_context(
-            context, bank_name="ingredients"
-        )
-        r2 = await tool.execute_with_context(
-            context, bank_name="instructions"
-        )
+        r1 = await tool.execute_with_context(context, bank_name="ingredients")
+        r2 = await tool.execute_with_context(context, bank_name="instructions")
 
         assert r1["record_count"] == 1
         assert r2["record_count"] == 2
@@ -1076,9 +1047,7 @@ class TestCompleteWizardTool:
         )
         tool = CompleteWizardTool()
 
-        result = await tool.execute_with_context(
-            context, summary="Recipe complete!"
-        )
+        result = await tool.execute_with_context(context, summary="Recipe complete!")
 
         assert result["success"] is True
         assert result["summary"] == "Recipe complete!"
@@ -1289,7 +1258,8 @@ def _make_artifact_with_catalog(
         for ing in ingredients:
             bank.add(ing, source_stage="test")
     catalog = ArtifactBankCatalog(
-        SyncMemoryDatabase(), entry_name_field="recipe_name",
+        SyncMemoryDatabase(),
+        entry_name_field="recipe_name",
     )
     return artifact, catalog
 
@@ -1326,7 +1296,9 @@ class TestAutoSaveToCatalog:
         tool = AddBankRecordTool()
 
         result = await tool.execute_with_context(
-            context, bank_name="ingredients", data={"name": "sugar"},
+            context,
+            bank_name="ingredients",
+            data={"name": "sugar"},
         )
         assert result["success"] is True
 
@@ -1345,7 +1317,9 @@ class TestAutoSaveToCatalog:
         tool = AddBankRecordTool()
 
         result = await tool.execute_with_context(
-            context, bank_name="ingredients", data={"name": "flour"},
+            context,
+            bank_name="ingredients",
+            data={"name": "flour"},
         )
         assert result["success"] is True
         # Catalog should still be empty — validation failed
@@ -1410,7 +1384,9 @@ class TestAutoSaveToCatalog:
         tool = AddBankRecordTool()
 
         result = await tool.execute_with_context(
-            context, bank_name="ingredients", data={"name": "flour"},
+            context,
+            bank_name="ingredients",
+            data={"name": "flour"},
         )
         assert result["success"] is True
 
@@ -1467,7 +1443,9 @@ class TestConstructorInjection:
         )
         tool = AddBankRecordTool(catalog=catalog, artifact=artifact)
         result = await tool.execute_with_context(
-            context, bank_name="ingredients", data={"name": "flour"},
+            context,
+            bank_name="ingredients",
+            data={"name": "flour"},
         )
         assert result["success"] is True
         # Auto-save hook fired via constructor-injected catalog

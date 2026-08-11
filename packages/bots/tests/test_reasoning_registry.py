@@ -91,7 +91,9 @@ def fresh_registry() -> PluginRegistry[ReasoningStrategy]:
 class TestRegistryBasics:
     """Core registration and creation behavior."""
 
-    def test_register_custom_factory(self, fresh_registry: PluginRegistry[ReasoningStrategy]) -> None:
+    def test_register_custom_factory(
+        self, fresh_registry: PluginRegistry[ReasoningStrategy]
+    ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         assert fresh_registry.is_registered("custom")
 
@@ -104,7 +106,8 @@ class TestRegistryBasics:
         assert strategy.custom_param == "hello"
 
     def test_create_with_callable_factory(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         def factory(config: dict[str, Any], **kwargs: Any) -> _CustomStrategy:
             return _CustomStrategy(custom_param=config.get("custom_param", "fn"))
@@ -115,27 +118,31 @@ class TestRegistryBasics:
         assert strategy.custom_param == "fn"
 
     def test_duplicate_registration_raises(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         with pytest.raises(OperationError, match="already registered"):
             fresh_registry.register("custom", _CustomStrategy)
 
     def test_duplicate_with_override(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         fresh_registry.register("custom", _CustomStrategy, override=True)
         assert fresh_registry.is_registered("custom")
 
     def test_unknown_strategy_error(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         with pytest.raises(NotFoundError, match="'nope' not registered"):
             fresh_registry.create(config={"strategy": "nope"})
 
     def test_unknown_strategy_lists_available(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         with pytest.raises(NotFoundError) as exc_info:
             fresh_registry.create(config={"strategy": "nope"})
@@ -158,27 +165,31 @@ class TestListAndGet:
     """Public API: list_strategies, get_strategy_factory."""
 
     def test_list_includes_builtins(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         keys = fresh_registry.list_keys()
         for name in ("simple", "react", "wizard", "grounded", "hybrid"):
             assert name in keys
 
     def test_list_includes_custom(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         keys = fresh_registry.list_keys()
         assert "custom" in keys
 
     def test_get_factory_returns_class(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         factory = fresh_registry.get_factory("simple")
         assert factory is SimpleReasoning
 
     def test_get_factory_returns_none(
-        self, fresh_registry: PluginRegistry[ReasoningStrategy],
+        self,
+        fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         assert fresh_registry.get_factory("nonexistent") is None
 
@@ -248,12 +259,14 @@ class TestFromConfig:
     async def test_react_from_config(self) -> None:
         from dataknobs_bots.testing import StubManager
 
-        strategy = ReActReasoning.from_config({
-            "max_iterations": 10,
-            "verbose": True,
-            "store_trace": True,
-            "greeting_template": "Hi",
-        })
+        strategy = ReActReasoning.from_config(
+            {
+                "max_iterations": 10,
+                "verbose": True,
+                "store_trace": True,
+                "greeting_template": "Hi",
+            }
+        )
         assert isinstance(strategy, ReActReasoning)
         assert strategy.max_iterations == 10
         assert strategy.verbose is True
@@ -371,10 +384,12 @@ class TestBackwardCompat:
         assert isinstance(strategy, SimpleReasoning)
 
     def test_create_react(self) -> None:
-        strategy = create_reasoning_from_config({
-            "strategy": "react",
-            "max_iterations": 3,
-        })
+        strategy = create_reasoning_from_config(
+            {
+                "strategy": "react",
+                "max_iterations": 3,
+            }
+        )
         assert isinstance(strategy, ReActReasoning)
         assert strategy.max_iterations == 3
 

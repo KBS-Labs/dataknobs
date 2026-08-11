@@ -47,9 +47,7 @@ from _aiohttp_error_stub import FakeResponse
 class _Ctx:
     """Async-context-manager stand-in yielding a scripted response (or raising)."""
 
-    def __init__(
-        self, resp: FakeResponse | None = None, exc: Exception | None = None
-    ) -> None:
+    def __init__(self, resp: FakeResponse | None = None, exc: Exception | None = None) -> None:
         self._resp = resp
         self._exc = exc
 
@@ -111,16 +109,13 @@ class RoutingSession:
             return _Ctx(
                 resp=FakeResponse(
                     200,
-                    json_data=self._chat
-                    or {"message": {"content": "ok"}, "done": True},
+                    json_data=self._chat or {"message": {"content": "ok"}, "done": True},
                 )
             )
         return _Ctx(resp=FakeResponse(200, json_data={}))
 
 
-def _provider(
-    session: RoutingSession, model: str = "llama3.1:8b", **cfg: Any
-) -> OllamaProvider:
+def _provider(session: RoutingSession, model: str = "llama3.1:8b", **cfg: Any) -> OllamaProvider:
     provider = OllamaProvider(LLMConfig(provider="ollama", model=model, **cfg))
     provider._session = session  # type: ignore[assignment]
     provider._is_initialized = True
@@ -158,30 +153,19 @@ class TestOllamaMatchKeySeam:
     def test_substrate_default_matcher_reintroduces_prefix_bug(self) -> None:
         """Documents the greedy-substring hazard the seam exists to close."""
         assert (
-            match_family_key(
-                "nomic-embed-text", ["nomic-embed-text-v2-moe:latest"]
-            )
+            match_family_key("nomic-embed-text", ["nomic-embed-text-v2-moe:latest"])
             == "nomic-embed-text-v2-moe:latest"
         )
         assert (
-            match_family_key("llama2", ["llama2-uncensored:latest"])
-            == "llama2-uncensored:latest"
+            match_family_key("llama2", ["llama2-uncensored:latest"]) == "llama2-uncensored:latest"
         )
 
     def test_ollama_match_key_rejects_prefix_collision(self) -> None:
-        assert (
-            ollama_match_key(
-                "nomic-embed-text", ["nomic-embed-text-v2-moe:latest"]
-            )
-            is None
-        )
+        assert ollama_match_key("nomic-embed-text", ["nomic-embed-text-v2-moe:latest"]) is None
         assert ollama_match_key("llama2", ["llama2-uncensored:latest"]) is None
 
     def test_ollama_match_key_base_name_matches_tagged(self) -> None:
-        assert (
-            ollama_match_key("llama3.1", ["llama3.1:8b", "mistral:latest"])
-            == "llama3.1:8b"
-        )
+        assert ollama_match_key("llama3.1", ["llama3.1:8b", "mistral:latest"]) == "llama3.1:8b"
 
     def test_ollama_match_key_exact_and_family_fallback(self) -> None:
         keys = ["llama3.1:8b", "llama3.1:70b"]
@@ -225,9 +209,7 @@ class TestOllamaMatchKeySeam:
 
 
 class TestOllamaCapabilitiesLive:
-    async def _caps(
-        self, session: RoutingSession, model: str
-    ) -> set[ModelCapability]:
+    async def _caps(self, session: RoutingSession, model: str) -> set[ModelCapability]:
         provider = _provider(session, model=model)
         await provider._live_source.refresh_if_stale()
         return set(provider._detect_capabilities())
@@ -278,9 +260,7 @@ class TestOllamaCapabilitiesLive:
 
 
 class TestOllamaCapabilitiesHeuristicFallback:
-    async def _caps(
-        self, session: RoutingSession, model: str
-    ) -> set[ModelCapability]:
+    async def _caps(self, session: RoutingSession, model: str) -> set[ModelCapability]:
         provider = _provider(session, model=model)
         await provider._live_source.refresh_if_stale()
         return set(provider._detect_capabilities())
@@ -352,9 +332,7 @@ class TestOllamaContextWindow:
         """Reproduce-first: max_input_tokens was always None for Ollama."""
         session = RoutingSession(
             installed=("llama3.1:8b",),
-            show={
-                "llama3.1:8b": _show(["completion", "tools"], context_length=131072)
-            },
+            show={"llama3.1:8b": _show(["completion", "tools"], context_length=131072)},
         )
         provider = _provider(session, model="llama3.1:8b")
         await provider._live_source.refresh_if_stale()
@@ -381,9 +359,7 @@ class TestOllamaPricing:
         provider = _provider(
             RoutingSession(),
             model="llama3.1:8b",
-            model_profile_overrides={
-                "pricing": {"input_per_mtok": 0.5, "output_per_mtok": 1.5}
-            },
+            model_profile_overrides={"pricing": {"input_per_mtok": 0.5, "output_per_mtok": 1.5}},
         )
         pricing = provider.get_pricing()
         assert pricing is not None
@@ -470,18 +446,13 @@ class TestOllamaShapingParity:
 
     def test_default_options_byte_identical_noop(self) -> None:
         session = RoutingSession()
-        provider = _provider(
-            session, model="llama3.1:8b", temperature=0.7, max_tokens=999999
-        )
+        provider = _provider(session, model="llama3.1:8b", temperature=0.7, max_tokens=999999)
         # Shaped == unshaped: no clamp (no ceiling), no drop, no remap.
-        assert provider._build_shaped_options(
+        assert provider._build_shaped_options(provider.config) == provider._build_options(
             provider.config
-        ) == provider._build_options(provider.config)
-        # A large num_predict passes through un-clamped (no output ceiling).
-        assert (
-            provider._build_shaped_options(provider.config)["num_predict"]
-            == 999999
         )
+        # A large num_predict passes through un-clamped (no output ceiling).
+        assert provider._build_shaped_options(provider.config)["num_predict"] == 999999
 
     def test_rejected_params_override_drops_param(self) -> None:
         session = RoutingSession()
@@ -506,9 +477,7 @@ class TestOllamaShapingParity:
         assert options["num_predict"] == 4096
 
 
-@pytest.mark.skipif(
-    not is_blockbuster_available(), reason="blockbuster not installed"
-)
+@pytest.mark.skipif(not is_blockbuster_available(), reason="blockbuster not installed")
 class TestOllamaNoBlocking:
     async def test_request_path_does_not_block_the_loop(self) -> None:
         session = RoutingSession(

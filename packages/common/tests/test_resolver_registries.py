@@ -56,9 +56,7 @@ class TestResolverBackends:
         def lookup(key: str) -> int | None:
             return len(key) if key else None
 
-        resolver = resolver_backends.create(
-            config={"backend": "callable", "fn": lookup}
-        )
+        resolver = resolver_backends.create(config={"backend": "callable", "fn": lookup})
         assert isinstance(resolver, CallableResolver)
         assert resolver.resolve("hello") == 5
 
@@ -140,9 +138,7 @@ class TestResolverBackends:
 
         resolver_backends.register("length-test", _make_length_resolver)
         try:
-            resolver = resolver_backends.create(
-                config={"backend": "length-test"}
-            )
+            resolver = resolver_backends.create(config={"backend": "length-test"})
             assert isinstance(resolver, ResourceResolver)
             assert resolver.resolve("hello") == 5
             assert resolver.resolve("") is None
@@ -206,10 +202,7 @@ class TestPartitionResolverBackends:
             }
         )
         assert isinstance(resolver, MetadataKeyPartitionResolver)
-        assert (
-            resolver.resolve(SimpleNamespace(metadata={"tenant_id": "acme"}))
-            == "acme"
-        )
+        assert resolver.resolve(SimpleNamespace(metadata={"tenant_id": "acme"})) == "acme"
         assert resolver.resolve(SimpleNamespace(metadata={})) == "shared"
 
     def test_partition_resolver_backends_creates_temporal(self) -> None:
@@ -221,9 +214,7 @@ class TestPartitionResolverBackends:
             }
         )
         assert isinstance(resolver, TemporalPartitionResolver)
-        record = SimpleNamespace(
-            metadata={"ingested_at": datetime(2026, 5, 1, 12, 0, 0)}
-        )
+        record = SimpleNamespace(metadata={"ingested_at": datetime(2026, 5, 1, 12, 0, 0)})
         assert resolver.resolve(record) == "2026_q2"
 
     def test_partition_resolver_backends_creates_callable(self) -> None:
@@ -238,9 +229,7 @@ class TestPartitionResolverBackends:
 
     def test_partition_resolver_backends_creates_joining(self) -> None:
         tenant = MetadataKeyPartitionResolver(metadata_key="tenant_id")
-        temporal = TemporalPartitionResolver(
-            timestamp_key="ingested_at", bucket="quarter"
-        )
+        temporal = TemporalPartitionResolver(timestamp_key="ingested_at", bucket="quarter")
         resolver = partition_resolver_backends.create(
             config={
                 "backend": "joining",
@@ -259,9 +248,7 @@ class TestPartitionResolverBackends:
 
     def test_partition_resolver_backends_unknown_backend_message(self) -> None:
         with pytest.raises(ValueError) as excinfo:
-            partition_resolver_backends.create(
-                config={"backend": "never-registered"}
-            )
+            partition_resolver_backends.create(config={"backend": "never-registered"})
         msg = str(excinfo.value)
         assert "Unknown partition resolver backend: never-registered" in msg
         assert "Available backends:" in msg
@@ -290,13 +277,9 @@ class TestPartitionResolverBackends:
         def _make_tenant_partition(config: dict) -> _TenantPartition:
             return _TenantPartition()
 
-        partition_resolver_backends.register(
-            "tenant-test", _make_tenant_partition
-        )
+        partition_resolver_backends.register("tenant-test", _make_tenant_partition)
         try:
-            resolver = partition_resolver_backends.create(
-                config={"backend": "tenant-test"}
-            )
+            resolver = partition_resolver_backends.create(config={"backend": "tenant-test"})
             assert resolver.resolve(SimpleNamespace()) == "tenant-test"
         finally:
             partition_resolver_backends.unregister("tenant-test")
@@ -325,9 +308,7 @@ class TestPartitionResolverBackends:
                 config={"backend": "still-never-registered"}
             )
         msg = str(excinfo.value)
-        assert (
-            "Unknown partition resolver backend: still-never-registered" in msg
-        )
+        assert "Unknown partition resolver backend: still-never-registered" in msg
         # Prefix-only check (defensive vs. exact enumeration) — a
         # consumer-registered backend lingering from an upstream test
         # run shouldn't flip this pin.

@@ -169,15 +169,12 @@ class TestMemoryBankDbOwnership:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            bank = MemoryBank.from_dict(
-                {"name": "b", "schema": {}}, owns_db=False
-            )
+            bank = MemoryBank.from_dict({"name": "b", "schema": {}}, owns_db=False)
 
         assert isinstance(bank._db, SyncMemoryDatabase)
         assert bank._owns_db is True
         assert any(
-            issubclass(w.category, UserWarning)
-            and "owns_db=False is ignored" in str(w.message)
+            issubclass(w.category, UserWarning) and "owns_db=False is ignored" in str(w.message)
             for w in caught
         ), "contradictory owns_db=False with db=None should warn"
 
@@ -239,9 +236,7 @@ class TestAsyncMemoryBankDbOwnership:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["close", "aclose"])
-    async def test_from_dict_owned_self_built_db_is_closed(
-        self, method: str
-    ) -> None:
+    async def test_from_dict_owned_self_built_db_is_closed(self, method: str) -> None:
         """The from_dict leak site: an owned db routed through from_dict is
         torn down. Routes an instrumentable owned db through the new
         ``from_dict`` db param so the close is observable.
@@ -249,9 +244,7 @@ class TestAsyncMemoryBankDbOwnership:
         from dataknobs_bots.memory.bank import AsyncMemoryBank
 
         owned = CountingAsyncDB()
-        bank = await AsyncMemoryBank.from_dict(
-            {"name": "b", "schema": {}}, db=owned, owns_db=True
-        )
+        bank = await AsyncMemoryBank.from_dict({"name": "b", "schema": {}}, db=owned, owns_db=True)
 
         await getattr(bank, method)()
 
@@ -263,9 +256,7 @@ class TestAsyncMemoryBankDbOwnership:
         from dataknobs_bots.memory.bank import AsyncMemoryBank
 
         shared = CountingAsyncDB()
-        bank = await AsyncMemoryBank.from_dict(
-            {"name": "b", "schema": {}}, db=shared
-        )
+        bank = await AsyncMemoryBank.from_dict({"name": "b", "schema": {}}, db=shared)
 
         await bank.close()
 
@@ -274,9 +265,7 @@ class TestAsyncMemoryBankDbOwnership:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["close", "aclose"])
-    async def test_from_dict_built_db_owned_despite_explicit_owns_false(
-        self, method: str
-    ) -> None:
+    async def test_from_dict_built_db_owned_despite_explicit_owns_false(self, method: str) -> None:
         """An internally-built db is owned even if owns_db=False is passed.
 
         The bank built the db itself, so the caller holds no reference to
@@ -289,15 +278,12 @@ class TestAsyncMemoryBankDbOwnership:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            bank = await AsyncMemoryBank.from_dict(
-                {"name": "b", "schema": {}}, owns_db=False
-            )
+            bank = await AsyncMemoryBank.from_dict({"name": "b", "schema": {}}, owns_db=False)
 
         assert isinstance(bank._db, AsyncMemoryDatabase)
         assert bank._owns_db is True
         assert any(
-            issubclass(w.category, UserWarning)
-            and "owns_db=False is ignored" in str(w.message)
+            issubclass(w.category, UserWarning) and "owns_db=False is ignored" in str(w.message)
             for w in caught
         ), "contradictory owns_db=False with db=None should warn"
         await getattr(bank, method)()  # does not raise
@@ -417,9 +403,7 @@ class TestCompositeMemoryClosesChildren:
         store = MemoryVectorStore(dimensions=8)
         await store.initialize()
         embedder = EchoProvider({"provider": "echo", "model": "test"})
-        vec = VectorMemory.from_components(
-            vector_store=store, embedding_provider=embedder
-        )
+        vec = VectorMemory.from_components(vector_store=store, embedding_provider=embedder)
         composite = CompositeMemory.from_components(strategies=[vec])
 
         await composite.close()
@@ -495,9 +479,7 @@ class TestGroundedReasoningOwnership:
         )
 
         injected = CountingSource("shared")
-        strategy = GroundedReasoning.from_config(
-            GroundedReasoningConfig(), sources=[injected]
-        )
+        strategy = GroundedReasoning.from_config(GroundedReasoningConfig(), sources=[injected])
 
         await strategy.close()
 
@@ -615,12 +597,14 @@ class TestDynaBotCascadeOwnership:
     async def test_config_built_collaborators_owned(self) -> None:
         from dataknobs_bots.bot.base import DynaBot
 
-        bot = await DynaBot.from_config({
-            "llm": {"provider": "echo", "model": "test"},
-            "conversation_storage": {"backend": "memory"},
-            "memory": {"type": "buffer", "max_messages": 5},
-            "reasoning": {"strategy": "simple"},
-        })
+        bot = await DynaBot.from_config(
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "memory": {"type": "buffer", "max_messages": 5},
+                "reasoning": {"strategy": "simple"},
+            }
+        )
         assert bot._owns_conversation_storage is True
         assert bot._owns_memory is True
         assert bot._owns_reasoning_strategy is True
@@ -678,9 +662,7 @@ class TestArtifactBankClose:
         """The §2.3 leak: a from_config-built artifact closes every owned
         section db.
         """
-        artifact, dbs = _artifact_from_config_with_counting_dbs(
-            ["ingredients", "instructions"]
-        )
+        artifact, dbs = _artifact_from_config_with_counting_dbs(["ingredients", "instructions"])
 
         artifact.close()
 
@@ -698,9 +680,7 @@ class TestArtifactBankClose:
 
         shared = CountingSyncDB()
         section = MemoryBank(name="s", schema={}, db=shared)  # owns_db=False
-        artifact = ArtifactBank(
-            name="a", field_defs={}, sections={"s": section}
-        )
+        artifact = ArtifactBank(name="a", field_defs={}, sections={"s": section})
 
         artifact.close()
 
@@ -730,12 +710,8 @@ class TestArtifactBankClose:
         from dataknobs_bots.memory.bank import MemoryBank
 
         good = CountingSyncDB()
-        bad_section = MemoryBank(
-            name="bad", schema={}, db=RaisingSyncDB(), owns_db=True
-        )
-        good_section = MemoryBank(
-            name="good", schema={}, db=good, owns_db=True
-        )
+        bad_section = MemoryBank(name="bad", schema={}, db=RaisingSyncDB(), owns_db=True)
+        good_section = MemoryBank(name="good", schema={}, db=good, owns_db=True)
         artifact = ArtifactBank(
             name="a",
             field_defs={},
@@ -755,9 +731,7 @@ class TestArtifactBankClose:
 class TestArtifactBankCatalogClose:
     """``ArtifactBankCatalog`` closes its db only when it owns it."""
 
-    def test_from_config_owns_and_closes_db(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_from_config_owns_and_closes_db(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The §2.2 leak: a from_config-built catalog owns its db (built +
         connected by the factory) and closes it.
         """
@@ -771,9 +745,7 @@ class TestArtifactBankCatalogClose:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         catalog = ArtifactBankCatalog.from_config({"backend": "memory"})
 
@@ -799,9 +771,7 @@ class TestArtifactBankCatalogClose:
         # Still usable by its owner after the catalog's close().
         assert catalog.count() == 0
 
-    def test_close_twice_is_safe(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_close_twice_is_safe(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Closing an owned catalog twice does not raise.
 
         There is no ``_closed`` guard and ``_owns_db`` is not flipped after
@@ -819,9 +789,7 @@ class TestArtifactBankCatalogClose:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         catalog = ArtifactBankCatalog.from_config({"backend": "memory"})
 
@@ -862,35 +830,37 @@ class TestWizardCatalogCascade:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         loader = WizardConfigLoader()
-        fsm = loader.load_from_dict({
-            "name": "w",
-            "version": "1.0",
-            "settings": {},
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "t",
-                },
-            ],
-        })
+        fsm = loader.load_from_dict(
+            {
+                "name": "w",
+                "version": "1.0",
+                "settings": {},
+                "stages": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "is_end": True,
+                        "prompt": "t",
+                    },
+                ],
+            }
+        )
         strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         # A non-memory section backend routes _create_bank_db through the
         # (patched) factory; the catalog's from_config always does. Both
         # dbs are owned (section owns_db=True, catalog owns_db=True).
-        strategy._init_artifact({
-            "name": "recipe",
-            "fields": {"recipe_name": {"required": True}},
-            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
-            "catalog": {"backend": "memory"},
-        })
+        strategy._init_artifact(
+            {
+                "name": "recipe",
+                "fields": {"recipe_name": {"required": True}},
+                "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+                "catalog": {"backend": "memory"},
+            }
+        )
 
         assert len(created) == 2, "one section db + one catalog db"
         assert all(db.close_count == 0 for db in created)
@@ -931,32 +901,34 @@ class TestWizardCatalogCascade:
             catalog_dbs.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         loader = WizardConfigLoader()
-        fsm = loader.load_from_dict({
-            "name": "w",
-            "version": "1.0",
-            "settings": {},
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "t",
-                },
-            ],
-        })
+        fsm = loader.load_from_dict(
+            {
+                "name": "w",
+                "version": "1.0",
+                "settings": {},
+                "stages": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "is_end": True,
+                        "prompt": "t",
+                    },
+                ],
+            }
+        )
         strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
-        strategy._init_artifact({
-            "name": "recipe",
-            "fields": {"recipe_name": {"required": True}},
-            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
-            "catalog": {"backend": "memory"},
-        })
+        strategy._init_artifact(
+            {
+                "name": "recipe",
+                "fields": {"recipe_name": {"required": True}},
+                "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+                "catalog": {"backend": "memory"},
+            }
+        )
 
         assert len(catalog_dbs) == 1, "one catalog db created"
 
@@ -968,9 +940,7 @@ class TestWizardCatalogCascade:
         )
 
     @pytest.mark.asyncio
-    async def test_wizard_close_twice_is_safe(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_wizard_close_twice_is_safe(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Closing the wizard cascade twice does not raise.
 
         ``close()`` clears the per-conversation bank-state map after tearing
@@ -989,32 +959,34 @@ class TestWizardCatalogCascade:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         loader = WizardConfigLoader()
-        fsm = loader.load_from_dict({
-            "name": "w",
-            "version": "1.0",
-            "settings": {},
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "t",
-                },
-            ],
-        })
+        fsm = loader.load_from_dict(
+            {
+                "name": "w",
+                "version": "1.0",
+                "settings": {},
+                "stages": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "is_end": True,
+                        "prompt": "t",
+                    },
+                ],
+            }
+        )
         strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
-        strategy._init_artifact({
-            "name": "recipe",
-            "fields": {"recipe_name": {"required": True}},
-            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
-            "catalog": {"backend": "memory"},
-        })
+        strategy._init_artifact(
+            {
+                "name": "recipe",
+                "fields": {"recipe_name": {"required": True}},
+                "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+                "catalog": {"backend": "memory"},
+            }
+        )
 
         await strategy.close()
         await strategy.close()  # must not raise
@@ -1042,13 +1014,13 @@ async def _real_conversation_manager() -> Any:
     from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 
     provider = EchoProvider(
-        LLMConfig(
-            provider="echo", model="echo-test", options={"echo_prefix": ""}
-        )
+        LLMConfig(provider="echo", model="echo-test", options={"echo_prefix": ""})
     )
-    library = ConfigPromptLibrary({
-        "system": {"assistant": {"template": "You are a helpful assistant."}},
-    })
+    library = ConfigPromptLibrary(
+        {
+            "system": {"assistant": {"template": "You are a helpful assistant."}},
+        }
+    )
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     return await ConversationManager.create(
@@ -1091,32 +1063,34 @@ class TestWizardRestoreReleasesPriorBanks:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         loader = WizardConfigLoader()
-        fsm = loader.load_from_dict({
-            "name": "w",
-            "version": "1.0",
-            "settings": {},
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "t",
-                },
-            ],
-        })
+        fsm = loader.load_from_dict(
+            {
+                "name": "w",
+                "version": "1.0",
+                "settings": {},
+                "stages": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "is_end": True,
+                        "prompt": "t",
+                    },
+                ],
+            }
+        )
         strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
         # A non-memory section routes _create_bank_db through the patched
         # factory and opens a (fake) connection the section owns.
-        strategy._init_artifact({
-            "name": "recipe",
-            "fields": {"recipe_name": {"required": True}},
-            "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
-        })
+        strategy._init_artifact(
+            {
+                "name": "recipe",
+                "fields": {"recipe_name": {"required": True}},
+                "sections": {"ingredients": {"backend": "sqlite", "schema": {}}},
+            }
+        )
 
         assert len(created) == 1, "init built one owned section db"
         init_section_db = created[0]
@@ -1166,29 +1140,29 @@ class TestWizardRestoreReleasesPriorBanks:
             created.append(db)
             return db
 
-        monkeypatch.setattr(
-            dataknobs_data.database_factory, "create", fake_create
-        )
+        monkeypatch.setattr(dataknobs_data.database_factory, "create", fake_create)
 
         loader = WizardConfigLoader()
-        fsm = loader.load_from_dict({
-            "name": "w",
-            "version": "1.0",
-            "settings": {
-                "banks": {
-                    "alpha": {"backend": "sqlite", "schema": {}},
-                    "beta": {"backend": "sqlite", "schema": {}},
-                }
-            },
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "t",
+        fsm = loader.load_from_dict(
+            {
+                "name": "w",
+                "version": "1.0",
+                "settings": {
+                    "banks": {
+                        "alpha": {"backend": "sqlite", "schema": {}},
+                        "beta": {"backend": "sqlite", "schema": {}},
+                    }
                 },
-            ],
-        })
+                "stages": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "is_end": True,
+                        "prompt": "t",
+                    },
+                ],
+            }
+        )
         strategy = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
         assert set(strategy._banks) == {"alpha", "beta"}
 
@@ -1204,9 +1178,7 @@ class TestWizardRestoreReleasesPriorBanks:
 
         # 'beta' must be present and OPEN — rebuilt fresh, not left referencing
         # the connection the restore's release just closed.
-        assert "beta" in strategy._banks, (
-            "config-added bank must survive restore"
-        )
+        assert "beta" in strategy._banks, "config-added bank must survive restore"
         assert strategy._banks["beta"]._db.close_count == 0, (
             "config-added bank must be rebuilt with a fresh open db, not left "
             "referencing the closed connection"
@@ -1223,9 +1195,7 @@ class TestWizardRestoreReleasesPriorBanks:
 # =====================================================================
 
 
-def _sqlite_bank_wizard(
-    *, ephemeral_keys: list[str] | None = None
-) -> Any:
+def _sqlite_bank_wizard(*, ephemeral_keys: list[str] | None = None) -> Any:
     """Build a ``WizardReasoning`` with one persistent (sqlite) memory bank.
 
     A non-memory backend routes ``_create_bank_db`` through the (patched-in
@@ -1237,31 +1207,29 @@ def _sqlite_bank_wizard(
     from dataknobs_bots.reasoning.wizard import WizardReasoning
     from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-    settings: dict[str, Any] = {
-        "banks": {"ledger": {"backend": "sqlite", "schema": {}}}
-    }
+    settings: dict[str, Any] = {"banks": {"ledger": {"backend": "sqlite", "schema": {}}}}
     if ephemeral_keys:
         settings["ephemeral_keys"] = ephemeral_keys
     loader = WizardConfigLoader()
-    fsm = loader.load_from_dict({
-        "name": "w",
-        "version": "1.0",
-        "settings": settings,
-        "stages": [
-            {
-                "name": "start",
-                "is_start": True,
-                "is_end": True,
-                "prompt": "t",
-            },
-        ],
-    })
+    fsm = loader.load_from_dict(
+        {
+            "name": "w",
+            "version": "1.0",
+            "settings": settings,
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "t",
+                },
+            ],
+        }
+    )
     return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
 
-def _patch_counting_factory(
-    monkeypatch: pytest.MonkeyPatch, created: list[CountingSyncDB]
-) -> None:
+def _patch_counting_factory(monkeypatch: pytest.MonkeyPatch, created: list[CountingSyncDB]) -> None:
     """Route ``database_factory.create`` to append a ``CountingSyncDB``."""
     import dataknobs_data
 
@@ -1327,9 +1295,7 @@ class TestWizardPerConversationScoping:
         await strategy.close()
 
     @pytest.mark.asyncio
-    async def test_concurrent_state_isolation(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_concurrent_state_isolation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """After A's restore, resolving B's banks (under B's key) still yields
         B's own bank objects — not A's rebuilt ones.
         """
@@ -1351,16 +1317,12 @@ class TestWizardPerConversationScoping:
         strategy._get_wizard_state(mgr_a)
 
         _active_conversation.set(mgr_b.conversation_id)
-        assert strategy._banks["ledger"] is b_bank, (
-            "B's banks must be isolated from A's restore"
-        )
+        assert strategy._banks["ledger"] is b_bank, "B's banks must be isolated from A's restore"
 
         await strategy.close()
 
     @pytest.mark.asyncio
-    async def test_fresh_conversation_gets_own_banks(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fresh_conversation_gets_own_banks(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A fresh conversation builds its own banks rather than inheriting
         the previous conversation's shared-slot banks.
         """
@@ -1377,9 +1339,7 @@ class TestWizardPerConversationScoping:
         strategy._get_wizard_state(mgr_b)
         b_bank = strategy._banks["ledger"]
 
-        assert b_bank is not a_bank, (
-            "a fresh conversation must not inherit another's banks"
-        )
+        assert b_bank is not a_bank, "a fresh conversation must not inherit another's banks"
 
         await strategy.close()
 
@@ -1489,9 +1449,7 @@ class TestWizardPerConversationScoping:
         await strategy.close()
 
     @pytest.mark.asyncio
-    async def test_asyncio_task_locality(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_asyncio_task_locality(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Two interleaved asyncio tasks — each running a turn for a different
         conversation with an ``await`` between the active-key set and the bank
         read — each resolve their OWN conversation's banks (ContextVar is

@@ -58,12 +58,8 @@ async def make_queue():
             name += ".fifo"
             attrs["FifoQueue"] = "true"
             attrs["ContentBasedDeduplication"] = "true"
-        async with session.client(
-            "sqs", endpoint_url=ENDPOINT
-        ) as client:
-            resp = await client.create_queue(
-                QueueName=name, Attributes=attrs
-            )
+        async with session.client("sqs", endpoint_url=ENDPOINT) as client:
+            resp = await client.create_queue(QueueName=name, Attributes=attrs)
             url = resp["QueueUrl"]
         created.append(url)
         return url
@@ -119,9 +115,7 @@ class TestSqsEventBus:
             await bus.subscribe("t", handler)
             await bus.publish(
                 "t",
-                Event(
-                    type=EventType.CREATED, topic="t", payload={"k": 1}
-                ),
+                Event(type=EventType.CREATED, topic="t", payload={"k": 1}),
             )
             await _wait_for(lambda: len(received) >= 1)
         finally:
@@ -149,9 +143,7 @@ class TestSqsEventBus:
         try:
             await bus.subscribe("a", a_handler)
             await bus.subscribe("b", b_handler)
-            await bus.publish(
-                "b", Event(type=EventType.UPDATED, topic="b", payload={})
-            )
+            await bus.publish("b", Event(type=EventType.UPDATED, topic="b", payload={}))
             await _wait_for(lambda: len(b_events) >= 1)
             # Give 'a' ample opportunity to (wrongly) pick it up.
             await asyncio.sleep(2.0)
@@ -162,9 +154,7 @@ class TestSqsEventBus:
         assert len(a_events) == 0
 
     @pytest.mark.asyncio
-    async def test_at_least_once_redelivery_on_handler_error(
-        self, make_queue
-    ):
+    async def test_at_least_once_redelivery_on_handler_error(self, make_queue):
         """A raising handler does not delete; the message redelivers."""
         url = await make_queue()
         bus = _make_bus(url, visibility_timeout=2)
@@ -191,9 +181,7 @@ class TestSqsEventBus:
         assert len(attempts) >= 2
 
     @pytest.mark.asyncio
-    async def test_poll_loop_survives_transient_receive_error(
-        self, make_queue
-    ):
+    async def test_poll_loop_survives_transient_receive_error(self, make_queue):
         """A transient receive_message failure must not kill the loop.
 
         The supervised loop logs the failure, backs off (non-zero
@@ -289,9 +277,7 @@ class TestSqsEventBus:
         assert all(t.done() for t in tasks)
         # Publishing after close fails fast rather than silently.
         with pytest.raises(RuntimeError):
-            await bus.publish(
-                "c", Event(type=EventType.CREATED, topic="c", payload={})
-            )
+            await bus.publish("c", Event(type=EventType.CREATED, topic="c", payload={}))
 
     @pytest.mark.asyncio
     async def test_fifo_ordering_within_topic(self, make_queue):
@@ -346,9 +332,7 @@ class TestSqsEventBus:
 
         try:
             await bus.subscribe("f", handler)
-            await bus.publish(
-                "f", Event(type=EventType.CREATED, topic="f", payload={"v": 9})
-            )
+            await bus.publish("f", Event(type=EventType.CREATED, topic="f", payload={"v": 9}))
             await _wait_for(lambda: len(received) >= 1)
         finally:
             await bus.close()
@@ -427,9 +411,7 @@ class TestSqsEventBusSingleTopicMode:
         assert bus.require_topic_attribute is True
 
     @pytest.mark.asyncio
-    async def test_attribute_required_default_drops_attribute_less_message(
-        self, make_queue
-    ):
+    async def test_attribute_required_default_drops_attribute_less_message(self, make_queue):
         """Default mode: attribute-less message returns to queue."""
         url = await make_queue()
         bus = _make_bus(url)
@@ -458,19 +440,13 @@ class TestSqsEventBusSingleTopicMode:
         finally:
             await bus.close()
 
-        assert received == [], (
-            "default mode must NOT dispatch attribute-less messages"
-        )
+        assert received == [], "default mode must NOT dispatch attribute-less messages"
         # Message should be released back to the queue.
         msg = await _receive_one(url, wait_seconds=3)
-        assert msg is not None, (
-            "released message must reappear on the queue"
-        )
+        assert msg is not None, "released message must reappear on the queue"
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_dispatches_attribute_less_message(
-        self, make_queue
-    ):
+    async def test_attribute_optional_dispatches_attribute_less_message(self, make_queue):
         """New mode: attribute-less Event-shaped body dispatches once."""
         url = await make_queue()
         bus = _make_bus(url, require_topic_attribute=False)
@@ -505,9 +481,7 @@ class TestSqsEventBusSingleTopicMode:
         assert msg is None, "successful dispatch must delete the message"
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_dispatches_non_event_shaped_body(
-        self, make_queue, caplog
-    ):
+    async def test_attribute_optional_dispatches_non_event_shaped_body(self, make_queue, caplog):
         """New mode: non-Event JSON body → synthesised CUSTOM event."""
         import logging as _logging
 
@@ -542,23 +516,13 @@ class TestSqsEventBusSingleTopicMode:
         # Synthesised events derive event_id from SQS MessageId so
         # idempotency keying survives at-least-once redelivery.
         assert received[0].event_id.startswith("sqs:")
-        assert received[0].event_id[len("sqs:"):] == (
-            received[0].metadata["sqs_message_id"]
-        )
+        assert received[0].event_id[len("sqs:") :] == (received[0].metadata["sqs_message_id"])
         assert received[0].metadata["sqs_synthesised"] is True
-        synth_warnings = [
-            r
-            for r in caplog.records
-            if "Synthesised CUSTOM event" in r.getMessage()
-        ]
-        assert len(synth_warnings) == 1, (
-            "expected exactly one synthesis warning"
-        )
+        synth_warnings = [r for r in caplog.records if "Synthesised CUSTOM event" in r.getMessage()]
+        assert len(synth_warnings) == 1, "expected exactly one synthesis warning"
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_unparseable_body_is_discarded(
-        self, make_queue, caplog
-    ):
+    async def test_attribute_optional_unparseable_body_is_discarded(self, make_queue, caplog):
         """New mode: non-JSON body is discarded (poison) and deleted.
 
         Locks in the ``json.JSONDecodeError`` branch of
@@ -589,9 +553,7 @@ class TestSqsEventBusSingleTopicMode:
         finally:
             await bus.close()
 
-        assert received == [], (
-            "unparseable body must not produce a handler invocation"
-        )
+        assert received == [], "unparseable body must not produce a handler invocation"
         # Message must be deleted (poison) — no redelivery.
         msg = await _receive_one(url, wait_seconds=2)
         assert msg is None, "unparseable bridge-mode message must be deleted"
@@ -601,14 +563,10 @@ class TestSqsEventBusSingleTopicMode:
             if "Discarding unparseable SQS message" in r.getMessage()
             and "(fanout)" in r.getMessage()
         ]
-        assert len(poison_warnings) >= 1, (
-            "expected at least one poison-discard warning"
-        )
+        assert len(poison_warnings) >= 1, "expected at least one poison-discard warning"
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_non_dict_json_body_wrapped(
-        self, make_queue
-    ):
+    async def test_attribute_optional_non_dict_json_body_wrapped(self, make_queue):
         """New mode: non-dict JSON body wraps into ``{'body': ...}``.
 
         Locks in the ``else`` arm of the
@@ -642,9 +600,7 @@ class TestSqsEventBusSingleTopicMode:
         assert received[0].metadata["sqs_synthesised"] is True
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_with_matching_attribute_dispatches(
-        self, make_queue
-    ):
+    async def test_attribute_optional_with_matching_attribute_dispatches(self, make_queue):
         """New mode: messages with a matching topic attribute still route.
 
         Bridge mode only changes attribute-*less* routing; messages
@@ -679,9 +635,7 @@ class TestSqsEventBusSingleTopicMode:
         assert received[0].payload == {"n": 1}
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_with_mismatched_attribute_still_releases(
-        self, make_queue
-    ):
+    async def test_attribute_optional_with_mismatched_attribute_still_releases(self, make_queue):
         """New mode: mismatched attribute → release back to queue."""
         url = await make_queue()
         bus = _make_bus(url, require_topic_attribute=False)
@@ -713,18 +667,12 @@ class TestSqsEventBusSingleTopicMode:
         finally:
             await bus.close()
 
-        assert received == [], (
-            "mismatched-attribute messages must not dispatch"
-        )
+        assert received == [], "mismatched-attribute messages must not dispatch"
         msg = await _receive_one(url, wait_seconds=3)
-        assert msg is not None, (
-            "mismatched message must be released back to the queue"
-        )
+        assert msg is not None, "mismatched message must be released back to the queue"
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_rejects_second_subscription(
-        self, make_queue
-    ):
+    async def test_attribute_optional_rejects_second_subscription(self, make_queue):
         """New mode is single-topic by contract: second subscribe raises.
 
         Bridge mode dispatches attribute-less messages to *the* sub;
@@ -750,9 +698,7 @@ class TestSqsEventBusSingleTopicMode:
             await bus.close()
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_handler_error_redelivers(
-        self, make_queue
-    ):
+    async def test_attribute_optional_handler_error_redelivers(self, make_queue):
         """New mode: handler raising → message not deleted → redelivered.
 
         Single subscriber (bridge mode is single-topic by contract).
@@ -794,7 +740,5 @@ class TestSqsEventBusSingleTopicMode:
         finally:
             await bus.close()
 
-        assert len(calls) >= 2, (
-            f"handler must retry after raising (calls={len(calls)})"
-        )
+        assert len(calls) >= 2, f"handler must retry after raising (calls={len(calls)})"
         assert state["raised"] is True

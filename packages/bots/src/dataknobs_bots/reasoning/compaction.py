@@ -27,9 +27,7 @@ class CompactionStrategy(Protocol):
     strategy only decides *whether/how* the dropped span is preserved.
     """
 
-    async def compact(
-        self, manager: Any, *, keep_recent_iterations: int
-    ) -> int:
+    async def compact(self, manager: Any, *, keep_recent_iterations: int) -> int:
         """Compact ``manager``'s history, keeping the most recent iterations."""
         ...
 
@@ -41,9 +39,7 @@ class WindowCompaction:
     simply windowed out of the active path.
     """
 
-    async def compact(
-        self, manager: Any, *, keep_recent_iterations: int
-    ) -> int:
+    async def compact(self, manager: Any, *, keep_recent_iterations: int) -> int:
         return await manager.compact_history(keep_recent_iterations)
 
 
@@ -58,17 +54,11 @@ class SummarizeCompaction:
     def __init__(self, summarizer: Summarizer) -> None:
         self._summarizer = summarizer
 
-    async def compact(
-        self, manager: Any, *, keep_recent_iterations: int
-    ) -> int:
-        return await manager.compact_history(
-            keep_recent_iterations, summarizer=self._summarizer
-        )
+    async def compact(self, manager: Any, *, keep_recent_iterations: int) -> int:
+        return await manager.compact_history(keep_recent_iterations, summarizer=self._summarizer)
 
 
-def build_compaction_strategy(
-    strategy: str, *, summary_provider: Any
-) -> CompactionStrategy:
+def build_compaction_strategy(strategy: str, *, summary_provider: Any) -> CompactionStrategy:
     """Build a reference :class:`CompactionStrategy` for a config ``strategy``.
 
     Args:

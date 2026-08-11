@@ -74,7 +74,8 @@ class TestTopicNode:
     def test_descendant_chunk_ids(self) -> None:
         grandchild = TopicNode(label="gc", level=2, chunk_ids=["c3"])
         child = TopicNode(
-            label="c", level=1,
+            label="c",
+            level=1,
             chunk_ids=["c1", "c2"],
             children=[grandchild],
         )
@@ -242,7 +243,9 @@ class TestFindHeadingRegions:
             _chunk("c2", ["10. Security Considerations"], [1]),
             _chunk("c3", ["10. Security Considerations", "10.1 Client Authentication"], [1, 2]),
             _chunk("c4", ["10. Security Considerations", "10.12 CSRF"], [1, 2]),
-            _chunk("c5", ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"], [1, 2, 3]),
+            _chunk(
+                "c5", ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"], [1, 2, 3]
+            ),
         ]
         tree = build_heading_tree(chunks)
         return tree, chunks
@@ -440,7 +443,8 @@ class TestExpandRegion:
     def test_subtree_with_depth_limit(self) -> None:
         security, by_id = self._build_tree_with_chunks()
         results = expand_region(
-            security, by_id,
+            security,
+            by_id,
             expansion_mode="subtree",
             max_expansion_depth=1,
         )
@@ -454,7 +458,8 @@ class TestExpandRegion:
     def test_leaves_with_depth_limit(self) -> None:
         security, by_id = self._build_tree_with_chunks()
         results = expand_region(
-            security, by_id,
+            security,
+            by_id,
             expansion_mode="leaves",
             max_expansion_depth=1,
         )
@@ -469,7 +474,9 @@ class TestExpandRegion:
     def test_deduplicates_chunk_ids(self) -> None:
         """Chunks appearing in multiple nodes are returned once."""
         node = TopicNode(
-            label="parent", level=1, chunk_ids=["c1"],
+            label="parent",
+            level=1,
+            chunk_ids=["c1"],
             children=[TopicNode(label="child", level=2, chunk_ids=["c1", "c2"])],
         )
         by_id = {
@@ -578,7 +585,11 @@ class TestHeadingPipelineIntegration:
             _chunk("intro", ["1. Introduction"], [1]),
             _chunk("sec_overview", ["10. Security Considerations"], [1]),
             _chunk("csrf", ["10. Security Considerations", "10.12 CSRF"], [1, 2]),
-            _chunk("csrf_mit", ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"], [1, 2, 3]),
+            _chunk(
+                "csrf_mit",
+                ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"],
+                [1, 2, 3],
+            ),
             _chunk("token", ["10. Security Considerations", "10.3 Token Leakage"], [1, 2]),
             _chunk("redirect", ["10. Security Considerations", "10.5 Redirect URI"], [1, 2]),
         ]
@@ -608,7 +619,11 @@ class TestHeadingPipelineIntegration:
         chunks = [
             _chunk("sec_overview", ["10. Security Considerations"], [1]),
             _chunk("csrf", ["10. Security Considerations", "10.12 CSRF"], [1, 2]),
-            _chunk("csrf_mit", ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"], [1, 2, 3]),
+            _chunk(
+                "csrf_mit",
+                ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"],
+                [1, 2, 3],
+            ),
             _chunk("token", ["10. Security Considerations", "10.3 Token Leakage"], [1, 2]),
         ]
         tree = build_heading_tree(chunks)

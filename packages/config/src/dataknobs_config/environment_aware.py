@@ -94,9 +94,7 @@ logger = logging.getLogger(__name__)
 RESOURCE_MARKER_KEYS = frozenset({"$resource", "type", "$requires"})
 
 
-def _substitute_deferring_defaults(
-    config: Any, *, defer_defaults: bool = True
-) -> Any:
+def _substitute_deferring_defaults(config: Any, *, defer_defaults: bool = True) -> Any:
     """Expand ``${VAR}`` refs, holding ``$resource`` inline defaults back.
 
     Run over each source as it enters resolution — the app config on the way
@@ -140,9 +138,7 @@ def _substitute_deferring_defaults(
             key = substitute_env_vars(key)
             if deferring:
                 substituted[key] = (
-                    substitute_env_vars(value)
-                    if key in RESOURCE_MARKER_KEYS
-                    else value
+                    substitute_env_vars(value) if key in RESOURCE_MARKER_KEYS else value
                 )
             else:
                 substituted[key] = _substitute_deferring_defaults(
@@ -151,10 +147,7 @@ def _substitute_deferring_defaults(
         return substituted
     if isinstance(config, list):
         return [
-            _substitute_deferring_defaults(
-                item, defer_defaults=defer_defaults
-            )
-            for item in config
+            _substitute_deferring_defaults(item, defer_defaults=defer_defaults) for item in config
         ]
     return substitute_env_vars(config)
 
@@ -249,9 +242,7 @@ class EnvironmentAwareConfig:
 
         config = cls._load_file(config_path)
 
-        logger.info(
-            f"Loaded app config '{app_name}' for environment '{env_config.name}'"
-        )
+        logger.info(f"Loaded app config '{app_name}' for environment '{env_config.name}'")
 
         return cls(
             config=config,
@@ -305,13 +296,9 @@ class EnvironmentAwareConfig:
         try:
             return load_yaml_or_json(path)
         except ConfigLoadError as e:
-            raise EnvironmentAwareConfigError(
-                f"Failed to load app config {path}: {e}"
-            ) from e
+            raise EnvironmentAwareConfigError(f"Failed to load app config {path}: {e}") from e
         except OSError as e:
-            raise EnvironmentAwareConfigError(
-                f"Failed to read app config {path}: {e}"
-            ) from e
+            raise EnvironmentAwareConfigError(f"Failed to read app config {path}: {e}") from e
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from the config.
@@ -357,13 +344,15 @@ class EnvironmentAwareConfig:
         Returns:
             Fully resolved configuration dictionary
         """
-        # Get the base configuration
+        # Get the base configuration. Annotated because every step below —
+        # ``get``, the substitution pass, the resource splice — walks an
+        # arbitrary config tree and so is declared ``Any``; this method is
+        # where the shape is actually promised.
+        config: dict[str, Any]
         if config_key:
             config = self.get(config_key)
             if config is None:
-                raise EnvironmentAwareConfigError(
-                    f"Config key not found: {config_key}"
-                )
+                raise EnvironmentAwareConfigError(f"Config key not found: {config_key}")
         else:
             config = copy.deepcopy(self._config)
 
@@ -383,9 +372,7 @@ class EnvironmentAwareConfig:
         # nothing discards a default and nothing else expands it, so
         # deferring would hand a caller literal ${VAR} text.
         if resolve_env_vars:
-            config = _substitute_deferring_defaults(
-                config, defer_defaults=resolve_resources
-            )
+            config = _substitute_deferring_defaults(config, defer_defaults=resolve_resources)
 
         # Resolve logical resource references. Each resource is substituted
         # as it is spliced, not the environment as a whole: a resource is
@@ -444,11 +431,7 @@ class EnvironmentAwareConfig:
                 resource_type = config.get("type", "default")
 
                 # Get defaults from the reference (exclude markers and metadata)
-                defaults = {
-                    k: v
-                    for k, v in config.items()
-                    if k not in RESOURCE_MARKER_KEYS
-                }
+                defaults = {k: v for k, v in config.items() if k not in RESOURCE_MARKER_KEYS}
                 requires = config.get("$requires", [])
 
                 if not environment.has_resource(resource_type, resource_name):
@@ -467,8 +450,7 @@ class EnvironmentAwareConfig:
                     # falling back to nothing is a factory about to be called
                     # with no arguments at all.
                     logger.warning(
-                        "Resource '%s' of type '%s' not found in environment "
-                        "'%s'; %s",
+                        "Resource '%s' of type '%s' not found in environment '%s'; %s",
                         resource_name,
                         resource_type,
                         environment.name,
@@ -492,9 +474,7 @@ class EnvironmentAwareConfig:
                     # and every one is expanded. A degraded config is still
                     # config, so it gets the same $requires check and the
                     # same recursive walk as a found one.
-                    resolved = self._resolve_source(
-                        defaults, environment, substitute=substitute
-                    )
+                    resolved = self._resolve_source(defaults, environment, substitute=substitute)
                 else:
                     # The two sources are walked separately and merged after,
                     # because they do not share a provenance. An environment
@@ -541,17 +521,13 @@ class EnvironmentAwareConfig:
             else:
                 # Regular dict - recurse into values
                 return {
-                    key: self._resolve_resource_refs(
-                        value, environment, substitute=substitute
-                    )
+                    key: self._resolve_resource_refs(value, environment, substitute=substitute)
                     for key, value in config.items()
                 }
         elif isinstance(config, list):
             # Recurse into list items
             return [
-                self._resolve_resource_refs(
-                    item, environment, substitute=substitute
-                )
+                self._resolve_resource_refs(item, environment, substitute=substitute)
                 for item in config
             ]
         else:
@@ -580,9 +556,7 @@ class EnvironmentAwareConfig:
         """
         if substitute:
             value = _substitute_deferring_defaults(value)
-        return self._resolve_resource_refs(
-            value, environment, substitute=substitute
-        )
+        return self._resolve_resource_refs(value, environment, substitute=substitute)
 
     def get_portable_config(self) -> dict[str, Any]:
         """Get the portable (unresolved) configuration.

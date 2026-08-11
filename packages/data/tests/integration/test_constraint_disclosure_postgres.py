@@ -38,10 +38,7 @@ _SECRET = "hunter2"
 #: A constraint a deployment could plausibly add to the JSON payload column,
 #: chosen because it is *not* a primary-key collision — the case the existing
 #: ``UniqueViolation`` handler already covers.
-_CHECK = (
-    "ADD CONSTRAINT no_tenant_secret "
-    "CHECK ((data->>'tenant_secret') IS NULL)"
-)
+_CHECK = "ADD CONSTRAINT no_tenant_secret CHECK ((data->>'tenant_secret') IS NULL)"
 
 
 def _assert_bounded(exc: RecordValidationError) -> None:
@@ -89,19 +86,13 @@ class TestSyncPostgres:
 
         _assert_bounded(excinfo.value)
 
-    def test_create_batch_maps_the_violation(
-        self, sync_pg: SyncPostgresDatabase
-    ) -> None:
+    def test_create_batch_maps_the_violation(self, sync_pg: SyncPostgresDatabase) -> None:
         with pytest.raises(RecordValidationError) as excinfo:
-            sync_pg.create_batch(
-                [Record({"v": 1}), Record({"tenant_secret": _SECRET})]
-            )
+            sync_pg.create_batch([Record({"v": 1}), Record({"tenant_secret": _SECRET})])
 
         _assert_bounded(excinfo.value)
 
-    def test_a_duplicate_id_is_still_told_apart(
-        self, sync_pg: SyncPostgresDatabase
-    ) -> None:
+    def test_a_duplicate_id_is_still_told_apart(self, sync_pg: SyncPostgresDatabase) -> None:
         """Widening the catch must not swallow the case it already handled.
 
         ``DuplicateRecordError`` and ``RecordValidationError`` are different
@@ -116,9 +107,7 @@ class TestSyncPostgres:
 
 
 class TestAsyncPostgres:
-    async def test_create_maps_the_violation(
-        self, async_pg: AsyncPostgresDatabase
-    ) -> None:
+    async def test_create_maps_the_violation(self, async_pg: AsyncPostgresDatabase) -> None:
         with pytest.raises(RecordValidationError) as excinfo:
             await async_pg.create(Record({"tenant_secret": _SECRET}))
 

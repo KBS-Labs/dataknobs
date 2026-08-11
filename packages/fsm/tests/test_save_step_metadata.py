@@ -207,21 +207,13 @@ class TestLoadStepsFilterSymmetry:
         storage, _ = _make_storage()
         await storage.initialize()
 
-        await storage.save_step(
-            "exec-1", _make_step("step-1"), metadata={"tenant_id": "acme"}
-        )
-        await storage.save_step(
-            "exec-1", _make_step("step-2"), metadata={"tenant_id": "globex"}
-        )
+        await storage.save_step("exec-1", _make_step("step-1"), metadata={"tenant_id": "acme"})
+        await storage.save_step("exec-1", _make_step("step-2"), metadata={"tenant_id": "globex"})
 
-        matched = await storage.load_steps(
-            "exec-1", filter_metadata={"tenant_id": "acme"}
-        )
+        matched = await storage.load_steps("exec-1", filter_metadata={"tenant_id": "acme"})
         assert [s.step_id for s in matched] == ["step-1"]
 
-        none = await storage.load_steps(
-            "exec-1", filter_metadata={"tenant_id": "missing"}
-        )
+        none = await storage.load_steps("exec-1", filter_metadata={"tenant_id": "missing"})
         assert none == []
 
     @pytest.mark.asyncio

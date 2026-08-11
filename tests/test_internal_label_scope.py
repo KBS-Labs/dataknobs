@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -37,9 +38,7 @@ GUARD = load_bin_module("check-internal-labels")
 
 def _scanned() -> set[str]:
     """The default scope, as repo-relative posix names."""
-    return {
-        path.relative_to(ROOT).as_posix() for path in GUARD.iter_target_files([])
-    }
+    return {path.relative_to(ROOT).as_posix() for path in GUARD.iter_target_files([])}
 
 
 def test_the_scope_covers_the_code_that_runs_the_gate():
@@ -54,9 +53,7 @@ def test_the_scope_covers_the_code_that_runs_the_gate():
 
     expected_roots = [t for t in workspace_targets() if (ROOT / t).is_dir()]
     missing_roots = [
-        root
-        for root in expected_roots
-        if not any(name.startswith(f"{root}/") for name in scanned)
+        root for root in expected_roots if not any(name.startswith(f"{root}/") for name in scanned)
     ]
     assert not missing_roots, (
         f"declared workspace targets contribute no scanned file: {missing_roots}. "
@@ -77,9 +74,8 @@ def test_the_scope_covers_every_shell_script_the_shell_lint_checks():
     """
     scanned = _scanned()
     missing = sorted(set(tracked_shell_files()) - scanned)
-    assert not missing, (
-        "tracked shell scripts outside the label scan:\n"
-        + "\n".join(f"  - {name}" for name in missing)
+    assert not missing, "tracked shell scripts outside the label scan:\n" + "\n".join(
+        f"  - {name}" for name in missing
     )
 
 
@@ -133,9 +129,7 @@ def test_the_exemption_is_what_keeps_the_scan_green():
     from a passing run.
     """
     guard_source = (ROOT / "bin" / "check-internal-labels.py").read_text(encoding="utf-8")
-    hits = [
-        line for line in guard_source.splitlines() if GUARD.LABEL_PATTERN.search(line)
-    ]
+    hits = [line for line in guard_source.splitlines() if GUARD.LABEL_PATTERN.search(line)]
     assert len(hits) >= 5, (
         f"only {len(hits)} label-shaped lines in the guard's own source — the "
         "exemption is close to unnecessary, so check whether it can go"
@@ -224,3 +218,74 @@ def test_a_scope_helper_that_names_nothing_is_not_absorbed():
     """
     with pytest.raises(RuntimeError, match="named nothing"):
         GUARD._declared([sys.executable, "-c", "pass"], "a silent probe")
+
+
+def test_a_suppression_that_covers_nothing_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The third way this guard goes quiet: the allowlist, not the scope.
+
+    An entry is keyed by (path, substring) to survive line drift, and for a long
+    time that was described as making it stable. It is not: adopting the
+    formatter killed two entries in one commit -- one on quote style, one that
+    had only ever matched because two tokens shared a line. Both happened to be
+    loud, because the hit they stopped covering became a reported leak. The
+    silent case is an entry whose target was deleted or reworded away, which
+    goes on suppressing nothing while the run prints its tick.
+
+    Run at full scope on purpose: that is the only mode where every entry is
+    reachable, so it is the only mode where "unused" means "dead".
+
+    Built from the *real* allowlist plus one planted entry so the run has no
+    ordinary findings. A hand-written stub allowlist leaves every genuine
+    fixture value unsuppressed, and the resulting leaks carry the failing
+    status on their own -- so the test would still pass with the dead entry
+    contributing nothing to it, which is one of the two things being checked.
+    """
+    planted = "- Item MOVED-BY-A-REFORMAT"
+    allowlist = tmp_path / "allow.txt"
+    allowlist.write_text(
+        GUARD.ALLOWLIST_FILE.read_text(encoding="utf-8")
+        + f"packages/xization/tests/test_md_constructs.py\t{planted}\tplanted\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(GUARD, "ALLOWLIST_FILE", allowlist)
+
+    status = GUARD.main([])
+    out = capsys.readouterr().out
+
+    assert "occurrence(s)" not in out, (
+        "the repository has real label findings, so this test can no longer "
+        f"attribute the failing status to the dead entry alone:\n{out}"
+    )
+    assert status == 1, f"a dead allowlist entry exited 0:\n{out}"
+    assert planted in out, out
+    assert "'- Item '" not in out, f"a live entry was reported as dead:\n{out}"
+
+
+def test_a_targeted_run_does_not_call_every_other_entry_dead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-vacuity from the other side, and the reason the check is scoped.
+
+    On a run over one named file, every entry pointing anywhere else is unused
+    for a reason that says nothing about the entry. Reporting those would make
+    the guard unusable for exactly the targeted invocation its argument list
+    exists to support, so the fix would be to delete the check.
+    """
+    allowlist = tmp_path / "allow.txt"
+    allowlist.write_text("packages/nowhere/absent.py\tnever matches\tdead\n", encoding="utf-8")
+    monkeypatch.setattr(GUARD, "ALLOWLIST_FILE", allowlist)
+
+    clean = tmp_path / "clean.py"
+    clean.write_text('"""Nothing label-shaped here."""\n', encoding="utf-8")
+
+    status = GUARD.main([str(clean)])
+    out = capsys.readouterr().out
+
+    assert status == 0, f"a targeted run reported unrelated entries as dead:\n{out}"
+    assert "never matches" not in out, out

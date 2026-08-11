@@ -80,15 +80,15 @@ class TestFileReaders:
         test_data = [
             {"id": 1, "name": "Alice"},
             {"id": 2, "name": "Bob"},
-            {"id": 3, "name": "Charlie"}
+            {"id": 3, "name": "Charlie"},
         ]
 
-        with open(jsonl_file, 'w') as f:
+        with open(jsonl_file, "w") as f:
             for item in test_data:
-                f.write(json.dumps(item) + '\n')
+                f.write(json.dumps(item) + "\n")
             # Add empty line and malformed JSON to test error handling
-            f.write('\n')
-            f.write('invalid json\n')
+            f.write("\n")
+            f.write("invalid json\n")
 
         # Read the file
         results = []
@@ -102,12 +102,9 @@ class TestFileReaders:
     async def test_read_json_file_array(self, tmp_path):
         """Test reading JSON file with array."""
         json_file = tmp_path / "test.json"
-        test_data = [
-            {"id": 1, "value": "a"},
-            {"id": 2, "value": "b"}
-        ]
+        test_data = [{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]
 
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump(test_data, f)
 
         results = []
@@ -123,7 +120,7 @@ class TestFileReaders:
         json_file = tmp_path / "test.json"
         test_data = {"status": "success", "count": 42}
 
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump(test_data, f)
 
         results = []
@@ -138,62 +135,62 @@ class TestFileReaders:
         """Test reading CSV file with header."""
         csv_file = tmp_path / "test.csv"
 
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['name', 'age', 'city'])
-            writer.writerow(['Alice', '30', 'New York'])
-            writer.writerow(['Bob', '25', 'San Francisco'])
+            writer.writerow(["name", "age", "city"])
+            writer.writerow(["Alice", "30", "New York"])
+            writer.writerow(["Bob", "25", "San Francisco"])
 
         results = []
-        async for record in read_csv_file(csv_file, delimiter=',', has_header=True):
+        async for record in read_csv_file(csv_file, delimiter=",", has_header=True):
             results.append(record)
 
         assert len(results) == 2
-        assert results[0] == {'name': 'Alice', 'age': '30', 'city': 'New York'}
-        assert results[1] == {'name': 'Bob', 'age': '25', 'city': 'San Francisco'}
+        assert results[0] == {"name": "Alice", "age": "30", "city": "New York"}
+        assert results[1] == {"name": "Bob", "age": "25", "city": "San Francisco"}
 
     @pytest.mark.asyncio
     async def test_read_csv_file_without_header(self, tmp_path):
         """Test reading CSV file without header."""
         csv_file = tmp_path / "test.csv"
 
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['Alice', '30', 'New York'])
-            writer.writerow(['Bob', '25', 'San Francisco'])
+            writer.writerow(["Alice", "30", "New York"])
+            writer.writerow(["Bob", "25", "San Francisco"])
 
         results = []
-        async for record in read_csv_file(csv_file, delimiter=',', has_header=False):
+        async for record in read_csv_file(csv_file, delimiter=",", has_header=False):
             results.append(record)
 
         assert len(results) == 2
-        assert results[0] == {'col_0': 'Alice', 'col_1': '30', 'col_2': 'New York'}
-        assert results[1] == {'col_0': 'Bob', 'col_1': '25', 'col_2': 'San Francisco'}
+        assert results[0] == {"col_0": "Alice", "col_1": "30", "col_2": "New York"}
+        assert results[1] == {"col_0": "Bob", "col_1": "25", "col_2": "San Francisco"}
 
     @pytest.mark.asyncio
     async def test_read_tsv_file(self, tmp_path):
         """Test reading TSV file."""
         tsv_file = tmp_path / "test.tsv"
 
-        with open(tsv_file, 'w', newline='') as f:
-            writer = csv.writer(f, delimiter='\t')
-            writer.writerow(['name', 'score'])
-            writer.writerow(['Alice', '95'])
-            writer.writerow(['Bob', '87'])
+        with open(tsv_file, "w", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(["name", "score"])
+            writer.writerow(["Alice", "95"])
+            writer.writerow(["Bob", "87"])
 
         results = []
-        async for record in read_csv_file(tsv_file, delimiter='\t', has_header=True):
+        async for record in read_csv_file(tsv_file, delimiter="\t", has_header=True):
             results.append(record)
 
         assert len(results) == 2
-        assert results[0] == {'name': 'Alice', 'score': '95'}
+        assert results[0] == {"name": "Alice", "score": "95"}
 
     @pytest.mark.asyncio
     async def test_read_text_file(self, tmp_path):
         """Test reading text file."""
         text_file = tmp_path / "test.txt"
 
-        with open(text_file, 'w') as f:
+        with open(text_file, "w") as f:
             f.write("Line 1\n")
             f.write("Line 2\n")
             f.write("\n")  # Empty line
@@ -201,28 +198,28 @@ class TestFileReaders:
 
         # Test with skipping empty lines
         results = []
-        async for record in read_text_file(text_file, field_name='content', skip_empty=True):
+        async for record in read_text_file(text_file, field_name="content", skip_empty=True):
             results.append(record)
 
         assert len(results) == 3
-        assert results[0] == {'content': 'Line 1'}
-        assert results[1] == {'content': 'Line 2'}
-        assert results[2] == {'content': 'Line 3'}
+        assert results[0] == {"content": "Line 1"}
+        assert results[1] == {"content": "Line 2"}
+        assert results[2] == {"content": "Line 3"}
 
         # Test without skipping empty lines
         results = []
-        async for record in read_text_file(text_file, field_name='text', skip_empty=False):
+        async for record in read_text_file(text_file, field_name="text", skip_empty=False):
             results.append(record)
 
         assert len(results) == 4
-        assert results[2] == {'text': ''}
+        assert results[2] == {"text": ""}
 
     @pytest.mark.asyncio
     async def test_create_file_reader_auto_detect(self, tmp_path):
         """Test create_file_reader with auto format detection."""
         # Test JSONL auto-detection
         jsonl_file = tmp_path / "test.jsonl"
-        with open(jsonl_file, 'w') as f:
+        with open(jsonl_file, "w") as f:
             f.write('{"test": "data"}\n')
 
         results = []
@@ -233,38 +230,38 @@ class TestFileReaders:
 
         # Test CSV auto-detection
         csv_file = tmp_path / "test.csv"
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['col1', 'col2'])
-            writer.writerow(['val1', 'val2'])
+            writer.writerow(["col1", "col2"])
+            writer.writerow(["val1", "val2"])
 
         results = []
         async for record in create_file_reader(csv_file):
             results.append(record)
         assert len(results) == 1
-        assert results[0] == {'col1': 'val1', 'col2': 'val2'}
+        assert results[0] == {"col1": "val1", "col2": "val2"}
 
         # Test text auto-detection
         txt_file = tmp_path / "test.txt"
-        with open(txt_file, 'w') as f:
-            f.write('Hello world\n')
+        with open(txt_file, "w") as f:
+            f.write("Hello world\n")
 
         results = []
         async for record in create_file_reader(txt_file):
             results.append(record)
         assert len(results) == 1
-        assert results[0] == {'text': 'Hello world'}
+        assert results[0] == {"text": "Hello world"}
 
     @pytest.mark.asyncio
     async def test_create_file_reader_explicit_format(self, tmp_path):
         """Test create_file_reader with explicit format."""
         # Force reading a .txt file as JSON
         json_file = tmp_path / "data.txt"
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump([{"id": 1}, {"id": 2}], f)
 
         results = []
-        async for record in create_file_reader(json_file, input_format='json'):
+        async for record in create_file_reader(json_file, input_format="json"):
             results.append(record)
         assert len(results) == 2
         assert results[0] == {"id": 1}
@@ -304,7 +301,7 @@ class TestFileWriters:
         """Test CSV writer with cleanup."""
         output_file = tmp_path / "output.csv"
 
-        writer, cleanup = create_csv_writer(output_file, delimiter=',')
+        writer, cleanup = create_csv_writer(output_file, delimiter=",")
 
         try:
             # Write first batch
@@ -329,7 +326,7 @@ class TestFileWriters:
         """Test TSV writer."""
         output_file = tmp_path / "output.tsv"
 
-        writer, cleanup = create_csv_writer(output_file, delimiter='\t')
+        writer, cleanup = create_csv_writer(output_file, delimiter="\t")
 
         try:
             writer([{"col1": "a", "col2": "b"}])
@@ -339,7 +336,7 @@ class TestFileWriters:
 
         # Verify output
         with open(output_file) as f:
-            reader = csv.DictReader(f, delimiter='\t')
+            reader = csv.DictReader(f, delimiter="\t")
             rows = list(reader)
 
         assert len(rows) == 2
@@ -405,10 +402,7 @@ class TestIntegration:
     async def test_roundtrip_jsonl(self, tmp_path):
         """Test reading and writing JSONL files."""
         # Original data
-        original_data = [
-            {"id": i, "value": f"item_{i}"}
-            for i in range(5)
-        ]
+        original_data = [{"id": i, "value": f"item_{i}"} for i in range(5)]
 
         # Write data
         output_file = tmp_path / "test.jsonl"
@@ -426,10 +420,7 @@ class TestIntegration:
     async def test_roundtrip_csv(self, tmp_path):
         """Test reading and writing CSV files."""
         # Original data
-        original_data = [
-            {"name": "Alice", "score": "95"},
-            {"name": "Bob", "score": "87"}
-        ]
+        original_data = [{"name": "Alice", "score": "95"}, {"name": "Bob", "score": "87"}]
 
         # Write data
         output_file = tmp_path / "test.csv"
@@ -449,7 +440,7 @@ class TestIntegration:
         """Test converting text file to JSONL."""
         # Create text file
         text_file = tmp_path / "input.txt"
-        with open(text_file, 'w') as f:
+        with open(text_file, "w") as f:
             f.write("Line 1\n")
             f.write("Line 2\n")
             f.write("Line 3\n")
@@ -477,11 +468,11 @@ class TestIntegration:
         """Test converting CSV file to JSON."""
         # Create CSV file
         csv_file = tmp_path / "input.csv"
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['id', 'name'])
-            writer.writerow(['1', 'Alice'])
-            writer.writerow(['2', 'Bob'])
+            writer.writerow(["id", "name"])
+            writer.writerow(["1", "Alice"])
+            writer.writerow(["2", "Bob"])
 
         # Read CSV and write as JSON
         output_file = tmp_path / "output.json"

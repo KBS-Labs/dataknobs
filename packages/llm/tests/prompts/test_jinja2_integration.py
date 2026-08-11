@@ -24,11 +24,7 @@ class TestJinja2Filters:
         """Test uppercase filter."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name|upper}}",
-            {"name": "alice"},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{name|upper}}", {"name": "alice"}, mode=TemplateMode.JINJA2)
 
         assert result.content == "ALICE"
 
@@ -36,11 +32,7 @@ class TestJinja2Filters:
         """Test lowercase filter."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name|lower}}",
-            {"name": "ALICE"},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{name|lower}}", {"name": "ALICE"}, mode=TemplateMode.JINJA2)
 
         assert result.content == "alice"
 
@@ -48,11 +40,7 @@ class TestJinja2Filters:
         """Test capitalize filter."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name|capitalize}}",
-            {"name": "alice"},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{name|capitalize}}", {"name": "alice"}, mode=TemplateMode.JINJA2)
 
         assert result.content == "Alice"
 
@@ -60,11 +48,7 @@ class TestJinja2Filters:
         """Test default filter with missing value."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name|default('Guest')}}",
-            {},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{name|default('Guest')}}", {}, mode=TemplateMode.JINJA2)
 
         assert result.content == "Guest"
 
@@ -73,9 +57,7 @@ class TestJinja2Filters:
         renderer = TemplateRenderer()
 
         result = renderer.render(
-            "{{items|length}}",
-            {"items": [1, 2, 3, 4, 5]},
-            mode=TemplateMode.JINJA2
+            "{{items|length}}", {"items": [1, 2, 3, 4, 5]}, mode=TemplateMode.JINJA2
         )
 
         assert result.content == "5"
@@ -87,7 +69,7 @@ class TestJinja2Filters:
         result = renderer.render(
             "{{items|join(', ')}}",
             {"items": ["apple", "banana", "cherry"]},
-            mode=TemplateMode.JINJA2
+            mode=TemplateMode.JINJA2,
         )
 
         assert result.content == "apple, banana, cherry"
@@ -97,13 +79,9 @@ class TestJinja2Filters:
         renderer = TemplateRenderer()
 
         # Register custom filter
-        renderer.add_custom_filter('double', lambda x: x * 2)
+        renderer.add_custom_filter("double", lambda x: x * 2)
 
-        result = renderer.render(
-            "{{count|double}}",
-            {"count": 5},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{count|double}}", {"count": 5}, mode=TemplateMode.JINJA2)
 
         assert result.content == "10"
 
@@ -112,9 +90,7 @@ class TestJinja2Filters:
         renderer = TemplateRenderer()
 
         result = renderer.render(
-            "{{code|format_code('python')}}",
-            {"code": "print('hello')"},
-            mode=TemplateMode.JINJA2
+            "{{code|format_code('python')}}", {"code": "print('hello')"}, mode=TemplateMode.JINJA2
         )
 
         assert "```python" in result.content
@@ -126,9 +102,7 @@ class TestJinja2Filters:
         renderer = TemplateRenderer()
 
         result = renderer.render(
-            "{{name|lower|capitalize}}",
-            {"name": "ALICE"},
-            mode=TemplateMode.JINJA2
+            "{{name|lower|capitalize}}", {"name": "ALICE"}, mode=TemplateMode.JINJA2
         )
 
         assert result.content == "Alice"
@@ -193,12 +167,16 @@ class TestJinja2Conditionals:
         result1 = renderer.render(template, {"verified": True, "age": 20}, mode=TemplateMode.JINJA2)
         assert "Approved" in result1.content
 
-        result2 = renderer.render(template, {"verified": False, "age": 20}, mode=TemplateMode.JINJA2)
+        result2 = renderer.render(
+            template, {"verified": False, "age": 20}, mode=TemplateMode.JINJA2
+        )
         assert "Approved" not in result2.content
 
         # OR
         template2 = "{% if admin or moderator %}Access{% endif %}"
-        result3 = renderer.render(template2, {"admin": False, "moderator": True}, mode=TemplateMode.JINJA2)
+        result3 = renderer.render(
+            template2, {"admin": False, "moderator": True}, mode=TemplateMode.JINJA2
+        )
         assert "Access" in result3.content
 
 
@@ -212,18 +190,10 @@ class TestMixedMode:
         # Filters outside (( )) - should work
         template = "{{name|upper}}((, age {{age}}))"
 
-        result1 = renderer.render(
-            template,
-            {"name": "alice", "age": 30},
-            mode=TemplateMode.MIXED
-        )
+        result1 = renderer.render(template, {"name": "alice", "age": 30}, mode=TemplateMode.MIXED)
         assert result1.content == "ALICE, age 30"
 
-        result2 = renderer.render(
-            template,
-            {"name": "alice", "age": None},
-            mode=TemplateMode.MIXED
-        )
+        result2 = renderer.render(template, {"name": "alice", "age": None}, mode=TemplateMode.MIXED)
         assert result2.content == "ALICE"
 
     def test_jinja_blocks_outside_conditionals(self):
@@ -233,9 +203,7 @@ class TestMixedMode:
         template = "{{name}}((, age {{age}})){% if verified %} ✓{% endif %}"
 
         result = renderer.render(
-            template,
-            {"name": "Alice", "verified": True},
-            mode=TemplateMode.MIXED
+            template, {"name": "Alice", "verified": True}, mode=TemplateMode.MIXED
         )
 
         assert "Alice" in result.content
@@ -252,9 +220,7 @@ class TestMixedMode:
         """
 
         result = renderer.render(
-            template,
-            {"name": "Alice", "city": "NYC", "premium": True},
-            mode=TemplateMode.MIXED
+            template, {"name": "Alice", "city": "NYC", "premium": True}, mode=TemplateMode.MIXED
         )
 
         assert "Alice" in result.content
@@ -273,11 +239,7 @@ class TestSyntaxValidation:
         template = "((Hello {{name|upper}}))"
 
         with pytest.raises(ValueError, match="filters.*not allowed inside"):
-            renderer.render(
-                template,
-                {"name": "alice"},
-                mode=TemplateMode.MIXED
-            )
+            renderer.render(template, {"name": "alice"}, mode=TemplateMode.MIXED)
 
     def test_jinja_block_inside_conditional_raises_error(self):
         """Test that {% %} blocks inside (( )) raise error in mixed mode."""
@@ -287,11 +249,7 @@ class TestSyntaxValidation:
         template = "(({% if age %}age {{age}}{% endif %}))"
 
         with pytest.raises(ValueError, match="block syntax.*not allowed inside"):
-            renderer.render(
-                template,
-                {"age": 30},
-                mode=TemplateMode.MIXED
-            )
+            renderer.render(template, {"age": 30}, mode=TemplateMode.MIXED)
 
     def test_filters_allowed_in_jinja2_mode(self):
         """Test that filters work anywhere in pure Jinja2 mode."""
@@ -300,11 +258,7 @@ class TestSyntaxValidation:
         # In JINJA2 mode, no (( )) preprocessing, so this is just text
         template = "Hello {{name|upper}}"
 
-        result = renderer.render(
-            template,
-            {"name": "alice"},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render(template, {"name": "alice"}, mode=TemplateMode.JINJA2)
 
         assert result.content == "Hello ALICE"
 
@@ -326,14 +280,8 @@ class TestTemplateMode:
         """Test template mode specified in config."""
         config = {
             "system": {
-                "modern": {
-                    "template": "{{name|upper}}",
-                    "template_mode": "jinja2"
-                },
-                "legacy": {
-                    "template": "(({{name}}))",
-                    "template_mode": "mixed"
-                }
+                "modern": {"template": "{{name|upper}}", "template_mode": "jinja2"},
+                "legacy": {"template": "(({{name}}))", "template_mode": "mixed"},
             }
         }
 
@@ -351,14 +299,7 @@ class TestTemplateMode:
 
     def test_mode_override_in_render(self):
         """Test mode override at render time."""
-        config = {
-            "system": {
-                "test": {
-                    "template": "{{name}}",
-                    "template_mode": "mixed"
-                }
-            }
-        }
+        config = {"system": {"test": {"template": "{{name}}", "template_mode": "mixed"}}}
 
         library = ConfigPromptLibrary(config)
         renderer = TemplateRenderer()
@@ -367,9 +308,7 @@ class TestTemplateMode:
 
         # Override to JINJA2 mode at render time
         result = renderer.render_prompt_template(
-            template,
-            {"name": "Alice"},
-            mode_override=TemplateMode.JINJA2
+            template, {"name": "Alice"}, mode_override=TemplateMode.JINJA2
         )
 
         assert result.metadata["template_mode"] == "jinja2"
@@ -389,9 +328,7 @@ class TestJinja2Loops:
         """
 
         result = renderer.render(
-            template,
-            {"items": ["apple", "banana", "cherry"]},
-            mode=TemplateMode.JINJA2
+            template, {"items": ["apple", "banana", "cherry"]}, mode=TemplateMode.JINJA2
         )
 
         assert "1. apple" in result.content
@@ -410,13 +347,8 @@ class TestJinja2Loops:
 
         result = renderer.render(
             template,
-            {
-                "users": [
-                    {"name": "Alice", "role": "admin"},
-                    {"name": "Bob", "role": "user"}
-                ]
-            },
-            mode=TemplateMode.JINJA2
+            {"users": [{"name": "Alice", "role": "admin"}, {"name": "Bob", "role": "user"}]},
+            mode=TemplateMode.JINJA2,
         )
 
         assert "Alice (admin)" in result.content
@@ -434,13 +366,8 @@ class TestJinja2Loops:
 
         result = renderer.render(
             template,
-            {
-                "users": [
-                    {"name": "Alice", "premium": True},
-                    {"name": "Bob", "premium": False}
-                ]
-            },
-            mode=TemplateMode.JINJA2
+            {"users": [{"name": "Alice", "premium": True}, {"name": "Bob", "premium": False}]},
+            mode=TemplateMode.JINJA2,
         )
 
         assert "Alice ⭐" in result.content
@@ -458,19 +385,11 @@ class TestBackwardCompatibility:
         template = "Hello {{name}}((, age {{age}}))"
 
         # With age
-        result1 = renderer.render(
-            template,
-            {"name": "Alice", "age": 30},
-            mode=TemplateMode.MIXED
-        )
+        result1 = renderer.render(template, {"name": "Alice", "age": 30}, mode=TemplateMode.MIXED)
         assert result1.content == "Hello Alice, age 30"
 
         # Without age
-        result2 = renderer.render(
-            template,
-            {"name": "Bob"},
-            mode=TemplateMode.MIXED
-        )
+        result2 = renderer.render(template, {"name": "Bob"}, mode=TemplateMode.MIXED)
         assert result2.content == "Hello Bob"
 
     def test_nested_conditionals(self):
@@ -481,26 +400,18 @@ class TestBackwardCompatibility:
 
         # All params
         result1 = renderer.render(
-            template,
-            {"name": "Alice", "city": "NYC", "country": "USA"},
-            mode=TemplateMode.MIXED
+            template, {"name": "Alice", "city": "NYC", "country": "USA"}, mode=TemplateMode.MIXED
         )
         assert result1.content == "Alice, from NYC, USA"
 
         # Missing country
         result2 = renderer.render(
-            template,
-            {"name": "Alice", "city": "NYC"},
-            mode=TemplateMode.MIXED
+            template, {"name": "Alice", "city": "NYC"}, mode=TemplateMode.MIXED
         )
         assert result2.content == "Alice, from NYC"
 
         # Missing city and country
-        result3 = renderer.render(
-            template,
-            {"name": "Alice"},
-            mode=TemplateMode.MIXED
-        )
+        result3 = renderer.render(template, {"name": "Alice"}, mode=TemplateMode.MIXED)
         assert result3.content == "Alice"
 
     def test_default_mode_backward_compatible(self):
@@ -522,11 +433,7 @@ class TestRenderResultMetadata:
         """Test that render result includes template mode."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name}}",
-            {"name": "Alice"},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{name}}", {"name": "Alice"}, mode=TemplateMode.JINJA2)
 
         assert "template_mode" in result.metadata
         assert result.metadata["template_mode"] == "jinja2"
@@ -535,11 +442,7 @@ class TestRenderResultMetadata:
         """Test metadata with mixed mode."""
         renderer = TemplateRenderer()
 
-        result = renderer.render(
-            "{{name}}",
-            {"name": "Alice"},
-            mode=TemplateMode.MIXED
-        )
+        result = renderer.render("{{name}}", {"name": "Alice"}, mode=TemplateMode.MIXED)
 
         assert result.metadata["template_mode"] == "mixed"
 
@@ -555,22 +458,14 @@ class TestEdgeCases:
         template = "{% if age %} Missing endif"
 
         with pytest.raises(ValueError, match="Template syntax error"):
-            renderer.render(
-                template,
-                {"age": 30},
-                mode=TemplateMode.JINJA2
-            )
+            renderer.render(template, {"age": 30}, mode=TemplateMode.JINJA2)
 
     def test_undefined_variable_in_filter(self):
         """Test undefined variable in filter."""
         renderer = TemplateRenderer()
 
         # Jinja2 by default returns empty string for undefined variables
-        result = renderer.render(
-            "{{undefined_var|default('N/A')}}",
-            {},
-            mode=TemplateMode.JINJA2
-        )
+        result = renderer.render("{{undefined_var|default('N/A')}}", {}, mode=TemplateMode.JINJA2)
 
         assert result.content == "N/A"
 

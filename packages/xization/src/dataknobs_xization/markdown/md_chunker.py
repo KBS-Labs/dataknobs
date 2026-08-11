@@ -150,9 +150,7 @@ class Chunk:
 
         # Build heading hierarchy
         lines = []
-        for heading, level in zip(
-            self.metadata.headings, self.metadata.heading_levels
-        ):
+        for heading, level in zip(self.metadata.headings, self.metadata.heading_levels):
             lines.append(f"{'#' * level} {heading}")
 
         # Add body text
@@ -262,9 +260,7 @@ class MarkdownChunker:
             # Process body text nodes (can be combined and split)
             if body_nodes:
                 active_nodes = [n for n in body_nodes if n.data.text.strip()]
-                combined_text = "\n".join(
-                    node.data.text for node in active_nodes
-                )
+                combined_text = "\n".join(node.data.text for node in active_nodes)
 
                 if combined_text.strip():
                     # Source span covers first to last contributing node
@@ -277,12 +273,8 @@ class MarkdownChunker:
                         # approximate by interpolating within the group span.
                         group_len = group_char_end - group_char_start
                         combined_len = len(combined_text) or 1
-                        abs_start = group_char_start + int(
-                            rel_start * group_len / combined_len
-                        )
-                        abs_end = group_char_start + int(
-                            rel_end * group_len / combined_len
-                        )
+                        abs_start = group_char_start + int(rel_start * group_len / combined_len)
+                        abs_end = group_char_start + int(rel_end * group_len / combined_len)
                         yield self._create_chunk(
                             text=chunk_text,
                             headings=headings,

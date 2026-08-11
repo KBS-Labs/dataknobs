@@ -430,7 +430,9 @@ class TestRegressionThroughRenderer:
 
         stage = reasoning._fsm.current_metadata
         result = reasoning._render_response_template(
-            "You picked {{ topic }}.", stage, state,
+            "You picked {{ topic }}.",
+            stage,
+            state,
         )
         assert result == "You picked Python."
 

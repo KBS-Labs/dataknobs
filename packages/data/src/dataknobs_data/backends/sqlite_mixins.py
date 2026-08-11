@@ -28,22 +28,21 @@ class SQLiteVectorSupport:
 
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if record has vector fields.
-        
+
         Args:
             record: Record to check
-            
+
         Returns:
             True if record has vector fields
         """
-        return any(isinstance(field, VectorField)
-                   for field in record.fields.values())
+        return any(isinstance(field, VectorField) for field in record.fields.values())
 
     def _extract_vector_dimensions(self, record: Record) -> dict[str, int]:
         """Extract dimensions from vector fields in a record.
-        
+
         Args:
             record: Record containing potential vector fields
-            
+
         Returns:
             Dictionary mapping field names to dimensions
         """
@@ -61,7 +60,7 @@ class SQLiteVectorSupport:
 
     def _update_vector_dimensions(self, record: Record) -> None:
         """Update tracked vector dimensions from a record.
-        
+
         Args:
             record: Record containing vector fields
         """
@@ -80,10 +79,10 @@ class SQLiteVectorSupport:
 
     def _serialize_vector(self, vector: np.ndarray | list) -> str:
         """Serialize a vector to JSON string for storage.
-        
+
         Args:
             vector: Vector as numpy array or list
-            
+
         Returns:
             JSON string representation
         """
@@ -93,10 +92,10 @@ class SQLiteVectorSupport:
 
     def _deserialize_vector(self, vector_str: str) -> np.ndarray | None:
         """Deserialize a vector from JSON string.
-        
+
         Args:
             vector_str: JSON string representation
-            
+
         Returns:
             Numpy array
         """
@@ -112,15 +111,15 @@ class SQLiteVectorSupport:
         self,
         vec1: np.ndarray | None,
         vec2: np.ndarray | None,
-        metric: DistanceMetric = DistanceMetric.COSINE
+        metric: DistanceMetric = DistanceMetric.COSINE,
     ) -> float:
         """Compute similarity between two vectors.
-        
+
         Args:
             vec1: First vector
             vec2: Second vector
             metric: Distance metric to use
-            
+
         Returns:
             Similarity score (higher is more similar)
         """
@@ -156,4 +155,3 @@ class SQLiteVectorSupport:
 
         else:
             raise ValueError(f"Unsupported metric: {metric}")
-

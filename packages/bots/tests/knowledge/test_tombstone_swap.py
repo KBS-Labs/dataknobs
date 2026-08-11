@@ -55,8 +55,7 @@ except ImportError:
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -119,9 +118,7 @@ async def _teardown_store(backend_name: str, store: Any) -> None:
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
@@ -152,12 +149,8 @@ async def wired(
         # ``ensure_postgres_ready`` dependency is not forced on the
         # memory/faiss params (which run without Postgres). The fixture
         # pre-drops the table and tears it down on ``pg_gen.close()``.
-        make_pgvector_test_table = request.getfixturevalue(
-            "make_pgvector_test_table"
-        )
-        pg_gen = make_pgvector_test_table(
-            "test_tombstone_", dimensions=_EMBED_DIM
-        )
+        make_pgvector_test_table = request.getfixturevalue("make_pgvector_test_table")
+        pg_gen = make_pgvector_test_table("test_tombstone_", dimensions=_EMBED_DIM)
         vs_config = next(pg_gen)
         vs_config["metric"] = "cosine"
     else:
@@ -194,9 +187,7 @@ async def test_tombstone_roundtrip_retires_old_generation(wired) -> None:
     count_before = await rag.count(filter={"domain_id": "d"})
     assert count_before > 0
 
-    await backend.put_file(
-        "d", "docs/b.md", b"# B\n\nAlpha banana REVISEDtoken.\n"
-    )
+    await backend.put_file("d", "docs/b.md", b"# B\n\nAlpha banana REVISEDtoken.\n")
 
     result = await manager.ingest("d", swap_mode=IngestSwapMode.TOMBSTONE)
 
@@ -241,13 +232,9 @@ async def test_query_and_hybrid_query_both_hide_stale(wired) -> None:
     assert "docs/b.md" in _sources(h)
 
     # Escape hatch returns the tombstoned chunks on both paths.
-    q_all = await rag.query(
-        "Alpha", k=10, min_similarity=_ALL, include_stale=True
-    )
+    q_all = await rag.query("Alpha", k=10, min_similarity=_ALL, include_stale=True)
     assert "docs/a.md" in _sources(q_all)
-    h_all = await rag.hybrid_query(
-        "Alpha", k=10, min_similarity=_ALL, include_stale=True
-    )
+    h_all = await rag.hybrid_query("Alpha", k=10, min_similarity=_ALL, include_stale=True)
     assert "docs/a.md" in _sources(h_all)
 
 
@@ -286,9 +273,7 @@ async def test_tombstone_rollback_restores_old_generation(wired) -> None:
     count_before = await rag.count(filter={"domain_id": "d"})
     assert count_before > 0
 
-    failing = KnowledgeIngestionManager(
-        source=backend, destination=_FailIngestRAG(rag)
-    )
+    failing = KnowledgeIngestionManager(source=backend, destination=_FailIngestRAG(rag))
     with pytest.raises(RuntimeError, match="embed failed mid-swap"):
         await failing.ingest("d", swap_mode=IngestSwapMode.TOMBSTONE)
 
@@ -313,34 +298,21 @@ async def test_ingest_changes_tombstone_per_file_scope(wired) -> None:
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
     version = await manager.get_current_version("d")
     assert version
-    a_before = await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/a.md"}
-    )
+    a_before = await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"})
     assert a_before > 0
 
-    await backend.put_file(
-        "d", "docs/b.md", b"# B\n\nAlpha banana DELTAtoken.\n"
-    )
+    await backend.put_file("d", "docs/b.md", b"# B\n\nAlpha banana DELTAtoken.\n")
 
-    result = await manager.ingest_changes(
-        "d", version, swap_mode=IngestSwapMode.TOMBSTONE
-    )
+    result = await manager.ingest_changes("d", version, swap_mode=IngestSwapMode.TOMBSTONE)
 
     assert result.success
     assert result.files_processed == 1
     # No residual tombstones; untouched file untouched; delta is live.
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
-    assert (
-        await rag.count(
-            filter={"domain_id": "d", "source_path": "docs/a.md"}
-        )
-        == a_before
-    )
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"}) == a_before
     hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
     assert hits
-    assert "docs/b.md" in {
-        h["metadata"].get("source_path") for h in hits
-    }
+    assert "docs/b.md" in {h["metadata"].get("source_path") for h in hits}
     assert all(h["metadata"].get("_stale") is not True for h in hits)
 
 
@@ -362,39 +334,21 @@ async def test_ingest_changes_tombstone_purely_additive_keeps_existing(
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
     version = await manager.get_current_version("d")
     assert version
-    a_before = await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/a.md"}
-    )
-    b_before = await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/b.md"}
-    )
+    a_before = await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"})
+    b_before = await rag.count(filter={"domain_id": "d", "source_path": "docs/b.md"})
     assert a_before > 0
     assert b_before > 0
 
     # Brand-new path — neither modified nor deleted: change.added only.
-    await backend.put_file(
-        "d", "docs/c.md", b"# C\n\nAlpha cherry ADDEDtoken.\n"
-    )
+    await backend.put_file("d", "docs/c.md", b"# C\n\nAlpha cherry ADDEDtoken.\n")
 
-    result = await manager.ingest_changes(
-        "d", version, swap_mode=IngestSwapMode.TOMBSTONE
-    )
+    result = await manager.ingest_changes("d", version, swap_mode=IngestSwapMode.TOMBSTONE)
 
     assert result.success
     assert result.files_processed == 1  # only the added file is embedded
     # Pre-existing files' chunks are NOT retired by an additive delta.
-    assert (
-        await rag.count(
-            filter={"domain_id": "d", "source_path": "docs/a.md"}
-        )
-        == a_before
-    )
-    assert (
-        await rag.count(
-            filter={"domain_id": "d", "source_path": "docs/b.md"}
-        )
-        == b_before
-    )
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"}) == a_before
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/b.md"}) == b_before
     # No tombstone residue, and the added file is live.
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
     hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
@@ -426,11 +380,7 @@ class _RetireProbeRAG:
         return await self._inner.ingest_from_backend(*args, **kwargs)
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:
-        if (
-            self.at_retire is None
-            and filter is not None
-            and filter.get("_stale") is True
-        ):
+        if self.at_retire is None and filter is not None and filter.get("_stale") is True:
             vs = self._inner.vector_store
             self.at_retire = {
                 "total": await vs.count(filter=None),
@@ -454,14 +404,10 @@ async def test_tombstone_preserves_old_generation_during_swap(
     """
     backend, rag, manager = wired
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
-    count_before = await rag.vector_store.count(
-        filter={"domain_id": "d"}
-    )
+    count_before = await rag.vector_store.count(filter={"domain_id": "d"})
     assert count_before > 0
 
-    await backend.put_file(
-        "d", "docs/b.md", b"# B\n\nAlpha banana REVISEDtwo.\n"
-    )
+    await backend.put_file("d", "docs/b.md", b"# B\n\nAlpha banana REVISEDtwo.\n")
 
     probe = _RetireProbeRAG(rag)
     pmgr = KnowledgeIngestionManager(source=backend, destination=probe)
@@ -475,10 +421,7 @@ async def test_tombstone_preserves_old_generation_during_swap(
     assert probe.at_retire["total"] == 2 * count_before
     # Post-commit steady state: exactly one clean generation.
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
-    assert (
-        await rag.vector_store.count(filter={"domain_id": "d"})
-        == count_before
-    )
+    assert await rag.vector_store.count(filter={"domain_id": "d"}) == count_before
 
 
 class _PartialWriteFailRAG:
@@ -541,9 +484,7 @@ async def test_tombstone_partial_write_does_not_leak(wired) -> None:
     """
     backend, rag, manager = wired
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
-    count_before = await rag.vector_store.count(
-        filter={"domain_id": "d"}
-    )
+    count_before = await rag.vector_store.count(filter={"domain_id": "d"})
     assert count_before > 0
 
     dest = _PartialWriteFailRAG(rag)
@@ -552,17 +493,9 @@ async def test_tombstone_partial_write_does_not_leak(wired) -> None:
         await failing.ingest("d", swap_mode=IngestSwapMode.TOMBSTONE)
 
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
-    assert (
-        await rag.vector_store.count(filter={"domain_id": "d"})
-        == count_before
-    )
+    assert await rag.vector_store.count(filter={"domain_id": "d"}) == count_before
     if dest.gen is not None:
-        assert (
-            await rag.vector_store.count(
-                filter={"_generation": dest.gen}
-            )
-            == 0
-        )
+        assert await rag.vector_store.count(filter={"_generation": dest.gen}) == 0
     assert await rag.query("Alpha", k=10, min_similarity=_ALL)
     info = await backend.get_info("d")
     assert info is not None
@@ -586,25 +519,16 @@ async def test_ingest_changes_tombstone_partial_write_keeps_deleted_gone(
     assert version
 
     await backend.delete_file("d", "docs/b.md")
-    await backend.put_file(
-        "d", "docs/a.md", b"# A\n\nAlpha apple CHANGEDthree.\n"
-    )
+    await backend.put_file("d", "docs/a.md", b"# A\n\nAlpha apple CHANGEDthree.\n")
 
     dest = _PartialWriteFailRAG(rag)
     failing = KnowledgeIngestionManager(source=backend, destination=dest)
     with pytest.raises(RuntimeError, match="after partial write"):
-        await failing.ingest_changes(
-            "d", version, swap_mode=IngestSwapMode.TOMBSTONE
-        )
+        await failing.ingest_changes("d", version, swap_mode=IngestSwapMode.TOMBSTONE)
 
     # b.md was deleted at the source — it must stay gone (not merely
     # hidden); a.md (modified, re-embed failed) is restored & visible.
-    assert (
-        await rag.vector_store.count(
-            filter={"domain_id": "d", "source_path": "docs/b.md"}
-        )
-        == 0
-    )
+    assert await rag.vector_store.count(filter={"domain_id": "d", "source_path": "docs/b.md"}) == 0
     hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
     sources = {h["metadata"].get("source_path") for h in hits}
     assert "docs/b.md" not in sources
@@ -689,9 +613,7 @@ async def test_interrupted_swap_reconciled_on_next_ingest_changes(
     """
     backend, rag, manager = wired
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
-    count_before = await rag.vector_store.count(
-        filter={"domain_id": "d"}
-    )
+    count_before = await rag.vector_store.count(filter={"domain_id": "d"})
     assert count_before > 0
     version = await manager.get_current_version("d")
     assert version
@@ -706,32 +628,18 @@ async def test_interrupted_swap_reconciled_on_next_ingest_changes(
     info = await backend.get_info("d")
     assert info is not None
     assert info.ingestion_status == IngestionStatus.SWAPPING
-    assert (
-        await rag.vector_store.count(
-            filter={"domain_id": "d", "_stale": True}
-        )
-        == count_before
-    )
+    assert await rag.vector_store.count(filter={"domain_id": "d", "_stale": True}) == count_before
 
     # Per-file recovery op: only docs/b.md changed.
-    await backend.put_file(
-        "d", "docs/b.md", b"# B\n\nAlpha banana RECOVERtoken.\n"
-    )
-    result = await manager.ingest_changes(
-        "d", version, swap_mode=IngestSwapMode.TOMBSTONE
-    )
+    await backend.put_file("d", "docs/b.md", b"# B\n\nAlpha banana RECOVERtoken.\n")
+    result = await manager.ingest_changes("d", version, swap_mode=IngestSwapMode.TOMBSTONE)
     assert result.success
 
     # Reconcile restored docs/a.md, dropped the orphan, and the delta
     # swapped docs/b.md cleanly: no residue, a.md visible again.
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
     if crashed.gen:
-        assert (
-            await rag.vector_store.count(
-                filter={"_generation": crashed.gen}
-            )
-            == 0
-        )
+        assert await rag.vector_store.count(filter={"_generation": crashed.gen}) == 0
     hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
     sources = {h["metadata"].get("source_path") for h in hits}
     assert "docs/a.md" in sources
@@ -751,9 +659,7 @@ async def test_reconcile_public_api_recovers_stuck_domain(wired) -> None:
     """
     backend, rag, manager = wired
     await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
-    count_before = await rag.vector_store.count(
-        filter={"domain_id": "d"}
-    )
+    count_before = await rag.vector_store.count(filter={"domain_id": "d"})
 
     crashed = _CrashAfterOrphanWriteRAG(rag)
     cmgr = KnowledgeIngestionManager(source=backend, destination=crashed)
@@ -763,17 +669,9 @@ async def test_reconcile_public_api_recovers_stuck_domain(wired) -> None:
     reconciled = await manager.reconcile("d")
     assert reconciled is True
     assert await rag.vector_store.count(filter={"_stale": True}) == 0
-    assert (
-        await rag.vector_store.count(filter={"domain_id": "d"})
-        == count_before
-    )
+    assert await rag.vector_store.count(filter={"domain_id": "d"}) == count_before
     if crashed.gen:
-        assert (
-            await rag.vector_store.count(
-                filter={"_generation": crashed.gen}
-            )
-            == 0
-        )
+        assert await rag.vector_store.count(filter={"_generation": crashed.gen}) == 0
     hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
     assert hits
     info = await backend.get_info("d")
@@ -856,9 +754,7 @@ async def test_native_hybrid_overfetches_past_stale() -> None:
     await src.create_kb("d")
     # 12 files → 12 chunks; ids sort as docs/f00..docs/f11.
     for i in range(12):
-        await src.put_file(
-            "d", f"docs/f{i:02d}.md", f"# F{i}\n\nAlpha token{i}.\n".encode()
-        )
+        await src.put_file("d", f"docs/f{i:02d}.md", f"# F{i}\n\nAlpha token{i}.\n".encode())
     mgr = KnowledgeIngestionManager(source=src, destination=rag)
     await mgr.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
     total = await store.count(filter={"domain_id": "d"})
@@ -872,9 +768,7 @@ async def test_native_hybrid_overfetches_past_stale() -> None:
         store.metadata_store[cid] = {**meta, "_stale": True}
 
     k = 5
-    hits = await rag.hybrid_query(
-        "Alpha", k=k, fusion_strategy="native", min_similarity=_ALL
-    )
+    hits = await rag.hybrid_query("Alpha", k=k, fusion_strategy="native", min_similarity=_ALL)
     # Pre-fix: store returns first 5 (all stale) → 0 visible.
     assert len(hits) == k
     assert all(h["metadata"].get("_stale") is not True for h in hits)
@@ -903,10 +797,7 @@ async def test_count_excludes_stale_by_default(wired) -> None:
 
     visible = total - marked
     assert await rag.count(filter={"domain_id": "d"}) == visible
-    assert (
-        await rag.count(filter={"domain_id": "d"}, include_stale=True)
-        == total
-    )
+    assert await rag.count(filter={"domain_id": "d"}, include_stale=True) == total
 
 
 async def test_clear_existing_deprecated_still_works(wired) -> None:

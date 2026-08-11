@@ -304,9 +304,7 @@ class TestWizardReasoning:
         # Verify the provider received the call with wizard context
         assert provider.call_count >= 1
         last_call = provider.get_last_call()
-        system_msg = next(
-            m for m in last_call["messages"] if m.role == "system"
-        )
+        system_msg = next(m for m in last_call["messages"] if m.role == "system")
         assert (
             "## Current Wizard Stage" in system_msg.content
             or "## Clarification Needed" in system_msg.content
@@ -331,9 +329,7 @@ class TestWizardReasoning:
         last_message = provider.get_last_user_message()
         assert last_message == "Test input message"
 
-    def test_validate_data_required_fields(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_validate_data_required_fields(self, wizard_reasoning: WizardReasoning) -> None:
         """Test data validation for required fields."""
         schema = {
             "type": "object",
@@ -347,12 +343,12 @@ class TestWizardReasoning:
         assert "name" in errors[0]
 
         # With required field
-        errors = wizard_reasoning._extraction.validate_data({"name": "test"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data(
+            {"name": "test"}, StageSchema.from_dict(schema)
+        )
         assert len(errors) == 0
 
-    def test_validate_data_enum_constraint(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_validate_data_enum_constraint(self, wizard_reasoning: WizardReasoning) -> None:
         """Test data validation for enum constraints."""
         schema = {
             "type": "object",
@@ -360,17 +356,19 @@ class TestWizardReasoning:
         }
 
         # Invalid enum value
-        errors = wizard_reasoning._extraction.validate_data({"choice": "invalid"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data(
+            {"choice": "invalid"}, StageSchema.from_dict(schema)
+        )
         assert len(errors) == 1
         assert "choice" in errors[0]
 
         # Valid enum value
-        errors = wizard_reasoning._extraction.validate_data({"choice": "a"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data(
+            {"choice": "a"}, StageSchema.from_dict(schema)
+        )
         assert len(errors) == 0
 
-    def test_calculate_progress(
-        self, simple_wizard_config: dict
-    ) -> None:
+    def test_calculate_progress(self, simple_wizard_config: dict) -> None:
         """Test progress calculation.
 
         Progress is calculated as: visited_stages / (total_stages - 1)
@@ -389,9 +387,7 @@ class TestWizardReasoning:
         assert progress == 0.5  # 1 / (3-1) = 0.5
 
         # Middle of wizard - 2 unique stages visited
-        state = WizardState(
-            current_stage="configure", history=["welcome", "configure"]
-        )
+        state = WizardState(current_stage="configure", history=["welcome", "configure"])
         progress = reasoning._calculate_progress(state)
         assert progress == 1.0  # 2 / (3-1) = 1.0, capped at 1.0
 
@@ -411,9 +407,7 @@ class TestWizardReasoning:
     ) -> None:
         """Test extracting last user message."""
         await conversation_manager.add_message(role="user", content="First message")
-        await conversation_manager.add_message(
-            role="assistant", content="Response"
-        )
+        await conversation_manager.add_message(role="assistant", content="Response")
         await conversation_manager.add_message(role="user", content="Last message")
 
         message = wizard_reasoning._get_last_user_message(conversation_manager)
@@ -461,9 +455,7 @@ class TestWizardReasoning:
         conversation_manager: ConversationManager,
     ) -> None:
         """Falls back to augmented content when no raw_content metadata."""
-        await conversation_manager.add_message(
-            role="user", content="plain message"
-        )
+        await conversation_manager.add_message(role="user", content="plain message")
 
         message = wizard_reasoning._get_last_user_message(conversation_manager)
         assert message == "plain message"
@@ -483,23 +475,17 @@ class TestWizardReasoning:
         state = WizardState(current_stage="configure")
 
         # First user message — augmented with KB context
-        augmented_1 = (
-            "## Knowledge base\n\nKB results\n\n---\n\n"
-            "## Question\n\nI want a math tutor"
-        )
+        augmented_1 = "## Knowledge base\n\nKB results\n\n---\n\n## Question\n\nI want a math tutor"
         await conversation_manager.add_message(
             role="user",
             content=augmented_1,
             metadata={"raw_content": "I want a math tutor"},
         )
-        await conversation_manager.add_message(
-            role="assistant", content="Great choice!"
-        )
+        await conversation_manager.add_message(role="assistant", content="Great choice!")
 
         # Second user message — also augmented
         augmented_2 = (
-            "## Knowledge base\n\nMore KB results\n\n---\n\n"
-            "## Question\n\nEnable hints please"
+            "## Knowledge base\n\nMore KB results\n\n---\n\n## Question\n\nEnable hints please"
         )
         await conversation_manager.add_message(
             role="user",
@@ -507,9 +493,7 @@ class TestWizardReasoning:
             metadata={"raw_content": "Enable hints please"},
         )
 
-        context = wizard_reasoning._extraction._build_wizard_context(
-            conversation_manager, state
-        )
+        context = wizard_reasoning._extraction._build_wizard_context(conversation_manager, state)
 
         # Should use raw messages, not augmented ones
         assert "I want a math tutor" in context
@@ -527,12 +511,8 @@ class TestWizardReasoning:
         state = WizardState(current_stage="configure")
 
         # First message — plain (no KB)
-        await conversation_manager.add_message(
-            role="user", content="Hello"
-        )
-        await conversation_manager.add_message(
-            role="assistant", content="Hi!"
-        )
+        await conversation_manager.add_message(role="user", content="Hello")
+        await conversation_manager.add_message(role="assistant", content="Hi!")
 
         # Second message — augmented
         await conversation_manager.add_message(
@@ -540,18 +520,12 @@ class TestWizardReasoning:
             content="## Knowledge base\n\nKB\n\n---\n\n## Question\n\nMath",
             metadata={"raw_content": "Math"},
         )
-        await conversation_manager.add_message(
-            role="assistant", content="OK"
-        )
+        await conversation_manager.add_message(role="assistant", content="OK")
 
         # Third message — current (excluded)
-        await conversation_manager.add_message(
-            role="user", content="Done"
-        )
+        await conversation_manager.add_message(role="user", content="Done")
 
-        context = wizard_reasoning._extraction._build_wizard_context(
-            conversation_manager, state
-        )
+        context = wizard_reasoning._extraction._build_wizard_context(conversation_manager, state)
 
         assert "Hello" in context
         assert "Math" in context
@@ -568,9 +542,7 @@ class TestWizardReasoningFromConfig:
 
         import yaml
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(simple_wizard_config, f)
             config_path = f.name
 

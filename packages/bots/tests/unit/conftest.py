@@ -31,9 +31,7 @@ def simple_wizard_config() -> dict[str, Any]:
                     "required": ["intent"],
                 },
                 "suggestions": ["Create something", "Edit something"],
-                "transitions": [
-                    {"target": "configure", "condition": "data.get('intent')"}
-                ],
+                "transitions": [{"target": "configure", "condition": "data.get('intent')"}],
             },
             {
                 "name": "configure",
@@ -113,13 +111,15 @@ async def conversation_manager_pair():
         options={"echo_prefix": ""},
     )
     provider = EchoProvider(config)
-    library = ConfigPromptLibrary({
-        "system": {
-            "assistant": {
-                "template": "You are a helpful assistant.",
+    library = ConfigPromptLibrary(
+        {
+            "system": {
+                "assistant": {
+                    "template": "You are a helpful assistant.",
+                },
             },
-        },
-    })
+        }
+    )
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 

@@ -42,7 +42,7 @@ Example:
 import dataclasses
 import logging
 from enum import Enum
-from typing import Any, Dict, Protocol, Type, TypeVar, runtime_checkable
+from typing import Any, Dict, Protocol, Type, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.exceptions import SerializationError
 
@@ -204,7 +204,11 @@ def deserialize(cls: Type[T], data: Dict[str, Any]) -> T:
         )
 
     try:
-        return cls.from_dict(data)
+        # The hasattr guard above is what establishes ``from_dict``; this names
+        # the shape it established. ``Type[T]`` alone does not carry it, so the
+        # call was unchecked and its result leaked out as ``Any``.
+        deserializable = cast("type[Serializable]", cls)
+        return cast("T", deserializable.from_dict(data))
     except Exception as e:
         if isinstance(e, SerializationError):
             raise
@@ -417,9 +421,7 @@ def _sanitize_recursive(
         result = {}
         for f in dataclasses.fields(value):
             child_path = f"{_path}.{f.name}" if _path else f.name
-            sanitized = _sanitize_recursive(
-                getattr(value, f.name), on_drop, child_path, _dropped
-            )
+            sanitized = _sanitize_recursive(getattr(value, f.name), on_drop, child_path, _dropped)
             if sanitized is not _SENTINEL:
                 result[f.name] = sanitized
         return result
@@ -431,24 +433,18 @@ def _sanitize_recursive(
             if isinstance(dict_result, dict):
                 return _sanitize_recursive(dict_result, on_drop, _path, _dropped)
         except Exception:
-            logger.debug(
-                "to_dict() failed for %s, dropping", type(value).__name__
-            )
+            logger.debug("to_dict() failed for %s, dropping", type(value).__name__)
 
     # Not convertible — handle according to on_drop mode
     path_label = _path or "<root>"
     type_name = type(value).__name__
 
     if on_drop == "warn":
-        logger.warning(
-            "Dropping non-serializable '%s' (type=%s)", path_label, type_name
-        )
+        logger.warning("Dropping non-serializable '%s' (type=%s)", path_label, type_name)
     elif on_drop == "error" and _dropped is not None:
         _dropped.append(f"{path_label} (type={type_name})")
     else:
-        logger.debug(
-            "Dropping non-serializable value of type %s", type_name
-        )
+        logger.debug("Dropping non-serializable value of type %s", type_name)
 
     return _SENTINEL
 

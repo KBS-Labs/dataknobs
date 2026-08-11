@@ -5,6 +5,7 @@ import yaml
 from pathlib import Path
 from dataknobs_fsm.api.simple import SimpleFSM
 
+
 def test_regex_yaml():
     """Test the regex transformations from YAML config."""
 
@@ -21,13 +22,13 @@ def test_regex_yaml():
     fsm1 = SimpleFSM(configs[0])
 
     test_data = {
-        'text': "Contact John at 555-123-4567 or email john@example.com. Visit https://example.com #urgent @support"
+        "text": "Contact John at 555-123-4567 or email john@example.com. Visit https://example.com #urgent @support"
     }
 
     result = fsm1.process(test_data)
 
-    if result['success']:
-        data = result['data']
+    if result["success"]:
+        data = result["data"]
         print(f"Original:              '{data.get('original', '')}'")
         print(f"Whitespace normalized: '{data.get('whitespace_normalized', '')}'")
         print(f"Phone masked:          '{data.get('phone_masked', '')}'")
@@ -45,14 +46,12 @@ def test_regex_yaml():
 
     fsm2 = SimpleFSM(configs[1])
 
-    test_data2 = {
-        'text': "Hello World 123! Test message with email@example.com"
-    }
+    test_data2 = {"text": "Hello World 123! Test message with email@example.com"}
 
     result2 = fsm2.process(test_data2)
 
-    if result2['success']:
-        data = result2['data']
+    if result2["success"]:
+        data = result2["data"]
         print(f"Original:         '{data.get('original_text', '')}'")
         print(f"Lowercase:        '{data.get('lowercase', '')}'")
         print(f"Uppercase:        '{data.get('uppercase', '')}'")
@@ -71,6 +70,7 @@ def test_regex_yaml():
         print(f"Has phone:        {data.get('has_phone', False)}")
 
     fsm2.close()
+
 
 if __name__ == "__main__":
     test_regex_yaml()

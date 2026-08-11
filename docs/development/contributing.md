@@ -347,8 +347,12 @@ We follow [PEP 8](https://pep8.org/) with some modifications:
 Ruff handles both linting and formatting; there is no Black or isort in this
 repository. Always pass the root config, which is the authoritative one.
 
+Both are enforced: `bin/validate.sh` fails on a lint finding *and* on a file
+the formatter would rewrite. Run it with `-f`, or `./bin/fix.sh`, and both are
+repaired in one pass.
+
 ```bash
-# Lint, and auto-fix what can be fixed
+# Lint and format, fixing what can be fixed
 bin/validate.sh -f
 
 # Or drive ruff directly
@@ -586,8 +590,9 @@ dk diagnose        # If checks fail, see what went wrong
 dk fix             # Auto-fix style issues
 dk test --last     # Re-run only failed tests
 
-# Or manually run individual checks. Always pass the root config: it is the
-# one bin/validate.sh uses, and a per-package [tool.ruff] section can differ.
+# Or manually run individual checks. --config is spelled out because these
+# name targets rather than the whole tree; the root config is the only one, so
+# a bare `ruff check` resolves the same rules the gate does.
 uv run ruff check --config pyproject.toml packages/*/src     # Style check
 uv run ruff format --config pyproject.toml packages/*/src    # Format code
 uv run pylint packages/*/src --rcfile=.pylintrc              # Linting

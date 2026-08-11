@@ -1,10 +1,7 @@
 """Tests for improved template validation error messages."""
 
 import pytest
-from dataknobs_llm.prompts import (
-    TemplateRenderer,
-    TemplateSyntaxError
-)
+from dataknobs_llm.prompts import TemplateRenderer, TemplateSyntaxError
 
 
 class TestImprovedValidationErrors:
@@ -259,7 +256,7 @@ class TestErrorDataclass:
             line=10,
             column=5,
             snippet="some ⮜HERE⮞ text",
-            error_type="test_error"
+            error_type="test_error",
         )
 
         assert error.message == "Test error"
@@ -275,7 +272,7 @@ class TestErrorDataclass:
             line=5,
             column=12,
             snippet="context ⮜HERE⮞ text",
-            error_type="syntax_error"
+            error_type="syntax_error",
         )
 
         error_str = str(error)

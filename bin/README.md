@@ -85,10 +85,11 @@ when validation fails:
 ./bin/fix.sh utils
 ```
 
-It does not format. No check anywhere runs `ruff format`, so a reformat here
-would be an unrequested diff over the whole repository that nothing would
-notice being reverted. `dk format` is the one command that formats, and you
-type it by name.
+It lints with `--fix` and then formats, in that order: the linter's fixes move
+code and the formatter lays it out, and the other order leaves a file that
+fails the check this script exists to satisfy. Formatting is checked by
+`validate.sh`, so this is the command that repairs what the gate reports rather
+than an unrequested diff. `dk format` runs the formatter alone.
 
 ### `validate.sh`
 Validate code quality and catch common errors:

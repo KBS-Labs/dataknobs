@@ -48,9 +48,7 @@ async def test_default_kinds_is_content(tmp_path) -> None:
 async def test_explicit_metadata_kind_pattern(tmp_path) -> None:
     backend = await _backend(tmp_path)
     bus = await _bus()
-    sub = await backend.subscribe_to_changes(
-        bus, kinds={KnowledgeKeyKind.METADATA}, handler=_noop
-    )
+    sub = await backend.subscribe_to_changes(bus, kinds={KnowledgeKeyKind.METADATA}, handler=_noop)
     assert sub.pattern == backend.key_pattern(KnowledgeKeyKind.METADATA)
     await bus.close()
 
@@ -83,13 +81,9 @@ async def test_changes_subscription_context_manager_teardown(
         received.append(event.topic)
 
     def _publish() -> Event:
-        return Event(
-            type=EventType.CUSTOM, topic=content_topic, payload={}
-        )
+        return Event(type=EventType.CUSTOM, topic=content_topic, payload={})
 
-    async with backend.changes_subscription(
-        bus, domain_id="d1", handler=handler
-    ):
+    async with backend.changes_subscription(bus, domain_id="d1", handler=handler):
         await bus.publish(content_topic, _publish())
 
     # After the context exits the subscription is cancelled.

@@ -55,7 +55,10 @@ GATE_SCRIPTS = (
         section=r"^\s*print_status\s",
         failure="print_error",
         verdict=r"[A-Z][A-Z0-9_]*_STATUS",
-        end='quality-summary.json" <<EOF',
+        # Where the checking stops and the reporting begins. It was the line
+        # opening the summary heredoc until the summary stopped being one; the
+        # writer call now occupies the same position, for the same reason.
+        end='quality-summary.py" build',
     ),
     GateScript(
         path=VALIDATOR,
@@ -133,13 +136,12 @@ def test_the_gate_scripts_still_look_the_way_this_guard_reads_them():
             "renamed or the script restructured. Fix this table, do not delete "
             "the guard."
         )
-        assert any(
-            script.failure in "\n".join(body) for _, _, body in sections
-        ), f"no section in {name} calls {script.failure} — the helper was renamed"
-        assert any(
-            any(_accounts(ln, script.verdict) for ln in body)
-            for _, _, body in sections
-        ), f"no section in {name} accounts for its outcome — {script.verdict} moved"
+        assert any(script.failure in "\n".join(body) for _, _, body in sections), (
+            f"no section in {name} calls {script.failure} — the helper was renamed"
+        )
+        assert any(any(_accounts(ln, script.verdict) for ln in body) for _, _, body in sections), (
+            f"no section in {name} accounts for its outcome — {script.verdict} moved"
+        )
 
 
 def test_every_check_that_reports_a_failure_can_fail_the_gate():
@@ -246,9 +248,7 @@ def test_a_helper_that_returns_its_outcome_has_it_caught():
                 if _drops_the_status(ln, name)
             ]
             if any(re.search(rf"\b{name}\b.*&\s*$", ln) for _, ln in calls):
-                assert any(
-                    re.match(r"^\s*wait\b", ln) and "||" in ln for ln in lines
-                ), (
+                assert any(re.match(r"^\s*wait\b", ln) and "||" in ln for ln in lines), (
                     f"{name} is backgrounded in {rel(script.path)}, but no "
                     "'wait' there catches a failing job — so the status of "
                     "every concurrent run is discarded"
@@ -319,11 +319,7 @@ def _block(opening: str, closing: str) -> str:
         "rather than letting it read an empty block"
     )
     stop = next(
-        (
-            i
-            for i, ln in enumerate(lines[start + 1 :], start + 1)
-            if re.match(closing, ln.strip())
-        ),
+        (i for i, ln in enumerate(lines[start + 1 :], start + 1) if re.match(closing, ln.strip())),
         None,
     )
     assert stop is not None, f"{opening!r} in {rel(GATE)} is never closed by {closing!r}"
@@ -337,8 +333,24 @@ def _gates_the_verdict() -> set[str]:
 
 
 def _reported_in_summary() -> set[str]:
-    """Statuses that reach ``quality-summary.json``'s ``checks`` object."""
-    return set(_STATUS.findall(_block('"checks": {', r"EOF$"))) - {VERDICT}
+    """Statuses that reach ``quality-summary.json``'s ``checks`` object.
+
+    The population is every ``record_check`` call, wherever it sits. It used to
+    be one block — the heredoc that serialized all eight checks in one place —
+    and reading a block is what a positional guard can do; now each check states
+    its own outcome at the site that produced it, so the calls are scattered by
+    design and gathering them by name is the only reading that stays true.
+
+    Continuation lines are not scanned, and do not need to be: the status is the
+    call's second argument, so it is always on the line that opens it.
+    """
+    calls = [line for line in _gate_lines() if re.match(r"\s*record_check\b", line)]
+    assert calls, (
+        f"no record_check calls found in {rel(GATE)} — the checks no longer "
+        "report their outcomes by that name, so this guard is comparing against "
+        "nothing. Re-point it rather than leaving it passing."
+    )
+    return set(_STATUS.findall("\n".join(calls))) - {VERDICT}
 
 
 def test_the_status_exception_tables_still_describe_the_gate():
@@ -367,8 +379,7 @@ def test_the_status_exception_tables_still_describe_the_gate():
         )
         absent = sorted(set(components) - reported)
         assert not absent, (
-            f"{name} is recorded as reported through {absent}, which the summary "
-            "does not contain"
+            f"{name} is recorded as reported through {absent}, which the summary does not contain"
         )
 
 
@@ -402,7 +413,104 @@ def test_every_status_that_gates_the_verdict_reaches_the_artifact():
     )
 
 
+def _init_lines(lines: list[str]) -> frozenset[int]:
+    """The block that sets every status before any check has run.
+
+    An assignment here records nothing: it is the default a path that never
+    touches the variable falls through to.
+    """
+    start = next((i for i, ln in enumerate(lines) if "# Initialize status tracking" in ln), None)
+    stop = next((i for i, ln in enumerate(lines) if "# How long each check took" in ln), None)
+    assert start is not None and stop is not None, (
+        f"{rel(GATE)} no longer has the initialization block this guard reads "
+        "between those two comments — re-point it rather than letting it read "
+        "an empty range."
+    )
+    return frozenset(range(start, stop))
+
+
+def _pr_only_lines(lines: list[str]) -> frozenset[int]:
+    """Line numbers reachable only when ``PR_MODE`` is yes.
+
+    Every such block, not just the test one. A block's ``else`` ends the
+    PR-only region: that arm is the dev path.
+    """
+    gated: set[int] = set()
+    for number, line in enumerate(lines):
+        opened = re.match(r'(\s*)if \[ "\$PR_MODE" = "yes" \]; then\s*$', line)
+        if not opened:
+            continue
+        closing = {f"{opened.group(1)}fi", f"{opened.group(1)}else"}
+        for end in range(number + 1, len(lines)):
+            if lines[end].rstrip() in closing:
+                gated.update(range(number, end))
+                break
+        else:  # pragma: no cover - a block that never closes is a syntax error
+            raise AssertionError(f"unterminated PR_MODE block at {rel(GATE)}:{number + 1}")
+    return frozenset(gated)
+
+
+def test_every_status_the_summary_records_is_measured_on_a_dev_run():
+    """A recorded status must not be able to reach the writer as its default.
+
+    Writing one record per check closed the "absent reads as passing" half of
+    this by construction: a check that records nothing has no entry, and no
+    entry cannot be mistaken for a passing one. Six of the eight checks are
+    finished by that argument — they run unconditionally, or their skip arm
+    passes a literal ``0`` beside ``--skipped true``.
+
+    The two test checks are not, and the difference is worth stating because it
+    is the reason this guard outlived the heredoc. ``UNIT_TEST_STATUS`` and
+    ``INTEGRATION_TEST_STATUS`` are **accumulators**: a package loop folds
+    failures into them with ``|| UNIT_TEST_STATUS=$?``, so ``0`` means "nothing
+    failed" and initialising to ``0`` is correct there. But the same variables
+    are what the dev arm records, and the dev arm runs no such loop — it assigns
+    them from ``TEST_STATUS``. Delete those two assignments and the record is
+    still written, still well-formed, and reports ``pass`` for a run whose tests
+    failed. That is the original defect, and the writer cannot see it: a stale
+    accumulator and a measured zero are the same byte by the time it arrives.
+
+    So the record is only as honest as the variable behind it, and a variable
+    assigned nowhere on the dev path is a verdict the run never measured. This
+    retires when the two test checks record at the site that produced their
+    outcome, the way the other six already do.
+    """
+    lines = _gate_lines()
+    init = _init_lines(lines)
+    pr_only = _pr_only_lines(lines)
+    assert pr_only, (
+        f"found no PR-gated region in {rel(GATE)} — the mode split has moved, "
+        "so this guard is exempting nothing and would pass on a gate that "
+        "measured nothing. Re-point it."
+    )
+
+    def assigned_on_dev(name: str) -> bool:
+        for number, line in enumerate(lines):
+            if number in init or number in pr_only:
+                continue
+            if re.match(rf"\s*{name}=", line) or re.search(rf"\bread -r\b[^;|#]*\b{name}\b", line):
+                return True
+        return False
+
+    reported = _reported_in_summary()
+    assert reported, (
+        f"no status variable reaches a record_check call in {rel(GATE)} — this "
+        "guard is comparing against nothing. Re-point it rather than leaving it "
+        "passing."
+    )
+
+    unmeasured = sorted(name for name in reported if not assigned_on_dev(name))
+    assert not unmeasured, (
+        f"{unmeasured} reach quality-summary.json but are assigned only inside "
+        "PR-gated regions, so a dev run records whatever they were initialised "
+        "to — and they are initialised to 0, which the writer reports as "
+        '"pass". Assign the measured outcome on the dev path too, or record '
+        "that check from the site that produced it."
+    )
+
+
 # --- a check whose tool is missing must fail, not skip ---
+
 
 def _required_tool_probes(path: Path) -> list[tuple[int, str, list[str]]]:
     """``if ! command -v X`` probes, as ``(line, tool, branch body)``."""

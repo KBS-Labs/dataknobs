@@ -80,9 +80,7 @@ def _minimal_builder() -> DynaBotConfigBuilder:
 class TestWizardReasoningInlineConfig:
     """Test WizardReasoning.from_config() with inline dict wizard_config."""
 
-    def test_from_config_with_dict(
-        self, conversation_wizard_dict: dict[str, Any]
-    ) -> None:
+    def test_from_config_with_dict(self, conversation_wizard_dict: dict[str, Any]) -> None:
         """from_config() loads wizard when wizard_config is a dict."""
         config = {"wizard_config": conversation_wizard_dict}
         reasoning = WizardReasoning.from_config(config)
@@ -91,9 +89,7 @@ class TestWizardReasoningInlineConfig:
         # Internal FSM attribute is _fsm
         assert reasoning._fsm is not None
 
-    def test_from_config_with_dict_structured(
-        self, structured_wizard_dict: dict[str, Any]
-    ) -> None:
+    def test_from_config_with_dict_structured(self, structured_wizard_dict: dict[str, Any]) -> None:
         """from_config() loads structured wizard from inline dict."""
         config = {"wizard_config": structured_wizard_dict}
         reasoning = WizardReasoning.from_config(config)
@@ -145,9 +141,7 @@ class TestWizardReasoningInlineConfig:
 class TestBuilderSetReasoningWizardDict:
     """Test DynaBotConfigBuilder.set_reasoning_wizard() with dict."""
 
-    def test_set_reasoning_wizard_with_dict(
-        self, conversation_wizard_dict: dict[str, Any]
-    ) -> None:
+    def test_set_reasoning_wizard_with_dict(self, conversation_wizard_dict: dict[str, Any]) -> None:
         """set_reasoning_wizard() accepts a dict and stores it inline."""
         builder = _minimal_builder()
         builder.set_reasoning_wizard(conversation_wizard_dict)

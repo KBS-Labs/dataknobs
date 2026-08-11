@@ -53,15 +53,11 @@ async def test_postgres_all_upsert_buffer_commits_atomically(postgres_test_db):
     try:
         await db.connect()
         async with db.transaction() as tx:  # strict; postgres is transactional
-            await tx.upsert_batch(
-                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
-            )
+            await tx.upsert_batch([Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})])
             assert tx.is_atomic is True
         assert await db.count() == 2
         async with db.transaction() as tx:
-            await tx.upsert_batch(
-                [Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})]
-            )
+            await tx.upsert_batch([Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})])
         assert await db.count() == 2
         rec = await db.read("1")
         assert rec is not None and rec.get_value("v") == "A"
@@ -110,9 +106,7 @@ async def test_postgres_multi_kind_commits_atomically_on_size1_pool(postgres_tes
     (no second ``pool.acquire()`` that would deadlock), so the whole commit is
     atomic and ``is_atomic`` is True.
     """
-    db = AsyncPostgresDatabase(
-        {**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1}
-    )
+    db = AsyncPostgresDatabase({**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1})
     try:
         await db.connect()
         seed_id = await db.create(Record({"v": "s"}))
@@ -129,9 +123,7 @@ async def test_postgres_multi_kind_commits_atomically_on_size1_pool(postgres_tes
 
 @pytest.mark.asyncio
 async def test_postgres_multi_kind_rolls_back_whole_flush_on_size1_pool(postgres_test_db):
-    db = _PgMidFlushDeleteFailure(
-        {**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1}
-    )
+    db = _PgMidFlushDeleteFailure({**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1})
     try:
         await db.connect()
         tx = await db.begin_transaction()  # strict; postgres transactional
@@ -156,9 +148,7 @@ async def test_postgres_multi_kind_create_collision_raises_duplicate(postgres_te
     transaction, so the precise-id probe is skipped and the first batch id is
     reported; the outer ``_transaction`` rolls the whole flush back.
     """
-    db = AsyncPostgresDatabase(
-        {**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1}
-    )
+    db = AsyncPostgresDatabase({**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1})
     try:
         await db.connect()
         # Seed the colliding id via create_batch, which honors record.id (the

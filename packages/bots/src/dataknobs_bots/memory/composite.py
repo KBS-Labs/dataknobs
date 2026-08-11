@@ -82,9 +82,7 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
         self._strategies: list[Memory] = []
         self._primary_index = 0
 
-    def _validate_and_bind(
-        self, strategies: list[Memory], primary_index: int
-    ) -> None:
+    def _validate_and_bind(self, strategies: list[Memory], primary_index: int) -> None:
         """Validate non-empty + in-range, then bind the strategies.
 
         Raises:
@@ -95,8 +93,7 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
             raise ValueError("CompositeMemory requires at least one strategy")
         if primary_index < 0 or primary_index >= len(strategies):
             raise ValueError(
-                f"primary_index {primary_index} out of range for "
-                f"{len(strategies)} strategies"
+                f"primary_index {primary_index} out of range for {len(strategies)} strategies"
             )
         self._strategies = strategies
         self._primary_index = primary_index
@@ -124,13 +121,14 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
             for child in self.config.strategies:
                 strategies.append(
                     await create_memory_from_config(
-                        child, llm_provider, prompt_resolver=prompt_resolver,
+                        child,
+                        llm_provider,
+                        prompt_resolver=prompt_resolver,
                     )
                 )
             if not strategies:
                 raise ValueError(
-                    "Composite memory requires at least one strategy "
-                    "in 'strategies' list"
+                    "Composite memory requires at least one strategy in 'strategies' list"
                 )
             self._validate_and_bind(strategies, self.config.primary_index)
         except Exception:

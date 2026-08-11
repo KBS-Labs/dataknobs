@@ -56,7 +56,7 @@ def _load_dotenv_fallbacks(
     dependency-optional.
     """
     try:
-        from dotenv import dotenv_values  # type: ignore[import-not-found]
+        from dotenv import dotenv_values
     except ImportError:
         return {}
 
@@ -74,7 +74,9 @@ def _load_dotenv_fallbacks(
                     values = dotenv_values(candidate)
                 except OSError as e:
                     logger.debug(
-                        "Could not read %s: %s", candidate, e,
+                        "Could not read %s: %s",
+                        candidate,
+                        e,
                     )
                     break
                 for key, value in values.items():
@@ -181,9 +183,7 @@ def normalize_postgres_connection_config(
 
     # Detect explicit individual keys in config — they win over any
     # parallel value from a connection_string (in config or env).
-    explicit_individual = {
-        k: out[k] for k in _INDIVIDUAL_KEYS if out.get(k) is not None
-    }
+    explicit_individual = {k: out[k] for k in _INDIVIDUAL_KEYS if out.get(k) is not None}
     has_explicit_individual = bool(explicit_individual)
 
     # Load dotenv fallbacks lazily — only if we actually need them
@@ -193,9 +193,7 @@ def normalize_postgres_connection_config(
     def _dotenv() -> dict[str, str]:
         nonlocal dotenv_fallbacks
         if dotenv_fallbacks is None:
-            dotenv_fallbacks = (
-                _load_dotenv_fallbacks() if load_dotenv else {}
-            )
+            dotenv_fallbacks = _load_dotenv_fallbacks() if load_dotenv else {}
         return dotenv_fallbacks
 
     def _env_or_dotenv(env_key: str) -> str | None:
@@ -320,33 +318,27 @@ def normalize_postgres_connection_config(
     # We only re-synthesize when an individual key in config or an
     # env fallback contributed something the URL did not already
     # carry — otherwise the original URL is authoritative.
-    needs_synthesis = has_explicit_individual or (
-        not conn_str_from_config
-    )
+    needs_synthesis = has_explicit_individual or (not conn_str_from_config)
     # Env fallbacks also force synthesis — if POSTGRES_* contributed
     # a value the URL did not have, we must record that in the
     # canonical connection_string.
     if not needs_synthesis:
         env_contributed = any(
-            env_fallbacks[k] is not None
-            and (base_keys.get(k) is None)
-            for k in _INDIVIDUAL_KEYS
+            env_fallbacks[k] is not None and (base_keys.get(k) is None) for k in _INDIVIDUAL_KEYS
         )
         needs_synthesis = env_contributed
     if not needs_synthesis and conn_str_from_config is not None:
         preserved = conn_str_from_config
         if preserved.startswith("postgresql+asyncpg://"):
             preserved = preserved.replace(
-                "postgresql+asyncpg://", "postgresql://", 1,
+                "postgresql+asyncpg://",
+                "postgresql://",
+                1,
             )
         out["connection_string"] = preserved
     else:
-        userinfo = (
-            f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-        )
-        out["connection_string"] = (
-            f"postgresql://{userinfo}{host}:{port}/{database}"
-        )
+        userinfo = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
+        out["connection_string"] = f"postgresql://{userinfo}{host}:{port}/{database}"
     return out
 
 
@@ -378,9 +370,7 @@ def _parse_connection_string(conn_str: str) -> dict[str, Any]:
     ``None`` (except ``host``/``port`` which have URL-level defaults).
     """
     if conn_str.startswith("postgresql+asyncpg://"):
-        conn_str = conn_str.replace(
-            "postgresql+asyncpg://", "postgresql://", 1
-        )
+        conn_str = conn_str.replace("postgresql+asyncpg://", "postgresql://", 1)
     parsed = urlparse(conn_str)
     database: str | None = None
     if parsed.path and len(parsed.path) > 1:

@@ -79,7 +79,7 @@ class DatabaseFetch(ITransformFunction):
         as_dict: bool = True,
     ):
         """Initialize the database fetch function.
-        
+
         Args:
             resource_name: Name of the database resource to use.
             query: SQL query to execute.
@@ -93,29 +93,27 @@ class DatabaseFetch(ITransformFunction):
         self.fetch_one = fetch_one
         self.as_dict = as_dict
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by fetching from database.
-        
+
         Args:
             data: Input data (can contain query parameters).
-            
+
         Returns:
             Data with database query results.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
-        
+
         # Merge parameters
         query_params = {**self.params}
-        
+
         # Allow dynamic parameters from input data
         for key, value in data.items():
             if key.startswith("param_"):
                 param_name = key[6:]  # Remove "param_" prefix
                 query_params[param_name] = value
-        
+
         try:
             # Execute query
             result = await resource.execute_query(
@@ -124,17 +122,15 @@ class DatabaseFetch(ITransformFunction):
                 fetch_one=self.fetch_one,
                 as_dict=self.as_dict,
             )
-            
+
             # Return result
             if self.fetch_one:
                 return {"record": result, **data}
             else:
                 return {"records": result, **data}
-        
+
         except Exception as e:
-            raise TransformError(
-                f"Database query failed ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Database query failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -181,9 +177,7 @@ class DatabaseUpsert(ITransformFunction):
                 f"Unknown on_conflict value '{on_conflict}' "
                 "(expected 'update', 'ignore', or 'error')"
             )
-        identity = resolve_identity(
-            identity=identity, key_columns=key_columns, id_fn=id_fn
-        )
+        identity = resolve_identity(identity=identity, key_columns=key_columns, id_fn=id_fn)
         # ``update`` (the default) with no identity is a legitimate plain
         # create. ``error`` / ``ignore`` are explicit conflict policies that
         # need an id to detect the conflict against — without one they would
@@ -201,20 +195,18 @@ class DatabaseUpsert(ITransformFunction):
         self.on_conflict = on_conflict
         self.identity = identity
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by upserting to database.
-        
+
         Args:
             data: Input data to upsert.
-            
+
         Returns:
             Data with upsert result.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
-        
+
         # Extract record(s) to upsert
         if "records" in data:
             records = data["records"]
@@ -223,7 +215,7 @@ class DatabaseUpsert(ITransformFunction):
         else:
             # Use the entire data as a single record
             records = [data]
-        
+
         try:
             # Perform upsert
             result = await resource.upsert(
@@ -234,7 +226,7 @@ class DatabaseUpsert(ITransformFunction):
                 on_conflict=self.on_conflict,
                 identity=self.identity,
             )
-            
+
             # Overrides last: ``**data`` is the passthrough, then the fresh
             # count wins over any stale ``upserted_count`` from a prior step.
             return {
@@ -248,10 +240,8 @@ class DatabaseUpsert(ITransformFunction):
             # actionable type rather than masking it as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(
-                f"Database upsert failed ({type(e).__name__})"
-            ) from e
-    
+            raise TransformError(f"Database upsert failed ({type(e).__name__})") from e
+
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         return f"Upsert data into {self.table} table in {self.resource_name}"
@@ -291,26 +281,19 @@ class BatchCommit(ITransformFunction):
                 guarantee all-or-nothing).
         """
         if batch_size <= 0:
-            raise ConfigurationError(
-                f"batch_size must be a positive integer (got {batch_size})"
-            )
+            raise ConfigurationError(f"batch_size must be a positive integer (got {batch_size})")
         self.resource_name = resource_name
         self.batch_size = batch_size
         if use_transaction is not None:
             atomicity = "require" if use_transaction else "best_effort"
         if atomicity not in ("best_effort", "require"):
             raise ConfigurationError(
-                f"Unknown atomicity policy '{atomicity}' "
-                "(expected 'best_effort' or 'require')"
+                f"Unknown atomicity policy '{atomicity}' (expected 'best_effort' or 'require')"
             )
         self.atomicity = atomicity
-        self.identity = resolve_identity(
-            identity=identity, key_columns=key_columns, id_fn=id_fn
-        )
+        self.identity = resolve_identity(identity=identity, key_columns=key_columns, id_fn=id_fn)
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by committing batch to database.
 
         Args:
@@ -347,7 +330,7 @@ class BatchCommit(ITransformFunction):
                 # all-or-nothing promise across them).
                 committed = 0
                 for start in range(0, len(batch), self.batch_size):
-                    chunk = batch[start:start + self.batch_size]
+                    chunk = batch[start : start + self.batch_size]
                     result = await resource.commit_batch(
                         chunk,
                         identity=self.identity,
@@ -375,9 +358,7 @@ class BatchCommit(ITransformFunction):
             # rather than being masked as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(
-                f"Batch commit failed ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Batch commit failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -395,7 +376,7 @@ class DatabaseQuery(ITransformFunction):
         result_field: str = "result",
     ):
         """Initialize the database query function.
-        
+
         Args:
             resource_name: Name of the database resource to use.
             query_field: Field containing the query to execute.
@@ -407,41 +388,37 @@ class DatabaseQuery(ITransformFunction):
         self.params_field = params_field
         self.result_field = result_field
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by executing dynamic query.
-        
+
         Args:
             data: Input data containing query and parameters.
-            
+
         Returns:
             Data with query results.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
-        
+
         # Get query and parameters
         query = data.get(self.query_field)
         if not query:
             raise TransformError(f"Query field '{self.query_field}' not found")
-        
+
         params = data.get(self.params_field, {})
-        
+
         try:
             # Execute query
             result = await resource.execute_query(query, params=params)
-            
+
             return {
                 **data,
                 self.result_field: result,
             }
-        
+
         except Exception as e:
-            raise TransformError(
-                f"Query execution failed ({type(e).__name__})"
-            ) from e
-    
+            raise TransformError(f"Query execution failed ({type(e).__name__})") from e
+
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         return f"Execute dynamic query from field '{self.query_field}'"
@@ -499,8 +476,7 @@ class DatabaseTransaction(ITransformFunction):
         """
         if action not in ("begin", "commit", "rollback"):
             raise ConfigurationError(
-                f"Unknown transaction action '{action}' "
-                "(expected 'begin', 'commit', or 'rollback')"
+                f"Unknown transaction action '{action}' (expected 'begin', 'commit', or 'rollback')"
             )
         # Validate against the data layer's single source of truth so the FSM
         # gate cannot drift from AsyncDatabase.begin_transaction's allowlist.
@@ -521,9 +497,7 @@ class DatabaseTransaction(ITransformFunction):
         self.savepoint = savepoint
         self.on_unsupported = on_unsupported
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by managing the transaction.
 
         Args:
@@ -538,9 +512,7 @@ class DatabaseTransaction(ITransformFunction):
 
         try:
             if self.action == "begin":
-                tx = await resource.begin_transaction(
-                    on_unsupported=self.on_unsupported
-                )
+                tx = await resource.begin_transaction(on_unsupported=self.on_unsupported)
                 # committed_count is not surfaced here — it is only meaningful on
                 # 'commit'. Any stale value carried in `data` from a prior commit
                 # leg passes through unchanged via the spread.
@@ -606,9 +578,7 @@ class DatabaseTransaction(ITransformFunction):
             # masked as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(
-                f"Transaction {self.action} failed ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Transaction {self.action} failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -657,52 +627,46 @@ class DatabaseBulkInsert(ITransformFunction):
                 "(expected 'error', 'ignore', or 'update')"
             )
         if chunk_size <= 0:
-            raise ConfigurationError(
-                f"chunk_size must be a positive integer (got {chunk_size})"
-            )
+            raise ConfigurationError(f"chunk_size must be a positive integer (got {chunk_size})")
         self.resource_name = resource_name
         self.table = table
         self.columns = columns
         self.chunk_size = chunk_size
         self.on_duplicate = on_duplicate
-        self.identity = resolve_identity(
-            identity=identity, key_columns=key_columns, id_fn=id_fn
-        )
+        self.identity = resolve_identity(identity=identity, key_columns=key_columns, id_fn=id_fn)
         if on_duplicate in ("ignore", "update") and self.identity is None:
             raise ConfigurationError(
                 f"on_duplicate='{on_duplicate}' needs an identity to detect "
                 "duplicates; pass key_columns=, id_fn=, or identity="
             )
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by performing bulk insert.
-        
+
         Args:
             data: Input data containing records to insert.
-            
+
         Returns:
             Data with insert results.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
-        
+
         # Get records to insert
         records = data.get("records", [])
         if not records:
             return {**data, "inserted_count": 0}
-        
+
         # Determine columns
         columns = self.columns
         if not columns and records:
             columns = list(records[0].keys())
-        
+
         try:
             # Perform bulk insert in chunks
             total_inserted = 0
             for i in range(0, len(records), self.chunk_size):
-                chunk = records[i:i + self.chunk_size]
+                chunk = records[i : i + self.chunk_size]
                 result = await resource.bulk_insert(
                     table=self.table,
                     records=chunk,
@@ -711,7 +675,7 @@ class DatabaseBulkInsert(ITransformFunction):
                     identity=self.identity,
                 )
                 total_inserted += result.get("affected_rows", 0)
-            
+
             return {
                 **data,
                 "inserted_count": total_inserted,
@@ -723,10 +687,8 @@ class DatabaseBulkInsert(ITransformFunction):
             # actionable type rather than masking it as a generic TransformError.
             raise
         except Exception as e:
-            raise TransformError(
-                f"Bulk insert failed ({type(e).__name__})"
-            ) from e
-    
+            raise TransformError(f"Bulk insert failed ({type(e).__name__})") from e
+
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         return f"Bulk insert into {self.table} table (chunk_size={self.chunk_size})"

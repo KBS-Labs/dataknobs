@@ -232,9 +232,7 @@ class TestKnowledgeIngestionService:
     ) -> None:
         """Disabled-skip path populates completed_at like the success path does."""
         service = KnowledgeIngestionService()
-        result = await service.ensure_ingested(
-            real_knowledge_base, {"enabled": False}
-        )
+        result = await service.ensure_ingested(real_knowledge_base, {"enabled": False})
         assert result.skipped is True
         assert result.reason == "knowledge_base_disabled"
         assert result.completed_at is not None
@@ -267,9 +265,7 @@ class TestKnowledgeIngestionService:
     ) -> None:
         """No-documents_path error path populates completed_at (regression guard)."""
         service = KnowledgeIngestionService()
-        result = await service.ingest_from_config(
-            real_knowledge_base, {"enabled": True}
-        )
+        result = await service.ingest_from_config(real_knowledge_base, {"enabled": True})
         assert result.error is not None
         assert result.completed_at is not None
 
@@ -294,9 +290,7 @@ class TestEnsureIngestionResult:
 
     def test_success_property_with_file_errors(self) -> None:
         """With individual file errors is not success."""
-        result = EnsureIngestionResult(
-            errors=[{"file": "bad.md", "error": "Parse error"}]
-        )
+        result = EnsureIngestionResult(errors=[{"file": "bad.md", "error": "Parse error"}])
         assert result.success is False
 
     def test_to_dict(self) -> None:

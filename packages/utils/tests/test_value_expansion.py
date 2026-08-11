@@ -10,20 +10,71 @@ import pytest
 
 # Representative stopword set for testing — the canonical set lives in
 # dataknobs_llm.extraction.grounding and is passed at the integration layer.
-_STOPWORDS: frozenset[str] = frozenset({
-    "the", "a", "an", "is", "of", "for", "to", "or", "and", "whether",
-    "it", "in", "on", "at", "by", "with", "this", "that", "be", "as",
-    "can", "do", "does", "did", "has", "have", "had", "was", "were",
-    "are", "been", "being", "will", "would", "could", "should", "may",
-    "might", "shall", "must", "not", "but", "if", "then", "than",
-    "so", "just", "also", "very", "too", "really", "quite",
-})
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "of",
+        "for",
+        "to",
+        "or",
+        "and",
+        "whether",
+        "it",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "this",
+        "that",
+        "be",
+        "as",
+        "can",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "was",
+        "were",
+        "are",
+        "been",
+        "being",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "must",
+        "not",
+        "but",
+        "if",
+        "then",
+        "than",
+        "so",
+        "just",
+        "also",
+        "very",
+        "too",
+        "really",
+        "quite",
+    }
+)
 
 
 def _expand(value: str, message: str, **kwargs) -> str | None:
     """Shorthand for calling expand_value_in_message with test stopwords."""
     return expand_value_in_message(
-        value, message, stopwords=_STOPWORDS, **kwargs,
+        value,
+        message,
+        stopwords=_STOPWORDS,
+        **kwargs,
     )
 
 

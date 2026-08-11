@@ -219,7 +219,7 @@ class TestMetaPromptComposition:
         meta = library.get_system_prompt("extraction.with_assumptions")
         assert meta is not None
         # The meta-prompt should reference the default schema_section
-        assert 'extraction.default.schema_section' in meta["template"]
+        assert "extraction.default.schema_section" in meta["template"]
 
 
 class TestFlatFragmentConsistency:
@@ -246,7 +246,9 @@ class TestFlatFragmentConsistency:
         meta = library.get_system_prompt("extraction.default")
         assert meta is not None
         composed_output = renderer.render(
-            meta["template"], test_vars, mode=TemplateMode.JINJA2,
+            meta["template"],
+            test_vars,
+            mode=TemplateMode.JINJA2,
         ).content
 
         assert flat_output == composed_output, (
@@ -272,7 +274,9 @@ class TestFlatFragmentConsistency:
         meta = library.get_system_prompt("extraction.with_assumptions")
         assert meta is not None
         composed_output = renderer.render(
-            meta["template"], test_vars, mode=TemplateMode.JINJA2,
+            meta["template"],
+            test_vars,
+            mode=TemplateMode.JINJA2,
         ).content
 
         assert flat_output == composed_output, (

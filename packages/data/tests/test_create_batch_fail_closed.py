@@ -83,9 +83,7 @@ def test_sync_create_batch_is_atomic_on_collision(sync_db: object) -> None:
 def test_sync_create_batch_within_batch_duplicate_raises(sync_db: object) -> None:
     """Two records sharing an id within one batch fail closed (nothing written)."""
     with pytest.raises(DuplicateRecordError):
-        sync_db.create_batch(
-            [Record({"v": 1}, id="same"), Record({"v": 2}, id="same")]
-        )
+        sync_db.create_batch([Record({"v": 1}, id="same"), Record({"v": 2}, id="same")])
     assert sync_db.read("same") is None
 
 
@@ -152,9 +150,7 @@ async def test_async_create_batch_preserves_ids(async_db: object) -> None:
     Regression: async file create_batch previously minted a fresh id per record
     and discarded ``record.id``.
     """
-    ids = await async_db.create_batch(
-        [Record({"v": 1}, id="x"), Record({"v": 2}, id="y")]
-    )
+    ids = await async_db.create_batch([Record({"v": 1}, id="x"), Record({"v": 2}, id="y")])
     assert ids == ["x", "y"]
     assert (await async_db.read("x")).get_value("v") == 1
     assert (await async_db.read("y")).get_value("v") == 2

@@ -76,17 +76,14 @@ __all__ = [
     # Data structures
     "ConversationNode",
     "ConversationState",
-
     # Storage interfaces
     "ConversationStorage",
     "DataknobsConversationStorage",
     "StorageError",
     "SchemaVersionError",
     "SCHEMA_VERSION",
-
     # Manager
     "ConversationManager",
-
     # Middleware
     "ConversationMiddleware",
     "LoggingMiddleware",
@@ -98,12 +95,10 @@ __all__ = [
     "RateLimitMiddleware",
     "PromoteToPersistMiddleware",
     "RateLimitError",
-
     # History-redaction helpers (the companion API to HistoryRedaction)
     "apply_history_redactions",
     "apply_history_redactions_to_dicts",
     "compile_history_redactions",
-
     # Helper functions
     "calculate_node_id",
     "get_node_by_id",

@@ -225,15 +225,11 @@ class ArtifactBank:
         # Check required fields
         for field_name, field_def in self._field_defs.items():
             if field_def.get("required") and self._field_values.get(field_name) is None:
-                errors.append(
-                    f"Required field '{field_name}' is not set."
-                )
+                errors.append(f"Required field '{field_name}' is not set.")
         # Check sections have records
         for section_name, bank in self._sections.items():
             if bank.count() == 0:
-                errors.append(
-                    f"Section '{section_name}' has no records."
-                )
+                errors.append(f"Section '{section_name}' has no records.")
         return errors
 
     # -----------------------------------------------------------------
@@ -256,10 +252,7 @@ class ArtifactBank:
         """
         errors = self.validate()
         if errors:
-            raise ValueError(
-                f"Cannot finalize artifact '{self._name}': "
-                + "; ".join(errors)
-            )
+            raise ValueError(f"Cannot finalize artifact '{self._name}': " + "; ".join(errors))
         compiled = self.compile()
         self._finalized = True
         logger.info(
@@ -287,10 +280,7 @@ class ArtifactBank:
             "field_values": dict(self._field_values),
             "finalized": self._finalized,
             "section_configs": self._section_configs,
-            "sections": {
-                name: bank.to_dict()
-                for name, bank in self._sections.items()
-            },
+            "sections": {name: bank.to_dict() for name, bank in self._sections.items()},
         }
 
     @classmethod
@@ -315,9 +305,7 @@ class ArtifactBank:
             if db_factory and cfg.get("backend", "memory") != "memory":
                 db, _mode = db_factory(name, cfg)
                 # The db is built per-section for the bank's exclusive use.
-                sections[name] = MemoryBank.from_dict(
-                    bank_dict, db=db, owns_db=True
-                )
+                sections[name] = MemoryBank.from_dict(bank_dict, db=db, owns_db=True)
             else:
                 sections[name] = MemoryBank.from_dict(bank_dict)
 
@@ -366,14 +354,8 @@ class ArtifactBank:
         for section_name, cfg in section_configs.items():
             # Support both flat keys and nested duplicate_detection
             dup_cfg = cfg.get("duplicate_detection", {})
-            dup_strategy = (
-                cfg.get("duplicate_strategy")
-                or dup_cfg.get("strategy", "allow")
-            )
-            match_fields = (
-                cfg.get("match_fields")
-                or dup_cfg.get("match_fields")
-            )
+            dup_strategy = cfg.get("duplicate_strategy") or dup_cfg.get("strategy", "allow")
+            match_fields = cfg.get("match_fields") or dup_cfg.get("match_fields")
 
             if db_factory:
                 db, storage_mode = db_factory(section_name, cfg)

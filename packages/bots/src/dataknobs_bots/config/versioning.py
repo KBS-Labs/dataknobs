@@ -190,9 +190,7 @@ class ConfigVersionManager:
             ValueError: If versions already exist
         """
         if self._versions:
-            raise ValueError(
-                "Configuration already exists. Use update() to create new versions."
-            )
+            raise ValueError("Configuration already exists. Use update() to create new versions.")
 
         version = ConfigVersion(
             version=1,
@@ -240,9 +238,7 @@ class ConfigVersionManager:
             VersionConflictError: If expected_version doesn't match current
         """
         if not self._versions:
-            raise ValueError(
-                "No configuration exists. Use create() to create the initial version."
-            )
+            raise ValueError("No configuration exists. Use create() to create the initial version.")
 
         # Check for version conflict
         if expected_version is not None and expected_version != self._current_version:
@@ -422,9 +418,7 @@ class ConfigVersionManager:
         """
         manager = cls()
         manager._current_version = data.get("current_version", 0)
-        manager._versions = [
-            ConfigVersion.from_dict(v) for v in data.get("versions", [])
-        ]
+        manager._versions = [ConfigVersion.from_dict(v) for v in data.get("versions", [])]
         return manager
 
     def __len__(self) -> int:

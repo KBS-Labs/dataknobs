@@ -75,9 +75,7 @@ _LOCAL_KINDS = ["memory", "file"]
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_advertises_conditional_write(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_advertises_conditional_write(kind: str, tmp_path: Path) -> None:
     """Each in-tree backend enforces CAS, so it advertises the capability."""
     backend = await _make_local_backend(kind, tmp_path)
     try:
@@ -87,9 +85,7 @@ async def test_advertises_conditional_write(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_state_version_none_for_missing_kb(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_state_version_none_for_missing_kb(kind: str, tmp_path: Path) -> None:
     """No state document ⇒ ``get_state_version`` returns ``None``."""
     backend = await _make_local_backend(kind, tmp_path)
     try:
@@ -99,9 +95,7 @@ async def test_state_version_none_for_missing_kb(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_state_version_present_after_create_kb(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_state_version_present_after_create_kb(kind: str, tmp_path: Path) -> None:
     """The single-tenant state document exists from ``create_kb`` onward."""
     backend = await _make_local_backend(kind, tmp_path)
     try:
@@ -112,9 +106,7 @@ async def test_state_version_present_after_create_kb(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_unconditional_writes_last_writer_wins(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_unconditional_writes_last_writer_wins(kind: str, tmp_path: Path) -> None:
     """Characterization: without ``expected_version`` the later write
     silently clobbers — the race the CAS guard exists to close.
     """
@@ -139,9 +131,7 @@ async def test_unconditional_writes_last_writer_wins(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_cas_conflict_raises_concurrency_error(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_cas_conflict_raises_concurrency_error(kind: str, tmp_path: Path) -> None:
     """A stale ``expected_version`` raises ``ConcurrencyError`` and the
     winning writer's transition survives intact.
     """
@@ -152,15 +142,11 @@ async def test_cas_conflict_raises_concurrency_error(
         assert token is not None
 
         # Writer A wins with the shared token.
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, expected_version=token
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, expected_version=token)
 
         # Writer B still holds the now-stale token.
         with pytest.raises(ConcurrencyError) as exc_info:
-            await backend.set_ingestion_status(
-                "d", IngestionStatus.ERROR, expected_version=token
-            )
+            await backend.set_ingestion_status("d", IngestionStatus.ERROR, expected_version=token)
         assert exc_info.value.context["domain_id"] == "d"
         assert exc_info.value.context["expected_version"] == token
 
@@ -173,9 +159,7 @@ async def test_cas_conflict_raises_concurrency_error(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_cas_routes_to_the_per_tenant_document(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_cas_routes_to_the_per_tenant_document(kind: str, tmp_path: Path) -> None:
     """The CAS surface (``get_state_version`` + ``expected_version``) must
     resolve the SAME per-tenant document as the sibling state methods.
 
@@ -203,9 +187,7 @@ async def test_cas_routes_to_the_per_tenant_document(
 
         # Establish the per-tenant document (first tenant write is
         # unconditional — there is no prior token to condition on).
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.INGESTING, ctx=tenant
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.INGESTING, ctx=tenant)
         tenant_token = await backend.get_state_version("d", ctx=tenant)
         assert tenant_token is not None
 
@@ -213,9 +195,7 @@ async def test_cas_routes_to_the_per_tenant_document(
         # documents are disjoint. If the read routed to the wrong document
         # this would change.
         await backend.set_ingestion_status("d", IngestionStatus.ERROR)
-        assert (
-            await backend.get_state_version("d", ctx=tenant) == tenant_token
-        )
+        assert await backend.get_state_version("d", ctx=tenant) == tenant_token
 
         # And the tenant conditional write does not false-conflict against
         # the single-tenant write — it succeeds with the still-fresh tenant
@@ -248,9 +228,7 @@ async def test_cas_routes_to_the_per_tenant_document(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_state_version_token_round_trips(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_state_version_token_round_trips(kind: str, tmp_path: Path) -> None:
     """Read token → conditional write → read a *different* token; an
     idempotent re-write with the fresh token succeeds.
     """
@@ -260,17 +238,13 @@ async def test_state_version_token_round_trips(
         t0 = await backend.get_state_version("d")
         assert t0 is not None
 
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.INGESTING, expected_version=t0
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.INGESTING, expected_version=t0)
         t1 = await backend.get_state_version("d")
         assert t1 is not None
         assert t1 != t0
 
         # The fresh token writes cleanly.
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, expected_version=t1
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, expected_version=t1)
         t2 = await backend.get_state_version("d")
         assert t2 is not None
         assert t2 != t1
@@ -279,9 +253,7 @@ async def test_state_version_token_round_trips(
 
 
 @pytest.mark.parametrize("kind", _LOCAL_KINDS)
-async def test_default_path_writes_unconditionally(
-    kind: str, tmp_path: Path
-) -> None:
+async def test_default_path_writes_unconditionally(kind: str, tmp_path: Path) -> None:
     """``expected_version=None`` (the default) preserves the
     unconditional write — a stale token never blocks it — and the file
     backend never creates its lock sidecar on this path.
@@ -303,12 +275,7 @@ async def test_default_path_writes_unconditionally(
         assert info.ingestion_status == IngestionStatus.ERROR
 
         if kind == "file":
-            lock = (
-                tmp_path
-                / "kb"
-                / "d"
-                / FileKnowledgeBackend.METADATA_LOCK_FILE
-            )
+            lock = tmp_path / "kb" / "d" / FileKnowledgeBackend.METADATA_LOCK_FILE
             assert not lock.exists()
     finally:
         await backend.close()
@@ -325,12 +292,8 @@ async def test_file_cas_path_creates_lock_sidecar(tmp_path: Path) -> None:
     try:
         await backend.create_kb("d")
         token = await backend.get_state_version("d")
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, expected_version=token
-        )
-        lock = (
-            tmp_path / "kb" / "d" / FileKnowledgeBackend.METADATA_LOCK_FILE
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, expected_version=token)
+        lock = tmp_path / "kb" / "d" / FileKnowledgeBackend.METADATA_LOCK_FILE
         assert lock.exists()
     finally:
         await backend.close()
@@ -355,9 +318,7 @@ async def test_s3_state_version_token_round_trips(s3_kb_config) -> None:
         t0 = await backend.get_state_version("d")
         assert t0 is not None
 
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, expected_version=t0
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, expected_version=t0)
         t1 = await backend.get_state_version("d")
         assert t1 is not None
         assert t1 != t0
@@ -386,23 +347,16 @@ async def test_s3_if_match_conflict_raises_concurrency_error(
         assert token is not None
 
         # Writer A wins; this advances the object ETag.
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, expected_version=token
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, expected_version=token)
 
         # Writer B holds A's pre-write (now stale) ETag.
         try:
-            await backend.set_ingestion_status(
-                "d", IngestionStatus.ERROR, expected_version=token
-            )
+            await backend.set_ingestion_status("d", IngestionStatus.ERROR, expected_version=token)
         except ConcurrencyError as exc:
             assert exc.context["domain_id"] == "d"
             assert exc.context["expected_version"] == token
         else:
-            pytest.skip(
-                "LocalStack build does not enforce S3 If-Match "
-                "conditional PUT"
-            )
+            pytest.skip("LocalStack build does not enforce S3 If-Match conditional PUT")
 
         info = await backend.get_info("d")
         assert info is not None
@@ -459,17 +413,13 @@ async def test_s3_deleted_object_conflicts_on_conditional_write(
     try:
         await backend.create_kb("d")
         # Establish the per-tenant object, then capture its token.
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.READY, ctx=tenant
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.READY, ctx=tenant)
         token = await backend.get_state_version("d", ctx=tenant)
         assert token is not None
 
         # Simulate a concurrent deletion of the per-tenant metadata object.
         key = backend._metadata_key("d", tenant)
-        async with backend._session.client(
-            "s3", **backend._client_kwargs
-        ) as s3:
+        async with backend._session.client("s3", **backend._client_kwargs) as s3:
             await s3.delete_object(Bucket=backend._bucket, Key=key)
 
         try:
@@ -483,10 +433,7 @@ async def test_s3_deleted_object_conflicts_on_conditional_write(
             assert exc.context["domain_id"] == "d"
             assert exc.context["expected_version"] == token
         else:
-            pytest.skip(
-                "LocalStack build does not enforce S3 If-Match "
-                "conditional PUT"
-            )
+            pytest.skip("LocalStack build does not enforce S3 If-Match conditional PUT")
     finally:
         await backend.close()
 
@@ -513,17 +460,13 @@ async def test_s3_cas_routes_to_the_per_tenant_document(
         assert await backend.get_state_version("d", ctx=tenant) is None
         assert await backend.get_state_version("d") is not None
 
-        await backend.set_ingestion_status(
-            "d", IngestionStatus.INGESTING, ctx=tenant
-        )
+        await backend.set_ingestion_status("d", IngestionStatus.INGESTING, ctx=tenant)
         tenant_token = await backend.get_state_version("d", ctx=tenant)
         assert tenant_token is not None
 
         # Single-tenant write must not touch the tenant object's ETag.
         await backend.set_ingestion_status("d", IngestionStatus.ERROR)
-        assert (
-            await backend.get_state_version("d", ctx=tenant) == tenant_token
-        )
+        assert await backend.get_state_version("d", ctx=tenant) == tenant_token
 
         # Tenant conditional write succeeds with the still-fresh token.
         await backend.set_ingestion_status(

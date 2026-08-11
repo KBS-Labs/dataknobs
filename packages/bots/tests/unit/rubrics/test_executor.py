@@ -45,15 +45,9 @@ def score_always_raises(target: dict[str, Any]) -> str:
 
 # --- Fixtures ---
 
-FAIL_LEVEL = RubricLevel(
-    id="fail", label="Fail", description="Does not meet", score=0.0
-)
-PASS_LEVEL = RubricLevel(
-    id="pass", label="Pass", description="Meets", score=0.7
-)
-EXCELLENT_LEVEL = RubricLevel(
-    id="excellent", label="Excellent", description="Exceeds", score=1.0
-)
+FAIL_LEVEL = RubricLevel(id="fail", label="Fail", description="Does not meet", score=0.0)
+PASS_LEVEL = RubricLevel(id="pass", label="Pass", description="Meets", score=0.7)
+EXCELLENT_LEVEL = RubricLevel(id="excellent", label="Excellent", description="Exceeds", score=1.0)
 
 STANDARD_LEVELS = [FAIL_LEVEL, PASS_LEVEL, EXCELLENT_LEVEL]
 
@@ -175,9 +169,11 @@ class TestFunctionRegistry:
 class TestRubricExecutorDeterministic:
     async def test_single_criterion_pass(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
         target = {"title": "My Document"}
 
         evaluation = await executor.evaluate(rubric, target, target_id="t1")
@@ -189,9 +185,11 @@ class TestRubricExecutorDeterministic:
 
     async def test_single_criterion_fail(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
         target = {"title": ""}
 
         evaluation = await executor.evaluate(rubric, target)
@@ -201,14 +199,18 @@ class TestRubricExecutorDeterministic:
         assert evaluation.criterion_results[0].level_id == "fail"
 
     async def test_multi_criteria_weighted(self) -> None:
-        executor = _make_executor({
-            "test:has_title": score_has_title,
-            "test:word_count": score_word_count,
-        })
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title", weight=0.4),
-            _make_deterministic_criterion("c2", "test:word_count", weight=0.6),
-        ])
+        executor = _make_executor(
+            {
+                "test:has_title": score_has_title,
+                "test:word_count": score_word_count,
+            }
+        )
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title", weight=0.4),
+                _make_deterministic_criterion("c2", "test:word_count", weight=0.6),
+            ]
+        )
         target = {
             "title": "My Doc",
             "content": " ".join(["word"] * 120),
@@ -223,18 +225,16 @@ class TestRubricExecutorDeterministic:
         assert evaluation.passed is True
 
     async def test_multi_criteria_mixed_results(self) -> None:
-        executor = _make_executor({
-            "test:has_title": score_has_title,
-            "test:word_count": score_word_count,
-        })
+        executor = _make_executor(
+            {
+                "test:has_title": score_has_title,
+                "test:word_count": score_word_count,
+            }
+        )
         rubric = _make_rubric(
             [
-                _make_deterministic_criterion(
-                    "c1", "test:has_title", weight=0.5
-                ),
-                _make_deterministic_criterion(
-                    "c2", "test:word_count", weight=0.5
-                ),
+                _make_deterministic_criterion("c1", "test:has_title", weight=0.5),
+                _make_deterministic_criterion("c2", "test:word_count", weight=0.5),
             ],
             pass_threshold=0.5,
         )
@@ -262,9 +262,11 @@ class TestRubricExecutorDeterministic:
 
     async def test_scoring_function_raises(self) -> None:
         executor = _make_executor({"test:raises": score_always_raises})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:raises"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:raises"),
+            ]
+        )
 
         evaluation = await executor.evaluate(rubric, {})
 
@@ -294,23 +296,29 @@ class TestRubricExecutorDeterministic:
             return "nonexistent_level"
 
         executor = _make_executor({"test:unknown": returns_unknown})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:unknown"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:unknown"),
+            ]
+        )
 
         evaluation = await executor.evaluate(rubric, {})
 
         assert evaluation.criterion_results[0].score == 0.0
 
     async def test_zero_weight_criterion(self) -> None:
-        executor = _make_executor({
-            "test:has_title": score_has_title,
-            "test:word_count": score_word_count,
-        })
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title", weight=1.0),
-            _make_deterministic_criterion("c2", "test:word_count", weight=0.0),
-        ])
+        executor = _make_executor(
+            {
+                "test:has_title": score_has_title,
+                "test:word_count": score_word_count,
+            }
+        )
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title", weight=1.0),
+                _make_deterministic_criterion("c2", "test:word_count", weight=0.0),
+            ]
+        )
         target = {"title": "Title", "content": "short"}
 
         evaluation = await executor.evaluate(rubric, target)
@@ -320,9 +328,11 @@ class TestRubricExecutorDeterministic:
 
     async def test_evaluation_metadata(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
 
         evaluation = await executor.evaluate(
             rubric, {"title": "T"}, target_id="art_123", target_type="doc"
@@ -337,9 +347,11 @@ class TestRubricExecutorDeterministic:
 
     async def test_default_target_type_from_rubric(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
 
         evaluation = await executor.evaluate(rubric, {"title": "T"})
 
@@ -417,9 +429,11 @@ class TestRubricExecutorLLMDecode:
 class TestRubricExecutorSummary:
     async def test_summary_contains_status(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
 
         eval_pass = await executor.evaluate(rubric, {"title": "T"})
         assert "PASSED" in eval_pass.feedback_summary
@@ -429,9 +443,11 @@ class TestRubricExecutorSummary:
 
     async def test_summary_contains_criterion_results(self) -> None:
         executor = _make_executor({"test:has_title": score_has_title})
-        rubric = _make_rubric([
-            _make_deterministic_criterion("c1", "test:has_title"),
-        ])
+        rubric = _make_rubric(
+            [
+                _make_deterministic_criterion("c1", "test:has_title"),
+            ]
+        )
 
         evaluation = await executor.evaluate(rubric, {"title": "T"})
 

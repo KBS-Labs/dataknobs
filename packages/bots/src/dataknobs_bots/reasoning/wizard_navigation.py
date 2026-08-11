@@ -193,10 +193,12 @@ class WizardNavigator:
 
         # Restore FSM to target stage
         active_fsm = self._subflows.get_active_fsm()
-        active_fsm.restore({
-            "current_stage": target_stage,
-            "data": state.data,
-        })
+        active_fsm.restore(
+            {
+                "current_stage": target_stage,
+                "data": state.data,
+            }
+        )
 
         # Record the amendment transition
         transition = create_transition_record(
@@ -217,7 +219,11 @@ class WizardNavigator:
         stage = active_fsm.current_metadata
         await self.branch_for_revisited_stage(manager, target_stage)
         response = await self._generate_stage_response(
-            manager, llm, stage, state, tools,
+            manager,
+            llm,
+            stage,
+            state,
+            tools,
         )
         return response
 
@@ -260,9 +266,7 @@ class WizardNavigator:
 
         state.history.pop()
         state.current_stage = state.history[-1]
-        active_fsm.restore(
-            {"current_stage": state.current_stage, "data": state.data}
-        )
+        active_fsm.restore({"current_stage": state.current_stage, "data": state.data})
         state.clarification_attempts = 0
         state.skip_extraction = False
 
@@ -325,7 +329,9 @@ class WizardNavigator:
         state.skip_extraction = False
 
         await self._execute_fsm_step(
-            state, user_message=user_message, trigger="navigation_skip",
+            state,
+            user_message=user_message,
+            trigger="navigation_skip",
         )
         auto_msgs: list[str] = []
         if self._consistent_lifecycle:
@@ -333,7 +339,9 @@ class WizardNavigator:
         return True, auto_msgs
 
     async def navigate_restart(
-        self, state: WizardState, user_message: str = "",
+        self,
+        state: WizardState,
+        user_message: str = "",
     ) -> None:
         """Execute restart navigation on the FSM.
 
@@ -390,14 +398,11 @@ class WizardNavigator:
                     )
                 else:
                     logger.debug(
-                        "Skipping auto-save before restart "
-                        "(validation errors: %s)",
+                        "Skipping auto-save before restart (validation errors: %s)",
                         errors,
                     )
             except Exception as e:
-                logger.warning(
-                    "Failed to auto-save artifact before restart: %s", e
-                )
+                logger.warning("Failed to auto-save artifact before restart: %s", e)
 
         from_stage = state.current_stage
         duration_ms = (time.time() - state.stage_entry_time) * 1000
@@ -501,9 +506,7 @@ class WizardNavigator:
 
         return None
 
-    async def branch_for_revisited_stage(
-        self, manager: Any, stage_name: str
-    ) -> None:
+    async def branch_for_revisited_stage(self, manager: Any, stage_name: str) -> None:
         """Branch the conversation tree when revisiting a wizard stage.
 
         If the tree already contains an assistant response for
@@ -521,8 +524,7 @@ class WizardNavigator:
             try:
                 await manager.branch_from(prev_node_id)
                 logger.debug(
-                    "Branched conversation tree for revisited stage '%s' "
-                    "(sibling of node '%s')",
+                    "Branched conversation tree for revisited stage '%s' (sibling of node '%s')",
                     stage_name,
                     prev_node_id,
                 )
@@ -530,8 +532,7 @@ class WizardNavigator:
                 # Manager may not support branch_from (e.g. test doubles).
                 # Gracefully degrade — tree will just chain deeper.
                 logger.debug(
-                    "branch_from not available; skipping tree branching "
-                    "for stage '%s'",
+                    "branch_from not available; skipping tree branching for stage '%s'",
                     stage_name,
                 )
 
@@ -560,18 +561,13 @@ class WizardNavigator:
         """
         if await self.navigate_back(state, user_message=message):
             stage = self._fsm.current_metadata
-            await self.branch_for_revisited_stage(
-                manager, state.current_stage
-            )
-            response = await self._generate_stage_response(
-                manager, llm, stage, state, None
-            )
+            await self.branch_for_revisited_stage(manager, state.current_stage)
+            response = await self._generate_stage_response(manager, llm, stage, state, None)
             return response
         # Can't go back - inform user
         return await manager.complete(
             system_prompt_override=(
-                manager.system_prompt
-                + "\n\nThe user asked to go back but we're at the beginning. "
+                manager.system_prompt + "\n\nThe user asked to go back but we're at the beginning. "
                 "Kindly explain we can't go back further and continue with "
                 "the current step."
             ),
@@ -612,13 +608,12 @@ class WizardNavigator:
             )
 
         _, auto_advance_messages = await self.navigate_skip(
-            state, user_message=message,
+            state,
+            user_message=message,
         )
 
         stage = self._subflows.get_active_fsm().current_metadata
-        response = await self._generate_stage_response(
-            manager, llm, stage, state, None
-        )
+        response = await self._generate_stage_response(manager, llm, stage, state, None)
         if auto_advance_messages:
             self._prepend_messages_to_response(response, auto_advance_messages)
         return response
@@ -652,12 +647,8 @@ class WizardNavigator:
         await self.restart_cleanup(state, message)
 
         stage = self._fsm.current_metadata
-        await self.branch_for_revisited_stage(
-            manager, state.current_stage
-        )
-        response = await self._generate_stage_response(
-            manager, llm, stage, state, None
-        )
+        await self.branch_for_revisited_stage(manager, state.current_stage)
+        response = await self._generate_stage_response(manager, llm, stage, state, None)
         return response
 
     # ------------------------------------------------------------------
@@ -700,15 +691,9 @@ class WizardNavigator:
             return NavigationCommandConfig(keywords=keywords, enabled=enabled)
 
         return NavigationConfig(
-            back=_merge_command(
-                self._navigation_config.back, stage_nav.get("back")
-            ),
-            skip=_merge_command(
-                self._navigation_config.skip, stage_nav.get("skip")
-            ),
-            restart=_merge_command(
-                self._navigation_config.restart, stage_nav.get("restart")
-            ),
+            back=_merge_command(self._navigation_config.back, stage_nav.get("back")),
+            skip=_merge_command(self._navigation_config.skip, stage_nav.get("skip")),
+            restart=_merge_command(self._navigation_config.restart, stage_nav.get("restart")),
         )
 
     def map_section_to_stage(self, section: str) -> str | None:
@@ -729,10 +714,7 @@ class WizardNavigator:
         section_lower = section.lower().strip()
 
         # Check custom mapping first
-        if (
-            self._section_to_stage_mapping
-            and section_lower in self._section_to_stage_mapping
-        ):
+        if self._section_to_stage_mapping and section_lower in self._section_to_stage_mapping:
             return self._section_to_stage_mapping[section_lower]
 
         # Default mappings for common wizard patterns
@@ -822,8 +804,7 @@ class WizardNavigator:
             lambda n: (
                 isinstance(n.data, ConversationNode)
                 and n.data.message.role == "assistant"
-                and n.data.metadata.get("wizard", {}).get("current_stage")
-                == stage_name
+                and n.data.metadata.get("wizard", {}).get("current_stage") == stage_name
             ),
         )
         if not matches:

@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 class TemplateStrategy(Enum):
     """Template rendering strategies."""
+
     SIMPLE = "simple"  # Python str.format() with {variable} syntax
     CONDITIONAL = "conditional"  # Advanced with {{variable}} and ((conditional)) syntax
 
@@ -47,10 +48,11 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
     Returns:
         The rendered template
     """
+
     def replace_variable(text: str, params: Dict[str, Any], in_conditional: bool = False) -> str:
         """Replace variables in text with proper whitespace handling."""
         # Pattern to match variables with optional whitespace
-        var_pattern = r'\{\{(\s*)(\w+)(\s*)\}\}'
+        var_pattern = r"\{\{(\s*)(\w+)(\s*)\}\}"
 
         def replace_var(match):
             """Replace a single variable with whitespace handling."""
@@ -87,7 +89,7 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
 
     def find_all_variables(text: str) -> set:
         """Find all variables in text, including nested conditionals."""
-        var_pattern = r'\{\{(\s*)(\w+)(\s*)\}\}'
+        var_pattern = r"\{\{(\s*)(\w+)(\s*)\}\}"
         variables = set()
         for match in re.finditer(var_pattern, text):
             variables.add(match.group(2))
@@ -103,7 +105,7 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
             # Find the first (( ... )) section
             start_pos = 0
             while True:
-                start = result.find('((', start_pos)
+                start = result.find("((", start_pos)
                 if start == -1:
                     break
 
@@ -112,10 +114,10 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
                 paren_depth = 0  # Track single parentheses
                 end = start + 2
                 while end < len(result) and depth > 0:
-                    if result[end:end+2] == '((':
+                    if result[end : end + 2] == "((":
                         depth += 1
                         end += 2
-                    elif result[end:end+2] == '))':
+                    elif result[end : end + 2] == "))":
                         # Only count as )) if we're not inside single parens
                         if paren_depth == 0:
                             depth -= 1
@@ -124,10 +126,10 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
                             # This is ) followed by another )
                             paren_depth -= 1
                             end += 1
-                    elif result[end] == '(':
+                    elif result[end] == "(":
                         paren_depth += 1
                         end += 1
-                    elif result[end] == ')':
+                    elif result[end] == ")":
                         paren_depth -= 1
                         end += 1
                     else:
@@ -135,7 +137,7 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
 
                 if depth == 0:
                     # Found a complete section
-                    content = result[start+2:end-2]
+                    content = result[start + 2 : end - 2]
 
                     # Find ALL variables in this section (including nested)
                     all_vars = find_all_variables(content)
@@ -165,7 +167,9 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
                             # At least one variable has a value, process nested conditionals
                             processed_content = process_conditionals(content, params)
                             # Then substitute variables in the processed content
-                            rendered = replace_variable(processed_content, params, in_conditional=True)
+                            rendered = replace_variable(
+                                processed_content, params, in_conditional=True
+                            )
                             result = result[:start] + rendered + result[end:]
                     else:
                         # No variables in this section, keep the content as-is

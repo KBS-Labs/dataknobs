@@ -86,18 +86,20 @@ class StreamResult:
 
     def add_error(self, record_id: str | None, error: Exception, index: int | None = None) -> None:
         """Add an error to the result.
-        
+
         Args:
             record_id: ID of the record that failed
             error: The exception that occurred
             index: Optional index of the failed record in the original batch
         """
-        self.errors.append({
-            "record_id": record_id,
-            "error": str(error),
-            "type": type(error).__name__,
-            "index": index
-        })
+        self.errors.append(
+            {
+                "record_id": record_id,
+                "error": str(error),
+                "type": type(error).__name__,
+                "index": index,
+            }
+        )
         if index is not None:
             self.failed_indices.append(index)
 
@@ -134,8 +136,7 @@ def build_shortfall_error(written: int, total: int) -> OperationError:
     """
     shortfall = total - written
     return OperationError(
-        f"batch write confirmed {written} of {total} records; "
-        f"{shortfall} failed to write"
+        f"batch write confirmed {written} of {total} records; {shortfall} failed to write"
     )
 
 
@@ -169,9 +170,7 @@ class BatchWriteAccountant(Protocol):
     def on_record_skip(self, record: Record) -> None:
         """Account one record left untouched under skip-on-duplicate."""
 
-    def on_record_failure(
-        self, record: Record | None, error: Exception, local_index: int
-    ) -> bool:
+    def on_record_failure(self, record: Record | None, error: Exception, local_index: int) -> bool:
         """Account one per-record failure; return ``False`` (or raise) to stop.
 
         ``local_index`` is the record's position within ``batch`` (0-based), for
@@ -235,9 +234,7 @@ class StreamResultAccountant:
         self._result.total_processed += 1
         self._result.skipped += 1
 
-    def on_record_failure(
-        self, record: Record | None, error: Exception, local_index: int
-    ) -> bool:
+    def on_record_failure(self, record: Record | None, error: Exception, local_index: int) -> bool:
         self._result.total_processed += 1
         self._result.failed += 1
         record_id = record.id if record is not None and hasattr(record, "id") else None
@@ -555,10 +552,7 @@ class StreamProcessor:
     """Base class for stream processing utilities."""
 
     @staticmethod
-    def batch_iterator(
-        iterator: Iterator[Record],
-        batch_size: int
-    ) -> Iterator[list[Record]]:
+    def batch_iterator(iterator: Iterator[Record], batch_size: int) -> Iterator[list[Record]]:
         """Convert a record iterator into batches."""
         batch = []
         for record in iterator:
@@ -572,10 +566,10 @@ class StreamProcessor:
     @staticmethod
     def list_to_iterator(records: list[Record]) -> Iterator[Record]:
         """Convert a list of records to an iterator.
-        
+
         Args:
             records: List of records
-            
+
         Yields:
             Individual records from the list
         """
@@ -585,12 +579,12 @@ class StreamProcessor:
     @staticmethod
     async def list_to_async_iterator(records: list[Record]) -> AsyncIterator[Record]:
         """Convert a list of records to an async iterator.
-        
+
         This adapter allows synchronous lists to be used with async streaming APIs.
-        
+
         Args:
             records: List of records
-            
+
         Yields:
             Individual records from the list
         """
@@ -600,12 +594,12 @@ class StreamProcessor:
     @staticmethod
     async def iterator_to_async_iterator(iterator: Iterator[Record]) -> AsyncIterator[Record]:
         """Convert a synchronous iterator to an async iterator.
-        
+
         This adapter allows synchronous iterators to be used with async streaming APIs.
-        
+
         Args:
             iterator: Synchronous iterator of records
-            
+
         Yields:
             Individual records from the iterator
         """
@@ -614,8 +608,7 @@ class StreamProcessor:
 
     @staticmethod
     async def async_batch_iterator(
-        iterator: AsyncIterator[Record],
-        batch_size: int
+        iterator: AsyncIterator[Record], batch_size: int
     ) -> AsyncIterator[list[Record]]:
         """Convert an async record iterator into batches."""
         batch = []
@@ -629,8 +622,7 @@ class StreamProcessor:
 
     @staticmethod
     def filter_stream(
-        iterator: Iterator[Record],
-        predicate: Callable[[Record], bool]
+        iterator: Iterator[Record], predicate: Callable[[Record], bool]
     ) -> Iterator[Record]:
         """Filter records in a stream."""
         for record in iterator:
@@ -639,8 +631,7 @@ class StreamProcessor:
 
     @staticmethod
     async def async_filter_stream(
-        iterator: AsyncIterator[Record],
-        predicate: Callable[[Record], bool]
+        iterator: AsyncIterator[Record], predicate: Callable[[Record], bool]
     ) -> AsyncIterator[Record]:
         """Filter records in an async stream."""
         async for record in iterator:
@@ -649,8 +640,7 @@ class StreamProcessor:
 
     @staticmethod
     def transform_stream(
-        iterator: Iterator[Record],
-        transform: Callable[[Record], Record | None]
+        iterator: Iterator[Record], transform: Callable[[Record], Record | None]
     ) -> Iterator[Record]:
         """Transform records in a stream, filtering out None results."""
         for record in iterator:
@@ -660,8 +650,7 @@ class StreamProcessor:
 
     @staticmethod
     async def async_transform_stream(
-        iterator: AsyncIterator[Record],
-        transform: Callable[[Record], Record | None]
+        iterator: AsyncIterator[Record], transform: Callable[[Record], Record | None]
     ) -> AsyncIterator[Record]:
         """Transform records in an async stream, filtering out None results."""
         async for record in iterator:
@@ -674,12 +663,10 @@ class StreamingMixin:
     """Mixin class providing common streaming functionality for sync databases."""
 
     def _default_stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Default implementation of stream_read using search method.
-        
+
         This provides a simple streaming wrapper around the search method
         that most backends can use without modification.
         """
@@ -691,18 +678,17 @@ class StreamingMixin:
         else:
             # If no query, get all records
             from .query import Query
+
             records = self.search(Query())
 
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record
 
     def _default_stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Default implementation of stream_write.
 
@@ -732,12 +718,10 @@ class AsyncStreamingMixin:
     """Mixin class providing common streaming functionality for async databases."""
 
     async def _default_stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Default implementation of async stream_read using search method.
-        
+
         This provides a simple streaming wrapper around the search method
         that most backends can use without modification.
         """
@@ -749,18 +733,17 @@ class AsyncStreamingMixin:
         else:
             # If no query, get all records
             from .query import Query
+
             records = await self.search(Query())
 
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record
 
     async def _default_stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Default implementation of async stream_write.
 

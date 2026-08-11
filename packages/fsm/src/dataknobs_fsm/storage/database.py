@@ -216,9 +216,7 @@ def _build_store(
     )
 
 
-def _require_store(
-    store: AsyncKeyedRecordStore[_T] | None, name: str
-) -> AsyncKeyedRecordStore[_T]:
+def _require_store(store: AsyncKeyedRecordStore[_T] | None, name: str) -> AsyncKeyedRecordStore[_T]:
     """Runtime guard that survives ``python -O`` (unlike ``assert``).
 
     Module-level helper used by every store-using method.  The
@@ -229,9 +227,7 @@ def _require_store(
     misuse.
     """
     if store is None:
-        raise RuntimeError(
-            f"{name} store not initialized; call initialize() first"
-        )
+        raise RuntimeError(f"{name} store not initialized; call initialize() first")
     return store
 
 
@@ -253,9 +249,7 @@ def _history_from_record(record: Record) -> _HistoryRecord:
         import zlib
 
         compressed = base64.b64decode(history_data["data"])
-        history_data = _json.loads(
-            zlib.decompress(compressed).decode("utf-8")
-        )
+        history_data = _json.loads(zlib.decompress(compressed).decode("utf-8"))
 
     history = ExecutionHistory.from_dict(history_data)
     return _HistoryRecord(
@@ -322,17 +316,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # defect class).  Built lazily once the backing database is
         # established — see :meth:`_setup_backend`.
         self._step_store: AsyncKeyedRecordStore[_StepRecord] | None = None
-        self._history_store: AsyncKeyedRecordStore[_HistoryRecord] | None = (
-            None
-        )
+        self._history_store: AsyncKeyedRecordStore[_HistoryRecord] | None = None
         if self._steps_db is not None:
-            self._step_store = _build_store(
-                self._steps_db, _step_to_columns, _step_from_record
-            )
+            self._step_store = _build_store(self._steps_db, _step_to_columns, _step_from_record)
         if self._db is not None:
-            self._history_store = _build_store(
-                self._db, _history_to_columns, _history_from_record
-            )
+            self._history_store = _build_store(self._db, _history_to_columns, _history_from_record)
 
     async def _setup_backend(self) -> None:
         """Set up the database backend using the dataknobs_data factory.
@@ -394,13 +382,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
 
         # Build the typed stores now that the databases are established.
         if self._step_store is None and self._steps_db is not None:
-            self._step_store = _build_store(
-                self._steps_db, _step_to_columns, _step_from_record
-            )
+            self._step_store = _build_store(self._steps_db, _step_to_columns, _step_from_record)
         if self._history_store is None and self._db is not None:
-            self._history_store = _build_store(
-                self._db, _history_to_columns, _history_from_record
-            )
+            self._history_store = _build_store(self._db, _history_to_columns, _history_from_record)
 
     @property
     def _uses_shared_db(self) -> bool:
@@ -439,9 +423,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         return query
 
     @staticmethod
-    def _apply_filter_metadata(
-        query: Query, filter_metadata: Mapping[str, Any] | None
-    ) -> Query:
+    def _apply_filter_metadata(query: Query, filter_metadata: Mapping[str, Any] | None) -> Query:
         """Route a ``filter_metadata`` map through the ``metadata.X`` convention.
 
         Centralizes the per-key ``query.filter("metadata.K", "=", V)``
@@ -486,9 +468,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # creation timestamp to the most recent save's wall-clock.
         existing_record = await history_store.db.read(history.execution_id)
         existing_created_at: float | None = (
-            existing_record.get_value("created_at")
-            if existing_record is not None
-            else None
+            existing_record.get_value("created_at") if existing_record is not None else None
         )
 
         wrapped = _HistoryRecord(
@@ -704,9 +684,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # change to the persisted ``_HistoryRecord`` shape cannot silently
         # bypass the serializer at this site.  The ``_history_query``
         # filter scopes the search in the shared-db case.
-        query = self._history_query(
-            Query().filter("execution_id", "=", history_id)
-        )
+        query = self._history_query(Query().filter("execution_id", "=", history_id))
         records = await history_store.search(query)
 
         deleted_count = 0
@@ -720,9 +698,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # route through ``_step_store``.
         if self._steps_db:
             step_store = _require_store(self._step_store, "Step")
-            step_query = self._steps_query(
-                Query().filter("execution_id", "=", history_id)
-            )
+            step_query = self._steps_query(Query().filter("execution_id", "=", history_id))
             step_records = await step_store.search(step_query)
             for step_record in step_records:
                 step_id = step_record.storage_id or step_record.get_value("id")

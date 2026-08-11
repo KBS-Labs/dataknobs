@@ -155,9 +155,7 @@ class TurnState:
         self._extract_provider_name(provider)
         self._capture_pricing(provider)
 
-    def populate_from_final_stream_chunk(
-        self, chunk: LLMStreamResponse, provider: Any
-    ) -> None:
+    def populate_from_final_stream_chunk(self, chunk: LLMStreamResponse, provider: Any) -> None:
         """Extract usage from the final streaming chunk."""
         if chunk.usage:
             self.usage = chunk.usage
@@ -198,8 +196,7 @@ class TurnState:
         """Merge token counts into the running total."""
         if self.usage is None:
             self.usage = {}
-        for key in ("input", "output", "prompt_tokens", "completion_tokens",
-                     "total_tokens"):
+        for key in ("input", "output", "prompt_tokens", "completion_tokens", "total_tokens"):
             if key in new_usage:
                 self.usage[key] = self.usage.get(key, 0) + new_usage[key]
 
@@ -225,9 +222,7 @@ class TurnState:
         # ``impl_name`` before the class name: re-deriving it inline ignores a
         # provider that has declared what it wants to be called, which is the
         # same reconstruct-it-yourself pattern this contract replaced.
-        self.provider_impl = (
-            getattr(provider, "impl_name", None) or type(provider).__name__
-        )
+        self.provider_impl = getattr(provider, "impl_name", None) or type(provider).__name__
 
     def _capture_pricing(self, provider: Any) -> None:
         """Resolve this turn's per-model pricing from the provider.

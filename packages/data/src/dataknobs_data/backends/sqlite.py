@@ -98,9 +98,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         # Connect to database
         self.conn = sqlite3.connect(
-            self.db_path,
-            timeout=self.timeout,
-            check_same_thread=self.check_same_thread
+            self.db_path, timeout=self.timeout, check_same_thread=self.check_same_thread
         )
 
         # Enable row factory for dict-like access
@@ -243,9 +241,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -277,7 +273,9 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         metadata_json = json.dumps(record.metadata) if record.metadata else None
 
         # Build update query
-        query = f"UPDATE {self.table_manager.qualified_table} SET data = ?, metadata = ? WHERE id = ?"
+        query = (
+            f"UPDATE {self.table_manager.qualified_table} SET data = ?, metadata = ? WHERE id = ?"
+        )
         params = [data_json, metadata_json, id]
 
         # Conditional write: compare the current content-hash token before
@@ -353,7 +351,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
     def clear(self) -> int:
         """Clear all records from the database."""
         self._check_connection()
-        
+
         cursor = self.conn.cursor()
         try:
             # Get count before clearing
@@ -363,11 +361,11 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             # Clear the table
             cursor.execute(f"DELETE FROM {self.table_manager.qualified_table}")
             self.conn.commit()
-            
+
             return count
         finally:
             cursor.close()
-    
+
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
         self._check_connection()
@@ -390,7 +388,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 record = self.row_to_record(row_dict)
 
                 # Populate storage_id from database ID
-                record.storage_id = str(row_dict['id'])
+                record.storage_id = str(row_dict["id"])
 
                 records.append(record)
 
@@ -458,9 +456,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             if is_duplicate_key_error(e):
                 # Name the colliding id precisely on the error path (cheap — only
                 # runs on a failed batch, never on the happy path).
-                colliding = next(
-                    (r.id for r in records if r.id and self.exists(r.id)), ids[0]
-                )
+                colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
                 raise DuplicateRecordError(colliding) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
@@ -501,7 +497,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
-        
+
         Uses CASE expressions for batch updates, similar to PostgreSQL.
         """
         if not updates:
@@ -523,7 +519,9 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             # SQLite doesn't have RETURNING, so we need to verify each ID
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            check_query = (
+                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            )
             cursor.execute(check_query, update_ids)
             existing_ids = {row[0] for row in cursor.fetchall()}
 
@@ -541,7 +539,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause for better performance.
         """
         if not ids:
@@ -551,7 +549,9 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        check_query = (
+            f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        )
 
         cursor = self.conn.cursor()
         try:
@@ -594,9 +594,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             cursor.close()
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from database."""
         from ..streaming import StreamConfig
@@ -625,9 +623,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 break
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
 
@@ -663,7 +659,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
     # Vector support methods
     def has_vector_support(self) -> bool:
         """Check if this backend has vector support.
-        
+
         Returns:
             False - SQLite has no native vector support, uses Python-based similarity
         """
@@ -671,7 +667,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
     def enable_vector_support(self) -> bool:
         """Enable vector support for this backend.
-        
+
         Returns:
             True - Vector support is always available (Python-based)
         """
@@ -687,12 +683,12 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | None = None,
-        **kwargs
+        **kwargs,
     ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python-based calculations.
-        
+
         Delegates to PythonVectorSearchMixin for the implementation.
-        
+
         Args:
             query_vector: Query vector
             field_name: Name of the vector field to search
@@ -700,7 +696,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             filter: Optional filter conditions
             metric: Distance metric (uses instance default if not specified)
             **kwargs: Additional arguments for compatibility
-            
+
         Returns:
             List of search results with scores
         """
@@ -713,7 +709,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )
 
     def add_vectors(
@@ -724,13 +720,13 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         field_name: str = "embedding",
     ) -> list[str]:
         """Add vectors to the database.
-        
+
         Args:
             vectors: List of vectors to add
             ids: Optional list of IDs
             metadata: Optional list of metadata dicts
             field_name: Name of the vector field
-            
+
         Returns:
             List of created record IDs
         """
@@ -749,7 +745,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             vector_field = VectorField(
                 name=field_name,
                 value=vector,
-                dimensions=len(vector) if isinstance(vector, (list, np.ndarray)) else None
+                dimensions=len(vector) if isinstance(vector, (list, np.ndarray)) else None,
             )
 
             # Create record
@@ -757,7 +753,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             record = Record(
                 data=OrderedDict({field_name: vector_field}),
                 metadata=record_metadata,
-                storage_id=ids[i]
+                storage_id=ids[i],
             )
             records.append(record)
 

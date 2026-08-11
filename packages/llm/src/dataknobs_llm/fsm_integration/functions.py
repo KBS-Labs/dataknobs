@@ -31,7 +31,7 @@ class PromptBuilder(ITransformFunction):
         format_spec: str | None = None,  # "json", "markdown", "plain"
     ):
         """Initialize the prompt builder.
-        
+
         Args:
             template: Prompt template with {variable} placeholders.
             system_prompt: Optional system prompt.
@@ -45,10 +45,10 @@ class PromptBuilder(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by building prompt.
-        
+
         Args:
             data: Input data containing variables for prompt.
-            
+
         Returns:
             Data with built prompt.
         """
@@ -69,20 +69,20 @@ class PromptBuilder(ITransformFunction):
                         break
                 if value is not None:
                     variables[var] = value
-        
+
         # Build prompt
         try:
             prompt = self.template.format(**variables)
         except KeyError as e:
             raise TransformError(f"Missing variable for prompt: {e}") from e
-        
+
         # Add format specification if provided
         if self.format_spec:
             if self.format_spec == "json":
                 prompt += "\n\nPlease respond with valid JSON only."
             elif self.format_spec == "markdown":
                 prompt += "\n\nPlease format your response using Markdown."
-        
+
         result = {
             **data,
             "prompt": prompt,
@@ -115,7 +115,7 @@ class LLMCaller(ITransformFunction):
         response_field: str = "llm_response",
     ):
         """Initialize the LLM caller.
-        
+
         Args:
             resource_name: Name of the LLM resource to use.
             model: Model to use (if None, use resource default).
@@ -133,10 +133,10 @@ class LLMCaller(ITransformFunction):
 
     async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by calling LLM.
-        
+
         Args:
             data: Input data containing prompt.
-            
+
         Returns:
             Data with LLM response.
         """
@@ -144,14 +144,14 @@ class LLMCaller(ITransformFunction):
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, LLMResource):
             raise TransformError(f"LLM resource '{self.resource_name}' not found")
-        
+
         # Get prompt
         prompt = data.get("prompt")
         if not prompt:
             raise TransformError("No prompt found in data")
-        
+
         system_prompt = data.get("system_prompt")
-        
+
         try:
             # Call LLM
             response = await resource.generate(
@@ -162,7 +162,7 @@ class LLMCaller(ITransformFunction):
                 max_tokens=self.max_tokens,
                 stream=self.stream,
             )
-            
+
             if self.stream:
                 # For streaming, return an async generator
                 return {
@@ -177,7 +177,7 @@ class LLMCaller(ITransformFunction):
                     self.response_field: response,
                     "tokens_used": response.get("usage", {}).get("total_tokens"),
                 }
-        
+
         except Exception as e:
             raise TransformError(f"LLM call failed ({type(e).__name__})") from e
 
@@ -203,7 +203,7 @@ class ResponseValidator(IValidationFunction):
         required_fields: List[str] | None = None,
     ):
         """Initialize the response validator.
-        
+
         Args:
             response_field: Field containing LLM response.
             format: Expected response format.
@@ -221,45 +221,46 @@ class ResponseValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate LLM response.
-        
+
         Args:
             data: Data containing LLM response.
-            
+
         Returns:
             True if valid.
-            
+
         Raises:
             ValidationError: If validation fails.
         """
         response = data.get(self.response_field)
         if response is None:
             raise ValidationError(f"Response field '{self.response_field}' not found")
-        
+
         # Extract text from response object if needed
         if isinstance(response, dict):
             text = response.get("text", response.get("content", str(response)))
         else:
             text = str(response)
-        
+
         # Check length constraints
         if self.min_length and len(text) < self.min_length:  # type: ignore
             raise ValidationError(
                 f"Response too short: {len(text)} < {self.min_length}"  # type: ignore
             )
-        
+
         if self.max_length and len(text) > self.max_length:  # type: ignore
             raise ValidationError(
                 f"Response too long: {len(text)} > {self.max_length}"  # type: ignore
             )
-        
+
         # Validate format
         if self.format == "json":
             try:
                 parsed = json.loads(text)  # type: ignore
-                
+
                 # Validate against schema if provided
                 if self.schema:
                     from pydantic import create_model, ValidationError as PydanticValidationError
+
                     model = create_model("ResponseSchema", **self.schema)
                     try:
                         model(**parsed)
@@ -271,20 +272,18 @@ class ResponseValidator(IValidationFunction):
                         # already has `validation_errors` for exactly that;
                         # the rendering stays reachable on `__cause__`.
                         fields = sorted(
-                            ".".join(str(part) for part in err.get("loc", ()))
-                            for err in e.errors()
+                            ".".join(str(part) for part in err.get("loc", ())) for err in e.errors()
                         )
                         raise ValidationError(
-                            f"Response failed schema validation on "
-                            f"{len(fields)} field(s)",
+                            f"Response failed schema validation on {len(fields)} field(s)",
                             validation_errors=fields,
                         ) from e
-                
+
                 # Check required fields
                 for field in self.required_fields:
                     if field not in parsed:
                         raise ValidationError(f"Required field missing: {field}")
-                
+
             except json.JSONDecodeError as e:
                 raise ValidationError(f"Invalid JSON response: {e}") from e
 
@@ -316,7 +315,7 @@ class FunctionCaller(ITransformFunction):
         result_field: str = "function_result",
     ):
         """Initialize the function caller.
-        
+
         Args:
             response_field: Field containing LLM response with function call.
             function_registry: Registry of available functions.
@@ -328,17 +327,17 @@ class FunctionCaller(ITransformFunction):
 
     async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by calling function from LLM response.
-        
+
         Args:
             data: Input data containing LLM response with function call.
-            
+
         Returns:
             Data with function result.
         """
         response = data.get(self.response_field)
         if not response:
             return data
-        
+
         # Parse function call from response
         if isinstance(response, str):
             try:
@@ -346,33 +345,33 @@ class FunctionCaller(ITransformFunction):
             except json.JSONDecodeError:
                 # Not a JSON response, no function to call
                 return data
-        
+
         # Extract function call
         function_name = response.get("function")
         function_args = response.get("arguments", {})
-        
+
         if not function_name:
             return data
-        
+
         # Look up function
         if function_name not in self.function_registry:
             raise TransformError(f"Function not found: {function_name}")
-        
+
         func = self.function_registry[function_name]
-        
+
         try:
             # Call function
             if asyncio.iscoroutinefunction(func):
                 result = await func(**function_args)
             else:
                 result = func(**function_args)
-            
+
             return {
                 **data,
                 self.result_field: result,
                 "function_called": function_name,
             }
-        
+
         except Exception as e:
             raise TransformError(f"Function call failed ({type(e).__name__})") from e
 
@@ -382,7 +381,9 @@ class FunctionCaller(ITransformFunction):
         Returns:
             String describing what this transform does.
         """
-        available_funcs = ", ".join(self.function_registry.keys()) if self.function_registry else "none"
+        available_funcs = (
+            ", ".join(self.function_registry.keys()) if self.function_registry else "none"
+        )
         return f"Call function from LLM response (available: {available_funcs})"
 
 
@@ -397,7 +398,7 @@ class ConversationManager(ITransformFunction):
         content_field: str = "content",
     ):
         """Initialize the conversation manager.
-        
+
         Args:
             max_history: Maximum number of messages to keep.
             history_field: Field to store conversation history.
@@ -411,23 +412,25 @@ class ConversationManager(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by managing conversation history.
-        
+
         Args:
             data: Input data with new message.
-            
+
         Returns:
             Data with updated conversation history.
         """
         # Get existing history
         history = data.get(self.history_field, [])
-        
+
         # Add user message if present
         if "prompt" in data:
-            history.append({
-                self.role_field: "user",
-                self.content_field: data["prompt"],
-            })
-        
+            history.append(
+                {
+                    self.role_field: "user",
+                    self.content_field: data["prompt"],
+                }
+            )
+
         # Add assistant message if present
         if "llm_response" in data:
             response = data["llm_response"]
@@ -435,16 +438,18 @@ class ConversationManager(ITransformFunction):
                 content = response.get("text", response.get("content", str(response)))
             else:
                 content = str(response)
-            
-            history.append({
-                self.role_field: "assistant",
-                self.content_field: content,
-            })
-        
+
+            history.append(
+                {
+                    self.role_field: "assistant",
+                    self.content_field: content,
+                }
+            )
+
         # Trim history if needed
         if len(history) > self.max_history:
-            history = history[-self.max_history:]
-        
+            history = history[-self.max_history :]
+
         return {
             **data,
             self.history_field: history,
@@ -471,7 +476,7 @@ class EmbeddingGenerator(ITransformFunction):
         batch_size: int = 100,
     ):
         """Initialize the embedding generator.
-        
+
         Args:
             resource_name: Name of the LLM resource to use.
             text_field: Field containing text to embed.
@@ -487,10 +492,10 @@ class EmbeddingGenerator(ITransformFunction):
 
     async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by generating embeddings.
-        
+
         Args:
             data: Input data containing text.
-            
+
         Returns:
             Data with embeddings.
         """
@@ -498,34 +503,32 @@ class EmbeddingGenerator(ITransformFunction):
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, LLMResource):
             raise TransformError(f"LLM resource '{self.resource_name}' not found")
-        
+
         # Get text to embed
         text = data.get(self.text_field)
         if not text:
             return data
-        
+
         try:
             # Generate embedding(s)
             if isinstance(text, list):
                 # Batch processing
                 embeddings = []
                 for i in range(0, len(text), self.batch_size):
-                    batch = text[i:i + self.batch_size]
+                    batch = text[i : i + self.batch_size]
                     batch_embeddings = await resource.embed(batch, model=self.model)
                     embeddings.extend(batch_embeddings)
             else:
                 # Single text
                 embeddings = await resource.embed(text, model=self.model)
-            
+
             return {
                 **data,
                 self.embedding_field: embeddings,
             }
-        
+
         except Exception as e:
-            raise TransformError(
-                f"Embedding generation failed ({type(e).__name__})"
-            ) from e
+            raise TransformError(f"Embedding generation failed ({type(e).__name__})") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.

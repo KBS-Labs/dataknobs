@@ -147,9 +147,7 @@ class PgVectorStore(VectorStore):
         placeholder.
         """
         if not ASYNCPG_AVAILABLE:
-            raise ImportError(
-                "asyncpg is not installed. Install with: pip install asyncpg"
-            )
+            raise ImportError("asyncpg is not installed. Install with: pip install asyncpg")
 
         super()._setup()
         cfg = self.config
@@ -270,10 +268,7 @@ class PgVectorStore(VectorStore):
 
         def _element_clause(filter_key: str, v: Any) -> str:
             nonlocal idx
-            scalar_clause = (
-                f"{col_metadata} @> jsonb_build_object("
-                f"${idx}::text, ${idx + 1}::jsonb)"
-            )
+            scalar_clause = f"{col_metadata} @> jsonb_build_object(${idx}::text, ${idx + 1}::jsonb)"
             params.append(filter_key)
             params.append(json.dumps(v))
             idx += 2
@@ -366,7 +361,9 @@ class PgVectorStore(VectorStore):
         exception hierarchy.
         """
         invalid_text_cls = getattr(
-            asyncpg.exceptions, "InvalidTextRepresentationError", None,
+            asyncpg.exceptions,
+            "InvalidTextRepresentationError",
+            None,
         )
         if invalid_text_cls is not None and isinstance(exc, invalid_text_cls):
             return True
@@ -377,7 +374,9 @@ class PgVectorStore(VectorStore):
         return "invalid" in msg and "uuid" in msg
 
     def _guided_id_type_error(
-        self, vec_id: Any, cause: BaseException,
+        self,
+        vec_id: Any,
+        cause: BaseException,
     ) -> ValueError:
         """Build the guided ValueError for an id-type mismatch.
 
@@ -393,7 +392,7 @@ class PgVectorStore(VectorStore):
         if self.id_type == "uuid":
             return ValueError(
                 f"PgVectorStore id_type={self.id_type!r} but received "
-                f"non-UUID id {vec_id!r}. Either set `id_type: \"text\"` "
+                f'non-UUID id {vec_id!r}. Either set `id_type: "text"` '
                 f"in the vector store config, or pass UUID-formatted "
                 f"string ids. Note: flipping to ``text`` only affects "
                 f"new deployments — existing UUID-typed tables require "
@@ -404,7 +403,7 @@ class PgVectorStore(VectorStore):
         # common post-flip migration case.
         return ValueError(
             f"PgVectorStore id_type={self.id_type!r} but the underlying "
-            f"table column is UUID. Add `id_type: \"uuid\"` to the vector "
+            f'table column is UUID. Add `id_type: "uuid"` to the vector '
             f"store config so id values are cast to uuid, or migrate the "
             f"table (DROP + re-ingest) to use a text id column. "
             f"Offending id: {vec_id!r}. ({location})"
@@ -493,9 +492,7 @@ class PgVectorStore(VectorStore):
 
         # Check if index already exists
         if if_not_exists and await self._check_index_exists():
-            logger.info(
-                "Index already exists on %s.%s", self.schema, self.table_name
-            )
+            logger.info("Index already exists on %s.%s", self.schema, self.table_name)
             return False
 
         col_embedding = self._col("embedding")
@@ -521,9 +518,7 @@ class PgVectorStore(VectorStore):
                     WITH (lists = {lists})
                 """)
 
-        logger.info(
-            f"Created {idx_type} index on {self.schema}.{self.table_name}.{col_embedding}"
-        )
+        logger.info(f"Created {idx_type} index on {self.schema}.{self.table_name}.{col_embedding}")
         return True
 
     async def _maybe_create_index(self) -> None:
@@ -559,9 +554,7 @@ class PgVectorStore(VectorStore):
         if self._initialized:
             return
 
-        logger.info(
-            "Initializing pgvector store: %s.%s", self.schema, self.table_name
-        )
+        logger.info("Initializing pgvector store: %s.%s", self.schema, self.table_name)
 
         # Create a connection pool only when this store owns its pool
         # lifecycle and does not currently hold one. ``_owns_pool`` is set
@@ -657,11 +650,7 @@ class PgVectorStore(VectorStore):
                 # test_pgvector_atttypmod_decodes_to_vector_dimension. A
                 # dimensionless ``vector`` column has atttypmod -1 — skip
                 # (nothing authoritative to compare against).
-                if (
-                    actual_dim is not None
-                    and actual_dim > 0
-                    and actual_dim != self.dimensions
-                ):
+                if actual_dim is not None and actual_dim > 0 and actual_dim != self.dimensions:
                     raise ConfigurationError(
                         f"Table {self.schema}.{self.table_name} has "
                         f"embedding vector({actual_dim}); store configured "
@@ -693,14 +682,14 @@ class PgVectorStore(VectorStore):
         await conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self._q_qualified} (
                 {id_def},
-                {self._col('domain_id')} VARCHAR(100),
-                {self._col('document_id')} VARCHAR(255),
-                {self._col('chunk_index')} INTEGER,
-                {self._col('content')} TEXT,
-                {self._col('embedding')} vector({self.dimensions}),
-                {self._col('metadata')} JSONB DEFAULT '{{}}',
-                {self._col('created_at')} TIMESTAMP DEFAULT NOW(),
-                {self._col('updated_at')} TIMESTAMP DEFAULT NOW()
+                {self._col("domain_id")} VARCHAR(100),
+                {self._col("document_id")} VARCHAR(255),
+                {self._col("chunk_index")} INTEGER,
+                {self._col("content")} TEXT,
+                {self._col("embedding")} vector({self.dimensions}),
+                {self._col("metadata")} JSONB DEFAULT '{{}}',
+                {self._col("created_at")} TIMESTAMP DEFAULT NOW(),
+                {self._col("updated_at")} TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -717,17 +706,13 @@ class PgVectorStore(VectorStore):
                 USING hnsw ({col_embedding} {operator_class})
                 WITH (m = {m}, ef_construction = {ef_construction})
             """)
-            logger.info(
-                "Created HNSW index on %s.%s", self.schema, self.table_name
-            )
+            logger.info("Created HNSW index on %s.%s", self.schema, self.table_name)
 
         # Note: IVFFlat index is not created here because it requires existing data.
         # It will be auto-created during search() if auto_create_index=True and
         # row count exceeds min_rows_for_index. Or use create_index() explicitly.
 
-        logger.info(
-            f"Created table {self.schema}.{self.table_name} with columns: {self.columns}"
-        )
+        logger.info(f"Created table {self.schema}.{self.table_name} with columns: {self.columns}")
 
     async def _migrate_schema(self, conn: asyncpg.Connection) -> None:
         """Apply additive schema migrations to an existing table.
@@ -758,14 +743,12 @@ class PgVectorStore(VectorStore):
           ``_create_table`` already have the default inline, so this
           step is a no-op for them.
         """
-        col_updated_at = self._col('updated_at')
+        col_updated_at = self._col("updated_at")
         await conn.execute(
-            f"ALTER TABLE {self._q_qualified} "
-            f"ADD COLUMN IF NOT EXISTS {col_updated_at} TIMESTAMP"
+            f"ALTER TABLE {self._q_qualified} ADD COLUMN IF NOT EXISTS {col_updated_at} TIMESTAMP"
         )
         await conn.execute(
-            f"ALTER TABLE {self._q_qualified} "
-            f"ALTER COLUMN {col_updated_at} SET DEFAULT NOW()"
+            f"ALTER TABLE {self._q_qualified} ALTER COLUMN {col_updated_at} SET DEFAULT NOW()"
         )
 
     async def close(self) -> None:
@@ -823,11 +806,8 @@ class PgVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-
         # Prepare vectors
-        vectors = self._prepare_vector(
-            vectors, normalize=(self.metric == DistanceMetric.COSINE)
-        )
+        vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))
 
         # Generate IDs if not provided
         if ids is None:
@@ -859,19 +839,19 @@ class PgVectorStore(VectorStore):
                     "execute",
                     f"""
                     INSERT INTO {self._q_qualified}
-                        ({self._col('id')}, {self._col('domain_id')},
-                         {self._col('document_id')}, {self._col('chunk_index')},
-                         {self._col('content')}, {self._col('embedding')},
-                         {self._col('metadata')})
+                        ({self._col("id")}, {self._col("domain_id")},
+                         {self._col("document_id")}, {self._col("chunk_index")},
+                         {self._col("content")}, {self._col("embedding")},
+                         {self._col("metadata")})
                     VALUES ($1{id_cast}, $2, $3, $4, $5, $6::vector, $7::jsonb)
-                    ON CONFLICT ({self._col('id')}) DO UPDATE SET
-                        {self._col('embedding')} = EXCLUDED.{self._col('embedding')},
-                        {self._col('metadata')} = EXCLUDED.{self._col('metadata')},
-                        {self._col('content')} = EXCLUDED.{self._col('content')},
-                        {self._col('domain_id')} = EXCLUDED.{self._col('domain_id')},
-                        {self._col('document_id')} = EXCLUDED.{self._col('document_id')},
-                        {self._col('chunk_index')} = EXCLUDED.{self._col('chunk_index')},
-                        {self._col('updated_at')} = NOW()
+                    ON CONFLICT ({self._col("id")}) DO UPDATE SET
+                        {self._col("embedding")} = EXCLUDED.{self._col("embedding")},
+                        {self._col("metadata")} = EXCLUDED.{self._col("metadata")},
+                        {self._col("content")} = EXCLUDED.{self._col("content")},
+                        {self._col("domain_id")} = EXCLUDED.{self._col("domain_id")},
+                        {self._col("document_id")} = EXCLUDED.{self._col("document_id")},
+                        {self._col("chunk_index")} = EXCLUDED.{self._col("chunk_index")},
+                        {self._col("updated_at")} = NOW()
                     """,
                     vec_id,
                     domain_id,
@@ -1026,7 +1006,7 @@ class PgVectorStore(VectorStore):
             raise ValueError(
                 f"PgVectorStore id_type={self.id_type!r} but received "
                 f"non-UUID id(s) in bulk operation: {sample}{more}. "
-                f"Either set `id_type: \"text\"` in the vector store "
+                f'Either set `id_type: "text"` in the vector store '
                 f"config, or supply UUID-formatted string ids. "
                 f"(table={self.schema}.{self.table_name})"
             )
@@ -1059,9 +1039,7 @@ class PgVectorStore(VectorStore):
         await self._maybe_create_index()
 
         # Prepare query vector
-        query = self._prepare_vector(
-            query_vector, normalize=(self.metric == DistanceMetric.COSINE)
-        )
+        query = self._prepare_vector(query_vector, normalize=(self.metric == DistanceMetric.COSINE))
         query_str = f"[{','.join(str(x) for x in query[0].tolist())}]"
 
         # Get column names
@@ -1112,10 +1090,8 @@ class PgVectorStore(VectorStore):
         # Add metadata filters — JSONB-native via @> containment.
         # See _build_jsonb_filter_sql for four-quadrant semantics.
         if filter:
-            filter_clauses, filter_params, param_idx = (
-                self._build_jsonb_filter_sql(
-                    filter, param_idx, col_metadata
-                )
+            filter_clauses, filter_params, param_idx = self._build_jsonb_filter_sql(
+                filter, param_idx, col_metadata
             )
             where_clauses.extend(filter_clauses)
             params.extend(filter_params)
@@ -1238,10 +1214,8 @@ class PgVectorStore(VectorStore):
             param_idx += 1
 
         if filter:
-            filter_clauses, filter_params, param_idx = (
-                self._build_jsonb_filter_sql(
-                    filter, param_idx, col_metadata
-                )
+            filter_clauses, filter_params, param_idx = self._build_jsonb_filter_sql(
+                filter, param_idx, col_metadata
             )
             where_clauses.extend(filter_clauses)
             params.extend(filter_params)
@@ -1285,10 +1259,8 @@ class PgVectorStore(VectorStore):
             param_idx += 1
 
         if filter:
-            filter_clauses, filter_params, param_idx = (
-                self._build_jsonb_filter_sql(
-                    filter, param_idx, col_metadata
-                )
+            filter_clauses, filter_params, param_idx = self._build_jsonb_filter_sql(
+                filter, param_idx, col_metadata
             )
             where_clauses.extend(filter_clauses)
             params.extend(filter_params)
@@ -1353,10 +1325,8 @@ class PgVectorStore(VectorStore):
             param_idx += 1
 
         if filter:
-            filter_clauses, filter_params, param_idx = (
-                self._build_jsonb_filter_sql(
-                    filter, param_idx, col_metadata
-                )
+            filter_clauses, filter_params, param_idx = self._build_jsonb_filter_sql(
+                filter, param_idx, col_metadata
             )
             where_clauses.extend(filter_clauses)
             params.extend(filter_params)

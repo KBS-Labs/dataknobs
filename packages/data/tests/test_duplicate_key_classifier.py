@@ -30,13 +30,7 @@ _SQLITE_DDL = (
     "  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata))"
     ")"
 )
-_DUCKDB_DDL = (
-    "CREATE TABLE t ("
-    "  id VARCHAR PRIMARY KEY,"
-    "  data JSON NOT NULL,"
-    "  metadata JSON"
-    ")"
-)
+_DUCKDB_DDL = "CREATE TABLE t (  id VARCHAR PRIMARY KEY,  data JSON NOT NULL,  metadata JSON)"
 
 
 def _sqlite_conn() -> sqlite3.Connection:

@@ -75,7 +75,7 @@ class TestTopicToChannel:
     def test_quotes_stripped(self):
         """Test quotes are removed from channel names."""
         bus = self._make_bus()
-        channel = bus._topic_to_channel("it's a \"test\"")
+        channel = bus._topic_to_channel('it\'s a "test"')
         assert "'" not in channel
         assert '"' not in channel
 
@@ -208,19 +208,12 @@ class TestConfigShapeSupport:
                 "password": "p",
             }
         )
-        assert (
-            bus.config.connection_string
-            == "postgresql://u:p@h:5433/db"
-        )
+        assert bus.config.connection_string == "postgresql://u:p@h:5433/db"
 
     def test_accepts_database_url_env_fallback(self, monkeypatch):
-        monkeypatch.setenv(
-            "DATABASE_URL", "postgresql://u:p@env-h/env-db"
-        )
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@env-h/env-db")
         bus = PostgresEventBus(config={})
-        assert (
-            bus.config.connection_string == "postgresql://u:p@env-h/env-db"
-        )
+        assert bus.config.connection_string == "postgresql://u:p@env-h/env-db"
 
     def test_accepts_postgres_env_vars(self, monkeypatch):
         monkeypatch.setenv("POSTGRES_HOST", "env-h")
@@ -298,9 +291,7 @@ class TestPublishSqlConstruction:
         query, args = executed_calls[0]
 
         # Must use pg_notify function, not NOTIFY statement
-        assert "pg_notify" in query, (
-            f"Expected pg_notify() function call, got: {query}"
-        )
+        assert "pg_notify" in query, f"Expected pg_notify() function call, got: {query}"
         assert "$1" in query and "$2" in query, (
             f"Expected parameterized query with $1, $2, got: {query}"
         )
@@ -404,12 +395,8 @@ class TestListenerRegistration:
             await bus.connect()
 
             # No wildcard listeners should be registered during connect
-            wildcard_listeners = [
-                (ch, cb) for ch, cb in registered_listeners if ch == "*"
-            ]
-            assert wildcard_listeners == [], (
-                "connect() should not register a wildcard '*' listener"
-            )
+            wildcard_listeners = [(ch, cb) for ch, cb in registered_listeners if ch == "*"]
+            assert wildcard_listeners == [], "connect() should not register a wildcard '*' listener"
         finally:
             if original is not None:
                 sys.modules["asyncpg"] = original

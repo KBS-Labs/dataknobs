@@ -192,8 +192,7 @@ def validate_vector_dimensions(
     if actual_dims != expected_dims:
         field_str = f" for field '{field_name}'" if field_name else ""
         raise ValueError(
-            f"Vector dimension mismatch{field_str}: "
-            f"expected {expected_dims}, got {actual_dims}"
+            f"Vector dimension mismatch{field_str}: expected {expected_dims}, got {actual_dims}"
         )
 
     return vector
@@ -218,14 +217,14 @@ def chunk_vectors(
         # List of individual vectors
         chunks = []
         for i in range(0, len(vectors), chunk_size):
-            chunk = vectors[i:i + chunk_size]
+            chunk = vectors[i : i + chunk_size]
             chunks.append(np.array(chunk))
         return chunks
     else:
         # Numpy array
         chunks = []
         for i in range(0, len(vectors), chunk_size):
-            chunks.append(vectors[i:i + chunk_size])
+            chunks.append(vectors[i : i + chunk_size])
         return chunks
 
 

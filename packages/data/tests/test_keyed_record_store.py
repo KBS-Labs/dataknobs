@@ -300,12 +300,8 @@ class TestAsyncKeyedRecordStoreClear:
     @pytest.mark.asyncio
     async def test_clear_removes_records_with_metadata(self, async_store):
         """Records carrying metadata round-trip through ``clear`` correctly."""
-        await async_store.put(
-            "a", Bot("a", {}, tenant_id="t1", audit={"by": "alice"})
-        )
-        await async_store.put(
-            "b", Bot("b", {}, tenant_id="t2", audit={"by": "bob"})
-        )
+        await async_store.put("a", Bot("a", {}, tenant_id="t1", audit={"by": "alice"}))
+        await async_store.put("b", Bot("b", {}, tenant_id="t2", audit={"by": "bob"}))
 
         await async_store.clear()
 

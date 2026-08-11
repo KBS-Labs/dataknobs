@@ -51,7 +51,7 @@ class TestLLMProviderFactory:
         config_dict = {
             "provider": "echo",
             "model": "echo-model",
-            "options": {"echo_prefix": "Test: "}
+            "options": {"echo_prefix": "Test: "},
         }
 
         provider = factory.create(config_dict)
@@ -62,12 +62,7 @@ class TestLLMProviderFactory:
     def test_factory_create_from_llm_config(self):
         """Test factory creates provider from LLMConfig."""
         factory = LLMProviderFactory(is_async=True)
-        config = LLMConfig(
-            provider="echo",
-            model="echo-model",
-            temperature=0.5,
-            max_tokens=100
-        )
+        config = LLMConfig(provider="echo", model="echo-model", temperature=0.5, max_tokens=100)
 
         provider = factory.create(config)
 
@@ -124,14 +119,14 @@ class TestLLMProviderFactory:
         # singleton registry isn't polluted across test runs (the
         # parity audit in test_provider_factory_parity.py asserts the
         # registry contains only built-ins).
-        LLMProviderFactory.register_provider('custom', CustomTestProvider)
+        LLMProviderFactory.register_provider("custom", CustomTestProvider)
         try:
             factory = LLMProviderFactory(is_async=True)
             config = LLMConfig(provider="custom", model="test")
             provider = factory.create(config)
             assert isinstance(provider, CustomTestProvider)
         finally:
-            _provider_registry.unregister('custom')
+            _provider_registry.unregister("custom")
 
     def test_factory_case_insensitive_provider_name(self):
         """Test factory handles case-insensitive provider names."""
@@ -152,10 +147,7 @@ class TestLLMProviderFactory:
             temperature=0.8,
             max_tokens=500,
             top_p=0.9,
-            options={
-                "echo_prefix": ">>> ",
-                "embedding_dim": 384
-            }
+            options={"echo_prefix": ">>> ", "embedding_dim": 384},
         )
 
         provider = factory.create(config)
@@ -188,10 +180,7 @@ class TestCreateLLMProvider:
 
     def test_create_llm_provider_from_dict(self):
         """Test create_llm_provider from dictionary."""
-        config_dict = {
-            "provider": "echo",
-            "model": "echo-model"
-        }
+        config_dict = {"provider": "echo", "model": "echo-model"}
         provider = create_llm_provider(config_dict)
 
         assert isinstance(provider, EchoProvider)
@@ -252,9 +241,7 @@ class TestSyncProviderAdapter:
         """Test adapter complete with message list."""
         sync_adapter.initialize()
 
-        messages = [
-            LLMMessage(role="user", content="Test message")
-        ]
+        messages = [LLMMessage(role="user", content="Test message")]
         response = sync_adapter.complete(messages)
 
         assert response.content == "Echo: Test message"
@@ -295,12 +282,7 @@ class TestSyncProviderAdapter:
         functions = [
             {
                 "name": "test_func",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "param": {"type": "string"}
-                    }
-                }
+                "parameters": {"type": "object", "properties": {"param": {"type": "string"}}},
             }
         ]
 
@@ -362,11 +344,7 @@ class TestProviderIntegration:
         factory = LLMProviderFactory(is_async=False)
 
         # Create provider from config
-        config = LLMConfig(
-            provider="echo",
-            model="echo-model",
-            options={"echo_prefix": "Test> "}
-        )
+        config = LLMConfig(provider="echo", model="echo-model", options={"echo_prefix": "Test> "})
         provider = factory.create(config)
 
         # Verify it's wrapped
@@ -384,14 +362,14 @@ class TestProviderIntegration:
     def test_create_llm_provider_end_to_end(self):
         """Test create_llm_provider end-to-end."""
         # Create from dict in sync mode
-        provider = create_llm_provider({
-            "provider": "echo",
-            "model": "test",
-            "options": {
-                "echo_prefix": "[ECHO] ",
-                "embedding_dim": 256
-            }
-        }, is_async=False)
+        provider = create_llm_provider(
+            {
+                "provider": "echo",
+                "model": "test",
+                "options": {"echo_prefix": "[ECHO] ", "embedding_dim": 256},
+            },
+            is_async=False,
+        )
 
         # Use the provider
         provider.initialize()
@@ -415,17 +393,13 @@ class TestProviderIntegration:
         factory = LLMProviderFactory(is_async=True)
 
         # Create multiple echo providers with different configs
-        provider1 = factory.create({
-            "provider": "echo",
-            "model": "echo-1",
-            "options": {"echo_prefix": "A> "}
-        })
+        provider1 = factory.create(
+            {"provider": "echo", "model": "echo-1", "options": {"echo_prefix": "A> "}}
+        )
 
-        provider2 = factory.create({
-            "provider": "echo",
-            "model": "echo-2",
-            "options": {"echo_prefix": "B> "}
-        })
+        provider2 = factory.create(
+            {"provider": "echo", "model": "echo-2", "options": {"echo_prefix": "B> "}}
+        )
 
         # They should be independent
         assert provider1.echo_prefix == "A> "

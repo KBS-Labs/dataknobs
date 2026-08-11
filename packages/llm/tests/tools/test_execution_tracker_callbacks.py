@@ -32,9 +32,7 @@ def _record(tool: str = "search", *, success: bool = True, error=None):
 def test_record_fires_execution_topic() -> None:
     tracker = ExecutionTracker(max_history=10)
     fired: list[dict] = []
-    tracker.execution_callbacks.register(
-        EXECUTION_RECORD_TOPIC, fired.append
-    )
+    tracker.execution_callbacks.register(EXECUTION_RECORD_TOPIC, fired.append)
 
     for _ in range(5):
         tracker.record(_record())
@@ -52,9 +50,7 @@ def test_record_fires_execution_topic() -> None:
 def test_record_payload_carries_error_message() -> None:
     tracker = ExecutionTracker()
     fired: list[dict] = []
-    tracker.execution_callbacks.register(
-        EXECUTION_RECORD_TOPIC, fired.append
-    )
+    tracker.execution_callbacks.register(EXECUTION_RECORD_TOPIC, fired.append)
     tracker.record(_record(success=False, error="boom"))
     assert fired[0]["success"] is False
     assert fired[0]["error"] == "boom"
@@ -104,9 +100,7 @@ async def test_record_async_fires_execution_topic() -> None:
     """``record_async`` records and fires, mirroring sync ``record``."""
     tracker = ExecutionTracker(max_history=10)
     fired: list[dict] = []
-    tracker.execution_callbacks.register(
-        EXECUTION_RECORD_TOPIC, fired.append
-    )
+    tracker.execution_callbacks.register(EXECUTION_RECORD_TOPIC, fired.append)
 
     await tracker.record_async(_record())
 

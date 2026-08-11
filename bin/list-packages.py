@@ -93,21 +93,14 @@ def main() -> None:
         "--format",
         choices=["yaml", "choices", "pip", "uv-install", "table"],
         default="yaml",
-        help="Output format"
+        help="Output format",
+    )
+    parser.add_argument("--category", help="Filter by category (core, experimental, legacy)")
+    parser.add_argument(
+        "--exclude-deprecated", action="store_true", help="Exclude deprecated packages"
     )
     parser.add_argument(
-        "--category",
-        help="Filter by category (core, experimental, legacy)"
-    )
-    parser.add_argument(
-        "--exclude-deprecated",
-        action="store_true",
-        help="Exclude deprecated packages"
-    )
-    parser.add_argument(
-        "--requires-docs",
-        action="store_true",
-        help="Only packages that require docs build"
+        "--requires-docs", action="store_true", help="Only packages that require docs build"
     )
 
     args = parser.parse_args()
@@ -117,7 +110,7 @@ def main() -> None:
         registry["packages"],
         category=args.category,
         exclude_deprecated=args.exclude_deprecated,
-        requires_docs=args.requires_docs if args.requires_docs else None
+        requires_docs=args.requires_docs if args.requires_docs else None,
     )
 
     if args.format == "yaml":

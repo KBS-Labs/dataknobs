@@ -106,10 +106,10 @@ class TestIterLatestRecords:
         # Old snapshots from a prior version of one entity should not
         # be confused for a different entity's pointer.
         records = [
-            _snapshot("a1", "1.0"),   # old snapshot of a1
-            _pointer("a2", "1.0"),    # pointer of a2
-            _pointer("a1", "2.0"),    # current pointer of a1
-            _snapshot("a1", "2.0"),   # current snapshot of a1
+            _snapshot("a1", "1.0"),  # old snapshot of a1
+            _pointer("a2", "1.0"),  # pointer of a2
+            _pointer("a1", "2.0"),  # current pointer of a1
+            _snapshot("a1", "2.0"),  # current snapshot of a1
         ]
         result = list(iter_latest_records(records))
         ids = [r.data["id"] for r in result]

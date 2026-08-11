@@ -34,29 +34,19 @@ class ErrorTrackingMiddleware(Middleware):
         self.after_message_calls: int = 0
         self.post_stream_calls: int = 0
 
-    async def before_message(
-        self, message: str, context: BotContext
-    ) -> None:
+    async def before_message(self, message: str, context: BotContext) -> None:
         self.before_message_calls += 1
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
+    async def after_message(self, response: str, context: BotContext, **kwargs: Any) -> None:
         self.after_message_calls += 1
 
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
+    async def post_stream(self, message: str, response: str, context: BotContext) -> None:
         self.post_stream_calls += 1
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         self.errors.append((error, message, context))
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
+    async def on_hook_error(self, hook_name: str, error: Exception, context: BotContext) -> None:
         self.hook_errors.append((hook_name, error, context))
 
 
@@ -71,35 +61,24 @@ class HookErrorMiddleware(Middleware):
     def __init__(self, fail_on: str) -> None:
         self._fail_on = fail_on
 
-    async def before_message(
-        self, message: str, context: BotContext
-    ) -> None:
+    async def before_message(self, message: str, context: BotContext) -> None:
         if self._fail_on == "before_message":
             raise RuntimeError("before_message failed")
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
+    async def after_message(self, response: str, context: BotContext, **kwargs: Any) -> None:
         if self._fail_on == "after_message":
             raise RuntimeError("after_message failed")
 
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
+    async def post_stream(self, message: str, response: str, context: BotContext) -> None:
         if self._fail_on == "post_stream":
             raise RuntimeError("post_stream failed")
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         if self._fail_on == "on_error":
             raise RuntimeError("on_error failed")
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
+    async def on_hook_error(self, hook_name: str, error: Exception, context: BotContext) -> None:
         pass
-
 
 
 def _make_provider() -> EchoProvider:
@@ -114,13 +93,15 @@ def _make_provider() -> EchoProvider:
 
 def _make_prompt_builder() -> AsyncPromptBuilder:
     """Create a real AsyncPromptBuilder with a minimal prompt library."""
-    library = ConfigPromptLibrary({
-        "system": {
-            "assistant": {
-                "template": "You are a helpful assistant.",
+    library = ConfigPromptLibrary(
+        {
+            "system": {
+                "assistant": {
+                    "template": "You are a helpful assistant.",
+                },
             },
-        },
-    })
+        }
+    )
     return AsyncPromptBuilder(library=library)
 
 
@@ -339,9 +320,7 @@ class TestPreparationPhaseOnError:
         failing_mw = HookErrorMiddleware("before_message")
         provider = _make_provider()
         strategy = ErrorRaisingStrategy()
-        bot = _make_bot(
-            provider, [failing_mw, tracker], reasoning_strategy=strategy
-        )
+        bot = _make_bot(provider, [failing_mw, tracker], reasoning_strategy=strategy)
 
         with pytest.raises(RuntimeError, match="before_message failed"):
             await bot.greet(bot_context)

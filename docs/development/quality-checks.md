@@ -11,8 +11,8 @@ DataKnobs uses a **developer-driven quality assurance process** where developers
 Before creating a pull request:
 
 ```bash
-# Run all quality checks (required for PRs to main)
-./bin/run-quality-checks.sh
+# Run all quality checks and produce the artifacts CI verifies
+./bin/dk pr
 ```
 
 This single command will:
@@ -24,6 +24,28 @@ This single command will:
 6. ✅ Create artifacts in `.quality-artifacts/`
 
 **Important:** The artifacts must be committed with your PR!
+
+### Checking versus producing evidence
+
+Two roles, and they are deliberately separate:
+
+| Command | Runs the checks | Writes `.quality-artifacts/` |
+|---|---|---|
+| `./bin/run-quality-checks.sh` | yes, in every mode | **no** |
+| `./bin/dk pr` (and `pr-all`, `pr-full`) | yes | yes |
+
+`run-quality-checks.sh` is a checker: it writes its working output to a
+temporary directory, removed on exit and kept on failure so the logs stay
+readable. Use it to iterate. Only `--emit-artifacts` writes the artifacts
+directory, and `bin/dk pr` is the only thing that passes it.
+
+The separation matters because the artifacts are the evidence CI checks the tree
+against. A checker that also rewrote them meant the documented remedy for a
+failing gate — re-run the checks — was also the command that made the gate stop
+disagreeing, whether or not anything had been fixed.
+
+`bin/run-quality-checks.sh --print-output-dir` reports where a given invocation
+would write, running nothing.
 
 ## Detailed Process
 
@@ -50,11 +72,11 @@ Before creating a PR to `main` or `develop`:
 # Ensure Docker is running
 docker info
 
-# Run the complete quality check suite
-./bin/run-quality-checks.sh
+# Run the complete quality check suite and produce its artifacts
+./bin/dk pr
 ```
 
-The script will:
+The gate will:
 - Start PostgreSQL, Elasticsearch, and LocalStack containers
 - Wait for services to be healthy
 - Validate package references across the codebase
@@ -194,6 +216,36 @@ per-package and per-workspace-scope content hash, and CI recomputes those from
 the checkout: if they disagree, your artifacts do not describe the code being
 merged and the check fails, naming the packages that need re-validation.
 
+Those hashes are taken **before the first check runs**, and re-taken at the end.
+The two are different questions and only one of them is the one you want asked:
+hashing at the end records whatever is on disk when the run finishes, so a file
+checked at minute 1 and edited at minute 2 is attested as its *new* content —
+CI then compares disk against the record, finds them equal, and accepts an
+artifact describing code no check ever read. Hashing at the start makes that
+edit surface as the ordinary "content has changed since quality checks were
+run", which is the message you want and a failure rather than a pass.
+
+The re-check at the end compares the two. If they disagree the tree moved while
+the run was reading it, no digest describes what was actually checked, and the
+run stops without writing an artifact:
+
+```
+✗ The tree changed while the checks were running:
+  - packages/data
+  - workspace/workspace_tests
+✗ No digest describes what was checked, so no artifact was written.
+✗ Re-run once the tree is settled.
+```
+
+Editing your working tree during a `bin/dk pr` is the usual cause. Let it finish,
+or re-run after you stop.
+
+If the *initial* hash computation fails outright, the gate stops there rather
+than at the end — an empty digest set compares clean against anything, so
+signing an artifact over one would attest a comparison that never happened. The
+diagnostics tier attests nothing, so `bin/dk check` degrades instead: it warns
+that a half went un-re-checked and finishes the run.
+
 ### Where the time went
 
 Every check records a `duration_seconds` beside its status, and the run records
@@ -226,6 +278,32 @@ guards are listed at the end of
 grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
 ```
 
+### How the summary is produced
+
+Each check appends one record to `check-records.jsonl` in the run's output
+directory, at the point that ran it — or at the arm that deliberately skipped
+it. `bin/quality-summary.py build` merges those records with the run's metadata
+and writes the document; `bin/quality-summary.py render` prints the terminal
+banner's check rows from the finished document, so the two cannot disagree.
+
+The split is the fix for a defect that shipped twice. The summary used to be a
+shell heredoc over status variables initialised near the top of the script, and
+**a status variable has a default, and the default is a verdict**: `0` renders
+as `"pass"`, so a check no code path assigned reported as one that ran and
+passed. There is no default to fall through to now — a check that writes no
+record simply is not in the document, and an absent entry cannot be read as a
+passing one.
+
+The banner had the same defect one layer further out, and kept it a phase
+longer: on any pull request that changed no documentation it printed three
+`✓ PASSED` rows beside a summary recording `skipped: true` for all three. It
+renders from the document now, and takes only presentation arguments — which
+rows to group, not what any row says.
+
+`check-records.jsonl` stays on disk beside the summary. It is git-ignored in
+both tiers, and it is worth reading when a run aborted before its summary was
+written: it holds every verdict the run had reached.
+
 Field order within a check no longer matters. `validate-quality-artifacts.sh`
 used to read this file with line-offset greps — `grep -A2` for a status,
 `grep -A3` for a skipped flag — which made position load-bearing in a format
@@ -240,9 +318,24 @@ To see what the validator makes of a summary without running the rest of it:
 bin/validate-quality-artifacts.sh --read-summary .quality-artifacts/quality-summary.json
 ```
 
-That prints one tab-delimited line per check — `CHECK<TAB>name<TAB>status<TAB>skipped<TAB>label`
-— and is the same reader the validation path uses, so what it shows is what CI
-sees.
+That prints one record per line with fields separated by ASCII Unit Separator
+(`\037`) — `CHECK<US>name<US>status<US>skipped<US>exit_code<US>tool<US>label`,
+plus an `OVERALL` record and `META` records. The separator is not a tab
+because a tab is IFS *whitespace*, and shell `read` collapses runs of it and
+discards empty fields, so a check with no `tool` recorded shifted every later
+field one place left and blanked the row.
+
+`--read-summary` returns before the rest of the script, which is what makes it
+cheap — and also means it exercises none of the validation below it. To run
+that part over a summary of your own:
+
+```bash
+bin/validate-quality-artifacts.sh --from /path/to/some-run
+```
+
+Use it when you want to know what CI would say about an artifact set. The
+projection alone cannot tell you: for a while the reader was correct and the two
+lines that consumed it were not.
 
 **Coverage reports are not committed.** The gate's only use for `coverage.xml`
 was its line rate, which it reports as a warning and never fails on, so that
@@ -317,7 +410,7 @@ docker-compose up -d
 ### Tests Pass Locally but CI Rejects Artifacts
 
 Common causes:
-- **Artifacts too old** - Re-run `./bin/run-quality-checks.sh`
+- **Artifacts too old** - Re-run `./bin/dk pr`
 - **Merged main without re-running** - Expected; re-run and re-commit
 - **Forgot to commit artifacts** - Run `git add .quality-artifacts/`
 - **Modified artifacts** - Don't edit files in `.quality-artifacts/`
@@ -327,7 +420,7 @@ that changed. There are three, and only the first dirties any package:
 
 | Scope | Covers | Effect when it changes |
 |---|---|---|
-| `toolchain` | root `pyproject.toml`, `uv.lock`, `conftest.py`, `mypy.ini`, `pytest.ini`, `.python-version`, and the three scripts that *are* the lint and test steps | every package needs re-validation |
+| `toolchain` | root `pyproject.toml`, `uv.lock`, `conftest.py`, `pytest.ini`, `.python-version`, and the three scripts that *are* the lint and test steps | every package needs re-validation |
 | `workspace_tests` | `bin/`, `tests/`, `.github/workflows/`, `.pylintrc`, `run_api.sh`, `setup-dk.sh`, and the data files a recorded check reads — `.gitignore`, `.gitattributes`, `bin/internal-label-allowlist.txt` | artifacts stale, no package dirtied |
 | `docs` | `docs/`, `packages/*/docs/`, `mkdocs.yml`, and the two `.dataknobs/` registries the version and mirror checks read | artifacts stale, no package dirtied |
 
@@ -367,6 +460,81 @@ rm -rf ~/dataknobs_elasticsearch_data
 rm -rf ~/dataknobs_localstack_data
 ```
 
+## The quality contract
+
+`.dataknobs/quality-contract.json` declares, for each of three tools, which
+files it covers and how far from clean each part of the tree is allowed to be.
+It is a **ceiling, not evidence**: no run produces it, CI never signs it, and
+moving a number is a deliberate visible diff rather than something a rerun does
+on your behalf.
+
+Each cell names a path, a tier, a ceiling and a reason:
+
+| Tool | Tiers | Ceiling counts |
+|---|---|---|
+| `ruff` | `checked` / `deferred` | findings |
+| `mypy` | `strict` / `transitional` / `unchecked` | findings |
+| `format` | `enforced` | files the formatter would rewrite |
+
+Two properties make it a ratchet rather than a list of excuses, and both are
+enforced rather than described:
+
+**Totality.** Every tracked first-party `*.py` lands in exactly one cell per
+tool. A file in no cell is one nobody decided about — the state `bin/` was in
+for as long as this repository has had a linter, outside every lint invocation
+with nothing saying so. A file in two cells is a decision that contradicts
+itself.
+
+**Ceilings are compared, not read.** The declaration this replaced recorded its
+counts in comment prose, which is enforced in one direction only: an entry
+matching nothing failed, while "241 findings" stayed green at 400. A number
+nobody compares is one that stops being true without anyone finding out.
+
+**A deferred tier is frozen, not unenforced.** Every ceiling currently equals
+what the tree measures, so a `deferred` cell is a backlog that cannot *grow* —
+adding a test with a new lint finding under `packages/*/tests` fails the
+`contract` check even though nothing lints that directory yet. That is the
+ratchet working: the backlog is being cleared, and a phase that clears one
+while another grows it never ends. Write
+new files clean, or clear one of the existing findings in the same cell.
+
+```bash
+# Measure the tree against every ceiling (the `contract` check the gate records)
+uv run python bin/quality-contract.py check
+
+# Just the declaration's shape — total, well-formed, no stale cells. Milliseconds.
+uv run python bin/quality-contract.py verify
+
+# One tool at a time
+uv run python bin/quality-contract.py check --tool mypy
+
+# Which cell does each file land in?
+uv run python bin/quality-contract.py partition --tool ruff
+```
+
+When you clear findings, lower the ceilings you cleared:
+
+```bash
+uv run python bin/quality-contract.py update-baseline
+```
+
+That command **only lowers**. A cell measuring above its ceiling is reported —
+as a warning naming the cell and both numbers — and then left alone, because
+raising one is how a backlog grows during the phase that is supposed to be
+clearing it, and doing it by rerunning a command is how that happens without
+anyone deciding to. Raising a ceiling is a hand edit, so the argument for it
+lands in a pull request where someone can read it.
+
+When a ceiling *is* breached, `check` names the files under it, most findings
+first, so a count you cannot act on does not send you to a second tool:
+
+```
+format/tests exceeds its ceiling: 21 findings against 20 allowed
+    tests/test_deep_merge_agreement.py (1)
+    tests/test_docs_mirror_check.py (1)
+    ... and 11 more
+```
+
 ## Configuration
 
 ### Linting and Code Style
@@ -381,9 +549,41 @@ To run linting checks:
 # Check specific package
 uv run bin/validate.sh data
 
-# Auto-fix formatting issues
-uv run ruff format packages/*/src
+# Auto-fix lint findings and formatting
+./bin/fix.sh
 ```
+
+Formatting is checked, not suggested: `bin/validate.sh` fails on a file the
+formatter would rewrite. `./bin/fix.sh` is what repairs it, and `bin/dk format`
+runs the formatter alone. All three read the root `pyproject.toml`, and all
+three resolve their file list from one declaration — `format_targets` in
+`bin/package-discovery.sh` — so a green `dk format` means a green format check.
+
+That list is **not** the one the linter uses, and the difference is deliberate.
+`bin/validate.sh` lints `packages/*/src` and the workspace directories, because
+every other per-package directory sits in the quality contract's `deferred`
+tier for ruff. The contract holds `format` to a ceiling of 0 on *all* of its
+cells, so the formatter additionally reaches each package's `tests`,
+`examples`, `scripts`, `benchmarks` and `docs`. Scoping to a package
+(`bin/validate.sh data`) narrows both lists to that package.
+
+Each script prints either resolved list without running anything —
+`--print-targets` for the linter's, `--print-format-targets` for the
+formatter's — which is also how `tests/test_toolchain_consistency.py` checks
+them against the contract. Four probes, and the reason there are four is that
+each list has a check side and a fix side, and both directions can fail: a
+check reading less than the contract enforces is a green verdict over
+unexamined files, and a fix reaching less than the check flags is a red gate
+with no local remedy.
+
+`./bin/fix.sh --print-targets` is the newest of the four and closes the last of
+those corners. It is also worth knowing what it does **not** cover: a bare
+`./bin/fix.sh` reaches each package's `tests` but none of `examples`,
+`scripts`, `benchmarks` or `docs`, whose ruff ceilings the contract does
+compare. Naming the directory reaches it — `./bin/fix.sh packages/bots/examples`
+— so the remedy exists; what it lacks is any way to find out about it from the
+failure. Widening the default would run the linter's `--fix` over files nobody
+has asked to be clean, so it waits on the decision to hold them clean at all.
 
 ### Type Checking and Python Compatibility
 
@@ -427,18 +627,43 @@ export PYTEST_MARKERS="not slow"
 
 ### Customizing Checks
 
-To add custom checks, modify `bin/run-quality-checks.sh`:
+A check has to make three hops, and `tests/test_quality_gate_accounting.py`
+enforces each. It must capture its own exit status; that status must reach
+`compute_overall_status`, which decides the local exit code; and it must be
+recorded, because CI validates the committed artifacts rather than re-running
+the gate, so a check missing from `quality-summary.json` is invisible to CI by
+construction. The workflow lint once made none of the three: it printed
+`✗ Workflow lint failed` and the gate went on to report `PASS`.
+
+In `bin/run-quality-checks.sh`:
 
 ```bash
-# Add your custom check
+SECURITY_SCAN_STATUS=0        # beside the other statuses
+
 print_status "Running custom security scan..."
+_check_start=$(date +%s)
 if run_security_scan; then
     print_success "Security scan passed"
 else
+    SECURITY_SCAN_STATUS=$?   # hop 1: capture it
     print_error "Security scan failed"
-    OVERALL_STATUS="FAIL"
 fi
+record_check security_scan "$SECURITY_SCAN_STATUS" \
+    --tool run-security-scan.sh --duration "$(elapsed_since "$_check_start")"
 ```
+
+Then add `SECURITY_SCAN_STATUS` to the test in `compute_overall_status` — hop 2.
+Assigning `OVERALL_STATUS` directly does nothing: that variable is computed from
+the statuses, and recomputed again before the exit code is chosen.
+
+Nothing else needs editing. `record_check` is hop 3, and both readers enumerate
+whatever the document holds — the terminal banner derives a label from the
+check's name, and `bin/diagnose-quality-failures.sh` offers `bin/<tool>` as the
+remedy when `--tool` names an executable there.
+
+A check that can be skipped passes `--skipped true|false` from the arm that
+knows, and `--duration null` when it did not run. One that cannot be skipped —
+nothing gates it — omits the field rather than always reporting `false`.
 
 ## Benefits of This Approach
 
@@ -463,14 +688,14 @@ A: For PRs to feature branches, you might skip integration tests. For PRs to `ma
 A: Add it to `docker-compose.override.yml`, update `bin/run-quality-checks.sh` to wait for it, and document it here.
 
 **Q: What if artifacts are accidentally modified?**
-A: The signature check reports it, and the content hashes in `quality-summary.json` are what actually fail the build. Re-run `./bin/run-quality-checks.sh` to regenerate valid artifacts.
+A: The signature check reports it, and the content hashes in `quality-summary.json` are what actually fail the build. Re-run `./bin/dk pr` to regenerate valid artifacts.
 
 **Q: Do I have to re-run checks after merging main?**
 A: Yes. Your artifacts attest to a tree that no longer exists, and CI compares their hashes against the merged checkout. You do *not* have to resolve an artifact merge conflict first — see [Merging main into a branch](#merging-main-into-a-branch).
 
 ## Summary
 
-1. **Before PR:** Run `./bin/run-quality-checks.sh`
+1. **Before PR:** Run `./bin/dk pr`
 2. **Commit:** Include `.quality-artifacts/` in your commit
 3. **CI Validates:** Artifacts are checked automatically
 4. **Merge:** Only if all checks pass

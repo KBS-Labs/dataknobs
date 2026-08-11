@@ -304,9 +304,7 @@ class PackResolutionError(ConfigurationError):
     be honoured).
     """
 
-    def __init__(
-        self, message: str, *, reason: PackResolutionReason, **context: Any
-    ) -> None:
+    def __init__(self, message: str, *, reason: PackResolutionReason, **context: Any) -> None:
         # Normalized for the same reason as ``PackWarning.code``: a plain
         # string stays acceptable, but an unrecognized one is a typo, not a
         # new vocabulary member, and this is the only public constructor
@@ -542,7 +540,11 @@ def _composition_plan(spec_cls: type[PackSpec]) -> _CompositionPlan:
         )
 
     meta = frozenset(spec_cls._META_FIELDS)
-    declared = dict(spec_cls._COMPOSITION)
+    # Read as ``object``: ``_COMPOSITION`` is annotated on the spec class by
+    # its author, and the isinstance/callable check below is what verifies the
+    # annotation was honoured. Reading it at its declared type would make mypy
+    # vouch for exactly the claim being tested, and call the check unreachable.
+    declared: dict[str, object] = dict(spec_cls._COMPOSITION)
     all_fields = {f.name for f in dataclasses.fields(spec_cls)}
 
     rules: dict[str, CompositionRule] = {}

@@ -32,9 +32,7 @@ def make_client_response_error(
     This is exactly the error ``ClientResponse.raise_for_status()`` raises for a
     non-2xx response, so translating it in a test exercises the real code path.
     """
-    request_info = RequestInfo(
-        URL(url), "POST", CIMultiDictProxy(CIMultiDict()), URL(url)
-    )
+    request_info = RequestInfo(URL(url), "POST", CIMultiDictProxy(CIMultiDict()), URL(url))
     return ClientResponseError(
         request_info,
         (),
@@ -114,8 +112,8 @@ class FakeSession:
 
     def post(self, url: str, json: Any = None) -> _PostCtx:
         self.calls.append(url)
-        return self._outcomes.pop(0) if self._outcomes else _PostCtx(
-            FakeResponse(200, json_data={})
+        return (
+            self._outcomes.pop(0) if self._outcomes else _PostCtx(FakeResponse(200, json_data={}))
         )
 
     @staticmethod

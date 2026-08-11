@@ -30,6 +30,7 @@ from dataknobs_llm.testing import text_response
 # Helpers
 # =====================================================================
 
+
 def _make_collection_wizard(
     done_keywords: list[str] | None = None,
     min_records: int = 0,
@@ -85,9 +86,7 @@ def _make_collection_wizard(
                 "name": "review",
                 "is_end": True,
                 "prompt": "Here are your ingredients",
-                "response_template": (
-                    "You added {{ bank('ingredients').count() }} items."
-                ),
+                "response_template": ("You added {{ bank('ingredients').count() }} items."),
             },
         ],
     }
@@ -100,8 +99,8 @@ def _make_collection_wizard(
 # Done signal detection
 # =====================================================================
 
-class TestDoneSignalDetection:
 
+class TestDoneSignalDetection:
     def test_exact_match(self) -> None:
         assert WizardExtractor.is_done_signal("done", ["done", "finished"])
 
@@ -118,17 +117,15 @@ class TestDoneSignalDetection:
         assert not WizardExtractor.is_done_signal("done", [])
 
     def test_thats_all_keyword(self) -> None:
-        assert WizardExtractor.is_done_signal(
-            "that's all", ["done", "that's all"]
-        )
+        assert WizardExtractor.is_done_signal("that's all", ["done", "that's all"])
 
 
 # =====================================================================
 # Collection mode integration
 # =====================================================================
 
-class TestCollectionModeIntegration:
 
+class TestCollectionModeIntegration:
     def test_collection_stage_config_recognised(self) -> None:
         reasoning = _make_collection_wizard()
         stage_names = reasoning._fsm.stage_names
@@ -189,10 +186,13 @@ class TestCollectionModeIntegration:
     def test_field_clearing_between_records(self) -> None:
         """Schema fields should be cleared between collection records."""
         reasoning = _make_collection_wizard()
-        state = WizardState(current_stage="collect", data={
-            "name": "flour",
-            "amount": "2 cups",
-        })
+        state = WizardState(
+            current_stage="collect",
+            data={
+                "name": "flour",
+                "amount": "2 cups",
+            },
+        )
         # Simulate what _handle_collection_mode does: clear schema fields
         schema_props = {"name", "amount"}
         for field_name in schema_props:
@@ -208,8 +208,7 @@ class TestCollectionModeIntegration:
         # Only 1 record → condition should be False
         reasoning._banks["ingredients"].add({"name": "flour"})
         result = reasoning._evaluate_condition(
-            "data.get('_collection_done') and "
-            "bank('ingredients').count() >= 2",
+            "data.get('_collection_done') and bank('ingredients').count() >= 2",
             {"_collection_done": True},
         )
         assert result is False
@@ -217,8 +216,7 @@ class TestCollectionModeIntegration:
         # 2 records → condition should be True
         reasoning._banks["ingredients"].add({"name": "sugar"})
         result = reasoning._evaluate_condition(
-            "data.get('_collection_done') and "
-            "bank('ingredients').count() >= 2",
+            "data.get('_collection_done') and bank('ingredients').count() >= 2",
             {"_collection_done": True},
         )
         assert result is True
@@ -265,8 +263,7 @@ class TestCollectionModeIntegration:
             "_collection_done": True,
         }
         result = reasoning._evaluate_condition(
-            "data.get('_collection_done') and "
-            "bank('ingredients').count() > 0",
+            "data.get('_collection_done') and bank('ingredients').count() > 0",
             data,
         )
         assert result is True
@@ -281,6 +278,7 @@ class TestCollectionModeIntegration:
 # omitted collection_mode/collection_config from the metadata.
 # =====================================================================
 
+
 class TestCollectionModeThroughLoadedMetadata:
     """Verify collection mode works when stage metadata comes from the loader."""
 
@@ -293,8 +291,7 @@ class TestCollectionModeThroughLoadedMetadata:
         stage = fsm.current_metadata
         assert stage["name"] == "collect"
         assert stage.get("collection_mode") == "collection", (
-            "collection_mode missing from loaded stage metadata — "
-            "_extract_metadata must include it"
+            "collection_mode missing from loaded stage metadata — _extract_metadata must include it"
         )
         assert stage.get("collection_config") is not None
         assert stage["collection_config"]["bank_name"] == "ingredients"
@@ -312,18 +309,19 @@ class TestCollectionModeThroughLoadedMetadata:
 
         # Create minimal manager and state for the async call
         config = LLMConfig(
-            provider="echo", model="echo-test",
+            provider="echo",
+            model="echo-test",
             options={"echo_prefix": ""},
         )
         provider = EchoProvider(config)
-        library = ConfigPromptLibrary(
-            {"system": {"test": {"template": "Test bot."}}}
-        )
+        library = ConfigPromptLibrary({"system": {"test": {"template": "Test bot."}}})
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         manager = await ConversationManager.create(
-            llm=provider, prompt_builder=builder,
-            storage=storage, system_prompt_name="test",
+            llm=provider,
+            prompt_builder=builder,
+            storage=storage,
+            system_prompt_name="test",
         )
         state = WizardState(current_stage="collect", data={})
         # Seed a user message so _generate_stage_response can find it
@@ -367,19 +365,17 @@ class TestCollectionModeThroughLoadedMetadata:
         reasoning = _make_collection_wizard()
         stage = reasoning._fsm.current_metadata
 
-        config = LLMConfig(
-            provider="echo", model="echo-test", options={"echo_prefix": ""}
-        )
+        config = LLMConfig(provider="echo", model="echo-test", options={"echo_prefix": ""})
         provider = EchoProvider(config)
         builder = AsyncPromptBuilder(
-            library=ConfigPromptLibrary(
-                {"system": {"test": {"template": "Test bot."}}}
-            )
+            library=ConfigPromptLibrary({"system": {"test": {"template": "Test bot."}}})
         )
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         manager = await ConversationManager.create(
-            llm=provider, prompt_builder=builder,
-            storage=storage, system_prompt_name="test",
+            llm=provider,
+            prompt_builder=builder,
+            storage=storage,
+            system_prompt_name="test",
         )
         state = WizardState(current_stage="collect", data={})
         await manager.add_message(role="user", content="2 cups of flour")
@@ -417,18 +413,19 @@ class TestCollectionModeThroughLoadedMetadata:
         stage = fsm.current_metadata
 
         config = LLMConfig(
-            provider="echo", model="echo-test",
+            provider="echo",
+            model="echo-test",
             options={"echo_prefix": ""},
         )
         provider = EchoProvider(config)
-        library = ConfigPromptLibrary(
-            {"system": {"test": {"template": "Test bot."}}}
-        )
+        library = ConfigPromptLibrary({"system": {"test": {"template": "Test bot."}}})
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         manager = await ConversationManager.create(
-            llm=provider, prompt_builder=builder,
-            storage=storage, system_prompt_name="test",
+            llm=provider,
+            prompt_builder=builder,
+            storage=storage,
+            system_prompt_name="test",
         )
         state = WizardState(current_stage="collect", data={})
 
@@ -456,6 +453,7 @@ class TestCollectionModeThroughLoadedMetadata:
 # =====================================================================
 # Bank config parsing tests
 # =====================================================================
+
 
 class TestBankConfigParsing:
     """Verify _init_banks handles both flat and nested duplicate config."""
@@ -525,21 +523,23 @@ class TestBankConfigParsing:
 # the "collect" stage we seed the manager metadata with fsm_state.
 # =====================================================================
 
+
 async def _make_manager_and_provider() -> tuple[ConversationManager, EchoProvider]:
     """Create a ConversationManager + EchoProvider pair for tests."""
     config = LLMConfig(
-        provider="echo", model="echo-test",
+        provider="echo",
+        model="echo-test",
         options={"echo_prefix": ""},
     )
     provider = EchoProvider(config)
-    library = ConfigPromptLibrary(
-        {"system": {"test": {"template": "You are a test bot."}}}
-    )
+    library = ConfigPromptLibrary({"system": {"test": {"template": "You are a test bot."}}})
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     manager = await ConversationManager.create(
-        llm=provider, prompt_builder=builder,
-        storage=storage, system_prompt_name="test",
+        llm=provider,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="test",
     )
     return manager, provider
 
@@ -555,19 +555,22 @@ def _seed_wizard_state(
     This helper sets that up so tests can simulate a conversation already
     at a particular stage.
     """
-    manager.set_metadata("wizard", {
-        "fsm_state": {
-            "current_stage": stage,
-            "history": [stage],
-            "data": data or {},
-            "completed": False,
-            "clarification_attempts": 0,
-            "transitions": [],
-            "stage_entry_time": 0,
-            "tasks": {},
-            "subflow_stack": [],
+    manager.set_metadata(
+        "wizard",
+        {
+            "fsm_state": {
+                "current_stage": stage,
+                "history": [stage],
+                "data": data or {},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": 0,
+                "tasks": {},
+                "subflow_stack": [],
+            },
         },
-    })
+    )
 
 
 class TestCollectionModeGenerateFlow:
@@ -626,9 +629,11 @@ class TestCollectionModeGenerateFlow:
 
         # No transition → wizard stays at "collect" and generates a
         # stage response via LLM (collect has no response_template).
-        provider.set_responses([
-            text_response("Please add at least one ingredient."),
-        ])
+        provider.set_responses(
+            [
+                text_response("Please add at least one ingredient."),
+            ]
+        )
 
         result = await reasoning.generate(manager=manager, llm=provider)
 
@@ -649,13 +654,17 @@ class TestCollectionModeGenerateFlow:
         await manager.add_message(role="user", content="2 cups flour")
 
         # Extraction provider returns structured JSON
-        ext_provider.set_responses([
-            text_response('{"name": "flour", "amount": "2 cups"}'),
-        ])
+        ext_provider.set_responses(
+            [
+                text_response('{"name": "flour", "amount": "2 cups"}'),
+            ]
+        )
         # Main provider generates the collection-loop stage response
-        provider.set_responses([
-            text_response("Got it! What's next?"),
-        ])
+        provider.set_responses(
+            [
+                text_response("Got it! What's next?"),
+            ]
+        )
 
         result = await reasoning.generate(manager=manager, llm=provider)
 
@@ -679,6 +688,7 @@ class TestCollectionModeGenerateFlow:
 # by ``except Exception: pass``, so the transition never fired.
 # =====================================================================
 
+
 def _seed_wizard_state_with_banks(
     manager: Any,
     reasoning: WizardReasoning,
@@ -695,20 +705,23 @@ def _seed_wizard_state_with_banks(
     for name, bank in reasoning._banks.items():
         banks_data[name] = bank.to_dict()
 
-    manager.set_metadata("wizard", {
-        "fsm_state": {
-            "current_stage": stage,
-            "history": [stage],
-            "data": data or {},
-            "completed": False,
-            "clarification_attempts": 0,
-            "transitions": [],
-            "stage_entry_time": 0,
-            "tasks": {},
-            "subflow_stack": [],
+    manager.set_metadata(
+        "wizard",
+        {
+            "fsm_state": {
+                "current_stage": stage,
+                "history": [stage],
+                "data": data or {},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": 0,
+                "tasks": {},
+                "subflow_stack": [],
+            },
+            "banks": banks_data,
         },
-        "banks": banks_data,
-    })
+    )
 
 
 class TestBankCountConditionInGenerate:
@@ -734,12 +747,15 @@ class TestBankCountConditionInGenerate:
 
         # Pre-populate the bank
         reasoning._banks["ingredients"].add(
-            {"name": "flour", "amount": "2 cups"}, source_stage="collect",
+            {"name": "flour", "amount": "2 cups"},
+            source_stage="collect",
         )
 
         # Seed state AND bank data into metadata
         _seed_wizard_state_with_banks(
-            manager, reasoning, stage="collect",
+            manager,
+            reasoning,
+            stage="collect",
         )
 
         await manager.add_message(role="user", content="done")
@@ -764,13 +780,17 @@ class TestBankCountConditionInGenerate:
 
         # Bank is empty — condition should be False
         _seed_wizard_state_with_banks(
-            manager, reasoning, stage="collect",
+            manager,
+            reasoning,
+            stage="collect",
         )
 
         await manager.add_message(role="user", content="done")
-        provider.set_responses([
-            text_response("Please add at least one ingredient."),
-        ])
+        provider.set_responses(
+            [
+                text_response("Please add at least one ingredient."),
+            ]
+        )
         await reasoning.generate(manager=manager, llm=provider)
 
         fsm_state = manager.metadata["wizard"]["fsm_state"]
@@ -800,7 +820,7 @@ def _collect_assistant_node_ids(manager: Any) -> list[str]:
         if isinstance(node.data, ConversationNode):
             if node.data.message.role == "assistant":
                 node_ids.append(calculate_node_id(node))
-        for child in (node.children or []):
+        for child in node.children or []:
             _walk(child)
 
     _walk(tree)
@@ -834,9 +854,11 @@ class TestCollectionModeBranching:
 
         # --- Iteration 1: add flour ---
         await manager.add_message(role="user", content="2 cups flour")
-        ext_provider.set_responses([
-            text_response('{"name": "flour", "amount": "2 cups"}'),
-        ])
+        ext_provider.set_responses(
+            [
+                text_response('{"name": "flour", "amount": "2 cups"}'),
+            ]
+        )
         provider.set_responses([text_response("Got it! What's next?")])
         await reasoning.generate(manager=manager, llm=provider)
 
@@ -845,9 +867,11 @@ class TestCollectionModeBranching:
 
         # --- Iteration 2: add sugar ---
         await manager.add_message(role="user", content="1 cup sugar")
-        ext_provider.set_responses([
-            text_response('{"name": "sugar", "amount": "1 cup"}'),
-        ])
+        ext_provider.set_responses(
+            [
+                text_response('{"name": "sugar", "amount": "1 cup"}'),
+            ]
+        )
         provider.set_responses([text_response("Got it! What's next?")])
         await reasoning.generate(manager=manager, llm=provider)
 
@@ -856,9 +880,11 @@ class TestCollectionModeBranching:
 
         # --- Iteration 3: add eggs ---
         await manager.add_message(role="user", content="3 eggs")
-        ext_provider.set_responses([
-            text_response('{"name": "eggs", "amount": "3"}'),
-        ])
+        ext_provider.set_responses(
+            [
+                text_response('{"name": "eggs", "amount": "3"}'),
+            ]
+        )
         provider.set_responses([text_response("Got it! What's next?")])
         await reasoning.generate(manager=manager, llm=provider)
 
@@ -870,7 +896,8 @@ class TestCollectionModeBranching:
         # An ever-deepening chain would have depths 1, 2, 3, ...
         # Siblings would all have the same depth.
         collect_stage_ids = [
-            nid for nid in ids_after_3
+            nid
+            for nid in ids_after_3
             if nid.count(".") > 0  # skip the system/initial node
         ]
         if len(collect_stage_ids) >= 2:
@@ -902,25 +929,21 @@ class TestCollectionModeBranching:
         ingredients = ["flour", "sugar", "eggs"]
         for name in ingredients:
             await manager.add_message(role="user", content=f"1 cup {name}")
-            ext_provider.set_responses([
-                text_response(f'{{"name": "{name}", "amount": "1 cup"}}'),
-            ])
+            ext_provider.set_responses(
+                [
+                    text_response(f'{{"name": "{name}", "amount": "1 cup"}}'),
+                ]
+            )
             provider.set_responses([text_response("Got it! What's next?")])
             await reasoning.generate(manager=manager, llm=provider)
 
         # Active-path view misses intermediate branches
         active_nodes = manager.state.get_current_nodes()
-        active_user_msgs = [
-            n.message.content for n in active_nodes
-            if n.message.role == "user"
-        ]
+        active_user_msgs = [n.message.content for n in active_nodes if n.message.role == "user"]
 
         # Full-tree view includes everything
         all_nodes = manager.state.get_all_nodes()
-        all_user_msgs = [
-            n.message.content for n in all_nodes
-            if n.message.role == "user"
-        ]
+        all_user_msgs = [n.message.content for n in all_nodes if n.message.role == "user"]
 
         # All 3 user messages should appear in the full tree
         assert len(all_user_msgs) >= len(ingredients), (
@@ -937,13 +960,8 @@ class TestCollectionModeBranching:
         )
 
         # All 3 assistant collection responses should be in the full tree
-        all_assistant_msgs = [
-            n.message.content for n in all_nodes
-            if n.message.role == "assistant"
-        ]
-        collection_responses = [
-            m for m in all_assistant_msgs if "Got it" in m
-        ]
+        all_assistant_msgs = [n.message.content for n in all_nodes if n.message.role == "assistant"]
+        collection_responses = [m for m in all_assistant_msgs if "Got it" in m]
         assert len(collection_responses) == len(ingredients), (
             f"Expected {len(ingredients)} collection responses but found "
             f"{len(collection_responses)}: {all_assistant_msgs}"

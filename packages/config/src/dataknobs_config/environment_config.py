@@ -368,13 +368,9 @@ class EnvironmentConfig:
         try:
             return load_yaml_or_json(path)
         except ConfigLoadError as e:
-            raise EnvironmentConfigError(
-                f"Failed to load environment config {path}: {e}"
-            ) from e
+            raise EnvironmentConfigError(f"Failed to load environment config {path}: {e}") from e
         except OSError as e:
-            raise EnvironmentConfigError(
-                f"Failed to read environment config {path}: {e}"
-            ) from e
+            raise EnvironmentConfigError(f"Failed to read environment config {path}: {e}") from e
 
     def get_resource(
         self,
@@ -409,7 +405,10 @@ class EnvironmentConfig:
             # each default under its own memo would make that property depend
             # on which of the two paths below the caller took.
             seen: dict[int, Any] = {}
-            config = _copy_structure(type_resources[logical_name], seen)
+            # Annotated because ``_copy_structure`` returns whatever it was
+            # handed, so its declared type is ``Any``; the caller is what knows
+            # a resource entry is a mapping.
+            config: dict[str, Any] = _copy_structure(type_resources[logical_name], seen)
 
             # Apply defaults for missing keys. Copied like everything else
             # handed out of here: the object aliased is the caller's own
@@ -424,7 +423,8 @@ class EnvironmentConfig:
             return config
 
         if defaults is not None:
-            return _copy_structure(defaults)
+            copied_defaults: dict[str, Any] = _copy_structure(defaults)
+            return copied_defaults
 
         raise ResourceNotFoundError(
             f"Resource '{logical_name}' of type '{resource_type}' "
@@ -579,9 +579,7 @@ class EnvironmentConfig:
         # Deep merge resources. Copied structurally, like every other hand-out
         # from this class: a one-level copy would leave each nested section of
         # the result aliasing one of the two inputs, both of which outlive it.
-        merged_resources: dict[str, dict[str, dict[str, Any]]] = (
-            _copy_structure(self.resources)
-        )
+        merged_resources: dict[str, dict[str, dict[str, Any]]] = _copy_structure(self.resources)
 
         # Merge in other's resources
         for rtype, resources in other.resources.items():
@@ -590,9 +588,7 @@ class EnvironmentConfig:
             for name, config in resources.items():
                 if name in merged_resources[rtype]:
                     # Merge configs
-                    merged_resources[rtype][name].update(
-                        _copy_structure(config)
-                    )
+                    merged_resources[rtype][name].update(_copy_structure(config))
                 else:
                     merged_resources[rtype][name] = _copy_structure(config)
 

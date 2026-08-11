@@ -1,5 +1,4 @@
-"""Reversible operations for data migration.
-"""
+"""Reversible operations for data migration."""
 
 from __future__ import annotations
 
@@ -17,17 +16,17 @@ if TYPE_CHECKING:
 @dataclass
 class Operation(ABC):
     """Base class for reversible migration operations.
-    
+
     Each operation can be applied forward or reversed for rollback support.
     """
 
     @abstractmethod
     def apply(self, record: Record) -> Record:
         """Apply this operation to a record.
-        
+
         Args:
             record: Record to transform
-            
+
         Returns:
             Transformed record
         """
@@ -36,10 +35,10 @@ class Operation(ABC):
     @abstractmethod
     def reverse(self, record: Record) -> Record:
         """Reverse this operation on a record.
-        
+
         Args:
             record: Record to reverse transform
-            
+
         Returns:
             Record with operation reversed
         """
@@ -60,29 +59,17 @@ class AddField(Operation):
 
     def apply(self, record: Record) -> Record:
         """Add field with default value."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         # Only add if field doesn't exist
         if self.field_name not in result.fields:
-            result.set_field(
-                self.field_name,
-                self.default_value,
-                field_type=self.field_type
-            )
+            result.set_field(self.field_name, self.default_value, field_type=self.field_type)
 
         return result
 
     def reverse(self, record: Record) -> Record:
         """Remove the added field."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         if self.field_name in result.fields:
             del result.fields[self.field_name]
@@ -102,27 +89,21 @@ class RemoveField(Operation):
 
     def apply(self, record: Record) -> Record:
         """Remove the specified field."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         if self.field_name in result.fields:
             if self.store_removed:
                 # Store removed value in metadata for potential recovery
-                result.metadata[f"_removed_{self.field_name}"] = result.fields[self.field_name].value
+                result.metadata[f"_removed_{self.field_name}"] = result.fields[
+                    self.field_name
+                ].value
             del result.fields[self.field_name]
 
         return result
 
     def reverse(self, record: Record) -> Record:
         """Restore the removed field if possible."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         # Try to restore from metadata if available
         metadata_key = f"_removed_{self.field_name}"
@@ -145,11 +126,7 @@ class RenameField(Operation):
 
     def apply(self, record: Record) -> Record:
         """Rename field from old_name to new_name."""
-        result = Record(
-            data={},
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data={}, metadata=record.metadata.copy(), id=record.id)
 
         # Copy fields with renaming
         for field_name, field in record.fields.items():
@@ -164,11 +141,7 @@ class RenameField(Operation):
 
     def reverse(self, record: Record) -> Record:
         """Rename field from new_name back to old_name."""
-        result = Record(
-            data={},
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data={}, metadata=record.metadata.copy(), id=record.id)
 
         # Copy fields with reverse renaming
         for field_name, field in record.fields.items():
@@ -195,11 +168,7 @@ class TransformField(Operation):
 
     def apply(self, record: Record) -> Record:
         """Apply transformation to field value."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         if self.field_name in result.fields:
             old_value = result.fields[self.field_name].value
@@ -209,7 +178,7 @@ class TransformField(Operation):
                     self.field_name,
                     new_value,
                     field_type=result.fields[self.field_name].type,
-                    field_metadata=result.fields[self.field_name].metadata
+                    field_metadata=result.fields[self.field_name].metadata,
                 )
             except Exception as e:
                 # If transformation fails, keep original value
@@ -224,11 +193,7 @@ class TransformField(Operation):
             # Can't reverse without reverse function
             return record
 
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         if self.field_name in result.fields:
             old_value = result.fields[self.field_name].value
@@ -238,7 +203,7 @@ class TransformField(Operation):
                     self.field_name,
                     new_value,
                     field_type=result.fields[self.field_name].type,
-                    field_metadata=result.fields[self.field_name].metadata
+                    field_metadata=result.fields[self.field_name].metadata,
                 )
             except Exception as e:
                 # If reverse fails, keep original value

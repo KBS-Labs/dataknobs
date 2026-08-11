@@ -71,17 +71,12 @@ async def test_caller_metadata_cannot_overwrite_system_fields(caplog):
 
     # Warning must be emitted naming at least one of the blocked keys.
     blocked_mentions = [
-        record.message
-        for record in caplog.records
-        if "immutable" in record.message.lower()
+        record.message for record in caplog.records if "immutable" in record.message.lower()
     ]
     assert blocked_mentions, "expected an immutable-key warning"
     # At least one of the system keys must appear in the warning(s).
     blocked_text = " ".join(blocked_mentions)
-    assert any(
-        key in blocked_text
-        for key in ("text", "source", "chunk_index", "document_type")
-    )
+    assert any(key in blocked_text for key in ("text", "source", "chunk_index", "document_type"))
 
 
 @pytest.mark.asyncio
@@ -103,9 +98,7 @@ async def test_caller_metadata_non_system_keys_flow_through(caplog):
     assert md.get("category") == "guide"
 
     # No immutable-key warnings for keys that don't collide.
-    assert not any(
-        "immutable" in record.message.lower() for record in caplog.records
-    )
+    assert not any("immutable" in record.message.lower() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -145,9 +138,7 @@ async def test_load_markdown_text_with_redundant_source_emits_no_warning(caplog)
 
     # No immutable-key warning — these are redundant copies that the
     # ingest path will recompute, not caller-as-attacker overrides.
-    assert not any(
-        "immutable" in record.message.lower() for record in caplog.records
-    ), (
+    assert not any("immutable" in record.message.lower() for record in caplog.records), (
         "Direct caller of load_markdown_text with redundant source/filename "
         "in metadata should not trigger an immutable-key warning."
     )
@@ -188,9 +179,7 @@ async def test_chunk_id_does_not_collide_for_snake_case_domains():
     # If chunk IDs collided, the second ingest would have upserted
     # over the first → only one record would survive.
     domain_my = await kb.vector_store.count(filter={"domain_id": "my"})
-    domain_my_team = await kb.vector_store.count(
-        filter={"domain_id": "my_team"}
-    )
+    domain_my_team = await kb.vector_store.count(filter={"domain_id": "my_team"})
     assert domain_my > 0, "Expected at least one chunk for domain_id=my"
     assert domain_my_team > 0, (
         "Expected at least one chunk for domain_id=my_team — collision "
@@ -246,9 +235,7 @@ async def test_warning_emitted_once_per_offense_not_per_chunk(caplog):
     kb = await _make_kb()
 
     # A document long enough to produce multiple chunks.
-    long_md = "# Section " + "\n\n# Section ".join(
-        f"{i}\n\n{'word ' * 40}" for i in range(10)
-    )
+    long_md = "# Section " + "\n\n# Section ".join(f"{i}\n\n{'word ' * 40}" for i in range(10))
     with caplog.at_level(logging.WARNING):
         await kb.load_markdown_text(
             long_md,
@@ -263,6 +250,5 @@ async def test_warning_emitted_once_per_offense_not_per_chunk(caplog):
     ]
     # Exactly one warning, not one per chunk.
     assert len(text_warnings) == 1, (
-        f"expected 1 warning for the single offense, got {len(text_warnings)}: "
-        f"{text_warnings}"
+        f"expected 1 warning for the single offense, got {len(text_warnings)}: {text_warnings}"
     )

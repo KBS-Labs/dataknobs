@@ -44,18 +44,11 @@ class TestVersionManager:
         """Test automatic version incrementing."""
         # Create first version
         v1 = await manager.create_version(
-            name="test",
-            prompt_type="user",
-            template="Version 1",
-            version="1.0.0"
+            name="test", prompt_type="user", template="Version 1", version="1.0.0"
         )
 
         # Create second version without specifying version
-        v2 = await manager.create_version(
-            name="test",
-            prompt_type="user",
-            template="Version 2"
-        )
+        v2 = await manager.create_version(name="test", prompt_type="user", template="Version 2")
 
         assert v1.version == "1.0.0"
         assert v2.version == "1.0.1"
@@ -65,9 +58,7 @@ class TestVersionManager:
     async def test_auto_increment_from_no_versions(self, manager):
         """Test auto-increment creates 1.0.0 for first version."""
         version = await manager.create_version(
-            name="new_prompt",
-            prompt_type="system",
-            template="First version"
+            name="new_prompt", prompt_type="system", template="First version"
         )
 
         assert version.version == "1.0.0"
@@ -81,42 +72,29 @@ class TestVersionManager:
                 name="test",
                 prompt_type="system",
                 template="Test",
-                version="1.0"  # Invalid: missing patch version
+                version="1.0",  # Invalid: missing patch version
             )
 
     @pytest.mark.asyncio
     async def test_duplicate_version(self, manager):
         """Test that creating duplicate version raises error."""
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V1",
-            version="1.0.0"
+            name="test", prompt_type="system", template="V1", version="1.0.0"
         )
 
         with pytest.raises(VersioningError, match="already exists"):
             await manager.create_version(
-                name="test",
-                prompt_type="system",
-                template="V1 again",
-                version="1.0.0"
+                name="test", prompt_type="system", template="V1 again", version="1.0.0"
             )
 
     @pytest.mark.asyncio
     async def test_get_version_by_number(self, manager):
         """Test retrieving specific version."""
         created = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="Test",
-            version="1.0.0"
+            name="test", prompt_type="system", template="Test", version="1.0.0"
         )
 
-        retrieved = await manager.get_version(
-            name="test",
-            prompt_type="system",
-            version="1.0.0"
-        )
+        retrieved = await manager.get_version(name="test", prompt_type="system", version="1.0.0")
 
         assert retrieved is not None
         assert retrieved.version_id == created.version_id
@@ -126,31 +104,18 @@ class TestVersionManager:
     async def test_get_latest_version(self, manager):
         """Test getting latest version."""
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V1",
-            version="1.0.0"
+            name="test", prompt_type="system", template="V1", version="1.0.0"
         )
 
         v2 = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V2",
-            version="1.1.0"
+            name="test", prompt_type="system", template="V2", version="1.1.0"
         )
 
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V3",
-            version="1.0.1"
+            name="test", prompt_type="system", template="V3", version="1.0.1"
         )
 
-        latest = await manager.get_version(
-            name="test",
-            prompt_type="system",
-            version="latest"
-        )
+        latest = await manager.get_version(name="test", prompt_type="system", version="latest")
 
         assert latest is not None
         assert latest.version == "1.1.0"  # Highest version
@@ -160,9 +125,7 @@ class TestVersionManager:
     async def test_get_nonexistent_version(self, manager):
         """Test getting nonexistent version returns None."""
         result = await manager.get_version(
-            name="nonexistent",
-            prompt_type="system",
-            version="1.0.0"
+            name="nonexistent", prompt_type="system", version="1.0.0"
         )
 
         assert result is None
@@ -171,24 +134,15 @@ class TestVersionManager:
     async def test_list_versions(self, manager):
         """Test listing all versions of a prompt."""
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V1",
-            version="1.0.0"
+            name="test", prompt_type="system", template="V1", version="1.0.0"
         )
 
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V2",
-            version="1.1.0"
+            name="test", prompt_type="system", template="V2", version="1.1.0"
         )
 
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V3",
-            version="2.0.0"
+            name="test", prompt_type="system", template="V3", version="2.0.0"
         )
 
         versions = await manager.list_versions("test", "system")
@@ -203,25 +157,15 @@ class TestVersionManager:
     async def test_list_versions_with_tag_filter(self, manager):
         """Test filtering versions by tags."""
         v1 = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V1",
-            version="1.0.0",
-            tags=["production"]
+            name="test", prompt_type="system", template="V1", version="1.0.0", tags=["production"]
         )
 
         await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V2",
-            version="1.1.0",
-            tags=["experimental"]
+            name="test", prompt_type="system", template="V2", version="1.1.0", tags=["experimental"]
         )
 
         versions = await manager.list_versions(
-            name="test",
-            prompt_type="system",
-            tags=["production"]
+            name="test", prompt_type="system", tags=["production"]
         )
 
         assert len(versions) == 1
@@ -235,7 +179,7 @@ class TestVersionManager:
             prompt_type="system",
             template="V1",
             version="1.0.0",
-            status=VersionStatus.PRODUCTION
+            status=VersionStatus.PRODUCTION,
         )
 
         await manager.create_version(
@@ -243,13 +187,11 @@ class TestVersionManager:
             prompt_type="system",
             template="V2",
             version="1.1.0",
-            status=VersionStatus.DRAFT
+            status=VersionStatus.DRAFT,
         )
 
         versions = await manager.list_versions(
-            name="test",
-            prompt_type="system",
-            status=VersionStatus.PRODUCTION
+            name="test", prompt_type="system", status=VersionStatus.PRODUCTION
         )
 
         assert len(versions) == 1
@@ -259,10 +201,7 @@ class TestVersionManager:
     async def test_tag_version(self, manager):
         """Test adding tags to a version."""
         version = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="Test",
-            version="1.0.0"
+            name="test", prompt_type="system", template="Test", version="1.0.0"
         )
 
         assert "production" not in version.tags
@@ -285,7 +224,7 @@ class TestVersionManager:
             prompt_type="system",
             template="Test",
             version="1.0.0",
-            tags=["production", "stable"]
+            tags=["production", "stable"],
         )
 
         assert "production" in version.tags
@@ -303,15 +242,12 @@ class TestVersionManager:
             prompt_type="system",
             template="Test",
             version="1.0.0",
-            status=VersionStatus.DRAFT
+            status=VersionStatus.DRAFT,
         )
 
         assert version.status == VersionStatus.DRAFT
 
-        updated = await manager.update_status(
-            version.version_id,
-            VersionStatus.PRODUCTION
-        )
+        updated = await manager.update_status(version.version_id, VersionStatus.PRODUCTION)
 
         assert updated.status == VersionStatus.PRODUCTION
 
@@ -319,18 +255,11 @@ class TestVersionManager:
     async def test_delete_version(self, manager):
         """Test deleting a version."""
         version = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="Test",
-            version="1.0.0"
+            name="test", prompt_type="system", template="Test", version="1.0.0"
         )
 
         # Verify it exists
-        retrieved = await manager.get_version(
-            name="test",
-            prompt_type="system",
-            version="1.0.0"
-        )
+        retrieved = await manager.get_version(name="test", prompt_type="system", version="1.0.0")
         assert retrieved is not None
 
         # Delete it
@@ -338,11 +267,7 @@ class TestVersionManager:
         assert deleted is True
 
         # Verify it's gone
-        retrieved = await manager.get_version(
-            name="test",
-            prompt_type="system",
-            version="1.0.0"
-        )
+        retrieved = await manager.get_version(name="test", prompt_type="system", version="1.0.0")
         assert retrieved is None
 
     @pytest.mark.asyncio
@@ -356,24 +281,15 @@ class TestVersionManager:
         """Test getting version history in chronological order."""
         # Create versions with slight time gaps
         v1 = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V1",
-            version="1.0.0"
+            name="test", prompt_type="system", template="V1", version="1.0.0"
         )
 
         v2 = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V2",
-            version="1.1.0"
+            name="test", prompt_type="system", template="V2", version="1.1.0"
         )
 
         v3 = await manager.create_version(
-            name="test",
-            prompt_type="system",
-            template="V3",
-            version="2.0.0"
+            name="test", prompt_type="system", template="V3", version="2.0.0"
         )
 
         history = await manager.get_version_history("test", "system")
@@ -392,7 +308,7 @@ class TestVersionManager:
             prompt_type="system",
             template="V1",
             version="1.0.0",
-            status=VersionStatus.PRODUCTION
+            status=VersionStatus.PRODUCTION,
         )
 
         # Create higher version but mark as deprecated
@@ -401,14 +317,10 @@ class TestVersionManager:
             prompt_type="system",
             template="V2",
             version="1.1.0",
-            status=VersionStatus.DEPRECATED
+            status=VersionStatus.DEPRECATED,
         )
 
-        latest = await manager.get_version(
-            name="test",
-            prompt_type="system",
-            version="latest"
-        )
+        latest = await manager.get_version(name="test", prompt_type="system", version="latest")
 
         # Should get v1 (production) not v2 (deprecated)
         assert latest.version_id == v1.version_id
@@ -424,7 +336,7 @@ class TestVersionManager:
             defaults={"var": "value"},
             metadata={"author": "alice"},
             tags=["production"],
-            status=VersionStatus.PRODUCTION
+            status=VersionStatus.PRODUCTION,
         )
 
         # Convert to dict

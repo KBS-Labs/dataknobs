@@ -49,22 +49,14 @@ def test_llm_message_basic():
 def test_llm_message_with_metadata():
     """Test LLMMessage with metadata."""
     metadata = {"timestamp": "2025-01-01", "source": "test"}
-    msg = LLMMessage(
-        role="assistant",
-        content="Response",
-        metadata=metadata
-    )
+    msg = LLMMessage(role="assistant", content="Response", metadata=metadata)
     assert msg.metadata == metadata
 
 
 def test_llm_message_with_function_call():
     """Test LLMMessage with function call."""
     func_call = {"name": "get_weather", "arguments": {"city": "SF"}}
-    msg = LLMMessage(
-        role="assistant",
-        content="",
-        function_call=func_call
-    )
+    msg = LLMMessage(role="assistant", content="", function_call=func_call)
     assert msg.function_call == func_call
 
 
@@ -82,17 +74,8 @@ def test_llm_response_basic():
 
 def test_llm_response_with_usage():
     """Test LLMResponse with token usage."""
-    usage = {
-        "prompt_tokens": 10,
-        "completion_tokens": 20,
-        "total_tokens": 30
-    }
-    response = LLMResponse(
-        content="Response",
-        model="gpt-4",
-        usage=usage,
-        finish_reason="stop"
-    )
+    usage = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    response = LLMResponse(content="Response", model="gpt-4", usage=usage, finish_reason="stop")
     assert response.usage == usage
     assert response.finish_reason == "stop"
 
@@ -106,10 +89,7 @@ def test_llm_stream_response():
     assert stream_resp.usage is None
 
     final_resp = LLMStreamResponse(
-        delta="!",
-        is_final=True,
-        finish_reason="stop",
-        usage={"total_tokens": 10}
+        delta="!", is_final=True, finish_reason="stop", usage={"total_tokens": 10}
     )
     assert final_resp.is_final is True
     assert final_resp.finish_reason == "stop"
@@ -118,10 +98,7 @@ def test_llm_stream_response():
 
 def test_llm_config_basic():
     """Test basic LLMConfig creation."""
-    config = LLMConfig(
-        provider="openai",
-        model="gpt-4"
-    )
+    config = LLMConfig(provider="openai", model="gpt-4")
     assert config.provider == "openai"
     assert config.model == "gpt-4"
     assert config.temperature is None
@@ -138,7 +115,7 @@ def test_llm_config_custom_params():
         max_tokens=2000,
         top_p=0.9,
         mode=CompletionMode.INSTRUCT,
-        system_prompt="You are a helpful assistant"
+        system_prompt="You are a helpful assistant",
     )
     assert config.provider == "anthropic"
     assert config.model == "claude-3-opus"
@@ -151,11 +128,7 @@ def test_llm_config_custom_params():
 
 def test_llm_config_from_dict_basic():
     """Test LLMConfig.from_dict with basic dict."""
-    config_dict = {
-        "provider": "openai",
-        "model": "gpt-4",
-        "temperature": 0.8
-    }
+    config_dict = {"provider": "openai", "model": "gpt-4", "temperature": 0.8}
     config = LLMConfig.from_dict(config_dict)
     assert config.provider == "openai"
     assert config.model == "gpt-4"
@@ -169,7 +142,7 @@ def test_llm_config_from_dict_filters_config_attrs():
         "name": "my-llm",  # Config-specific
         "factory": "SomeFactory",  # Config-specific
         "provider": "openai",
-        "model": "gpt-4"
+        "model": "gpt-4",
     }
     config = LLMConfig.from_dict(config_dict)
     assert config.provider == "openai"
@@ -182,7 +155,7 @@ def test_llm_config_from_dict_mode_string():
     config_dict = {
         "provider": "openai",
         "model": "gpt-4",
-        "mode": "chat"  # String value
+        "mode": "chat",  # String value
     }
     config = LLMConfig.from_dict(config_dict)
     assert config.mode == CompletionMode.CHAT
@@ -195,7 +168,7 @@ def test_llm_config_from_dict_filters_unknown_fields():
         "provider": "openai",
         "model": "gpt-4",
         "unknown_field": "should_be_ignored",
-        "another_unknown": 123
+        "another_unknown": 123,
     }
     config = LLMConfig.from_dict(config_dict)
     assert config.provider == "openai"
@@ -205,11 +178,7 @@ def test_llm_config_from_dict_filters_unknown_fields():
 
 def test_llm_config_to_dict_basic():
     """Test LLMConfig.to_dict basic conversion."""
-    config = LLMConfig(
-        provider="openai",
-        model="gpt-4",
-        temperature=0.8
-    )
+    config = LLMConfig(provider="openai", model="gpt-4", temperature=0.8)
     config_dict = config.to_dict()
     assert config_dict["provider"] == "openai"
     assert config_dict["model"] == "gpt-4"
@@ -224,11 +193,7 @@ def test_llm_config_to_dict_keeps_enum_member():
     and ``to_json_dict`` is the JSON-safe projection that renders enums as
     their ``.value``.
     """
-    config = LLMConfig(
-        provider="openai",
-        model="gpt-4",
-        mode=CompletionMode.INSTRUCT
-    )
+    config = LLMConfig(provider="openai", model="gpt-4", mode=CompletionMode.INSTRUCT)
     assert config.to_dict()["mode"] is CompletionMode.INSTRUCT
     json_dict = config.to_json_dict()
     assert json_dict["mode"] == "instruct"
@@ -263,11 +228,7 @@ def test_normalize_llm_config_with_llm_config():
 
 def test_normalize_llm_config_with_dict():
     """Test normalize_llm_config with dictionary."""
-    config_dict = {
-        "provider": "anthropic",
-        "model": "claude-3-opus",
-        "temperature": 0.5
-    }
+    config_dict = {"provider": "anthropic", "model": "claude-3-opus", "temperature": 0.5}
     normalized = normalize_llm_config(config_dict)
     assert isinstance(normalized, LLMConfig)
     assert normalized.provider == "anthropic"
@@ -294,7 +255,7 @@ def test_llm_config_round_trip():
         temperature=0.8,
         max_tokens=1000,
         mode=CompletionMode.CHAT,
-        system_prompt="Test prompt"
+        system_prompt="Test prompt",
     )
 
     # Convert to dict and back
@@ -314,11 +275,7 @@ def test_llm_config_with_options():
     config = LLMConfig(
         provider="echo",
         model="echo-model",
-        options={
-            "echo_prefix": "Test: ",
-            "embedding_dim": 384,
-            "mock_tokens": True
-        }
+        options={"echo_prefix": "Test: ", "embedding_dim": 384, "mock_tokens": True},
     )
     assert config.options["echo_prefix"] == "Test: "
     assert config.options["embedding_dim"] == 384
@@ -336,20 +293,10 @@ def test_llm_config_with_functions():
         {
             "name": "get_weather",
             "description": "Get weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                }
-            }
+            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
         }
     ]
-    config = LLMConfig(
-        provider="openai",
-        model="gpt-4",
-        functions=functions,
-        function_call="auto"
-    )
+    config = LLMConfig(provider="openai", model="gpt-4", functions=functions, function_call="auto")
     assert config.functions == functions
     assert config.function_call == "auto"
 
@@ -357,11 +304,7 @@ def test_llm_config_with_functions():
 def test_llm_config_with_stop_sequences():
     """Test LLMConfig with stop sequences."""
     stop_sequences = ["END", "STOP", "\n\n"]
-    config = LLMConfig(
-        provider="openai",
-        model="gpt-4",
-        stop_sequences=stop_sequences
-    )
+    config = LLMConfig(provider="openai", model="gpt-4", stop_sequences=stop_sequences)
     assert config.stop_sequences == stop_sequences
 
 

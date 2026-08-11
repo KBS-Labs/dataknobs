@@ -32,6 +32,7 @@ from dataknobs_llm.tools.base import Tool
 
 # ── Helper: minimal tool for tool_result_mapping ─────────────────────
 
+
 class LookupKbTool(Tool):
     """Returns a deterministic kb_name based on the domain parameter."""
 
@@ -80,16 +81,17 @@ class TestConfirmOnNewDataWithToolResultMapping:
                 is_start=True,
                 prompt="Tell me the domain.",
                 response_template=(
-                    "Domain: {{ domain }}"
-                    "{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
+                    "Domain: {{ domain }}{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
                 ),
                 confirm_first_render=False,
                 confirm_on_new_data=True,
-                tool_result_mapping=[{
-                    "tool": "lookup_kb",
-                    "params": {"domain": "domain"},
-                    "mapping": {"kb_name": "kb_name"},
-                }],
+                tool_result_mapping=[
+                    {
+                        "tool": "lookup_kb",
+                        "params": {"domain": "domain"},
+                        "mapping": {"kb_name": "kb_name"},
+                    }
+                ],
             )
             .field("domain", field_type="string", required=True)
             .field("kb_name", field_type="string")
@@ -139,16 +141,17 @@ class TestConfirmOnNewDataWithToolResultMapping:
                 is_start=True,
                 prompt="Tell me the domain.",
                 response_template=(
-                    "Domain: {{ domain }}"
-                    "{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
+                    "Domain: {{ domain }}{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
                 ),
                 confirm_first_render=False,
                 confirm_on_new_data=True,
-                tool_result_mapping=[{
-                    "tool": "lookup_kb",
-                    "params": {"domain": "domain"},
-                    "mapping": {"kb_name": "kb_name"},
-                }],
+                tool_result_mapping=[
+                    {
+                        "tool": "lookup_kb",
+                        "params": {"domain": "domain"},
+                        "mapping": {"kb_name": "kb_name"},
+                    }
+                ],
             )
             .field("domain", field_type="string", required=True)
             .field("kb_name", field_type="string")

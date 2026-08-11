@@ -305,6 +305,7 @@ logger = logging.getLogger(__name__)
 
 class ExecutionMode(Enum):
     """Advanced execution modes."""
+
     STEP_BY_STEP = "step"  # Execute one transition at a time
     BREAKPOINT = "breakpoint"  # Stop at specific states
     TRACE = "trace"  # Full execution tracing
@@ -315,6 +316,7 @@ class ExecutionMode(Enum):
 @dataclass
 class ExecutionHook:
     """Hook for monitoring execution events."""
+
     on_state_enter: Callable | None = None
     on_state_exit: Callable | None = None
     on_arc_execute: Callable | None = None
@@ -326,6 +328,7 @@ class ExecutionHook:
 @dataclass
 class StepResult:
     """Result from a single step execution."""
+
     from_state: str
     to_state: str
     transition: str
@@ -359,7 +362,7 @@ class AdvancedFSM:
         self,
         config: FSM | str | Path | dict[str, Any],
         execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP,
-        custom_functions: dict[str, Callable] | None = None
+        custom_functions: dict[str, Callable] | None = None,
     ):
         """Initialize AdvancedFSM.
 
@@ -382,6 +385,7 @@ class AdvancedFSM:
             fsm = config
         else:
             from dataknobs_fsm.config.builder import build_fsm
+
             fsm = build_fsm(config, custom_functions)
 
         self.fsm = fsm
@@ -403,7 +407,7 @@ class AdvancedFSM:
 
     def set_execution_strategy(self, strategy: TraversalStrategy) -> None:
         """Set custom execution strategy.
-        
+
         Args:
             strategy: Execution strategy to use
         """
@@ -411,19 +415,15 @@ class AdvancedFSM:
 
     def set_data_handler(self, handler: DataHandler) -> None:
         """Set custom data handler.
-        
+
         Args:
             handler: Data handler implementation
         """
         self._engine.data_handler = handler
 
-    def register_resource(
-        self,
-        name: str,
-        resource: IResourceProvider | dict[str, Any]
-    ) -> None:
+    def register_resource(self, name: str, resource: IResourceProvider | dict[str, Any]) -> None:
         """Register a custom resource.
-        
+
         Args:
             name: Resource name
             resource: Resource instance or configuration
@@ -437,7 +437,7 @@ class AdvancedFSM:
 
     def set_hooks(self, hooks: ExecutionHook) -> None:
         """Set execution hooks for monitoring.
-        
+
         Args:
             hooks: Execution hooks configuration
         """
@@ -445,7 +445,7 @@ class AdvancedFSM:
 
     def add_breakpoint(self, state_name: str) -> None:
         """Add a breakpoint at a specific state.
-        
+
         Args:
             state_name: Name of state to break at
         """
@@ -453,7 +453,7 @@ class AdvancedFSM:
 
     def remove_breakpoint(self, state_name: str) -> None:
         """Remove a breakpoint.
-        
+
         Args:
             state_name: Name of state to remove breakpoint from
         """
@@ -488,13 +488,9 @@ class AdvancedFSM:
         """Get the execution history steps."""
         return self._history.steps if self._history else []
 
-    def enable_history(
-        self,
-        storage: IHistoryStorage | None = None,
-        max_depth: int = 100
-    ) -> None:
+    def enable_history(self, storage: IHistoryStorage | None = None, max_depth: int = 100) -> None:
         """Enable execution history tracking.
-        
+
         Args:
             storage: Optional storage backend for history
             max_depth: Maximum history depth to track
@@ -504,7 +500,7 @@ class AdvancedFSM:
         from dataknobs_fsm.core.data_modes import DataHandlingMode
 
         # Get FSM name from the FSM object
-        fsm_name = getattr(self.fsm, 'name', 'unnamed_fsm')
+        fsm_name = getattr(self.fsm, "name", "unnamed_fsm")
 
         # Generate a unique execution ID
         execution_id = str(uuid.uuid4())
@@ -513,7 +509,7 @@ class AdvancedFSM:
             fsm_name=fsm_name,
             execution_id=execution_id,
             data_mode=DataHandlingMode.COPY,  # Default data mode
-            max_depth=max_depth
+            max_depth=max_depth,
         )
         self._storage = storage
 
@@ -526,7 +522,7 @@ class AdvancedFSM:
         self,
         data: dict[str, Any] | Record,
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        initial_state: str | None = None
+        initial_state: str | None = None,
     ) -> ExecutionContext:
         """Create an execution context for manual control (synchronous).
 
@@ -542,11 +538,7 @@ class AdvancedFSM:
         # Use SINGLE processing mode as default
         processing_mode = ProcessingMode.SINGLE
 
-        context = ContextFactory.create_context(
-            self.fsm,
-            data,
-            data_mode=processing_mode
-        )
+        context = ContextFactory.create_context(self.fsm, data, data_mode=processing_mode)
 
         # Set initial state if provided
         if initial_state:
@@ -563,12 +555,12 @@ class AdvancedFSM:
 
         # Register custom functions if any
         if self._custom_functions:
-            registry = getattr(self.fsm, 'function_registry', None)
+            registry = getattr(self.fsm, "function_registry", None)
             if registry is None:
                 self.fsm.function_registry = {}
                 registry = self.fsm.function_registry
             for name, func in self._custom_functions.items():
-                if hasattr(registry, 'register'):
+                if hasattr(registry, "register"):
                     registry.register(name, func)
                 elif isinstance(registry, dict):
                     registry[name] = func
@@ -580,7 +572,7 @@ class AdvancedFSM:
         self,
         data: dict[str, Any] | Record,
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        initial_state: str | None = None
+        initial_state: str | None = None,
     ) -> AsyncGenerator[ExecutionContext, None]:
         """Create an execution context for manual control.
 
@@ -598,7 +590,7 @@ class AdvancedFSM:
             data=data,
             initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
-            resource_manager=self._resource_manager
+            resource_manager=self._resource_manager,
         )
 
         # Get the state instance for the hook
@@ -607,7 +599,7 @@ class AdvancedFSM:
             # Create state instance if not set by factory
             state_instance = self.fsm.create_state_instance(
                 context.current_state,  # type: ignore
-                context.data.copy() if isinstance(context.data, dict) else {}
+                context.data.copy() if isinstance(context.data, dict) else {},
             )
             context.current_state_instance = state_instance
 
@@ -623,11 +615,7 @@ class AdvancedFSM:
                 await self._hooks.on_state_exit(state_instance)
             await self._resource_manager.cleanup()
 
-    async def step(
-        self,
-        context: ExecutionContext,
-        arc_name: str | None = None
-    ) -> StepResult:
+    async def step(self, context: ExecutionContext, arc_name: str | None = None) -> StepResult:
         """Execute a single transition step.
 
         .. versionchanged::
@@ -645,9 +633,7 @@ class AdvancedFSM:
         return await self.execute_step_async(context, arc_name)
 
     async def run_until_breakpoint(
-        self,
-        context: ExecutionContext,
-        max_steps: int = 1000
+        self, context: ExecutionContext, max_steps: int = 1000
     ) -> StepResult | None:
         """Run execution until a breakpoint is hit.
 
@@ -687,9 +673,7 @@ class AdvancedFSM:
         return last_result
 
     async def trace_execution(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None
+        self, data: dict[str, Any] | Record, initial_state: str | None = None
     ) -> list[dict[str, Any]]:
         """Execute with full tracing enabled.
 
@@ -713,9 +697,7 @@ class AdvancedFSM:
         return self._trace_buffer
 
     async def profile_execution(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None
+        self, data: dict[str, Any] | Record, initial_state: str | None = None
     ) -> dict[str, Any]:
         """Execute with performance profiling.
 
@@ -761,84 +743,86 @@ class AdvancedFSM:
 
         # Compute statistics
         self._profile_data = self._compute_profile_stats(
-            total_time, transitions, state_times, context,
+            total_time,
+            transitions,
+            state_times,
+            context,
             transition_times=transition_times,
         )
 
         return self._profile_data
 
-    def get_available_transitions(
-        self,
-        state_name: str
-    ) -> list[dict[str, Any]]:
+    def get_available_transitions(self, state_name: str) -> list[dict[str, Any]]:
         """Get available transitions from a state.
-        
+
         Args:
             state_name: Name of state
-            
+
         Returns:
             List of available transition information
         """
         arcs = self.fsm.get_outgoing_arcs(state_name)
         return [
             {
-                'name': arc.name,
-                'target': arc.target_state,
-                'has_pre_test': arc.pre_test is not None,
-                'has_transform': arc.transform is not None
+                "name": arc.name,
+                "target": arc.target_state,
+                "has_pre_test": arc.pre_test is not None,
+                "has_transform": arc.transform is not None,
             }
             for arc in arcs
         ]
 
     def inspect_state(self, state_name: str) -> dict[str, Any]:
         """Inspect a state's configuration.
-        
+
         Args:
             state_name: Name of state to inspect
-            
+
         Returns:
             State configuration details
         """
         state = self.fsm.get_state(state_name)
         if not state:
-            return {'error': f'State {state_name} not found'}
+            return {"error": f"State {state_name} not found"}
 
         return {
-            'name': state.name,
-            'is_start': self.fsm.is_start_state(state_name),
-            'is_end': self.fsm.is_end_state(state_name),
-            'has_transform': len(state.transform_functions) > 0,
-            'has_validator': len(state.validation_functions) > 0,
-            'resources': [r.name for r in state.resource_requirements] if state.resource_requirements else [],
-            'metadata': state.metadata,
-            'arcs': state.arcs
+            "name": state.name,
+            "is_start": self.fsm.is_start_state(state_name),
+            "is_end": self.fsm.is_end_state(state_name),
+            "has_transform": len(state.transform_functions) > 0,
+            "has_validator": len(state.validation_functions) > 0,
+            "resources": [r.name for r in state.resource_requirements]
+            if state.resource_requirements
+            else [],
+            "metadata": state.metadata,
+            "arcs": state.arcs,
         }
 
     def visualize_fsm(self) -> str:
         """Generate a visual representation of the FSM.
-        
+
         Returns:
             GraphViz DOT format string
         """
-        lines = ['digraph FSM {']
-        lines.append('  rankdir=LR;')
-        lines.append('  node [shape=circle];')
+        lines = ["digraph FSM {"]
+        lines.append("  rankdir=LR;")
+        lines.append("  node [shape=circle];")
 
         # Add states
         for state in self.fsm.states.values():
             attrs = []
             if state.is_start:
-                attrs.append('style=filled')
-                attrs.append('fillcolor=green')
+                attrs.append("style=filled")
+                attrs.append("fillcolor=green")
             elif state.is_end:
-                attrs.append('shape=doublecircle')
-                attrs.append('style=filled')
-                attrs.append('fillcolor=red')
+                attrs.append("shape=doublecircle")
+                attrs.append("style=filled")
+                attrs.append("fillcolor=red")
 
             if attrs:
-                lines.append(f'  {state.name} [{",".join(attrs)}];')
+                lines.append(f"  {state.name} [{','.join(attrs)}];")
             else:
-                lines.append(f'  {state.name};')
+                lines.append(f"  {state.name};")
 
         # Add arcs
         for state_name in self.fsm.states:
@@ -846,12 +830,12 @@ class AdvancedFSM:
                 label = arc.name if arc.name else ""
                 lines.append(f'  {state_name} -> {arc.target_state} [label="{label}"];')
 
-        lines.append('}')
-        return '\n'.join(lines)
+        lines.append("}")
+        return "\n".join(lines)
 
     async def validate_network(self) -> dict[str, Any]:
         """Validate the FSM network for consistency.
-        
+
         Returns:
             Validation results
         """
@@ -874,36 +858,30 @@ class AdvancedFSM:
 
         unreachable = set(self.fsm.states.keys()) - reachable
         if unreachable:
-            issues.append({
-                'type': 'unreachable_states',
-                'states': list(unreachable)
-            })
+            issues.append({"type": "unreachable_states", "states": list(unreachable)})
 
         # Check for dead ends (non-end states with no outgoing arcs)
         for state_name, state in self.fsm.states.items():
             if not state.is_end:
                 arcs = self.fsm.get_outgoing_arcs(state_name)
                 if not arcs:
-                    issues.append({
-                        'type': 'dead_end',
-                        'state': state_name
-                    })
+                    issues.append({"type": "dead_end", "state": state_name})
 
         return {
-            'valid': len(issues) == 0,
-            'issues': issues,
-            'stats': {
-                'total_states': len(self.fsm.states),
-                'reachable_states': len(reachable),
-                'unreachable_states': len(unreachable),
-                'start_states': sum(1 for s in self.fsm.states.values() if s.is_start),  # type: ignore
-                'end_states': sum(1 for s in self.fsm.states.values() if s.is_end)  # type: ignore
-            }
+            "valid": len(issues) == 0,
+            "issues": issues,
+            "stats": {
+                "total_states": len(self.fsm.states),
+                "reachable_states": len(reachable),
+                "unreachable_states": len(unreachable),
+                "start_states": sum(1 for s in self.fsm.states.values() if s.is_start),  # type: ignore
+                "end_states": sum(1 for s in self.fsm.states.values() if s.is_end),  # type: ignore
+            },
         }
 
     def get_history(self) -> ExecutionHistory | None:
         """Get execution history if enabled.
-        
+
         Returns:
             Execution history or None
         """
@@ -939,9 +917,7 @@ class AdvancedFSM:
     # ========== Shared Helper Methods ==========
     # These methods contain logic shared between sync and async implementations
 
-    def _prepare_initial_state(
-        self, context: ExecutionContext
-    ) -> StepResult | None:
+    def _prepare_initial_state(self, context: ExecutionContext) -> StepResult | None:
         """Find and set the initial state if needed.
 
         Returns a ``StepResult`` error when no initial state can be
@@ -952,28 +928,26 @@ class AdvancedFSM:
             initial_state = self._find_initial_state()
             if not initial_state:
                 return StepResult(
-                    from_state="initial", to_state="initial",
+                    from_state="initial",
+                    to_state="initial",
                     transition="error",
                     data_before=context.get_data_snapshot(),
                     data_after=context.get_data_snapshot(),
-                    duration=0.0, success=False,
+                    duration=0.0,
+                    success=False,
                     error="No initial state found",
                 )
             context.set_state(initial_state)
             self._update_state_instance(context, initial_state)
         return None
 
-    async def _enter_initial_state_async(
-        self, context: ExecutionContext
-    ) -> StepResult | None:
+    async def _enter_initial_state_async(self, context: ExecutionContext) -> StepResult | None:
         """Ensure initial state is entered with transforms (async)."""
         error = self._prepare_initial_state(context)
         if error is not None:
             return error
         if not context._initial_transforms_executed:
-            await self._execute_state_transforms_async(
-                context, context.current_state
-            )
+            await self._execute_state_transforms_async(context, context.current_state)
             context._initial_transforms_executed = True
         return None
 
@@ -1013,8 +987,8 @@ class AdvancedFSM:
 
     def _resolve_test_function(self, pre_test_name: str) -> Callable | None:
         """Look up a pre-test function by name in the FSM registry."""
-        registry = getattr(self.fsm, 'function_registry', {})
-        if hasattr(registry, 'functions'):
+        registry = getattr(self.fsm, "function_registry", {})
+        if hasattr(registry, "functions"):
             functions = registry.functions
         else:
             functions = registry
@@ -1045,9 +1019,7 @@ class AdvancedFSM:
         return None
 
     def _get_available_transitions(
-        self,
-        context: ExecutionContext,
-        arc_name: str | None = None
+        self, context: ExecutionContext, arc_name: str | None = None
     ) -> list:
         """Get available transitions from current state (sync)."""
         early = self._get_candidate_arcs(context)
@@ -1067,7 +1039,9 @@ class AdvancedFSM:
                     except Exception:
                         logger.debug(
                             "Pre-test '%s' for arc '%s' raised — arc skipped",
-                            arc.pre_test, arc.name, exc_info=True,
+                            arc.pre_test,
+                            arc.name,
+                            exc_info=True,
                         )
                         continue
                     if self._test_result_is_truthy(result):
@@ -1141,11 +1115,7 @@ class AdvancedFSM:
 
         return ArcExecution(arc_def, source_state, functions)
 
-    def _update_state_instance(
-        self,
-        context: ExecutionContext,
-        state_name: str
-    ) -> None:
+    def _update_state_instance(self, context: ExecutionContext, state_name: str) -> None:
         """Update the current state instance in context (shared logic).
 
         Args:
@@ -1154,12 +1124,9 @@ class AdvancedFSM:
         """
         state_def = self.fsm.states.get(state_name)
         if state_def:
-            context.current_state_instance = StateInstance(
-                definition=state_def,
-                data=context.data
-            )
+            context.current_state_instance = StateInstance(definition=state_def, data=context.data)
             # Mark if it's an end state
-            context.metadata['is_end_state'] = state_def.is_end
+            context.metadata["is_end_state"] = state_def.is_end
 
     def _step_transform_failure(
         self, context: ExecutionContext, state_name: str
@@ -1181,7 +1148,7 @@ class AdvancedFSM:
             ``state_name`` recorded a failure; ``failed_states`` is the sorted
             list of all states that failed for this record (or None if none).
         """
-        failed = getattr(context, 'failed_states', None)
+        failed = getattr(context, "failed_states", None)
         if not failed:
             return True, None, None
         failed_list = self._engine.failed_states_sorted(context)
@@ -1211,14 +1178,10 @@ class AdvancedFSM:
         if state:
             return state.is_end
 
-        return context.metadata.get('is_end_state', False)
+        return context.metadata.get("is_end_state", False)
 
     def _record_trace_entry(
-        self,
-        from_state: str,
-        to_state: str,
-        arc_name: str | None,
-        context: ExecutionContext
+        self, from_state: str, to_state: str, arc_name: str | None, context: ExecutionContext
     ) -> None:
         """Record a trace entry if in trace mode (shared logic).
 
@@ -1229,19 +1192,18 @@ class AdvancedFSM:
             context: Execution context
         """
         if self.execution_mode == ExecutionMode.TRACE:
-            self._trace_buffer.append({
-                'from_state': from_state,
-                'to_state': to_state,
-                'transition': arc_name or f"{from_state}->{to_state}",
-                'data': context.get_data_snapshot(),
-                'timestamp': time.time()
-            })
+            self._trace_buffer.append(
+                {
+                    "from_state": from_state,
+                    "to_state": to_state,
+                    "transition": arc_name or f"{from_state}->{to_state}",
+                    "data": context.get_data_snapshot(),
+                    "timestamp": time.time(),
+                }
+            )
 
     def _record_history_step(
-        self,
-        state_name: str,
-        arc_name: str | None,
-        context: ExecutionContext
+        self, state_name: str, arc_name: str | None, context: ExecutionContext
     ) -> None:
         """Record a history step if history is enabled (shared logic).
 
@@ -1253,10 +1215,10 @@ class AdvancedFSM:
         if self._history:
             step = self._history.add_step(  # type: ignore[unreachable]
                 state_name=state_name,
-                network_name=getattr(context, 'network_name', 'main'),
-                data=context.data
+                network_name=getattr(context, "network_name", "main"),
+                data=context.data,
             )
-            step.complete(arc_taken=arc_name or 'transition')
+            step.complete(arc_taken=arc_name or "transition")
 
     def _apply_transition(
         self,
@@ -1290,11 +1252,7 @@ class AdvancedFSM:
         self._record_trace_entry(from_state, arc.target_state, arc.name, context)
         self._record_history_step(arc.target_state, arc.name, context)
 
-    async def _call_hook_async(
-        self,
-        hook_name: str,
-        *args: Any
-    ) -> None:
+    async def _call_hook_async(self, hook_name: str, *args: Any) -> None:
         """Call a hook, awaiting if it returns a coroutine.
 
         Args:
@@ -1311,9 +1269,7 @@ class AdvancedFSM:
                 pass  # Silently ignore hook errors
 
     async def _get_available_transitions_async(
-        self,
-        context: ExecutionContext,
-        arc_name: str | None = None
+        self, context: ExecutionContext, arc_name: str | None = None
     ) -> list:
         """Get available transitions, awaiting async pre-tests."""
         early = self._get_candidate_arcs(context)
@@ -1335,7 +1291,9 @@ class AdvancedFSM:
                     except Exception:
                         logger.debug(
                             "Pre-test '%s' for arc '%s' raised — arc skipped",
-                            arc.pre_test, arc.name, exc_info=True,
+                            arc.pre_test,
+                            arc.name,
+                            exc_info=True,
                         )
                         continue
                     if self._test_result_is_truthy(result):
@@ -1392,8 +1350,7 @@ class AdvancedFSM:
             # exempt and runs regardless.
             if self._engine.should_skip_state_transforms(context, state_def):
                 logger.debug(
-                    "Skipping transform in state '%s': record already failed "
-                    "in %s",
+                    "Skipping transform in state '%s': record already failed in %s",
                     state_name,
                     self._engine.failed_states_sorted(context),
                 )
@@ -1402,10 +1359,10 @@ class AdvancedFSM:
                 # Create function context
                 func_context = FunctionContext(
                     state_name=state_name,
-                    function_name=getattr(transform_func, '__name__', 'transform'),
-                    metadata={'state': state_name},
+                    function_name=getattr(transform_func, "__name__", "transform"),
+                    metadata={"state": state_name},
                     resources={},
-                    variables=context.variables
+                    variables=context.variables,
                 )
 
                 # Try calling with state object first (for inline lambdas)
@@ -1438,9 +1395,7 @@ class AdvancedFSM:
     # ========== Synchronous Execution Methods ==========
 
     def execute_step_sync(
-        self,
-        context: ExecutionContext,
-        arc_name: str | None = None
+        self, context: ExecutionContext, arc_name: str | None = None
     ) -> StepResult:
         """Execute a single transition step synchronously.
 
@@ -1457,14 +1412,10 @@ class AdvancedFSM:
         Returns:
             StepResult with transition details
         """
-        return self.fsm.get_sync_bridge().run(
-            self.execute_step_async(context, arc_name)
-        )
+        return self.fsm.get_sync_bridge().run(self.execute_step_async(context, arc_name))
 
     async def execute_step_async(
-        self,
-        context: ExecutionContext,
-        arc_name: str | None = None
+        self, context: ExecutionContext, arc_name: str | None = None
     ) -> StepResult:
         """Execute a single transition step asynchronously.
 
@@ -1488,10 +1439,13 @@ class AdvancedFSM:
             transitions = await self._get_available_transitions_async(context, arc_name)
             if not transitions:
                 return StepResult(
-                    from_state=from_state, to_state=from_state,
-                    transition="none", data_before=data_before,
+                    from_state=from_state,
+                    to_state=from_state,
+                    transition="none",
+                    data_before=data_before,
                     data_after=context.get_data_snapshot(),
-                    duration=time.time() - start_time, success=True,
+                    duration=time.time() - start_time,
+                    success=True,
                     is_complete=self._is_at_end_state(context),
                 )
 
@@ -1501,28 +1455,31 @@ class AdvancedFSM:
                 context.data = result
             else:
                 return StepResult(
-                    from_state=from_state, to_state=from_state,
-                    transition=arc.name or "error", data_before=data_before,
+                    from_state=from_state,
+                    to_state=from_state,
+                    transition=arc.name or "error",
+                    data_before=data_before,
                     data_after=context.get_data_snapshot(),
                     duration=time.time() - start_time,
-                    success=False, error=result,
+                    success=False,
+                    error=result,
                 )
 
             at_breakpoint = self._apply_transition(from_state, arc, context)
             await self._execute_state_transforms_async(context, arc.target_state)
             self._record_transition(from_state, arc, context)
-            await self._call_hook_async('on_state_exit', from_state)
-            await self._call_hook_async('on_state_enter', arc.target_state)
+            await self._call_hook_async("on_state_exit", from_state)
+            await self._call_hook_async("on_state_enter", arc.target_state)
 
-            success, error, failed_states = self._step_transform_failure(
-                context, arc.target_state
-            )
+            success, error, failed_states = self._step_transform_failure(context, arc.target_state)
             return StepResult(
-                from_state=from_state, to_state=arc.target_state,
+                from_state=from_state,
+                to_state=arc.target_state,
                 transition=arc.name or f"{from_state}->{arc.target_state}",
                 data_before=data_before,
                 data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time, success=success,
+                duration=time.time() - start_time,
+                success=success,
                 error=error,
                 at_breakpoint=at_breakpoint,
                 is_complete=self._is_at_end_state(context),
@@ -1530,19 +1487,20 @@ class AdvancedFSM:
             )
 
         except Exception as e:
-            await self._call_hook_async('on_error', e)
+            await self._call_hook_async("on_error", e)
             return StepResult(
-                from_state=from_state, to_state=from_state,
-                transition="error", data_before=data_before,
+                from_state=from_state,
+                to_state=from_state,
+                transition="error",
+                data_before=data_before,
                 data_after=context.get_data_snapshot(),
                 duration=time.time() - start_time,
-                success=False, error=str(e),
+                success=False,
+                error=str(e),
             )
 
     def run_until_breakpoint_sync(
-        self,
-        context: ExecutionContext,
-        max_steps: int = 1000
+        self, context: ExecutionContext, max_steps: int = 1000
     ) -> StepResult | None:
         """Run execution until a breakpoint is hit (synchronous).
 
@@ -1578,10 +1536,7 @@ class AdvancedFSM:
         return last_result
 
     def trace_execution_sync(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None,
-        max_steps: int = 1000
+        self, data: dict[str, Any] | Record, initial_state: str | None = None, max_steps: int = 1000
     ) -> list[dict[str, Any]]:
         """Execute with full tracing enabled (synchronous).
 
@@ -1612,10 +1567,7 @@ class AdvancedFSM:
         return self._trace_buffer
 
     def profile_execution_sync(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None,
-        max_steps: int = 1000
+        self, data: dict[str, Any] | Record, initial_state: str | None = None, max_steps: int = 1000
     ) -> dict[str, Any]:
         """Execute with performance profiling (synchronous).
 
@@ -1663,7 +1615,10 @@ class AdvancedFSM:
 
         total_time = time.time() - start_time
         self._profile_data = self._compute_profile_stats(
-            total_time, transitions, state_times, context,
+            total_time,
+            transitions,
+            state_times,
+            context,
             transition_times=transition_times,
         )
 
@@ -1689,28 +1644,26 @@ class AdvancedFSM:
                 as it measures time inside the step itself.  When ``None``
                 (async path), falls back to flattened ``state_times``.
         """
-        all_durations = transition_times or [
-            d for times in state_times.values() for d in times
-        ]
+        all_durations = transition_times or [d for times in state_times.values() for d in times]
         return {
-            'total_time': total_time,
-            'transitions': transitions,
-            'states_visited': len(state_times),
-            'avg_transition_time': (
+            "total_time": total_time,
+            "transitions": transitions,
+            "states_visited": len(state_times),
+            "avg_transition_time": (
                 sum(all_durations) / len(all_durations) if all_durations else 0
             ),
-            'state_times': {
+            "state_times": {
                 state: {
-                    'count': len(times),
-                    'total': sum(times),
-                    'avg': sum(times) / len(times),
-                    'min': min(times),
-                    'max': max(times),
+                    "count": len(times),
+                    "total": sum(times),
+                    "avg": sum(times) / len(times),
+                    "min": min(times),
+                    "max": max(times),
                 }
                 for state, times in state_times.items()
             },
-            'final_state': context.current_state,
-            'final_data': context.get_data_snapshot(),
+            "final_state": context.current_state,
+            "final_data": context.get_data_snapshot(),
         }
 
     def close(self) -> None:
@@ -1798,11 +1751,7 @@ class FSMDebugger:
         """Get current watch variable values."""
         return self.watch_vars.copy()
 
-    def start(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None
-    ) -> None:
+    def start(self, data: dict[str, Any] | Record, initial_state: str | None = None) -> None:
         """Start debugging session (synchronous).
 
         Args:
@@ -1829,7 +1778,7 @@ class FSMDebugger:
                 to_state="none",
                 transition="error",
                 success=False,
-                error="No active debugging session"
+                error="No active debugging session",
             )
 
         result = self.fsm.execute_step_sync(self.context)
@@ -1841,7 +1790,9 @@ class FSMDebugger:
             if result.from_state == result.to_state and result.transition == "none":
                 print(f"Step {self.step_count}: No transition available from '{result.from_state}'")
             else:
-                print(f"Step {self.step_count}: {result.from_state} -> {result.to_state} via '{result.transition}'")
+                print(
+                    f"Step {self.step_count}: {result.from_state} -> {result.to_state} via '{result.transition}'"
+                )
 
             if result.at_breakpoint:
                 print("*** Hit breakpoint ***")
@@ -1920,7 +1871,7 @@ class FSMDebugger:
             return data
 
         # Navigate path
-        for key in path.split('.'):
+        for key in path.split("."):
             if isinstance(data, dict):
                 data = data.get(key)
             elif hasattr(data, key):
@@ -2006,16 +1957,16 @@ class FSMDebugger:
             return {"error": "No active debugging session"}
 
         return {
-            'state': self.context.current_state,
-            'previous_state': self.context.previous_state,
-            'data': self.context.get_data_snapshot(),
-            'is_complete': self.context.is_complete(),
-            'step_count': self.step_count,
-            'at_breakpoint': self.context.current_state in self.fsm._breakpoints,
-            'available_transitions': [
-                {'name': arc.name, 'target': arc.target_state}
+            "state": self.context.current_state,
+            "previous_state": self.context.previous_state,
+            "data": self.context.get_data_snapshot(),
+            "is_complete": self.context.is_complete(),
+            "step_count": self.step_count,
+            "at_breakpoint": self.context.current_state in self.fsm._breakpoints,
+            "available_transitions": [
+                {"name": arc.name, "target": arc.target_state}
                 for arc in self.fsm._get_available_transitions(self.context)
-            ]
+            ],
         }
 
     def get_history(self, limit: int = 10) -> list[StepResult]:
@@ -2048,7 +1999,7 @@ class FSMDebugger:
 def create_advanced_fsm(
     config: str | Path | dict[str, Any] | FSM,
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.
 

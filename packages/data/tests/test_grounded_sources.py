@@ -139,7 +139,9 @@ class TestDatabaseSourceSchemaGeneration:
             created=FieldType.DATETIME,
         )
         source = DatabaseSource(
-            db=AsyncMemoryDatabase(), schema=db_schema, name="events",
+            db=AsyncMemoryDatabase(),
+            schema=db_schema,
+            name="events",
         )
         schema = source.get_schema()
         assert schema is not None
@@ -153,7 +155,9 @@ class TestDatabaseSourceSchemaGeneration:
             embedding=FieldType.VECTOR,
         )
         source = DatabaseSource(
-            db=AsyncMemoryDatabase(), schema=db_schema, name="docs",
+            db=AsyncMemoryDatabase(),
+            schema=db_schema,
+            name="docs",
         )
         schema = source.get_schema()
         assert schema is not None
@@ -288,20 +292,28 @@ class TestDatabaseSourceExecution:
         db.set_schema(schema)
 
         # Insert records
-        await db.create(Record.from_dict({
-            "title": "Intro to Algorithms",
-            "department": "CS",
-            "level": 100,
-            "active": True,
-            "description": "Learn basic algorithms and data structures.",
-        }))
-        await db.create(Record.from_dict({
-            "title": "Linear Algebra",
-            "department": "Math",
-            "level": 200,
-            "active": True,
-            "description": "Matrix operations and vector spaces.",
-        }))
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "Intro to Algorithms",
+                    "department": "CS",
+                    "level": 100,
+                    "active": True,
+                    "description": "Learn basic algorithms and data structures.",
+                }
+            )
+        )
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "Linear Algebra",
+                    "department": "Math",
+                    "level": 200,
+                    "active": True,
+                    "description": "Matrix operations and vector spaces.",
+                }
+            )
+        )
 
         source = DatabaseSource(
             db=db,
@@ -324,7 +336,9 @@ class TestDatabaseSourceExecution:
     async def test_empty_results(self) -> None:
         db = AsyncMemoryDatabase()
         source = DatabaseSource(
-            db=db, schema=DatabaseSchema.create(name=FieldType.STRING), name="empty",
+            db=db,
+            schema=DatabaseSchema.create(name=FieldType.STRING),
+            name="empty",
         )
         results = await source.query(RetrievalIntent(text_queries=["nothing"]))
         assert results == []
@@ -336,10 +350,14 @@ class TestDatabaseSourceExecution:
         db.set_schema(schema)
 
         for i in range(10):
-            await db.create(Record.from_dict({
-                "name": f"record_{i}",
-                "content": f"Content for record {i}",
-            }))
+            await db.create(
+                Record.from_dict(
+                    {
+                        "name": f"record_{i}",
+                        "content": f"Content for record {i}",
+                    }
+                )
+            )
 
         source = DatabaseSource(db=db, schema=schema, name="test", content_field="content")
         results = await source.query(RetrievalIntent(), top_k=3)
@@ -362,30 +380,42 @@ class TestDatabaseSourceExecution:
         schema = _make_course_schema()
         db.set_schema(schema)
 
-        await db.create(Record.from_dict({
-            "title": "Algorithms",
-            "department": "CS",
-            "level": 100,
-            "active": True,
-            "description": "Learn about algorithms.",
-        }))
-        await db.create(Record.from_dict({
-            "title": "Calculus",
-            "department": "Math",
-            "level": 200,
-            "active": True,
-            "description": "Derivatives and integrals.",
-        }))
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "Algorithms",
+                    "department": "CS",
+                    "level": 100,
+                    "active": True,
+                    "description": "Learn about algorithms.",
+                }
+            )
+        )
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "Calculus",
+                    "department": "Math",
+                    "level": 200,
+                    "active": True,
+                    "description": "Derivatives and integrals.",
+                }
+            )
+        )
 
         source = DatabaseSource(
-            db=db, schema=schema, name="courses",
+            db=db,
+            schema=schema,
+            name="courses",
             content_field="description",
             text_search_fields=["title", "description"],
         )
         # Two queries — should find both records (OR, not AND)
-        results = await source.query(RetrievalIntent(
-            text_queries=["algorithms", "calculus"],
-        ))
+        results = await source.query(
+            RetrievalIntent(
+                text_queries=["algorithms", "calculus"],
+            )
+        )
         assert len(results) == 2
         titles = {r.metadata.get("title") for r in results}
         assert "Algorithms" in titles
@@ -404,19 +434,27 @@ class TestDatabaseSourceRelevanceScoring:
             summary=FieldType.TEXT,
         )
         db.set_schema(schema)
-        await db.create(Record.from_dict({
-            "title": "OAuth Grant Types",
-            "summary": "OAuth 2.0 defines several grant types for authorization.",
-        }))
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "OAuth Grant Types",
+                    "summary": "OAuth 2.0 defines several grant types for authorization.",
+                }
+            )
+        )
 
         source = DatabaseSource(
-            db=db, schema=schema, name="docs",
+            db=db,
+            schema=schema,
+            name="docs",
             content_field="summary",
             text_search_fields=["title", "summary"],
         )
-        results = await source.query(RetrievalIntent(
-            text_queries=["OAuth"],
-        ))
+        results = await source.query(
+            RetrievalIntent(
+                text_queries=["OAuth"],
+            )
+        )
         assert len(results) == 1
         # "OAuth" appears in both title and summary → high score
         assert results[0].relevance > 0.5
@@ -449,12 +487,16 @@ class TestDatabaseSourceRelevanceScoring:
         await db.create(Record.from_dict({"dept": "CS", "summary": "Algorithms"}))
 
         source = DatabaseSource(
-            db=db, schema=schema, name="courses",
+            db=db,
+            schema=schema,
+            name="courses",
             content_field="summary",
         )
-        results = await source.query(RetrievalIntent(
-            filters={"courses": {"dept": "CS"}},
-        ))
+        results = await source.query(
+            RetrievalIntent(
+                filters={"courses": {"dept": "CS"}},
+            )
+        )
         assert len(results) == 1
         assert results[0].relevance == 1.0
 
@@ -467,22 +509,34 @@ class TestDatabaseSourceRelevanceScoring:
             body=FieldType.TEXT,
         )
         db.set_schema(schema)
-        await db.create(Record.from_dict({
-            "title": "OAuth Security",
-            "body": "OAuth security considerations and threat model.",
-        }))
-        await db.create(Record.from_dict({
-            "title": "Unrelated Topic",
-            "body": "This mentions OAuth only in passing.",
-        }))
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "OAuth Security",
+                    "body": "OAuth security considerations and threat model.",
+                }
+            )
+        )
+        await db.create(
+            Record.from_dict(
+                {
+                    "title": "Unrelated Topic",
+                    "body": "This mentions OAuth only in passing.",
+                }
+            )
+        )
 
         source = DatabaseSource(
-            db=db, schema=schema, name="docs",
+            db=db,
+            schema=schema,
+            name="docs",
             content_field="body",
             text_search_fields=["title", "body"],
         )
-        results = await source.query(RetrievalIntent(
-            text_queries=["OAuth", "security"],
-        ))
+        results = await source.query(
+            RetrievalIntent(
+                text_queries=["OAuth", "security"],
+            )
+        )
         if len(results) >= 2:
             assert results[0].relevance >= results[1].relevance

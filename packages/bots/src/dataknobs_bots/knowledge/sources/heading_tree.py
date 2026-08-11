@@ -57,8 +57,7 @@ class VectorQueryFn(Protocol):
         top_k: int,
         *,
         filter_metadata: dict[str, Any] | None = None,
-    ) -> list[SourceResult]:
-        ...
+    ) -> list[SourceResult]: ...
 
 
 # ------------------------------------------------------------------
@@ -294,10 +293,7 @@ class HeadingTreeIndex:
         heading metadata — the heading tree would be too sparse to
         be useful.
         """
-        heading_count = sum(
-            1 for r in results
-            if r.metadata.get("headings")
-        )
+        heading_count = sum(1 for r in results if r.metadata.get("headings"))
         if heading_count < min_heading_chunks:
             return None
 
@@ -339,9 +335,10 @@ class HeadingTreeIndex:
         params = _resolve_params(self._config, intent)
 
         logger.info(
-            "HeadingTreeIndex resolving for source '%s': "
-            "entry_strategy=%s, expansion_mode=%s",
-            self._source_name, params.entry_strategy, params.expansion_mode,
+            "HeadingTreeIndex resolving for source '%s': entry_strategy=%s, expansion_mode=%s",
+            self._source_name,
+            params.entry_strategy,
+            params.expansion_mode,
         )
 
         # Pick up the filter slice keyed by our source name and forward
@@ -354,7 +351,9 @@ class HeadingTreeIndex:
 
         # Steps 2-3: Get chunk pool and heading tree for this turn
         chunks_by_id, tree = await self._get_tree_and_chunks(
-            query, params, filter_metadata=filter_metadata,
+            query,
+            params,
+            filter_metadata=filter_metadata,
         )
 
         if tree is None:
@@ -367,7 +366,10 @@ class HeadingTreeIndex:
 
         # Step 4: Find seed headings
         seed_nodes = self._find_seed_headings(
-            query, params, tree, chunks_by_id,
+            query,
+            params,
+            tree,
+            chunks_by_id,
         )
 
         if not seed_nodes:
@@ -378,17 +380,16 @@ class HeadingTreeIndex:
             return []
 
         # Step 5: Filter by min_heading_depth
-        seed_nodes = [
-            n for n in seed_nodes
-            if n.level >= params.min_heading_depth
-        ]
+        seed_nodes = [n for n in seed_nodes if n.level >= params.min_heading_depth]
         if not seed_nodes:
             return []
 
         matched_labels = [n.label for n in seed_nodes]
         logger.info(
             "HeadingTreeIndex: %d heading regions matched for source '%s': %s",
-            len(seed_nodes), self._source_name, matched_labels,
+            len(seed_nodes),
+            self._source_name,
+            matched_labels,
         )
 
         # Step 6: Region selection — narrow candidates to top regions
@@ -398,17 +399,23 @@ class HeadingTreeIndex:
                 selection_llm = self._heading_selection_llm or llm
                 if selection_llm is not None:
                     seed_nodes = await self._llm_select_headings(
-                        query, seed_nodes, selection_llm,
+                        query,
+                        seed_nodes,
+                        selection_llm,
                     )
                 else:
                     # No LLM available — fall through to score-based
                     seed_nodes = self._score_based_region_selection(
-                        seed_nodes, chunks_by_id, params,
+                        seed_nodes,
+                        chunks_by_id,
+                        params,
                     )
             else:
                 # Score-based selection (default, deterministic)
                 seed_nodes = self._score_based_region_selection(
-                    seed_nodes, chunks_by_id, params,
+                    seed_nodes,
+                    chunks_by_id,
+                    params,
                 )
 
         # Step 7: Expand matched regions and collect chunks
@@ -429,12 +436,13 @@ class HeadingTreeIndex:
 
         # Step 8: Cap results
         if len(all_results) > params.max_expanded_results:
-            all_results = all_results[:params.max_expanded_results]
+            all_results = all_results[: params.max_expanded_results]
 
         logger.info(
-            "HeadingTreeIndex: %d heading regions -> %d expanded chunks "
-            "for source '%s'",
-            len(seed_nodes), len(all_results), self._source_name,
+            "HeadingTreeIndex: %d heading regions -> %d expanded chunks for source '%s'",
+            len(seed_nodes),
+            len(all_results),
+            self._source_name,
         )
 
         return all_results
@@ -477,7 +485,9 @@ class HeadingTreeIndex:
 
         # Lazy mode: fetch seeds and build per-turn
         seed_results = await self._fetch_vector_seeds(
-            query, params, filter_metadata=filter_metadata,
+            query,
+            params,
+            filter_metadata=filter_metadata,
         )
         if not seed_results:
             return {}, None
@@ -501,8 +511,7 @@ class HeadingTreeIndex:
         """Fetch seed results via vector search."""
         if self._vector_query_fn is None:
             logger.debug(
-                "No vector_query_fn configured for source '%s', "
-                "cannot fetch seeds in lazy mode",
+                "No vector_query_fn configured for source '%s', cannot fetch seeds in lazy mode",
                 self._source_name,
             )
             return []
@@ -516,15 +525,13 @@ class HeadingTreeIndex:
         except Exception:
             logger.warning(
                 "Vector query failed for source '%s'",
-                self._source_name, exc_info=True,
+                self._source_name,
+                exc_info=True,
             )
             return []
 
         # Filter by score threshold
-        return [
-            r for r in results
-            if r.relevance >= params.seed_score_threshold
-        ]
+        return [r for r in results if r.relevance >= params.seed_score_threshold]
 
     # ------------------------------------------------------------------
     # Private: seeding strategies
@@ -641,12 +648,13 @@ class HeadingTreeIndex:
 
         # Rank by score descending, take top N
         scored.sort(key=lambda x: x[1], reverse=True)
-        selected = scored[:params.top_regions]
+        selected = scored[: params.top_regions]
 
         logger.info(
-            "HeadingTreeIndex: score-based selection for source '%s': "
-            "%d candidates -> top %d: %s",
-            self._source_name, len(scored), len(selected),
+            "HeadingTreeIndex: score-based selection for source '%s': %d candidates -> top %d: %s",
+            self._source_name,
+            len(scored),
+            len(selected),
             [(n.label, f"{s:.3f}") for n, s in selected],
         )
 
@@ -673,8 +681,7 @@ class HeadingTreeIndex:
         # Use letter-based IDs to avoid collision with section numbers
         # in heading labels (e.g. "10. Security Considerations").
         heading_list = "\n".join(
-            f"  ({_index_to_letter(i)}) {n.label}"
-            for i, n in enumerate(truncated)
+            f"  ({_index_to_letter(i)}) {n.label}" for i, n in enumerate(truncated)
         )
 
         prompt = self._config.resolution_prompt or (
@@ -699,9 +706,9 @@ class HeadingTreeIndex:
                 return [truncated[i] for i in selected_indices]
         except Exception:
             logger.warning(
-                "LLM heading selection failed for source '%s', "
-                "using all candidates",
-                self._source_name, exc_info=True,
+                "LLM heading selection failed for source '%s', using all candidates",
+                self._source_name,
+                exc_info=True,
             )
 
         return candidates
@@ -735,9 +742,9 @@ def _parse_letter_indices(text: str, max_index: int) -> list[int]:
             dropped.append(letter)
     if dropped:
         logger.warning(
-            "LLM heading selection: dropped out-of-range IDs %s "
-            "(max valid: %s)",
-            dropped, _index_to_letter(max_index - 1),
+            "LLM heading selection: dropped out-of-range IDs %s (max valid: %s)",
+            dropped,
+            _index_to_letter(max_index - 1),
         )
     return indices
 
@@ -768,8 +775,8 @@ def _parse_bracket_indices(text: str, max_index: int) -> list[int]:
             dropped.append(idx)
     if dropped:
         logger.warning(
-            "LLM heading selection: dropped out-of-range indices %s "
-            "(max valid: %d)",
-            dropped, max_index - 1,
+            "LLM heading selection: dropped out-of-range indices %s (max valid: %d)",
+            dropped,
+            max_index - 1,
         )
     return indices

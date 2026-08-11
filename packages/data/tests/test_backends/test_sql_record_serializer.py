@@ -14,9 +14,7 @@ import uuid
 from dataknobs_data import Record
 from dataknobs_data.backends.sql_base import SQLRecordSerializer
 
-UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 class TestRowToRecord:
@@ -32,9 +30,7 @@ class TestRowToRecord:
 
     def test_missing_id_does_not_raise(self):
         """Some test/in-memory paths may pass rows without ``id``."""
-        record = SQLRecordSerializer.row_to_record(
-            {"data": '{"x": 1}', "metadata": None}
-        )
+        record = SQLRecordSerializer.row_to_record({"data": '{"x": 1}', "metadata": None})
         # Without an ``id`` in the row, ``ensure_record_id`` is skipped.
         # The record's id is whatever ``json_to_record`` assigned (None).
         assert record.fields["x"].value == 1
@@ -92,16 +88,11 @@ class TestRecordToRow:
 
     def test_generates_unique_ids(self):
         """Each call without an id gets its own UUID (no reuse)."""
-        seen = {
-            SQLRecordSerializer.record_to_row(Record({"x": i}))["id"]
-            for i in range(5)
-        }
+        seen = {SQLRecordSerializer.record_to_row(Record({"x": i}))["id"] for i in range(5)}
         assert len(seen) == 5
 
     def test_data_is_serialized_json_string(self):
-        row = SQLRecordSerializer.record_to_row(
-            Record({"x": 1, "y": "two"}), id="k"
-        )
+        row = SQLRecordSerializer.record_to_row(Record({"x": 1, "y": "two"}), id="k")
         assert isinstance(row["data"], str)
         decoded = json.loads(row["data"])
         assert decoded == {"x": 1, "y": "two"}
@@ -139,9 +130,7 @@ class TestRoundTrip:
         assert restored.fields["z"].value == [1, 2, 3]
 
     def test_round_trip_preserves_metadata(self):
-        original = Record(
-            {"k": "v"}, id="r2", metadata={"source": "doc-1", "version": 3}
-        )
+        original = Record({"k": "v"}, id="r2", metadata={"source": "doc-1", "version": 3})
         row = SQLRecordSerializer.record_to_row(original, id="r2")
         restored = SQLRecordSerializer.row_to_record(row)
 

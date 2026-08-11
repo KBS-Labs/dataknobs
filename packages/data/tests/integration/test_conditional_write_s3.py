@@ -47,9 +47,7 @@ def _store_honors_if_match(cfg: dict[str, Any]) -> bool:
     client.put_object(Bucket=cfg["bucket"], Key=key, Body=b"first")
     try:
         # A deliberately-wrong ETag must be rejected.
-        client.put_object(
-            Bucket=cfg["bucket"], Key=key, Body=b"second", IfMatch='"0deadbeef0"'
-        )
+        client.put_object(Bucket=cfg["bucket"], Key=key, Body=b"second", IfMatch='"0deadbeef0"')
         return False  # accepted a bogus If-Match → header ignored
     except ClientError as e:
         status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
@@ -159,9 +157,7 @@ async def test_async_conditional_upsert_absent_raises(
     """upsert() of a missing id with a token is itself a conflict (never inserts)."""
     with assert_no_blocking():
         with pytest.raises(ConcurrencyError) as excinfo:
-            await async_db.upsert(
-                "ghost", Record({"v": 1}, id="ghost"), expected_version='"x"'
-            )
+            await async_db.upsert("ghost", Record({"v": 1}, id="ghost"), expected_version='"x"')
     assert excinfo.value.context["actual_version"] is None
 
 
@@ -197,9 +193,7 @@ def _store_honors_delete_if_match(cfg: dict[str, Any]) -> bool:
         client.delete_object(Bucket=cfg["bucket"], Key=key)
 
 
-def test_sync_conditional_delete(
-    sync_db: SyncS3Database, s3_config: dict[str, Any]
-) -> None:
+def test_sync_conditional_delete(sync_db: SyncS3Database, s3_config: dict[str, Any]) -> None:
     """Conditional delete: stale raises, fresh removes, missing returns False."""
     if not _store_honors_delete_if_match(s3_config):
         pytest.skip("S3 store under test does not honor If-Match conditional deletes")

@@ -52,7 +52,7 @@ def resolve_json_column_and_path(field: str) -> tuple[str, str]:
             f"column, not a JSON column). Gate the call on is_storage_key_field()."
         )
     if field.startswith(_METADATA_FIELD_PREFIX):
-        return "metadata", field[len(_METADATA_FIELD_PREFIX):]
+        return "metadata", field[len(_METADATA_FIELD_PREFIX) :]
     return "data", field
 
 
@@ -65,8 +65,7 @@ def validate_field_name(field: str) -> None:
     """
     if not _FIELD_NAME_RE.match(field):
         raise ValueError(
-            f"Invalid field name: {field!r}. "
-            f"Field names must match [A-Za-z_][A-Za-z0-9_]*."
+            f"Invalid field name: {field!r}. Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
 
 
@@ -183,9 +182,7 @@ def constraint_violation_error(record_id: str | None = None) -> RecordValidation
         The error to raise ``from`` the driver's exception.
     """
     if record_id:
-        return RecordValidationError(
-            f"Record '{record_id}' was rejected by a database constraint"
-        )
+        return RecordValidationError(f"Record '{record_id}' was rejected by a database constraint")
     return RecordValidationError("A record was rejected by a database constraint")
 
 
@@ -199,7 +196,7 @@ class SQLRecordSerializer:
     @staticmethod
     def record_to_json(record: Record) -> str:
         """Convert a Record to JSON string for storage.
-        
+
         Handles VectorField serialization to preserve metadata.
         """
         from ..fields import VectorField
@@ -210,7 +207,7 @@ class SQLRecordSerializer:
             if isinstance(field_obj, VectorField):
                 data[field_name] = field_obj.to_dict()
             # Handle other special fields that have to_list
-            elif hasattr(field_obj, 'to_list') and callable(field_obj.to_list):
+            elif hasattr(field_obj, "to_list") and callable(field_obj.to_list):
                 data[field_name] = field_obj.to_list()
             else:
                 data[field_name] = field_obj.value
@@ -219,13 +216,13 @@ class SQLRecordSerializer:
     @staticmethod
     def get_vector_extraction_sql(field_name: str, dialect: str = "postgres") -> str:
         """Get SQL expression to extract vector from JSON field.
-        
+
         Handles both raw arrays and VectorField dict formats.
-        
+
         Args:
             field_name: Name of the vector field
             dialect: SQL dialect (postgres, sqlite, etc.)
-            
+
         Returns:
             SQL expression to extract vector value
         """
@@ -252,13 +249,13 @@ class SQLRecordSerializer:
     @staticmethod
     def json_to_record(data_json: str, metadata_json: str | None = None) -> Record:
         """Convert JSON strings to a Record.
-        
+
         Reconstructs VectorField objects from serialized format.
         """
         from ..fields import Field, VectorField
 
         data = json.loads(data_json) if data_json else {}
-        metadata = json.loads(metadata_json) if metadata_json and metadata_json != 'null' else {}
+        metadata = json.loads(metadata_json) if metadata_json and metadata_json != "null" else {}
 
         # Reconstruct fields properly, especially VectorFields
         fields = {}
@@ -301,15 +298,14 @@ class SQLRecordSerializer:
 
         # Ensure the record has its ID set from the row
         from ..database_utils import ensure_record_id
+
         if "id" in row:
             record = ensure_record_id(record, row["id"])
 
         return record
 
     @staticmethod
-    def record_to_row(
-        record: Record, id: str | None = None
-    ) -> dict[str, Any]:
+    def record_to_row(record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to a database row.
 
         Outbound counterpart to :meth:`row_to_record`. Centralizes the
@@ -330,18 +326,22 @@ class SQLRecordSerializer:
         return {
             "id": id or str(uuid.uuid4()),
             "data": SQLRecordSerializer.record_to_json(record),
-            "metadata": (
-                json.dumps(record.metadata) if record.metadata else None
-            ),
+            "metadata": (json.dumps(record.metadata) if record.metadata else None),
         }
 
 
 class SQLQueryBuilder:
     """Builds SQL queries from Query objects."""
 
-    def __init__(self, table_name: str, schema_name: str | None = None, dialect: str = "standard", param_style: str = "numeric"):
+    def __init__(
+        self,
+        table_name: str,
+        schema_name: str | None = None,
+        dialect: str = "standard",
+        param_style: str = "numeric",
+    ):
         """Initialize the SQL query builder.
-        
+
         Args:
             table_name: Name of the database table
             schema_name: Optional schema name
@@ -362,11 +362,11 @@ class SQLQueryBuilder:
 
     def _get_param_placeholder(self, param_num: int, param_name: str | None = None) -> str:
         """Get the appropriate parameter placeholder based on param_style.
-        
+
         Args:
             param_num: Parameter number (1-based)
             param_name: Optional parameter name for pyformat style
-            
+
         Returns:
             Parameter placeholder string
         """
@@ -384,7 +384,9 @@ class SQLQueryBuilder:
             else:
                 return "?"
 
-    def build_create_query(self, record: Record, record_id: str | None = None) -> tuple[str, list[Any]]:
+    def build_create_query(
+        self, record: Record, record_id: str | None = None
+    ) -> tuple[str, list[Any]]:
         """Build an INSERT query for creating a record.
 
         Args:
@@ -418,10 +420,10 @@ class SQLQueryBuilder:
 
     def build_read_query(self, record_id: str) -> tuple[str, list[Any]]:
         """Build a SELECT query for reading a record by ID.
-        
+
         Args:
             record_id: The record ID
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -432,11 +434,11 @@ class SQLQueryBuilder:
 
     def build_update_query(self, record_id: str, record: Record) -> tuple[str, list[Any]]:
         """Build an UPDATE query for updating a record.
-        
+
         Args:
             record_id: The record ID
             record: The updated record
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -467,10 +469,10 @@ class SQLQueryBuilder:
 
     def build_delete_query(self, record_id: str) -> tuple[str, list[Any]]:
         """Build a DELETE query for deleting a record.
-        
+
         Args:
             record_id: The record ID
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -481,10 +483,10 @@ class SQLQueryBuilder:
 
     def build_exists_query(self, record_id: str) -> tuple[str, list[Any]]:
         """Build a query to check if a record exists.
-        
+
         Args:
             record_id: The record ID
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -535,11 +537,11 @@ class SQLQueryBuilder:
 
     def _build_complex_condition(self, condition: Any, param_start: int) -> tuple[str, list[Any]]:
         """Build WHERE clause for complex boolean logic conditions.
-        
+
         Args:
             condition: The Condition object (LogicCondition or FilterCondition)
             param_start: Starting parameter number
-            
+
         Returns:
             Tuple of (SQL clause, parameters)
         """
@@ -558,7 +560,9 @@ class SQLQueryBuilder:
                 clauses = []
                 current_param = param_start
                 for sub_condition in condition.conditions:
-                    sub_clause, sub_params = self._build_complex_condition(sub_condition, current_param)
+                    sub_clause, sub_params = self._build_complex_condition(
+                        sub_condition, current_param
+                    )
                     if sub_clause:
                         clauses.append(sub_clause)
                         params.extend(sub_params)
@@ -569,7 +573,9 @@ class SQLQueryBuilder:
                 clauses = []
                 current_param = param_start
                 for sub_condition in condition.conditions:
-                    sub_clause, sub_params = self._build_complex_condition(sub_condition, current_param)
+                    sub_clause, sub_params = self._build_complex_condition(
+                        sub_condition, current_param
+                    )
                     if sub_clause:
                         clauses.append(sub_clause)
                         params.extend(sub_params)
@@ -577,19 +583,23 @@ class SQLQueryBuilder:
                 return (f"({' OR '.join(clauses)})", params) if clauses else ("", [])
 
             elif condition.operator == LogicOperator.NOT:
-                sub_clause, sub_params = self._build_complex_condition(condition.conditions[0], param_start)
+                sub_clause, sub_params = self._build_complex_condition(
+                    condition.conditions[0], param_start
+                )
                 params.extend(sub_params)
                 return (f"NOT ({sub_clause})", params) if sub_clause else ("", [])
 
         return ("", [])
 
-    def build_where_clause(self, query: Query | None, param_start: int = 1) -> tuple[str, list[Any]]:
+    def build_where_clause(
+        self, query: Query | None, param_start: int = 1
+    ) -> tuple[str, list[Any]]:
         """Build just the WHERE clause from a Query object.
-        
+
         Args:
             query: The Query object (can be None)
             param_start: Starting parameter number for placeholders
-            
+
         Returns:
             Tuple of (WHERE clause SQL, parameters)
             Returns empty string and empty list if no filters
@@ -660,12 +670,12 @@ class SQLQueryBuilder:
 
     def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> tuple[str, list[Any]]:
         """Build a batch UPDATE query using CASE expressions.
-        
+
         This provides efficient batch updates for both PostgreSQL and SQLite.
-        
+
         Args:
             updates: List of (id, record) tuples to update
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -706,7 +716,10 @@ class SQLQueryBuilder:
             id_placeholders = ["?" for _ in update_ids]
         else:
             # PostgreSQL with numbered/named placeholders
-            id_placeholders = [self._get_param_placeholder(i) for i in range(id_param_start, id_param_start + len(update_ids))]
+            id_placeholders = [
+                self._get_param_placeholder(i)
+                for i in range(id_param_start, id_param_start + len(update_ids))
+            ]
         params.extend(update_ids)
 
         # Build the UPDATE query
@@ -714,10 +727,10 @@ class SQLQueryBuilder:
         query = f"""
         UPDATE {self.qualified_table}
         SET 
-            data = CASE {' '.join(data_cases)} ELSE data END,
-            metadata = CASE {' '.join(metadata_cases)} ELSE metadata END,
+            data = CASE {" ".join(data_cases)} ELSE data END,
+            metadata = CASE {" ".join(metadata_cases)} ELSE metadata END,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id IN ({', '.join(id_placeholders)})
+        WHERE id IN ({", ".join(id_placeholders)})
         """
 
         # PostgreSQL can use RETURNING
@@ -788,7 +801,7 @@ class SQLQueryBuilder:
         # Build the INSERT query
         query = f"""
         INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-        VALUES {', '.join(values_clauses)}
+        VALUES {", ".join(values_clauses)}
         """
 
         # PostgreSQL can use RETURNING
@@ -837,9 +850,7 @@ class SQLQueryBuilder:
             record_id = record.id or mint()
             ids.append(record_id)
             data_json = self._record_to_json(record)
-            metadata_json = (
-                json.dumps(record.metadata) if record.metadata else None
-            )
+            metadata_json = json.dumps(record.metadata) if record.metadata else None
             rows[record_id] = (data_json, metadata_json)
 
         values_clauses = []
@@ -849,9 +860,7 @@ class SQLQueryBuilder:
             p1 = self._get_param_placeholder(param_idx)
             p2 = self._get_param_placeholder(param_idx + 1)
             p3 = self._get_param_placeholder(param_idx + 2)
-            values_clauses.append(
-                f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-            )
+            values_clauses.append(f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
             params.extend([record_id, data_json, metadata_json])
 
         # EXCLUDED.updated_at is the CURRENT_TIMESTAMP from this row's VALUES
@@ -860,7 +869,7 @@ class SQLQueryBuilder:
         # rejects a bare CURRENT_TIMESTAMP there, PostgreSQL/SQLite accept both.
         query = f"""
         INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-        VALUES {', '.join(values_clauses)}
+        VALUES {", ".join(values_clauses)}
         ON CONFLICT (id) DO UPDATE SET
             data = EXCLUDED.data,
             metadata = EXCLUDED.metadata,
@@ -874,12 +883,12 @@ class SQLQueryBuilder:
 
     def build_batch_delete_query(self, ids: list[str]) -> tuple[str, list[Any]]:
         """Build a batch DELETE query for multiple records.
-        
+
         Deletes multiple records in a single query.
-        
+
         Args:
             ids: List of record IDs to delete
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -891,7 +900,7 @@ class SQLQueryBuilder:
 
         query = f"""
         DELETE FROM {self.qualified_table}
-        WHERE id IN ({', '.join(placeholders)})
+        WHERE id IN ({", ".join(placeholders)})
         """
 
         # PostgreSQL can use RETURNING
@@ -902,10 +911,10 @@ class SQLQueryBuilder:
 
     def build_count_query(self, query: Query | None = None) -> tuple[str, list[Any]]:
         """Build a COUNT query.
-        
+
         Args:
             query: Optional Query object for filtering
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
@@ -916,7 +925,7 @@ class SQLQueryBuilder:
             # Remove ORDER BY, LIMIT, OFFSET clauses
             for clause in ["ORDER BY", "LIMIT", "OFFSET"]:
                 if clause in count_query:
-                    count_query = count_query[:count_query.index(clause)]
+                    count_query = count_query[: count_query.index(clause)]
             return count_query.strip(), params
         else:
             return f"SELECT COUNT(*) FROM {self.qualified_table}", []
@@ -942,7 +951,11 @@ class SQLQueryBuilder:
         return self._build_json_field_expr(nested_path, column=column, as_text=False)
 
     def _build_json_field_expr(
-        self, field: str, column: str = "data", *, as_text: bool = True,
+        self,
+        field: str,
+        column: str = "data",
+        *,
+        as_text: bool = True,
     ) -> str:
         """Build a SQL expression to extract a value from a JSON/JSONB column.
 
@@ -976,9 +989,7 @@ class SQLQueryBuilder:
         """
         _allowed_columns = {"data", "metadata"}
         if column not in _allowed_columns:
-            raise ValueError(
-                f"column must be one of {_allowed_columns!r}, got {column!r}"
-            )
+            raise ValueError(f"column must be one of {_allowed_columns!r}, got {column!r}")
 
         # Validate field path segments to prevent SQL injection
         parts = field.split(".")
@@ -1018,11 +1029,18 @@ class SQLQueryBuilder:
             The expression, potentially wrapped with a dialect-specific cast.
         """
         needs_ordered_cast = op in [
-            Operator.GT, Operator.GTE, Operator.LT, Operator.LTE,
-            Operator.BETWEEN, Operator.NOT_BETWEEN,
+            Operator.GT,
+            Operator.GTE,
+            Operator.LT,
+            Operator.LTE,
+            Operator.BETWEEN,
+            Operator.NOT_BETWEEN,
         ]
         needs_equality_cast = op in [
-            Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN,
+            Operator.EQ,
+            Operator.NEQ,
+            Operator.IN,
+            Operator.NOT_IN,
         ]
 
         # Determine target type from the value
@@ -1090,7 +1108,11 @@ class SQLQueryBuilder:
         return None
 
     def _build_operator_clause(
-        self, field_expr: str, op: Operator, value: Any, param_start: int,
+        self,
+        field_expr: str,
+        op: Operator,
+        value: Any,
+        param_start: int,
     ) -> tuple[str, list[Any]]:
         """Build the comparison clause for a given operator.
 
@@ -1122,16 +1144,20 @@ class SQLQueryBuilder:
         elif op == Operator.NOT_LIKE:
             return f"{field_expr} NOT LIKE {param_placeholder}", [value]
         elif op == Operator.IN:
-            placeholders = ", ".join([
-                self._get_param_placeholder(i)
-                for i in range(param_start, param_start + len(value))
-            ])
+            placeholders = ", ".join(
+                [
+                    self._get_param_placeholder(i)
+                    for i in range(param_start, param_start + len(value))
+                ]
+            )
             return f"{field_expr} IN ({placeholders})", list(value)
         elif op == Operator.NOT_IN:
-            placeholders = ", ".join([
-                self._get_param_placeholder(i)
-                for i in range(param_start, param_start + len(value))
-            ])
+            placeholders = ", ".join(
+                [
+                    self._get_param_placeholder(i)
+                    for i in range(param_start, param_start + len(value))
+                ]
+            )
             return f"{field_expr} NOT IN ({placeholders})", list(value)
         elif op == Operator.BETWEEN:
             placeholder1 = self._get_param_placeholder(param_start)
@@ -1158,7 +1184,10 @@ class SQLQueryBuilder:
             raise ValueError(f"Unsupported operator: {op}")
 
     def _build_starts_with_clause(
-        self, field_expr: str, value: Any, param_start: int,
+        self,
+        field_expr: str,
+        value: Any,
+        param_start: int,
     ) -> tuple[str, list[Any]]:
         r"""Build a case-sensitive literal-prefix clause for ``STARTS_WITH``.
 
@@ -1242,7 +1271,7 @@ class SQLQueryBuilder:
 
         # The reserved storage-key field is a real column, not inside JSON.
         if is_storage_key_field(field):
-            field_expr = 'id'
+            field_expr = "id"
         else:
             # Non-storage-key fields target the data JSONB column, or the
             # metadata column when prefixed ``metadata.`` (dot-notation nesting).
@@ -1271,10 +1300,10 @@ class SQLQueryBuilder:
     @staticmethod
     def row_to_record(row: dict[str, Any]) -> Record:
         """Convert a database row to a Record.
-        
+
         Args:
             row: Database row as dictionary
-            
+
         Returns:
             Record object
         """
@@ -1436,20 +1465,10 @@ class SQLTableManager:
             schema = self.schema_name or "main"
             return sql, (schema, self.table_name)
         elif self.dialect == "sqlite":
-            sql = (
-                "SELECT EXISTS ("
-                "SELECT 1 FROM sqlite_master "
-                "WHERE type = 'table' AND name = ?"
-                ")"
-            )
+            sql = "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
             return sql, (self.table_name,)
         else:
-            sql = (
-                "SELECT EXISTS ("
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = ?"
-                ")"
-            )
+            sql = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = ?)"
             return sql, (self.table_name,)
 
     @staticmethod

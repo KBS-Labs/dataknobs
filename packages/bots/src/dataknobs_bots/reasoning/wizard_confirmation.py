@@ -150,11 +150,7 @@ class ConfirmationEvaluator:
         }
         prior = wizard_state.get_stage_snapshot(stage_name)
         # Keys whose values changed
-        changed = {
-            k
-            for k in current
-            if current.get(k) != (prior or {}).get(k)
-        }
+        changed = {k for k in current if current.get(k) != (prior or {}).get(k)}
         # Keys present in prior snapshot but now absent/None (cleared)
         cleared = set((prior or {}).keys()) - set(current.keys())
         return changed | cleared

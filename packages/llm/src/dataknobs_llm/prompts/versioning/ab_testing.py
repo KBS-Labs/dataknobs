@@ -64,7 +64,9 @@ class ABTestManager:
         """
         self.storage = storage if storage is not None else {}
         self._experiments: Dict[str, PromptExperiment] = {}  # experiment_id -> PromptExperiment
-        self._user_assignments: Dict[str, Dict[str, str]] = {}  # experiment_id -> {user_id -> version}
+        self._user_assignments: Dict[
+            str, Dict[str, str]
+        ] = {}  # experiment_id -> {user_id -> version}
 
     async def create_experiment(
         self,
@@ -99,10 +101,7 @@ class ABTestManager:
         if traffic_split is None:
             # Normalize weights to ensure they sum to 1.0
             total_weight = sum(v.weight for v in variants)
-            traffic_split = {
-                v.version: v.weight / total_weight
-                for v in variants
-            }
+            traffic_split = {v.version: v.weight / total_weight for v in variants}
 
         # Create experiment
         experiment = PromptExperiment(
@@ -240,10 +239,7 @@ class ABTestManager:
                 return existing
 
         # Assign user to variant using hash-based selection
-        assigned_version = self._hash_based_assignment(
-            user_id,
-            experiment.traffic_split
-        )
+        assigned_version = self._hash_based_assignment(user_id, experiment.traffic_split)
 
         # Store assignment
         if experiment_id not in self._user_assignments:

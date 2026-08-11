@@ -150,9 +150,7 @@ def test_names_may_be_a_one_shot_iterable() -> None:
     leaked: SyncLoopBridge | None = None
     try:
         with pytest.raises(AssertionError, match="daemon thread"):
-            with assert_no_leaked_bridge_threads(
-                names=(name for name in [_BRIDGE_THREAD])
-            ):
+            with assert_no_leaked_bridge_threads(names=(name for name in [_BRIDGE_THREAD])):
                 leaked = SyncLoopBridge()
                 leaked.run(_answer())
                 # deliberately not closed

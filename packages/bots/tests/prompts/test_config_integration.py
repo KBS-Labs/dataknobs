@@ -24,17 +24,19 @@ from dataknobs_llm.prompts import CompositePromptLibrary, ConfigPromptLibrary
 # PromptResolver tests
 # ============================================================================
 
-class TestPromptResolver:
 
+class TestPromptResolver:
     def test_resolve_simple_format_template(self) -> None:
-        library = ConfigPromptLibrary(config={
-            "system": {
-                "test.greeting": {
-                    "template": "Hello, {name}!",
-                    "template_syntax": "format",
+        library = ConfigPromptLibrary(
+            config={
+                "system": {
+                    "test.greeting": {
+                        "template": "Hello, {name}!",
+                        "template_syntax": "format",
+                    },
                 },
-            },
-        })
+            }
+        )
         resolver = PromptResolver(library)
         result = resolver.resolve("test.greeting", name="World")
         assert result == "Hello, World!"
@@ -152,7 +154,6 @@ class TestPromptResolver:
 
 
 class TestPromptResolverWithOverrides:
-
     def test_override_fragment_changes_meta_output(self) -> None:
         """Overriding a fragment changes the composed meta-prompt."""
         custom_keys = dict(get_all_bots_keys())
@@ -177,14 +178,16 @@ class TestPromptResolverWithOverrides:
 
     def test_composite_override_precedence(self) -> None:
         """Consumer overrides take precedence over defaults."""
-        override_library = ConfigPromptLibrary(config={
-            "system": {
-                "wizard.clarification.header": {
-                    "template": "## CUSTOM Clarification",
-                    "template_syntax": "format",
+        override_library = ConfigPromptLibrary(
+            config={
+                "system": {
+                    "wizard.clarification.header": {
+                        "template": "## CUSTOM Clarification",
+                        "template_syntax": "format",
+                    },
                 },
-            },
-        })
+            }
+        )
         default_library = get_default_prompt_library()
 
         composite = CompositePromptLibrary(
@@ -207,8 +210,8 @@ class TestPromptResolverWithOverrides:
 # FocusGuard integration tests
 # ============================================================================
 
-class TestFocusGuardPromptIntegration:
 
+class TestFocusGuardPromptIntegration:
     def test_focus_guard_with_resolver(self) -> None:
         from dataknobs_bots.reasoning.focus_guard import FocusContext, FocusGuard
 
@@ -271,8 +274,8 @@ class TestFocusGuardPromptIntegration:
 # SummaryMemory integration tests
 # ============================================================================
 
-class TestSummaryMemoryPromptIntegration:
 
+class TestSummaryMemoryPromptIntegration:
     def test_summary_memory_with_resolver(self) -> None:
         from dataknobs_bots.memory.summary import SummaryMemory
         from dataknobs_llm import EchoProvider
@@ -320,8 +323,8 @@ class TestSummaryMemoryPromptIntegration:
 # BotTestHarness integration tests
 # ============================================================================
 
-class TestBotPromptResolverIntegration:
 
+class TestBotPromptResolverIntegration:
     @pytest.mark.asyncio
     async def test_bot_has_prompt_resolver(self) -> None:
         """Bot created via BotTestHarness has a prompt_resolver."""
@@ -337,9 +340,7 @@ class TestBotPromptResolverIntegration:
             main_responses=[text_response("Hello!")],
         ) as harness:
             assert harness.bot.prompt_resolver is not None
-            assert isinstance(
-                harness.bot.prompt_resolver, PromptResolver
-            )
+            assert isinstance(harness.bot.prompt_resolver, PromptResolver)
 
     @pytest.mark.asyncio
     async def test_bot_resolver_has_default_keys(self) -> None:

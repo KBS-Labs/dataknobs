@@ -167,6 +167,7 @@ def example_streaming():
 
     # Use the example document
     from pathlib import Path
+
     example_file = Path(__file__).parent / "example_document.md"
     print(f"\nStreaming {example_file.name}:")
 

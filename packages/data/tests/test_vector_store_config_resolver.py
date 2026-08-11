@@ -62,9 +62,7 @@ def test_registered_backend_without_config_cls_is_skipped() -> None:
     def _untyped_factory(config: object = None, **_: object) -> object:
         raise NotImplementedError  # never built — resolver only reads the type
 
-    vector_backends.register(
-        "untyped_test_backend", _untyped_factory, override=True
-    )
+    vector_backends.register("untyped_test_backend", _untyped_factory, override=True)
     try:
         assert _resolver()({"backend": "untyped_test_backend"}) is SKIP_VALIDATION
     finally:

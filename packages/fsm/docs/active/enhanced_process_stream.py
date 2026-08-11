@@ -13,10 +13,10 @@ async def process_stream_enhanced(
     sink: str | None = None,
     chunk_size: int = 100,
     on_progress: Union[Callable, None] = None,
-    input_format: str = 'auto',  # 'auto', 'jsonl', 'json', 'csv', 'text'
-    text_field_name: str = 'text',  # Field name for text lines
-    csv_delimiter: str = ',',
-    csv_has_header: bool = True
+    input_format: str = "auto",  # 'auto', 'jsonl', 'json', 'csv', 'text'
+    text_field_name: str = "text",  # Field name for text lines
+    csv_delimiter: str = ",",
+    csv_has_header: bool = True,
 ) -> Dict[str, Any]:
     """Process a stream of data through the FSM with multiple format support.
 
@@ -37,17 +37,11 @@ async def process_stream_enhanced(
     from ..streaming.core import StreamConfig as CoreStreamConfig
 
     # Configure streaming
-    stream_config = CoreStreamConfig(
-        chunk_size=chunk_size,
-        parallelism=4,
-        memory_limit_mb=1024
-    )
+    stream_config = CoreStreamConfig(chunk_size=chunk_size, parallelism=4, memory_limit_mb=1024)
 
     # Create async stream executor
     stream_executor = AsyncStreamExecutor(
-        fsm=self._fsm,
-        stream_config=stream_config,
-        progress_callback=on_progress
+        fsm=self._fsm, stream_config=stream_config, progress_callback=on_progress
     )
 
     # Handle file source
@@ -55,24 +49,25 @@ async def process_stream_enhanced(
         file_path = Path(source)
 
         # Auto-detect format if needed
-        if input_format == 'auto':
+        if input_format == "auto":
             suffix = file_path.suffix.lower()
-            if suffix in ['.jsonl', '.ndjson']:
-                input_format = 'jsonl'
-            elif suffix == '.json':
-                input_format = 'json'
-            elif suffix in ['.csv', '.tsv']:
-                input_format = 'csv'
-                if suffix == '.tsv':
-                    csv_delimiter = '\t'
-            elif suffix in ['.txt', '.text', '.log']:
-                input_format = 'text'
+            if suffix in [".jsonl", ".ndjson"]:
+                input_format = "jsonl"
+            elif suffix == ".json":
+                input_format = "json"
+            elif suffix in [".csv", ".tsv"]:
+                input_format = "csv"
+                if suffix == ".tsv":
+                    csv_delimiter = "\t"
+            elif suffix in [".txt", ".text", ".log"]:
+                input_format = "text"
             else:
                 # Default to text for unknown extensions
-                input_format = 'text'
+                input_format = "text"
 
         # Create appropriate file reader based on format
-        if input_format == 'jsonl':
+        if input_format == "jsonl":
+
             async def file_reader():
                 with open(file_path) as f:
                     for line in f:
@@ -83,7 +78,8 @@ async def process_stream_enhanced(
                                 # Skip malformed JSON lines
                                 continue
 
-        elif input_format == 'json':
+        elif input_format == "json":
+
             async def file_reader():
                 with open(file_path) as f:
                     data = json.load(f)
@@ -93,10 +89,15 @@ async def process_stream_enhanced(
                     else:
                         yield data
 
-        elif input_format == 'csv':
+        elif input_format == "csv":
+
             async def file_reader():
-                with open(file_path, newline='') as f:
-                    reader = csv.DictReader(f, delimiter=csv_delimiter) if csv_has_header else csv.reader(f, delimiter=csv_delimiter)
+                with open(file_path, newline="") as f:
+                    reader = (
+                        csv.DictReader(f, delimiter=csv_delimiter)
+                        if csv_has_header
+                        else csv.reader(f, delimiter=csv_delimiter)
+                    )
 
                     if csv_has_header:
                         # DictReader yields dicts
@@ -105,13 +106,16 @@ async def process_stream_enhanced(
                     else:
                         # Regular reader yields lists, convert to dict with numeric keys
                         for row in reader:
-                            yield {f'col_{i}': val for i, val in enumerate(row)}
+                            yield {f"col_{i}": val for i, val in enumerate(row)}
 
-        elif input_format == 'text':
+        elif input_format == "text":
+
             async def file_reader():
                 with open(file_path) as f:
                     for line in f:
-                        line = line.rstrip('\n\r')  # Remove line endings but preserve other whitespace
+                        line = line.rstrip(
+                            "\n\r"
+                        )  # Remove line endings but preserve other whitespace
                         if line or not skip_empty_lines:  # Include empty lines if not skipping
                             yield {text_field_name: line}
 
@@ -127,24 +131,26 @@ async def process_stream_enhanced(
     sink_func = None
     if sink:
         sink_path = Path(sink)
-        sink_format = 'jsonl'  # Default output format
+        sink_format = "jsonl"  # Default output format
 
         # Auto-detect output format
         suffix = sink_path.suffix.lower()
-        if suffix in ['.csv', '.tsv']:
-            sink_format = 'csv'
-            output_delimiter = '\t' if suffix == '.tsv' else ','
-        elif suffix == '.json':
-            sink_format = 'json'
+        if suffix in [".csv", ".tsv"]:
+            sink_format = "csv"
+            output_delimiter = "\t" if suffix == ".tsv" else ","
+        elif suffix == ".json":
+            sink_format = "json"
 
-        if sink_format == 'jsonl':
+        if sink_format == "jsonl":
+
             def write_to_file(results):
                 from dataknobs_fsm.utils.json_encoder import dumps
-                with open(sink, 'a') as f:
-                    for result in results:
-                        f.write(dumps(result) + '\n')
 
-        elif sink_format == 'csv':
+                with open(sink, "a") as f:
+                    for result in results:
+                        f.write(dumps(result) + "\n")
+
+        elif sink_format == "csv":
             # CSV writer needs to know fields upfront
             csv_writer = None
             csv_file = None
@@ -153,41 +159,41 @@ async def process_stream_enhanced(
                 nonlocal csv_writer, csv_file
 
                 if not csv_file:
-                    csv_file = open(sink, 'w', newline='')
+                    csv_file = open(sink, "w", newline="")
 
                 for result in results:
                     if not csv_writer:
                         # Initialize CSV writer with fields from first result
                         fieldnames = list(result.keys())
-                        csv_writer = csv.DictWriter(csv_file, fieldnames=fieldnames, delimiter=output_delimiter)
+                        csv_writer = csv.DictWriter(
+                            csv_file, fieldnames=fieldnames, delimiter=output_delimiter
+                        )
                         csv_writer.writeheader()
                     csv_writer.writerow(result)
 
-        elif sink_format == 'json':
+        elif sink_format == "json":
             all_results = []
 
             def write_to_file(results):
                 nonlocal all_results
                 all_results.extend(results)
                 # Write all at once when done
-                with open(sink, 'w') as f:
+                with open(sink, "w") as f:
                     json.dump(all_results, f, indent=2)
 
         sink_func = write_to_file
 
     # Execute stream using async executor
     result = await stream_executor.execute_stream(
-        source=stream_source,
-        sink=sink_func,
-        chunk_size=chunk_size
+        source=stream_source, sink=sink_func, chunk_size=chunk_size
     )
 
     return {
-        'total_processed': result.total_processed,
-        'successful': result.successful,
-        'failed': result.failed,
-        'duration': result.duration,
-        'throughput': result.throughput
+        "total_processed": result.total_processed,
+        "successful": result.successful,
+        "failed": result.failed,
+        "duration": result.duration,
+        "throughput": result.throughput,
     }
 
 

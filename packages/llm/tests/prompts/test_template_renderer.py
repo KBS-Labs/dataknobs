@@ -21,10 +21,7 @@ class TestTemplateRenderer:
     def test_basic_rendering(self):
         """Test basic template rendering with all parameters provided."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Hello {{name}}",
-            {"name": "Alice"}
-        )
+        result = renderer.render("Hello {{name}}", {"name": "Alice"})
         assert result.content == "Hello Alice"
         assert result.params_used == {"name": "Alice"}
         assert result.params_missing == []
@@ -33,47 +30,33 @@ class TestTemplateRenderer:
         """Test conditional sections when variables have values."""
         renderer = TemplateRenderer()
         result = renderer.render(
-            "Hello {{name}}((, you are {{age}} years old))",
-            {"name": "Alice", "age": 30}
+            "Hello {{name}}((, you are {{age}} years old))", {"name": "Alice", "age": 30}
         )
         assert result.content == "Hello Alice, you are 30 years old"
 
     def test_conditional_rendering_without_value(self):
         """Test conditional sections when variables are missing."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Hello {{name}}((, you are {{age}} years old))",
-            {"name": "Bob"}
-        )
+        result = renderer.render("Hello {{name}}((, you are {{age}} years old))", {"name": "Bob"})
         assert result.content == "Hello Bob"
 
     def test_validation_error_level(self):
         """Test ERROR validation level raises exception for missing required params."""
         renderer = TemplateRenderer()
-        validation = ValidationConfig(
-            level=ValidationLevel.ERROR,
-            required_params=["name", "age"]
-        )
+        validation = ValidationConfig(level=ValidationLevel.ERROR, required_params=["name", "age"])
 
         with pytest.raises(ValueError, match="Missing required parameters: age"):
             renderer.render(
-                "Hello {{name}}, age: {{age}}",
-                {"name": "Alice"},
-                validation=validation
+                "Hello {{name}}, age: {{age}}", {"name": "Alice"}, validation=validation
             )
 
     def test_validation_warn_level(self):
         """Test WARN validation level logs warnings but continues."""
         renderer = TemplateRenderer()
-        validation = ValidationConfig(
-            level=ValidationLevel.WARN,
-            required_params=["name", "age"]
-        )
+        validation = ValidationConfig(level=ValidationLevel.WARN, required_params=["name", "age"])
 
         result = renderer.render(
-            "Hello {{name}}, age: {{age}}",
-            {"name": "Alice"},
-            validation=validation
+            "Hello {{name}}, age: {{age}}", {"name": "Alice"}, validation=validation
         )
 
         assert result.content == "Hello Alice, age: {{age}}"
@@ -84,15 +67,10 @@ class TestTemplateRenderer:
     def test_validation_ignore_level(self):
         """Test IGNORE validation level silently ignores missing params."""
         renderer = TemplateRenderer()
-        validation = ValidationConfig(
-            level=ValidationLevel.IGNORE,
-            required_params=["name", "age"]
-        )
+        validation = ValidationConfig(level=ValidationLevel.IGNORE, required_params=["name", "age"])
 
         result = renderer.render(
-            "Hello {{name}}, age: {{age}}",
-            {"name": "Alice"},
-            validation=validation
+            "Hello {{name}}, age: {{age}}", {"name": "Alice"}, validation=validation
         )
 
         assert result.content == "Hello Alice, age: {{age}}"
@@ -106,9 +84,7 @@ class TestTemplateRenderer:
         # Should use ERROR level by default
         with pytest.raises(ValueError):
             renderer.render(
-                "Hello {{name}}",
-                {},
-                validation=ValidationConfig(required_params=["name"])
+                "Hello {{name}}", {}, validation=ValidationConfig(required_params=["name"])
             )
 
     def test_extract_variables(self):
@@ -120,9 +96,7 @@ class TestTemplateRenderer:
 
     def test_extract_variables_with_whitespace(self):
         """Test variable extraction handles whitespace."""
-        variables = TemplateRenderer._extract_variables(
-            "Hello {{ name }}, age: {{age}}"
-        )
+        variables = TemplateRenderer._extract_variables("Hello {{ name }}, age: {{age}}")
         assert variables == {"name", "age"}
 
     def test_validate_template_syntax_valid(self):
@@ -134,17 +108,13 @@ class TestTemplateRenderer:
 
     def test_validate_template_syntax_unmatched_braces(self):
         """Test syntax validation catches unmatched braces."""
-        errors = TemplateRenderer.validate_template_syntax(
-            "Hello {name}"
-        )
+        errors = TemplateRenderer.validate_template_syntax("Hello {name}")
         assert len(errors) > 0
         assert "unmatched brace" in errors[0].lower()
 
     def test_validate_template_syntax_unmatched_conditionals(self):
         """Test syntax validation catches unmatched conditional sections."""
-        errors = TemplateRenderer.validate_template_syntax(
-            "Hello ((name"
-        )
+        errors = TemplateRenderer.validate_template_syntax("Hello ((name")
         assert len(errors) > 0
         # Check for either space or underscore version (new format uses underscore)
         assert "unmatched" in errors[0].lower() and "conditional" in errors[0].lower()
@@ -157,10 +127,7 @@ class TestTemplateRenderer:
             "defaults": {"age": 25},
         }
 
-        result = renderer.render_prompt_template(
-            prompt_template,
-            {"name": "Alice"}
-        )
+        result = renderer.render_prompt_template(prompt_template, {"name": "Alice"})
 
         assert result.content == "Hello Alice, age: 25"
 
@@ -172,10 +139,7 @@ class TestTemplateRenderer:
             "defaults": {"name": "Unknown", "age": 0},
         }
 
-        result = renderer.render_prompt_template(
-            prompt_template,
-            {"name": "Bob", "age": 30}
-        )
+        result = renderer.render_prompt_template(prompt_template, {"name": "Bob", "age": 30})
 
         assert result.content == "Hello Bob, age: 30"
 
@@ -185,28 +149,19 @@ class TestTemplateRenderer:
         prompt_template = {
             "template": "Hello {{name}}",
             "defaults": {},
-            "validation": ValidationConfig(
-                level=ValidationLevel.WARN,
-                required_params=["name"]
-            ),
+            "validation": ValidationConfig(level=ValidationLevel.WARN, required_params=["name"]),
         }
 
         # Override to ERROR level at runtime
         with pytest.raises(ValueError):
             renderer.render_prompt_template(
-                prompt_template,
-                {},
-                validation_override=ValidationLevel.ERROR
+                prompt_template, {}, validation_override=ValidationLevel.ERROR
             )
 
     def test_batch_render(self):
         """Test batch rendering of multiple templates."""
         renderer = TemplateRenderer()
-        templates = [
-            "Hello {{name}}",
-            "Goodbye {{name}}",
-            "Welcome {{name}}"
-        ]
+        templates = ["Hello {{name}}", "Goodbye {{name}}", "Welcome {{name}}"]
         params = {"name": "Alice"}
 
         results = renderer.batch_render(templates, params)
@@ -222,18 +177,13 @@ class TestConvenienceFunctions:
 
     def test_render_template(self):
         """Test render_template convenience function."""
-        result = render_template(
-            "Hello {{name}}((, age {{age}}))",
-            {"name": "Alice", "age": 30}
-        )
+        result = render_template("Hello {{name}}((, age {{age}}))", {"name": "Alice", "age": 30})
         assert result == "Hello Alice, age 30"
 
     def test_render_template_with_validation_level(self):
         """Test render_template with custom validation level."""
         result = render_template(
-            "Hello {{name}}",
-            {"name": "Alice"},
-            validation_level=ValidationLevel.IGNORE
+            "Hello {{name}}", {"name": "Alice"}, validation_level=ValidationLevel.IGNORE
         )
         assert result == "Hello Alice"
 
@@ -241,9 +191,7 @@ class TestConvenienceFunctions:
         """Test render_template_strict raises on missing params."""
         with pytest.raises(ValueError, match="Missing required parameters: age"):
             render_template_strict(
-                "Hello {{name}}, age: {{age}}",
-                {"name": "Alice"},
-                required_params=["name", "age"]
+                "Hello {{name}}, age: {{age}}", {"name": "Alice"}, required_params=["name", "age"]
             )
 
     def test_render_template_strict_success(self):
@@ -251,7 +199,7 @@ class TestConvenienceFunctions:
         result = render_template_strict(
             "Hello {{name}}, age: {{age}}",
             {"name": "Alice", "age": 30},
-            required_params=["name", "age"]
+            required_params=["name", "age"],
         )
         assert result == "Hello Alice, age: 30"
 
@@ -264,7 +212,7 @@ class TestComplexScenarios:
         renderer = TemplateRenderer()
         result = renderer.render(
             "Hello {{name}}((, from {{city}}((, {{country}}))))",
-            {"name": "Alice", "city": "Paris", "country": "France"}
+            {"name": "Alice", "city": "Paris", "country": "France"},
         )
         assert result.content == "Hello Alice, from Paris, France"
 
@@ -272,8 +220,7 @@ class TestComplexScenarios:
         """Test nested conditionals with partial data."""
         renderer = TemplateRenderer()
         result = renderer.render(
-            "Hello {{name}}((, from {{city}}((, {{country}}))))",
-            {"name": "Alice", "city": "Paris"}
+            "Hello {{name}}((, from {{city}}((, {{country}}))))", {"name": "Alice", "city": "Paris"}
         )
         assert result.content == "Hello Alice, from Paris"
 
@@ -302,19 +249,13 @@ class TestComplexScenarios:
     def test_whitespace_preservation(self):
         """Test that whitespace is preserved correctly."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Hello {{ name }}, age: {{ age }}",
-            {"name": "Alice", "age": 30}
-        )
+        result = renderer.render("Hello {{ name }}, age: {{ age }}", {"name": "Alice", "age": 30})
         assert result.content == "Hello  Alice , age:  30 "
 
     def test_params_used_tracking(self):
         """Test that params_used correctly tracks which params were in template."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Hello {{name}}",
-            {"name": "Alice", "age": 30, "city": "NYC"}
-        )
+        result = renderer.render("Hello {{name}}", {"name": "Alice", "age": 30, "city": "NYC"})
         # Only 'name' is in the template
         assert result.params_used == {"name": "Alice"}
         assert "age" not in result.params_used
@@ -327,67 +268,46 @@ class TestSystemContext:
     def test_current_date_injected(self):
         """Test that current_date is auto-injected into rendered output."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Today is {{current_date}}.",
-            {}
-        )
+        result = renderer.render("Today is {{current_date}}.", {})
         today = datetime.now().strftime("%Y-%m-%d")
         assert result.content == f"Today is {today}."
 
     def test_current_datetime_injected(self):
         """Test that current_datetime is auto-injected."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Now: {{current_datetime}}",
-            {}
-        )
+        result = renderer.render("Now: {{current_datetime}}", {})
         # Should contain a date-like ISO string
         assert re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", result.content)
 
     def test_current_year_injected(self):
         """Test that current_year is auto-injected."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Year: {{current_year}}",
-            {}
-        )
+        result = renderer.render("Year: {{current_year}}", {})
         assert result.content == f"Year: {datetime.now().year}"
 
     def test_user_params_override_system_context(self):
         """Test that explicit user params take precedence over system context."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Date: {{current_date}}",
-            {"current_date": "2000-01-01"}
-        )
+        result = renderer.render("Date: {{current_date}}", {"current_date": "2000-01-01"})
         assert result.content == "Date: 2000-01-01"
 
     def test_system_context_in_jinja2_mode(self):
         """Test that system context works in pure JINJA2 mode."""
         renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
-        result = renderer.render(
-            "Today is {{current_date}}.",
-            {}
-        )
+        result = renderer.render("Today is {{current_date}}.", {})
         today = datetime.now().strftime("%Y-%m-%d")
         assert result.content == f"Today is {today}."
 
     def test_system_context_in_mixed_mode(self):
         """Test that system context works in MIXED mode with conditionals."""
         renderer = TemplateRenderer(default_mode=TemplateMode.MIXED)
-        result = renderer.render(
-            "Hello {{name}}((, today is {{current_date}}))",
-            {"name": "Alice"}
-        )
+        result = renderer.render("Hello {{name}}((, today is {{current_date}}))", {"name": "Alice"})
         today = datetime.now().strftime("%Y-%m-%d")
         assert result.content == f"Hello Alice, today is {today}"
 
     def test_system_context_does_not_affect_unrelated_templates(self):
         """Test that system context vars don't appear when not referenced."""
         renderer = TemplateRenderer()
-        result = renderer.render(
-            "Hello {{name}}",
-            {"name": "Alice"}
-        )
+        result = renderer.render("Hello {{name}}", {"name": "Alice"})
         assert result.content == "Hello Alice"
         assert "current_date" not in result.content

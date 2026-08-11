@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 try:
     import faiss
+
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
@@ -30,11 +31,11 @@ except ImportError:
 
 class FaissVectorStore(VectorStore):
     """Faiss-based vector store for efficient similarity search.
-    
+
     Faiss is a library for efficient similarity search and clustering of dense vectors.
     It provides various index types optimized for different use cases:
     - Flat: Exact search, best for small datasets
-    - IVF: Inverted file index, good for medium datasets  
+    - IVF: Inverted file index, good for medium datasets
     - HNSW: Hierarchical navigable small world, good for large datasets
     """
 
@@ -43,9 +44,7 @@ class FaissVectorStore(VectorStore):
     def _setup(self) -> None:
         """Initialize Faiss-specific derived config and runtime state."""
         if not FAISS_AVAILABLE:
-            raise ImportError(
-                "Faiss is not installed. Install with: pip install faiss-cpu"
-            )
+            raise ImportError("Faiss is not installed. Install with: pip install faiss-cpu")
 
         super()._setup()
 
@@ -152,9 +151,7 @@ class FaissVectorStore(VectorStore):
             # inner-product; the search metric is passed separately below.
             quantizer = faiss.IndexFlatL2(dimensions)
             if metric == faiss.METRIC_INNER_PRODUCT:
-                return faiss.IndexIVFFlat(
-                    quantizer, dimensions, self.nlist, metric
-                )
+                return faiss.IndexIVFFlat(quantizer, dimensions, self.nlist, metric)
             return faiss.IndexIVFFlat(quantizer, dimensions, self.nlist)
 
         if index_type == "hnsw":
@@ -166,9 +163,7 @@ class FaissVectorStore(VectorStore):
         if index_type == "ivfpq":
             m = 8  # Number of subquantizers
             quantizer = faiss.IndexFlatL2(dimensions)
-            return faiss.IndexIVFPQ(
-                quantizer, dimensions, self.nlist, m, 8
-            )
+            return faiss.IndexIVFPQ(quantizer, dimensions, self.nlist, m, 8)
 
         raise ValueError(f"Unknown index type: {index_type}")
 
@@ -185,9 +180,7 @@ class FaissVectorStore(VectorStore):
         """
         # Auto-select index type based on expected dataset size.
         if self.index_type == "auto":
-            self.index_type = (
-                "flat" if self.dimensions < 100 else "ivfflat"
-            )
+            self.index_type = "flat" if self.dimensions < 100 else "ivfflat"
 
         if self.index_type in ("ivfflat", "ivfpq"):
             # Defer the real IVF until >= nlist vectors exist; serve a
@@ -222,9 +215,7 @@ class FaissVectorStore(VectorStore):
 
         items = list(self.vectors.items())  # (internal_id, row)
         internal_ids = np.array([iid for iid, _ in items], dtype=np.int64)
-        matrix = np.ascontiguousarray(
-            np.vstack([row for _, row in items]), dtype=np.float32
-        )
+        matrix = np.ascontiguousarray(np.vstack([row for _, row in items]), dtype=np.float32)
 
         raw = self._new_raw_index(self.index_type)
         raw.train(matrix)
@@ -234,8 +225,7 @@ class FaissVectorStore(VectorStore):
         self.index = ivf
         self._deferred_ivf = False
         logger.info(
-            "FAISS: migrated deferred %s index to trained IVF "
-            "(%d vectors, nlist=%d)",
+            "FAISS: migrated deferred %s index to trained IVF (%d vectors, nlist=%d)",
             self.index_type,
             len(items),
             self.nlist,
@@ -263,7 +253,7 @@ class FaissVectorStore(VectorStore):
         vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))
 
         # For Faiss, we need to ensure vectors are C-contiguous
-        if not vectors.flags['C_CONTIGUOUS']:
+        if not vectors.flags["C_CONTIGUOUS"]:
             vectors = np.ascontiguousarray(vectors)
 
         # Generate IDs if not provided
@@ -302,9 +292,7 @@ class FaissVectorStore(VectorStore):
                 if old_internal in self.timestamps:
                     prior_created[ext_id] = self.timestamps[old_internal][0]
 
-        orphan_internal_ids = [
-            self.id_map[ext_id] for ext_id in ids if ext_id in self.id_map
-        ]
+        orphan_internal_ids = [self.id_map[ext_id] for ext_id in ids if ext_id in self.id_map]
         if orphan_internal_ids:
             orphan_array = np.array(orphan_internal_ids, dtype=np.int64)
             self.index.remove_ids(orphan_array)
@@ -328,9 +316,7 @@ class FaissVectorStore(VectorStore):
             # exactly what is added to the index. Copy so the caller's
             # array and the big batch buffer are not aliased; pin float32
             # so the side-car cannot silently drift from the index dtype.
-            self.vectors[internal_id] = np.array(
-                vectors[i], dtype=np.float32
-            )
+            self.vectors[internal_id] = np.array(vectors[i], dtype=np.float32)
             internal_ids.append(internal_id)
 
         # Add to index with internal IDs
@@ -372,8 +358,7 @@ class FaissVectorStore(VectorStore):
                 # before this point). Surface it at WARNING rather than
                 # silently collapsing to indistinguishable-from-absent.
                 logger.warning(
-                    "FAISS get_vectors: no stored vector for id %s "
-                    "(internal id %s)",
+                    "FAISS get_vectors: no stored vector for id %s (internal id %s)",
                     ext_id,
                     internal_id,
                 )
@@ -382,18 +367,10 @@ class FaissVectorStore(VectorStore):
 
             # Copy so the caller cannot mutate the stored array.
             vector = stored.copy()
-            metadata = (
-                self.metadata_store.get(internal_id)
-                if include_metadata
-                else None
-            )
+            metadata = self.metadata_store.get(internal_id) if include_metadata else None
             if inject:
-                created, updated = self.timestamps.get(
-                    internal_id, (None, None)
-                )
-                metadata = self._inject_timestamps(
-                    metadata, created=created, updated=updated
-                )
+                created, updated = self.timestamps.get(internal_id, (None, None))
+                metadata = self._inject_timestamps(metadata, created=created, updated=updated)
             results.append((vector, metadata))
 
         return results
@@ -491,12 +468,8 @@ class FaissVectorStore(VectorStore):
 
             out_meta = metadata if include_metadata else None
             if inject:
-                created, updated = self.timestamps.get(
-                    internal_id, (None, None)
-                )
-                out_meta = self._inject_timestamps(
-                    out_meta, created=created, updated=updated
-                )
+                created, updated = self.timestamps.get(internal_id, (None, None))
+                out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
             results.append((ext_id, score, out_meta))
 
         return results
@@ -603,7 +576,8 @@ class FaissVectorStore(VectorStore):
             ext_id
             for ext_id, internal_id in self.id_map.items()
             if self._match_metadata_filter(
-                self.metadata_store.get(internal_id), filter,
+                self.metadata_store.get(internal_id),
+                filter,
             )
         ]
         if matching_ext_ids:
@@ -655,9 +629,7 @@ class FaissVectorStore(VectorStore):
                 "index_type": self.index_type,
             },
         }
-        await asyncio.to_thread(
-            self._save_to_disk, index_snapshot, meta_snapshot
-        )
+        await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot)
 
     def _save_to_disk(self, index: Any, meta: dict[str, Any]) -> None:
         """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
@@ -736,6 +708,4 @@ class FaissVectorStore(VectorStore):
                 # been persisted pre-fix), so False is correct.
                 self._deferred_ivf = data.get("deferred_ivf", False)
                 self.next_idx = data["next_idx"]
-            logger.info(
-                "FAISS: Loaded metadata with %d entries", len(self.id_map)
-            )
+            logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))

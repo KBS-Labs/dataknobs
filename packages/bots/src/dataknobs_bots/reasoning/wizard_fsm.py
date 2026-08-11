@@ -77,13 +77,9 @@ class WizardFSM:
         self._context: ExecutionContext | None = None
         self._subflow_registry: dict[str, WizardFSM] = dict(subflow_registry or {})
         self._owns_subflows: set[str] = set(self._subflow_registry)
-        self._transform_context_factory: Callable[..., Any] | None = (
-            transform_context_factory
-        )
+        self._transform_context_factory: Callable[..., Any] | None = transform_context_factory
 
-    def set_transform_context_factory(
-        self, factory: Callable[..., Any]
-    ) -> None:
+    def set_transform_context_factory(self, factory: Callable[..., Any]) -> None:
         """Register a factory for building transform-level context objects.
 
         The factory receives a :class:`FunctionContext` and returns the
@@ -218,9 +214,7 @@ class WizardFSM:
         stage = stage or self.current_stage
         return self._stage_metadata.get(stage, {}).get("suggestions", [])
 
-    def get_transition_condition(
-        self, from_stage: str, to_stage: str
-    ) -> str | None:
+    def get_transition_condition(self, from_stage: str, to_stage: str) -> str | None:
         """Get the condition expression for a transition.
 
         Args:
@@ -313,9 +307,7 @@ class WizardFSM:
         """
         return name in self._subflow_registry
 
-    def register_subflow(
-        self, name: str, subflow_fsm: "WizardFSM", *, owns: bool = True
-    ) -> None:
+    def register_subflow(self, name: str, subflow_fsm: "WizardFSM", *, owns: bool = True) -> None:
         """Register a subflow WizardFSM.
 
         Args:
@@ -344,17 +336,11 @@ class WizardFSM:
         down something its caller may still be stepping.
         """
         displaced = self._subflow_registry.get(name)
-        if (
-            displaced is not None
-            and displaced is not subflow_fsm
-            and name in self._owns_subflows
-        ):
+        if displaced is not None and displaced is not subflow_fsm and name in self._owns_subflows:
             try:
                 displaced.close()
             except Exception:
-                logger.exception(
-                    "Error closing subflow %r displaced by re-registration", name
-                )
+                logger.exception("Error closing subflow %r displaced by re-registration", name)
 
         self._subflow_registry[name] = subflow_fsm
         if owns:
@@ -406,9 +392,7 @@ class WizardFSM:
         if not self._context:
             self._context = self._fsm.create_context(data)
             if self._transform_context_factory:
-                self._context.transform_context_factory = (
-                    self._transform_context_factory
-                )
+                self._context.transform_context_factory = self._transform_context_factory
         else:
             # Update context data
             if isinstance(self._context.data, dict):
@@ -479,9 +463,7 @@ class WizardFSM:
         if not self._context:
             self._context = self._fsm.create_context(data)
             if self._transform_context_factory:
-                self._context.transform_context_factory = (
-                    self._transform_context_factory
-                )
+                self._context.transform_context_factory = self._transform_context_factory
         else:
             # Update context data
             if isinstance(self._context.data, dict):
@@ -600,9 +582,7 @@ class WizardFSM:
             self._context = self._fsm.create_context(data)
             self._context.set_state(current_stage)
             if self._transform_context_factory:
-                self._context.transform_context_factory = (
-                    self._transform_context_factory
-                )
+                self._context.transform_context_factory = self._transform_context_factory
 
     @property
     def start_stage(self) -> str:
@@ -623,11 +603,7 @@ class WizardFSM:
             if meta.get("is_start"):
                 return name
         # Fallback to first stage
-        return (
-            next(iter(self._stage_metadata.keys()))
-            if self._stage_metadata
-            else "start"
-        )
+        return next(iter(self._stage_metadata.keys())) if self._stage_metadata else "start"
 
     def _get_history(self) -> list[str]:
         """Get stage history from context.

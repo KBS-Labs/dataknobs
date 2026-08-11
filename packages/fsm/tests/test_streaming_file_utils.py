@@ -29,9 +29,9 @@ class TestStreamingFileReader:
         jsonl_file = tmp_path / "test.jsonl"
         test_data = [{"id": i, "value": f"item_{i}"} for i in range(25)]
 
-        with open(jsonl_file, 'w') as f:
+        with open(jsonl_file, "w") as f:
             for item in test_data:
-                f.write(json.dumps(item) + '\n')
+                f.write(json.dumps(item) + "\n")
 
         # Read with chunk size of 10
         reader = StreamingFileReader(jsonl_file, chunk_size=10)
@@ -56,13 +56,13 @@ class TestStreamingFileReader:
         """Test reading CSV file in chunks."""
         csv_file = tmp_path / "test.csv"
 
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['id', 'name', 'value'])
+            writer.writerow(["id", "name", "value"])
             for i in range(15):
-                writer.writerow([i, f'name_{i}', i * 10])
+                writer.writerow([i, f"name_{i}", i * 10])
 
-        reader = StreamingFileReader(csv_file, chunk_size=5, input_format='csv')
+        reader = StreamingFileReader(csv_file, chunk_size=5, input_format="csv")
         chunks = []
 
         async for chunk in reader.read_chunks():
@@ -76,16 +76,16 @@ class TestStreamingFileReader:
 
         # Check data
         first_record = chunks[0].data[0]
-        assert 'id' in first_record
-        assert 'name' in first_record
-        assert 'value' in first_record
+        assert "id" in first_record
+        assert "name" in first_record
+        assert "value" in first_record
 
     @pytest.mark.asyncio
     async def test_read_text_chunks(self, tmp_path):
         """Test reading text file in chunks."""
         text_file = tmp_path / "test.txt"
 
-        with open(text_file, 'w') as f:
+        with open(text_file, "w") as f:
             for i in range(20):
                 f.write(f"Line {i}\n")
             f.write("\n")  # Empty line
@@ -94,9 +94,9 @@ class TestStreamingFileReader:
         reader = StreamingFileReader(
             text_file,
             chunk_size=8,
-            input_format='text',
-            text_field_name='content',
-            skip_empty_lines=True
+            input_format="text",
+            text_field_name="content",
+            skip_empty_lines=True,
         )
 
         chunks = []
@@ -108,8 +108,8 @@ class TestStreamingFileReader:
         assert reader.metrics.items_processed == 21  # Skipped empty line
 
         # Check content
-        assert chunks[0].data[0] == {'content': 'Line 0'}
-        assert chunks[-1].data[-1] == {'content': 'Last line'}
+        assert chunks[0].data[0] == {"content": "Line 0"}
+        assert chunks[-1].data[-1] == {"content": "Last line"}
 
     @pytest.mark.asyncio
     async def test_read_json_array_chunks(self, tmp_path):
@@ -117,10 +117,10 @@ class TestStreamingFileReader:
         json_file = tmp_path / "test.json"
         test_data = [{"id": i} for i in range(12)]
 
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump(test_data, f)
 
-        reader = StreamingFileReader(json_file, chunk_size=5, input_format='json')
+        reader = StreamingFileReader(json_file, chunk_size=5, input_format="json")
         chunks = []
 
         async for chunk in reader.read_chunks():
@@ -137,9 +137,9 @@ class TestStreamingFileReader:
         """Test error handling for malformed data."""
         jsonl_file = tmp_path / "bad.jsonl"
 
-        with open(jsonl_file, 'w') as f:
+        with open(jsonl_file, "w") as f:
             f.write('{"valid": "json"}\n')
-            f.write('invalid json\n')
+            f.write("invalid json\n")
             f.write('{"another": "valid"}\n')
 
         reader = StreamingFileReader(jsonl_file, chunk_size=10)
@@ -188,20 +188,15 @@ class TestStreamingFileWriter:
         """Test writing CSV file with chunks."""
         output_file = tmp_path / "output.csv"
 
-        writer = StreamingFileWriter(output_file, output_format='csv', buffer_size=3)
+        writer = StreamingFileWriter(output_file, output_format="csv", buffer_size=3)
         writer.open()
 
         try:
             # Write chunks
-            chunk1 = StreamChunk(data=[
-                {"name": "Alice", "age": 30},
-                {"name": "Bob", "age": 25}
-            ])
+            chunk1 = StreamChunk(data=[{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}])
             await writer.write_chunk(chunk1)
 
-            chunk2 = StreamChunk(data=[
-                {"name": "Charlie", "age": 35}
-            ], is_last=True)
+            chunk2 = StreamChunk(data=[{"name": "Charlie", "age": 35}], is_last=True)
             await writer.write_chunk(chunk2)
 
         finally:
@@ -221,14 +216,13 @@ class TestStreamingFileWriter:
         """Test writing JSON file with accumulation."""
         output_file = tmp_path / "output.json"
 
-        writer = StreamingFileWriter(output_file, output_format='json')
+        writer = StreamingFileWriter(output_file, output_format="json")
         writer.open()
 
         try:
             for i in range(3):
                 chunk = StreamChunk(
-                    data=[{"batch": i, "item": j} for j in range(2)],
-                    is_last=(i == 2)
+                    data=[{"batch": i, "item": j} for j in range(2)], is_last=(i == 2)
                 )
                 await writer.write_chunk(chunk)
         finally:
@@ -247,7 +241,7 @@ class TestStreamingFileWriter:
         """Test writing text file with chunks."""
         output_file = tmp_path / "output.txt"
 
-        writer = StreamingFileWriter(output_file, output_format='text')
+        writer = StreamingFileWriter(output_file, output_format="text")
         writer.open()
 
         try:
@@ -275,7 +269,7 @@ class TestStreamingFileWriter:
         writer = StreamingFileWriter(
             output_file,
             buffer_size=3,
-            flush_interval=0.1  # Short interval for testing
+            flush_interval=0.1,  # Short interval for testing
         )
         writer.open()
 
@@ -315,24 +309,18 @@ class TestStreamingFileProcessor:
         """Test processing file with transformation."""
         # Create input file
         input_file = tmp_path / "input.jsonl"
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             for i in range(10):
-                f.write(json.dumps({"value": i}) + '\n')
+                f.write(json.dumps({"value": i}) + "\n")
 
         output_file = tmp_path / "output.jsonl"
 
         # Create processor with transformation
         def transform(record: Dict) -> Dict:
-            return {
-                "original": record["value"],
-                "doubled": record["value"] * 2
-            }
+            return {"original": record["value"], "doubled": record["value"] * 2}
 
         processor = StreamingFileProcessor(
-            input_file,
-            output_file,
-            transform_fn=transform,
-            chunk_size=3
+            input_file, output_file, transform_fn=transform, chunk_size=3
         )
 
         metrics = await processor.process()
@@ -356,9 +344,9 @@ class TestStreamingFileProcessor:
         """Test processing with progress callback."""
         # Create CSV input
         input_file = tmp_path / "input.csv"
-        with open(input_file, 'w', newline='') as f:
+        with open(input_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['id', 'value'])
+            writer.writerow(["id", "value"])
             for i in range(15):
                 writer.writerow([i, i * 10])
 
@@ -371,10 +359,7 @@ class TestStreamingFileProcessor:
             progress_updates.append((items, chunks))
 
         processor = StreamingFileProcessor(
-            input_file,
-            output_file,
-            chunk_size=5,
-            input_format='csv'
+            input_file, output_file, chunk_size=5, input_format="csv"
         )
 
         await processor.process(progress_callback=progress_callback)
@@ -389,21 +374,17 @@ class TestStreamingFileProcessor:
         """Test converting between file formats."""
         # Create CSV input
         csv_file = tmp_path / "input.csv"
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['name', 'score'])
-            writer.writerow(['Alice', '95'])
-            writer.writerow(['Bob', '87'])
+            writer.writerow(["name", "score"])
+            writer.writerow(["Alice", "95"])
+            writer.writerow(["Bob", "87"])
 
         # Convert to JSON
         json_file = tmp_path / "output.json"
 
         processor = StreamingFileProcessor(
-            csv_file,
-            json_file,
-            chunk_size=10,
-            input_format='csv',
-            output_format='json'
+            csv_file, json_file, chunk_size=10, input_format="csv", output_format="json"
         )
 
         await processor.process()
@@ -425,18 +406,14 @@ class TestIntegrationWithSimpleFSM:
         """Test creating a streaming reader for SimpleFSM."""
         # Create test file
         input_file = tmp_path / "input.txt"
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             for i in range(25):
                 f.write(f"Line {i}\n")
 
         config = StreamConfig(chunk_size=10)
 
         # Create streaming reader
-        reader = create_streaming_file_reader(
-            input_file,
-            config,
-            input_format='text'
-        )
+        reader = create_streaming_file_reader(input_file, config, input_format="text")
 
         # Read chunks
         chunks_received = []
@@ -454,10 +431,7 @@ class TestIntegrationWithSimpleFSM:
         output_file = tmp_path / "output.jsonl"
         config = StreamConfig(buffer_size=5)
 
-        write_fn, cleanup_fn = await create_streaming_file_writer(
-            output_file,
-            config
-        )
+        write_fn, cleanup_fn = await create_streaming_file_writer(output_file, config)
 
         try:
             # Write data

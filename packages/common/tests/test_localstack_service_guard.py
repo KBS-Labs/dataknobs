@@ -63,9 +63,7 @@ def _patch_urlopen(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
     )
 
 
-def _patch_urlopen_raises(
-    monkeypatch: pytest.MonkeyPatch, exc: Exception
-) -> None:
+def _patch_urlopen_raises(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     def _raise(url: str, timeout: float | None = None) -> Any:
         raise exc
 
@@ -111,33 +109,23 @@ class TestServiceEnabledProbe:
         _patch_urlopen(monkeypatch, _health_payload(sqs="available"))
         assert _localstack_service_enabled(ENDPOINT, "sqs") is True
 
-    def test_disabled_is_not_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_disabled_is_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_urlopen(monkeypatch, _health_payload(s3="running", sqs="disabled"))
         assert _localstack_service_enabled(ENDPOINT, "sqs") is False
 
-    def test_missing_service_is_not_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_service_is_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_urlopen(monkeypatch, _health_payload(s3="running"))
         assert _localstack_service_enabled(ENDPOINT, "sqs") is False
 
-    def test_unreachable_health_is_not_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unreachable_health_is_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_urlopen_raises(monkeypatch, URLError("no route to host"))
         assert _localstack_service_enabled(ENDPOINT, "sqs") is False
 
-    def test_malformed_body_is_not_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_malformed_body_is_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_urlopen(monkeypatch, b"not json")
         assert _localstack_service_enabled(ENDPOINT, "sqs") is False
 
-    def test_non_dict_payload_is_not_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_non_dict_payload_is_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_urlopen(monkeypatch, b"[1, 2, 3]")
         assert _localstack_service_enabled(ENDPOINT, "sqs") is False
 
@@ -158,9 +146,7 @@ class TestIsAvailableServiceGate:
         _patch_urlopen(monkeypatch, _health_payload(sqs="running"))
         assert is_localstack_available(service="sqs") is False
 
-    def test_open_port_service_enabled_is_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_open_port_service_enabled_is_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_socket(monkeypatch, connect_result=0)
         _patch_urlopen(monkeypatch, _health_payload(sqs="running"))
         assert is_localstack_available(service="sqs") is True
@@ -172,9 +158,7 @@ class TestIsAvailableServiceGate:
         _patch_urlopen(monkeypatch, _health_payload(s3="running", sqs="disabled"))
         assert is_localstack_available(service="sqs") is False
 
-    def test_no_service_arg_is_backcompat_tcp_only(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_service_arg_is_backcompat_tcp_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Without a service, the health endpoint is never consulted.
         _patch_socket(monkeypatch, connect_result=0)
 

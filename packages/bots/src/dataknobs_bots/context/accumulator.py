@@ -279,10 +279,7 @@ class ConversationContext:
         Returns:
             List of low-confidence assumptions
         """
-        return [
-            a for a in self.assumptions
-            if not a.confirmed and a.confidence < threshold
-        ]
+        return [a for a in self.assumptions if not a.confirmed and a.confidence < threshold]
 
     # =========================================================================
     # Artifact Access
@@ -354,14 +351,16 @@ class ConversationContext:
         """
         # Remove existing section with same name
         self.sections = [s for s in self.sections if s.name != name]
-        self.sections.append(ContextSection(
-            name=name,
-            content=content,
-            priority=priority,
-            max_tokens=max_tokens,
-            include_always=include_always,
-            formatter=formatter,
-        ))
+        self.sections.append(
+            ContextSection(
+                name=name,
+                content=content,
+                priority=priority,
+                max_tokens=max_tokens,
+                include_always=include_always,
+                formatter=formatter,
+            )
+        )
         self.updated_at = time.time()
 
     def get_section(self, name: str) -> ContextSection | None:
@@ -458,69 +457,75 @@ class ConversationContext:
 
         # Wizard progress (high priority)
         if self.wizard_stage:
-            sections.append(ContextSection(
-                name="wizard_progress",
-                content={
-                    "stage": self.wizard_stage,
-                    "progress": f"{self.wizard_progress * 100:.0f}%",
-                    "data_collected": list(self.wizard_data.keys()),
-                },
-                priority=90,
-                include_always=True,
-                formatter="summary",
-            ))
+            sections.append(
+                ContextSection(
+                    name="wizard_progress",
+                    content={
+                        "stage": self.wizard_stage,
+                        "progress": f"{self.wizard_progress * 100:.0f}%",
+                        "data_collected": list(self.wizard_data.keys()),
+                    },
+                    priority=90,
+                    include_always=True,
+                    formatter="summary",
+                )
+            )
 
         # Unconfirmed assumptions (high priority)
         unconfirmed = self.get_unconfirmed_assumptions()
         if unconfirmed:
-            sections.append(ContextSection(
-                name="unconfirmed_assumptions",
-                content=[
-                    {"assumption": a.content, "confidence": a.confidence}
-                    for a in unconfirmed
-                ],
-                priority=85,
-                formatter="list",
-            ))
+            sections.append(
+                ContextSection(
+                    name="unconfirmed_assumptions",
+                    content=[
+                        {"assumption": a.content, "confidence": a.confidence} for a in unconfirmed
+                    ],
+                    priority=85,
+                    formatter="list",
+                )
+            )
 
         # Pending artifacts
         pending = [
-            a for a in self.artifacts
+            a
+            for a in self.artifacts
             if a.get("status") in ("draft", "pending_review", "needs_revision")
         ]
         if pending:
-            sections.append(ContextSection(
-                name="pending_artifacts",
-                content=[
-                    {"name": a.get("name"), "status": a.get("status")}
-                    for a in pending
-                ],
-                priority=70,
-                formatter="list",
-            ))
+            sections.append(
+                ContextSection(
+                    name="pending_artifacts",
+                    content=[{"name": a.get("name"), "status": a.get("status")} for a in pending],
+                    priority=70,
+                    formatter="list",
+                )
+            )
 
         # Approved artifacts (lower priority)
         approved = self.get_artifacts(status="approved")
         if approved:
-            sections.append(ContextSection(
-                name="approved_artifacts",
-                content=[a.get("name") for a in approved],
-                priority=50,
-                formatter="list",
-            ))
+            sections.append(
+                ContextSection(
+                    name="approved_artifacts",
+                    content=[a.get("name") for a in approved],
+                    priority=50,
+                    formatter="list",
+                )
+            )
 
         # Recent tool executions
         if self.tool_history:
             recent = self.tool_history[-5:]  # Last 5
-            sections.append(ContextSection(
-                name="recent_tools",
-                content=[
-                    {"tool": t.get("tool_name"), "success": t.get("success")}
-                    for t in recent
-                ],
-                priority=40,
-                formatter="list",
-            ))
+            sections.append(
+                ContextSection(
+                    name="recent_tools",
+                    content=[
+                        {"tool": t.get("tool_name"), "success": t.get("success")} for t in recent
+                    ],
+                    priority=40,
+                    formatter="list",
+                )
+            )
 
         return sections
 
@@ -590,12 +595,8 @@ class ConversationContext:
         Returns:
             ConversationContext instance
         """
-        sections = [
-            ContextSection.from_dict(s) for s in data.get("sections", [])
-        ]
-        assumptions = [
-            Assumption.from_dict(a) for a in data.get("assumptions", [])
-        ]
+        sections = [ContextSection.from_dict(s) for s in data.get("sections", [])]
+        assumptions = [Assumption.from_dict(a) for a in data.get("assumptions", [])]
         return cls(
             conversation_id=data.get("conversation_id"),
             wizard_stage=data.get("wizard_stage"),

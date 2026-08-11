@@ -272,8 +272,7 @@ class RunAllReviewsTool(ContextAwareTool):
                     for r in reviews
                 ],
                 "message": (
-                    f"Ran {len(reviews)} reviews: "
-                    f"{'all passed' if all_passed else 'some failed'}"
+                    f"Ran {len(reviews)} reviews: {'all passed' if all_passed else 'some failed'}"
                 ),
             }
         except Exception as e:

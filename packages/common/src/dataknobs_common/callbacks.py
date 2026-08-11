@@ -149,8 +149,7 @@ class BatchedCallbackError(DataknobsError):
         self.failures = failures
         topics = sorted({entry.topic for entry, _ in failures})
         super().__init__(
-            f"{len(failures)} callback(s) failed during dispatch "
-            f"on topic(s) {topics}",
+            f"{len(failures)} callback(s) failed during dispatch on topic(s) {topics}",
         )
 
 
@@ -425,9 +424,9 @@ class CallbackRegistry(Generic[CallbackT]):
             for entries in self._entries.values():
                 entries.clear()
             return
-        entries = self._entries.get(topic)
-        if entries is not None:
-            entries.clear()
+        topic_entries = self._entries.get(topic)
+        if topic_entries is not None:
+            topic_entries.clear()
 
     def set_ordering(self, ordering: CallbackOrdering) -> None:
         """Replace the ordering. Affects subsequent ``fire`` calls only."""
@@ -468,10 +467,7 @@ class CallbackRegistry(Generic[CallbackT]):
            fan-out paths in async-heavy environments.
         """
         entries = self._sorted_entries(topic)
-        async_entries = [
-            e for e in entries
-            if inspect.iscoroutinefunction(e.callback)
-        ]
+        async_entries = [e for e in entries if inspect.iscoroutinefunction(e.callback)]
         if async_entries:
             raise TypeError(
                 f"Cannot fire() topic {topic!r}: "
@@ -485,10 +481,7 @@ class CallbackRegistry(Generic[CallbackT]):
                 entry.callback(payload)
             except Exception as exc:
                 self._handle_failure(entry, exc, failures)
-        if (
-            self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END
-            and failures
-        ):
+        if self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END and failures:
             raise BatchedCallbackError(failures)
 
     async def fire_async(
@@ -511,10 +504,7 @@ class CallbackRegistry(Generic[CallbackT]):
                     await result
             except Exception as exc:
                 self._handle_failure(entry, exc, failures)
-        if (
-            self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END
-            and failures
-        ):
+        if self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END and failures:
             raise BatchedCallbackError(failures)
 
     # ----- EventBus fan-out ----- #
@@ -556,9 +546,7 @@ class CallbackRegistry(Generic[CallbackT]):
                 trail). ``asyncio.CancelledError`` is always re-raised
                 regardless of this flag.
         """
-        self._fanout_buses.append(
-            _FanoutTarget(bus, topic_prefix, isolate_errors)
-        )
+        self._fanout_buses.append(_FanoutTarget(bus, topic_prefix, isolate_errors))
 
     # ----- introspection ----- #
 
@@ -568,9 +556,7 @@ class CallbackRegistry(Generic[CallbackT]):
         Read-only view; modifying the returned iterable does not affect
         the registry.
         """
-        return tuple(
-            topic for topic, entries in self._entries.items() if entries
-        )
+        return tuple(topic for topic, entries in self._entries.items() if entries)
 
     def callback_count(self, topic: str) -> int:
         """Return the number of callbacks registered on ``topic``."""
@@ -670,8 +656,7 @@ class CallbackRegistry(Generic[CallbackT]):
             if target.isolate_errors:
                 full_topic = target.topic_prefix + topic
                 logger.warning(
-                    "EventBus fan-out to %s failed on topic %r; "
-                    "observed operation continues: %s",
+                    "EventBus fan-out to %s failed on topic %r; observed operation continues: %s",
                     type(target.bus).__name__,
                     full_topic,
                     result,
@@ -698,8 +683,7 @@ class CallbackRegistry(Generic[CallbackT]):
             return
         # LOG_AND_RAISE_AT_END — log now, raise after all fire.
         logger.exception(
-            "Callback %r on topic %r raised; will raise batched at "
-            "end of dispatch.",
+            "Callback %r on topic %r raised; will raise batched at end of dispatch.",
             entry.callback,
             entry.topic,
         )
@@ -828,9 +812,7 @@ class RecordingCallbackRegistry:
         if topic is None:
             self._registered.clear()
             return
-        self._registered = [
-            (t, c) for t, c in self._registered if t != topic
-        ]
+        self._registered = [(t, c) for t, c in self._registered if t != topic]
 
     def set_ordering(self, ordering: CallbackOrdering) -> None:
         """No-op: ordering is irrelevant when dispatch is suppressed.

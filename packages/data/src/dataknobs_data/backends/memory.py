@@ -37,11 +37,11 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
     StructuredConfigConsumer[MemoryDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
-    VectorConfigMixin,           # Parse vector config
-    SQLiteVectorSupport,          # Provides _compute_similarity
-    PythonVectorSearchMixin,      # Provides python_vector_search_async
-    BulkEmbedMixin,              # Bulk embedding operations
-    VectorOperationsMixin        # Standard vector interface
+    VectorConfigMixin,  # Parse vector config
+    SQLiteVectorSupport,  # Provides _compute_similarity
+    PythonVectorSearchMixin,  # Provides python_vector_search_async
+    BulkEmbedMixin,  # Bulk embedding operations
+    VectorOperationsMixin,  # Standard vector interface
 ):
     """Async in-memory database implementation."""
 
@@ -120,9 +120,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update a record in memory."""
         async with self._lock:
             if id not in self._storage:
@@ -135,9 +133,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             self._versions[id] = self._next_version()
             return True
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record from memory.
 
         When ``expected_version`` is provided the delete is a compare-and-set:
@@ -230,9 +226,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             self._versions.clear()
             return count
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 
         Matches ``create``'s atomic-insert contract: a colliding id — against an
@@ -256,9 +250,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 ids.append(storage_id)
             return ids
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records under a single lock.
 
         The batch sibling of ``create_batch``, with upsert semantics: a
@@ -289,9 +281,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 results.append(self._prepare_record_from_storage(record, id))
             return results
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently.
 
         ``_tx`` is accepted for interface parity and ignored (see
@@ -309,9 +299,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             return results
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from memory."""
         config = config or StreamConfig()
@@ -329,16 +317,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record.copy(deep=True)
                 # Small yield to prevent blocking
                 await asyncio.sleep(0)
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into memory."""
         # Use the default implementation from mixin
@@ -351,7 +337,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations."""
         return await self.python_vector_search_async(
@@ -360,7 +346,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -372,7 +358,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """Synchronous in-memory database implementation."""
 
@@ -441,9 +427,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             record = self._storage.get(id)
             return record.copy(deep=True) if record else None
 
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update a record in memory."""
         with self._lock:
             if id not in self._storage:
@@ -623,9 +607,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             return results
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from memory."""
         config = config or StreamConfig()
@@ -643,14 +625,12 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record.copy(deep=True)
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into memory."""
         # Use the default implementation from mixin
@@ -663,7 +643,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations."""
         return self.python_vector_search_sync(
@@ -672,5 +652,5 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )

@@ -25,18 +25,49 @@ TIMESTAMP_PATTERN = re.compile(
 )
 
 # Field names commonly containing text content
-TEXT_FIELD_NAMES = frozenset({
-    "title", "name", "description", "content", "text", "summary",
-    "body", "message", "comment", "note", "notes", "abstract",
-    "overview", "details", "explanation", "definition", "label",
-})
+TEXT_FIELD_NAMES = frozenset(
+    {
+        "title",
+        "name",
+        "description",
+        "content",
+        "text",
+        "summary",
+        "body",
+        "message",
+        "comment",
+        "note",
+        "notes",
+        "abstract",
+        "overview",
+        "details",
+        "explanation",
+        "definition",
+        "label",
+    }
+)
 
 # Field names to skip (technical/metadata)
-SKIP_FIELD_NAMES = frozenset({
-    "id", "uuid", "guid", "_id", "created_at", "updated_at",
-    "created", "updated", "timestamp", "modified", "hash",
-    "checksum", "signature", "token", "key", "secret",
-})
+SKIP_FIELD_NAMES = frozenset(
+    {
+        "id",
+        "uuid",
+        "guid",
+        "_id",
+        "created_at",
+        "updated_at",
+        "created",
+        "updated",
+        "timestamp",
+        "modified",
+        "hash",
+        "checksum",
+        "signature",
+        "token",
+        "key",
+        "secret",
+    }
+)
 
 
 @dataclass
@@ -192,22 +223,16 @@ class JSONChunker:
             if jsonl:
                 yield from self._stream_jsonl(source, source_file=source_label)
             else:
-                yield from self._stream_json_array(
-                    source, timeout, source_file=source_label
-                )
+                yield from self._stream_json_array(source, timeout, source_file=source_label)
             return
 
         source_str = str(source)
         source_label = source_file if source_file is not None else source_str
-        jsonl = (
-            is_jsonl if is_jsonl is not None else self._is_jsonl_file(source_str)
-        )
+        jsonl = is_jsonl if is_jsonl is not None else self._is_jsonl_file(source_str)
         if jsonl:
             yield from self._stream_jsonl(source_str, source_file=source_label)
         else:
-            yield from self._stream_json_array(
-                source_str, timeout, source_file=source_label
-            )
+            yield from self._stream_json_array(source_str, timeout, source_file=source_label)
 
     def _is_jsonl_file(self, source: str) -> bool:
         """Check if source is a JSONL file based on extension."""
@@ -232,8 +257,8 @@ class JSONChunker:
         """
         import gzip
 
-        label = source_file if source_file is not None else (
-            source if isinstance(source, str) else ""
+        label = (
+            source_file if source_file is not None else (source if isinstance(source, str) else "")
         )
 
         if hasattr(source, "read") and callable(source.read):  # type: ignore[union-attr]
@@ -302,8 +327,8 @@ class JSONChunker:
                 yield from self.chunk(data, source=label)
             return
 
-        label = source_file if source_file is not None else (
-            source if isinstance(source, str) else ""
+        label = (
+            source_file if source_file is not None else (source if isinstance(source, str) else "")
         )
 
         # Use PathSorter to group paths into records
@@ -480,7 +505,11 @@ class JSONChunker:
             if lower_key in TEXT_FIELD_NAMES:
                 if isinstance(value, str) and value.strip():
                     if not self._is_technical_value(value):
-                        if self.config.include_field_names and key not in ("content", "text", "body"):
+                        if self.config.include_field_names and key not in (
+                            "content",
+                            "text",
+                            "body",
+                        ):
                             parts.append(f"{key}: {value}")
                         else:
                             parts.append(value)
@@ -620,6 +649,7 @@ class JSONChunker:
         if self._jinja_env is None:
             try:
                 from jinja2 import Environment
+
                 self._jinja_env = Environment()
             except ImportError as err:
                 raise ImportError(

@@ -66,9 +66,7 @@ class Middleware:
 
     # --- Legacy hooks (concrete no-ops, kept for backward compat) ---
 
-    async def before_message(
-        self, message: str, context: BotContext
-    ) -> None:
+    async def before_message(self, message: str, context: BotContext) -> None:
         """Called before processing user message.
 
         .. deprecated::
@@ -81,9 +79,7 @@ class Middleware:
             context: Bot context with conversation and user info
         """
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
+    async def after_message(self, response: str, context: BotContext, **kwargs: Any) -> None:
         """Called after generating bot response (non-streaming).
 
         .. deprecated::
@@ -97,9 +93,7 @@ class Middleware:
             **kwargs: Additional data (e.g., tokens_used, response_time_ms, provider, model)
         """
 
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
+    async def post_stream(self, message: str, response: str, context: BotContext) -> None:
         """Called after streaming response completes.
 
         .. deprecated::
@@ -112,9 +106,7 @@ class Middleware:
             context: Bot context
         """
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         """Called when a request-level error occurs during message processing.
 
         This hook fires when the bot request fails (preparation, generation,
@@ -127,9 +119,7 @@ class Middleware:
             context: Bot context
         """
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
+    async def on_hook_error(self, hook_name: str, error: Exception, context: BotContext) -> None:
         """Called when a middleware hook itself raises an exception.
 
         This fires when a post-generation middleware hook raises:
@@ -155,9 +145,7 @@ class Middleware:
 
     # --- Unified hooks (preferred) ---
 
-    async def on_turn_start(
-        self, turn: TurnState
-    ) -> str | None:
+    async def on_turn_start(self, turn: TurnState) -> str | None:
         """Called at the start of every turn, before message processing.
 
         Receives the full ``TurnState`` including ``plugin_data`` for
@@ -226,9 +214,7 @@ class Middleware:
                 ``plugin_data`` is always available.
         """
 
-    async def on_tool_executed(
-        self, execution: ToolExecution, context: BotContext
-    ) -> None:
+    async def on_tool_executed(self, execution: ToolExecution, context: BotContext) -> None:
         """Called after each tool execution within a turn.
 
         Fired once per tool invocation, before ``after_turn``.  All

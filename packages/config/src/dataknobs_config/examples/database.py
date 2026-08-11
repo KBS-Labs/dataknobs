@@ -1,5 +1,7 @@
 """Example database classes for configuration."""
 
+from typing import Any
+
 from dataknobs_config import ConfigurableBase, FactoryBase
 
 
@@ -10,7 +12,7 @@ class Database(ConfigurableBase):
     integration.
     """
 
-    def __init__(self, host: str, port: int, **kwargs):
+    def __init__(self, host: str, port: int, **kwargs: Any):
         """Initialize database connection.
 
         Args:
@@ -28,18 +30,18 @@ class Database(ConfigurableBase):
         }
         self._connected = False
 
-    def connect(self):
+    def connect(self) -> str:
         """Simulate database connection."""
         self._connected = True
         return f"Connected to {self.host}:{self.port}/{self.database}"
 
-    def disconnect(self):
+    def disconnect(self) -> str:
         """Simulate database disconnection."""
         self._connected = False
         return "Disconnected"
 
     @property
-    def is_connected(self):
+    def is_connected(self) -> bool:
         """Check if database is connected."""
         return self._connected
 
@@ -50,12 +52,12 @@ class DatabaseFactory(FactoryBase):
     This demonstrates using FactoryBase for creating configured instances.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize factory."""
         self.created_count = 0
         self.default_pool_size = 10
 
-    def create(self, **config):
+    def create(self, **config: Any) -> Database:
         """Create a database instance.
 
         Args:

@@ -122,8 +122,11 @@ def stream_json_data(
             of elements identifying the path to the item.
         timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
-    # File-like: forward-sequential stream — pass through directly.
-    if hasattr(json_data, "read") and callable(json_data.read):  # type: ignore[union-attr]
+    # File-like: forward-sequential stream — pass through directly. Tested by
+    # what it is not, rather than by probing for ``read``: the declared input is
+    # a str or a file-like object, so ruling out the first *is* the test, and it
+    # narrows the type for every branch below, all of which assume a str.
+    if not isinstance(json_data, str):
         json_stream.visit(json_data, visitor_fn)
         return
     if os.path.exists(json_data):
@@ -136,7 +139,7 @@ def stream_json_data(
     elif json_data.startswith("http"):
         with requests.get(json_data, stream=True, timeout=timeout) as response:
             json_stream.requests.visit(response, visitor_fn)
-    elif isinstance(json_data, str):
+    else:
         string_io = io.StringIO(json_data)
         json_stream.visit(string_io, visitor_fn)
 
@@ -626,9 +629,9 @@ class ValuesIndex:
     """
 
     def __init__(self) -> None:
-        self.path_values: Dict[str, Dict[Any, ValuePath]] = (
-            {}
-        )  # Dict[jq_path, Dict[value, ValuePath]]
+        self.path_values: Dict[
+            str, Dict[Any, ValuePath]
+        ] = {}  # Dict[jq_path, Dict[value, ValuePath]]
 
     def add(self, value: Any, jq_path: str, path: Tuple[Any, ...] | None = None) -> None:
         """Add a value occurrence to the index.

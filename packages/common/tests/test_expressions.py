@@ -242,16 +242,13 @@ class TestSecurity:
 
     def test_no_mro_traversal_subclasses(self) -> None:
         """Block full MRO chain to __subclasses__."""
-        result = safe_eval(
-            "().__class__.__bases__[0].__subclasses__()"
-        )
+        result = safe_eval("().__class__.__bases__[0].__subclasses__()")
         assert result.success is False
 
     def test_no_mro_popen_attack(self) -> None:
         """Block the classic Popen sandbox escape."""
         result = safe_eval(
-            "[c for c in ().__class__.__bases__[0].__subclasses__() "
-            "if c.__name__ == 'Popen']"
+            "[c for c in ().__class__.__bases__[0].__subclasses__() if c.__name__ == 'Popen']"
         )
         assert result.success is False
 
@@ -268,16 +265,12 @@ class TestSecurity:
         """The format-spec escape would chain to ``__subclasses__`` for
         a full sandbox escape — block at the ``.format()`` call.
         """
-        result = safe_eval(
-            "'{0.__class__.__bases__[0].__subclasses__()}'.format(())"
-        )
+        result = safe_eval("'{0.__class__.__bases__[0].__subclasses__()}'.format(())")
         assert result.success is False
 
     def test_no_format_map_attribute_escape(self) -> None:
         """``.format_map()`` has the same format-spec vulnerability."""
-        result = safe_eval(
-            "'{x.__class__}'.format_map({'x': ()})"
-        )
+        result = safe_eval("'{x.__class__}'.format_map({'x': ()})")
         assert result.success is False
 
     def test_no_format_via_walrus_aliased_method(self) -> None:
@@ -308,6 +301,7 @@ class TestSecurity:
         need string formatting use f-strings (which go through normal
         AST validation), not ``.format()``.
         """
+
         # An object with its own .format() method is still blocked.
         class _Custom:
             def format(self) -> str:  # noqa: D401 - test fixture

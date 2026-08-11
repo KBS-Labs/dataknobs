@@ -79,9 +79,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             (``pip install 'dataknobs-common[postgres]'``)
     """
 
-    CONFIG_CLS: ClassVar[type[PostgresEventBusConfig]] = (
-        PostgresEventBusConfig
-    )
+    CONFIG_CLS: ClassVar[type[PostgresEventBusConfig]] = PostgresEventBusConfig
 
     def __init__(
         self,
@@ -89,6 +87,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         channel_prefix: str | None = None,
         *,
         config: PostgresEventBusConfig | Mapping[str, Any] | None = None,
+        _components: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize the Postgres event bus.
 
@@ -137,12 +136,13 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             if channel_prefix is not None:
                 merged["channel_prefix"] = channel_prefix
             config = merged
-        super().__init__(config=config)
+        super().__init__(config=config, _components=_components)
 
     @classmethod
     def from_config(
         cls,
         config: Mapping[str, Any] | StructuredConfig,
+        **components: Any,
     ) -> PostgresEventBus:
         """Construct from a config dict or typed config.
 
@@ -153,8 +153,14 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         positional. Reuses the inherited ``_coerce_config`` guard so a
         config of the wrong ``StructuredConfig`` subclass raises a clear
         ``TypeError``.
+
+        Injected collaborators reach ``self.components`` through the
+        mixin's ``_components`` channel, as they do on the base method.
+        Omitting ``**components`` here narrowed the override, which left
+        this class the one member of the family to raise ``TypeError``
+        when a registry factory forwarded one.
         """
-        return cls(config=cls._coerce_config(config))
+        return cls(config=cls._coerce_config(config), _components=components or None)
 
     def _setup(self) -> None:
         # ``channel_prefix`` is already sanitized by
@@ -194,9 +200,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         # Strip any characters that are not valid in a Postgres identifier
         safe_topic = re.sub(r"[^a-zA-Z0-9_]", "", safe_topic)
         if not safe_topic:
-            raise ValueError(
-                f"Topic {topic!r} produces an empty channel name after sanitization"
-            )
+            raise ValueError(f"Topic {topic!r} produces an empty channel name after sanitization")
         return f"{self._config.channel_prefix}_{safe_topic}"
 
     async def connect(self) -> None:
@@ -254,9 +258,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        await self._listen_conn.remove_listener(
-                            channel, self._notification_handler
-                        )
+                        await self._listen_conn.remove_listener(channel, self._notification_handler)
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
                 except Exception:
                     pass
@@ -294,8 +296,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         # Postgres NOTIFY payload limit is ~8000 bytes
         if len(payload) > 7500:
             logger.warning(
-                "Event payload for topic %s is %d bytes, "
-                "may exceed Postgres NOTIFY limit",
+                "Event payload for topic %s is %d bytes, may exceed Postgres NOTIFY limit",
                 topic,
                 len(payload),
             )
@@ -346,9 +347,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             # Start listening on this channel if not already
             if channel not in self._channel_topics:
                 await self._listen_conn.execute(f"LISTEN {channel}")
-                await self._listen_conn.add_listener(
-                    channel, self._notification_handler
-                )
+                await self._listen_conn.add_listener(channel, self._notification_handler)
                 self._channel_topics[channel] = topic
                 self._topic_channels[topic] = channel
                 logger.debug("Started listening on channel %s", channel)
@@ -376,16 +375,12 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             channel = self._topic_to_channel(topic)
 
             # Check if any other subscriptions are using this channel
-            has_other_subs = any(
-                s.topic == topic for s in self._subscriptions.values()
-            )
+            has_other_subs = any(s.topic == topic for s in self._subscriptions.values())
 
             if not has_other_subs and channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        await self._listen_conn.remove_listener(
-                            channel, self._notification_handler
-                        )
+                        await self._listen_conn.remove_listener(channel, self._notification_handler)
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
                 except Exception:
                     pass
@@ -435,9 +430,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         ``close()`` (which acquires the same lock) indefinitely. The
         held-lock invariant is asserted rather than left implicit.
         """
-        assert (
-            self._lock.locked()
-        ), "_reestablish_listen_conn_locked requires self._lock"
+        assert self._lock.locked(), "_reestablish_listen_conn_locked requires self._lock"
         import asyncpg
 
         new_conn = await asyncpg.connect(
@@ -447,9 +440,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         try:
             for channel in self._channel_topics:
                 await new_conn.execute(f"LISTEN {channel}")
-                await new_conn.add_listener(
-                    channel, self._notification_handler
-                )
+                await new_conn.add_listener(channel, self._notification_handler)
         except Exception:
             try:
                 await new_conn.close()
@@ -465,8 +456,7 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             except Exception:
                 pass
         logger.warning(
-            "PostgresEventBus re-established dropped LISTEN connection "
-            "(%d channels re-registered)",
+            "PostgresEventBus re-established dropped LISTEN connection (%d channels re-registered)",
             channel_count,
         )
 

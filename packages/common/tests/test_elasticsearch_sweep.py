@@ -112,9 +112,7 @@ def test_sweep_reclaims_stale_indices(es_host_port, ensure_elasticsearch_ready):
 
 
 @requires_elasticsearch
-def test_sweep_age_gating_protects_fresh_index(
-    es_host_port, ensure_elasticsearch_ready
-):
+def test_sweep_age_gating_protects_fresh_index(es_host_port, ensure_elasticsearch_ready):
     """Load-bearing safety property: an index younger than the threshold survives.
 
     The sweep deletes an index only when ``created_ms <= now_ms -
@@ -327,9 +325,7 @@ def test_sweep_non_2xx_list_logs_status_and_returns_empty(caplog):
             host, port, prefixes=("test_sweep_503_",), min_age_seconds=0
         )
     assert result == []
-    assert any(
-        "returned status 503" in rec.getMessage() for rec in caplog.records
-    )
+    assert any("returned status 503" in rec.getMessage() for rec in caplog.records)
 
 
 def test_sweep_malformed_max_age_env_is_non_fatal(caplog, monkeypatch):
@@ -343,11 +339,8 @@ def test_sweep_malformed_max_age_env_is_non_fatal(caplog, monkeypatch):
     monkeypatch.setenv("DK_ES_TEST_INDEX_MAX_AGE_SECONDS", "not-a-number")
     with caplog.at_level(logging.WARNING, logger=_ES_FIX_LOGGER):
         # min_age_seconds omitted => the env var is consulted (and is malformed).
-        result = sweep_stale_test_indices(
-            "127.0.0.1", 1, prefixes=("test_sweep_badenv_",)
-        )
+        result = sweep_stale_test_indices("127.0.0.1", 1, prefixes=("test_sweep_badenv_",))
     assert result == []
     assert any(
-        "malformed DK_ES_TEST_INDEX_MAX_AGE_SECONDS" in rec.getMessage()
-        for rec in caplog.records
+        "malformed DK_ES_TEST_INDEX_MAX_AGE_SECONDS" in rec.getMessage() for rec in caplog.records
     )

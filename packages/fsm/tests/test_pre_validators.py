@@ -46,26 +46,21 @@ class TestPreValidators:
                             pre_validators=[
                                 FunctionReference(
                                     type="inline",
-                                    code="lambda state: False"  # This will fail
+                                    code="lambda state: False",  # This will fail
                                 )
                             ],
                             transforms=[
                                 FunctionReference(
                                     type="inline",
-                                    code="lambda state: execution_log.append('transform_executed') or state.data"
+                                    code="lambda state: execution_log.append('transform_executed') or state.data",
                                 )
                             ],
-                            arcs=[
-                                ArcConfig(target="final")
-                            ]
+                            arcs=[ArcConfig(target="final")],
                         ),
-                        StateConfig(
-                            name="final",
-                            is_end=True
-                        )
-                    ]
+                        StateConfig(name="final", is_end=True),
+                    ],
                 )
-            ]
+            ],
         )
 
         # Build and execute FSM
@@ -114,7 +109,7 @@ def pre_val(data, context):
     assert hasattr(context, 'variables')
     assert isinstance(context.variables, dict)
     return True
-"""
+""",
                                 )
                             ],
                             transforms=[
@@ -126,20 +121,15 @@ def transform(data, context):
     assert hasattr(context, 'resources')
     assert isinstance(context.resources, dict)
     return data
-"""
+""",
                                 )
                             ],
-                            arcs=[
-                                ArcConfig(target="final")
-                            ]
+                            arcs=[ArcConfig(target="final")],
                         ),
-                        StateConfig(
-                            name="final",
-                            is_end=True
-                        )
-                    ]
+                        StateConfig(name="final", is_end=True),
+                    ],
                 )
-            ]
+            ],
         )
 
         # Build and execute FSM
@@ -171,12 +161,10 @@ def transform(data, context):
                                 FunctionReference(
                                     type="inline",
                                     # Set a variable in context
-                                    code="lambda state: {'data': state.data, 'set_var': 'value1'}"
+                                    code="lambda state: {'data': state.data, 'set_var': 'value1'}",
                                 )
                             ],
-                            arcs=[
-                                ArcConfig(target="state2")
-                            ]
+                            arcs=[ArcConfig(target="state2")],
                         ),
                         StateConfig(
                             name="state2",
@@ -184,20 +172,15 @@ def transform(data, context):
                                 FunctionReference(
                                     type="inline",
                                     # Read the variable from context
-                                    code="lambda state: {'data': state.data, 'read_var': 'value1'}"
+                                    code="lambda state: {'data': state.data, 'read_var': 'value1'}",
                                 )
                             ],
-                            arcs=[
-                                ArcConfig(target="final")
-                            ]
+                            arcs=[ArcConfig(target="final")],
                         ),
-                        StateConfig(
-                            name="final",
-                            is_end=True
-                        )
-                    ]
+                        StateConfig(name="final", is_end=True),
+                    ],
                 )
-            ]
+            ],
         )
 
         # Build and execute FSM
@@ -236,34 +219,31 @@ def transform(data, context):
                                     target="path1",
                                     priority=1,
                                     condition=FunctionReference(
-                                        type="inline",
-                                        code="lambda state: True"
-                                    )
+                                        type="inline", code="lambda state: True"
+                                    ),
                                 ),
                                 ArcConfig(
                                     target="path2",
                                     priority=1,
                                     condition=FunctionReference(
-                                        type="inline",
-                                        code="lambda state: True"
-                                    )
+                                        type="inline", code="lambda state: True"
+                                    ),
                                 ),
                                 ArcConfig(
                                     target="path3",
                                     priority=1,
                                     condition=FunctionReference(
-                                        type="inline",
-                                        code="lambda state: True"
-                                    )
+                                        type="inline", code="lambda state: True"
+                                    ),
                                 ),
-                            ]
+                            ],
                         ),
                         StateConfig(name="path1", is_end=True),
                         StateConfig(name="path2", is_end=True),
                         StateConfig(name="path3", is_end=True),
-                    ]
+                    ],
                 )
-            ]
+            ],
         )
 
         # Build FSM

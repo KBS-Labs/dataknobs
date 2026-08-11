@@ -53,10 +53,10 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         params = dict(config.connection_params)
 
         # Set memory-specific defaults
-        params.setdefault('max_size', 1000)
+        params.setdefault("max_size", 1000)
 
         # Enable indexing for fast queries
-        params.setdefault('enable_indexing', True)
+        params.setdefault("enable_indexing", True)
 
         config = replace(config, connection_params=params)
 

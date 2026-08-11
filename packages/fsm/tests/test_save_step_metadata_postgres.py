@@ -91,7 +91,8 @@ class TestSaveStepMetadataPostgres:
 
     @pytest.mark.asyncio
     async def test_save_step_with_metadata_round_trip(
-        self, postgres_storage: UnifiedDatabaseStorage,
+        self,
+        postgres_storage: UnifiedDatabaseStorage,
     ) -> None:
         """``save_step(..., metadata=...)`` round-trips on PG.
 
@@ -126,7 +127,8 @@ class TestSaveStepMetadataPostgres:
 
     @pytest.mark.asyncio
     async def test_default_metadata_is_empty_on_postgres(
-        self, postgres_storage: UnifiedDatabaseStorage,
+        self,
+        postgres_storage: UnifiedDatabaseStorage,
     ) -> None:
         """No ``metadata=`` kwarg ⇒ empty metadata column on PG."""
         await postgres_storage.save_step("exec-1", _make_step("step-1"))
@@ -145,7 +147,8 @@ class TestSaveStepMetadataPostgres:
 
     @pytest.mark.asyncio
     async def test_load_steps_after_save_with_metadata(
-        self, postgres_storage: UnifiedDatabaseStorage,
+        self,
+        postgres_storage: UnifiedDatabaseStorage,
     ) -> None:
         """``load_steps`` reconstructs steps written with metadata on PG.
 
@@ -169,7 +172,8 @@ class TestSaveStepMetadataPostgres:
 
     @pytest.mark.asyncio
     async def test_metadata_dot_notation_filter_postgres(
-        self, postgres_storage: UnifiedDatabaseStorage,
+        self,
+        postgres_storage: UnifiedDatabaseStorage,
     ) -> None:
         """``metadata.X`` dot-notation filter reaches the JSONB column on PG.
 
@@ -192,9 +196,7 @@ class TestSaveStepMetadataPostgres:
 
         assert postgres_storage._steps_db is not None
         acme_results: list[Any] = await postgres_storage._steps_db.search(
-            Query()
-            .filter("step_data", "exists")
-            .filter("metadata.tenant_id", "=", "acme")
+            Query().filter("step_data", "exists").filter("metadata.tenant_id", "=", "acme")
         )
         assert len(acme_results) == 1
         assert acme_results[0].data["step_id"] == "step-1"
@@ -202,7 +204,8 @@ class TestSaveStepMetadataPostgres:
 
     @pytest.mark.asyncio
     async def test_load_steps_filter_on_data_column_field_postgres(
-        self, postgres_storage: UnifiedDatabaseStorage,
+        self,
+        postgres_storage: UnifiedDatabaseStorage,
     ) -> None:
         """``load_steps(filters=...)`` continues to match on data-column fields on PG.
 
@@ -216,12 +219,8 @@ class TestSaveStepMetadataPostgres:
         other.state_name = "state_b"
         await postgres_storage.save_step("exec-1", other)
 
-        matched = await postgres_storage.load_steps(
-            "exec-1", filters={"state_name": "state_a"}
-        )
+        matched = await postgres_storage.load_steps("exec-1", filters={"state_name": "state_a"})
         assert [s.step_id for s in matched] == ["step-1"]
 
-        none = await postgres_storage.load_steps(
-            "exec-1", filters={"state_name": "missing"}
-        )
+        none = await postgres_storage.load_steps("exec-1", filters={"state_name": "missing"})
         assert none == []

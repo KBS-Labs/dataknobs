@@ -177,12 +177,8 @@ class TestContextBuilderBuild:
                     "fsm_state": {
                         "current_stage": "collect_info",
                         "data": {"name": "test"},
-                        "tasks": {
-                            "tasks": [{"id": "t1", "status": "pending"}]
-                        },
-                        "transitions": [
-                            {"from_stage": "welcome", "to_stage": "collect_info"}
-                        ],
+                        "tasks": {"tasks": [{"id": "t1", "status": "pending"}]},
+                        "transitions": [{"from_stage": "welcome", "to_stage": "collect_info"}],
                     },
                 }
             }
@@ -216,11 +212,7 @@ class TestContextBuilderBuild:
         """Fall back to metadata['artifacts'] when no registry is configured."""
         builder = ContextBuilder()
         manager = await make_manager(
-            metadata={
-                "artifacts": [
-                    {"id": "a1", "name": "Test", "status": "draft"}
-                ]
-            }
+            metadata={"artifacts": [{"id": "a1", "name": "Test", "status": "draft"}]}
         )
 
         context = await builder.build(manager)
@@ -259,9 +251,7 @@ class TestContextBuilderBuild:
         builder = ContextBuilder()
         manager = await make_manager(
             metadata={
-                "tool_history": [
-                    {"tool_name": "search", "success": True, "duration_ms": 100}
-                ]
+                "tool_history": [{"tool_name": "search", "success": True, "duration_ms": 100}]
             }
         )
 
@@ -287,9 +277,7 @@ class TestContextBuilderFromMetadata:
                 },
             },
             "context": {
-                "assumptions": [
-                    {"content": "Test", "source": "inferred", "confidence": 0.5}
-                ]
+                "assumptions": [{"content": "Test", "source": "inferred", "confidence": 0.5}]
             },
         }
 
@@ -367,9 +355,7 @@ class TestContextBuilderToolRegistry:
 
         builder = ContextBuilder(tool_registry=tool_registry)
         manager = await make_manager(
-            metadata={
-                "tool_history": [{"tool_name": "fallback", "success": True}]
-            }
+            metadata={"tool_history": [{"tool_name": "fallback", "success": True}]}
         )
 
         context = await builder.build(manager)
@@ -428,9 +414,7 @@ class TestContextPersisterAgainstRealManager:
         assert manager.state.metadata["context"]["sections"][0]["name"] == "profile"
 
     @pytest.mark.asyncio
-    async def test_persist_against_post_state_manager_replaces_section(
-        self, make_manager
-    ) -> None:
+    async def test_persist_against_post_state_manager_replaces_section(self, make_manager) -> None:
         """Post-state path — also raised ``AttributeError`` before the
         fix. Also pins the original *replace* semantic of the
         ``metadata["context"] = ...`` write: calling :meth:`persist`
@@ -460,9 +444,7 @@ class TestContextPersisterAgainstRealManager:
         assert section["sections"][0]["name"] == "custom"
 
     @pytest.mark.asyncio
-    async def test_persist_preserves_other_metadata_keys(
-        self, make_manager
-    ) -> None:
+    async def test_persist_preserves_other_metadata_keys(self, make_manager) -> None:
         """Persisting context must not clobber other metadata keys.
 
         Pins the "wizard / other top-level keys survive" semantic the
@@ -472,9 +454,7 @@ class TestContextPersisterAgainstRealManager:
         from dataknobs_bots.context.accumulator import ConversationContext
 
         manager = await make_manager(materialize=False)
-        manager.update_seed_metadata(
-            {"wizard": {"progress": 0.5}, "other": "data"}
-        )
+        manager.update_seed_metadata({"wizard": {"progress": 0.5}, "other": "data"})
 
         context = ConversationContext(conversation_id=manager.conversation_id)
         context.add_assumption(content="new")

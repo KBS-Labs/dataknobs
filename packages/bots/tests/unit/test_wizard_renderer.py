@@ -119,9 +119,7 @@ class TestRenderFallback:
         self, renderer: WizardRenderer, stage: dict, state: _StubState
     ) -> None:
         bad_template = "{{ broken | nonexistent_filter }}"
-        result = renderer.render(
-            bad_template, stage, state, fallback="safe value"
-        )
+        result = renderer.render(bad_template, stage, state, fallback="safe value")
         assert result == "safe value"
 
     def test_without_fallback_propagates_exception(
@@ -163,9 +161,7 @@ class TestRenderList:
         result = renderer.render_list(items, stage, state)
         assert result == items
 
-    def test_empty_list(
-        self, renderer: WizardRenderer, stage: dict, state: _StubState
-    ) -> None:
+    def test_empty_list(self, renderer: WizardRenderer, stage: dict, state: _StubState) -> None:
         assert renderer.render_list([], stage, state) == []
 
 
@@ -186,9 +182,7 @@ class TestSandboxing:
 # Mixed mode (( )) preprocessing
 # ===================================================================
 class TestMixedMode:
-    def test_conditional_present(
-        self, renderer: WizardRenderer, state: _StubState
-    ) -> None:
+    def test_conditional_present(self, renderer: WizardRenderer, state: _StubState) -> None:
         """(( )) section retained when author-controlled vars have values."""
         stage = {
             "name": "details",
@@ -199,9 +193,7 @@ class TestMixedMode:
         result = renderer.render(template, stage, state, mixed_mode=True)
         assert result == "Hello details, help: Extra help here"
 
-    def test_conditional_absent(
-        self, renderer: WizardRenderer, state: _StubState
-    ) -> None:
+    def test_conditional_absent(self, renderer: WizardRenderer, state: _StubState) -> None:
         """(( )) section removed when author-controlled vars missing/empty."""
         stage = {
             "name": "details",
@@ -212,9 +204,7 @@ class TestMixedMode:
         result = renderer.render(template, stage, state, mixed_mode=True)
         assert result == "Hello details"
 
-    def test_with_jinja_features(
-        self, renderer: WizardRenderer, state: _StubState
-    ) -> None:
+    def test_with_jinja_features(self, renderer: WizardRenderer, state: _StubState) -> None:
         """(( )) + Jinja2 features work together."""
         stage = {"name": "details", "help_text": "tip", "suggestions": []}
         # Use {{topic}} without spaces — in mixed mode, the preprocessor
@@ -229,9 +219,7 @@ class TestMixedMode:
         assert ", help: tip" in result
         assert "topic=Python" in result
 
-    def test_false_ignores_conditionals(
-        self, renderer: WizardRenderer, state: _StubState
-    ) -> None:
+    def test_false_ignores_conditionals(self, renderer: WizardRenderer, state: _StubState) -> None:
         """mixed_mode=False does NOT preprocess (( )) syntax."""
         stage = {"name": "details", "suggestions": []}
         template = "Hello ((world))"
@@ -251,7 +239,9 @@ class TestMixedMode:
         assert result == "Go"
         # With can_skip=True via extra_context, section retained
         result2 = renderer.render(
-            template, stage, state,
+            template,
+            stage,
+            state,
             extra_context={"can_skip": True},
             mixed_mode=True,
         )
@@ -267,9 +257,7 @@ class TestMixedMode:
         # stage_name resolved by preprocessor, topic resolved by Jinja2
         assert result == "Stage: details, Topic: Python"
 
-    def test_injection_via_user_data_blocked(
-        self, renderer: WizardRenderer
-    ) -> None:
+    def test_injection_via_user_data_blocked(self, renderer: WizardRenderer) -> None:
         """User-entered Jinja2 control flow is NOT interpreted as code."""
         malicious_value = "{% for i in range(999999999) %}x{% endfor %}"
         state = _StubState(
@@ -298,20 +286,14 @@ class TestMixedMode:
 # ===================================================================
 class TestRenderSimple:
     def test_basic_rendering(self, renderer: WizardRenderer) -> None:
-        result = renderer.render_simple(
-            "Hello {{ name }}", {"name": "World"}
-        )
+        result = renderer.render_simple("Hello {{ name }}", {"name": "World"})
         assert result == "Hello World"
 
     def test_fallback_on_error(self, renderer: WizardRenderer) -> None:
-        result = renderer.render_simple(
-            "{% for %}", {}, fallback="default"
-        )
+        result = renderer.render_simple("{% for %}", {}, fallback="default")
         assert result == "default"
 
-    def test_propagates_without_fallback(
-        self, renderer: WizardRenderer
-    ) -> None:
+    def test_propagates_without_fallback(self, renderer: WizardRenderer) -> None:
         with pytest.raises(TemplateSyntaxError):
             renderer.render_simple("{% for %}", {})
 
@@ -330,9 +312,7 @@ class TestStrictMode:
         with pytest.raises(UndefinedError):
             renderer.render("{{ nonexistent_var }}", stage, state)
 
-    def test_non_strict_renders_empty(
-        self, renderer: WizardRenderer
-    ) -> None:
+    def test_non_strict_renders_empty(self, renderer: WizardRenderer) -> None:
         stage: dict[str, Any] = {"name": "test", "suggestions": []}
         state = _StubState()
         result = renderer.render("Hello {{ nonexistent_var }}!", stage, state)

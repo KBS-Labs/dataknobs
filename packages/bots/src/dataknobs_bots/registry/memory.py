@@ -15,9 +15,7 @@ if TYPE_CHECKING:
     from dataknobs_data import SortSpec, StreamConfig
 
 
-def _matches_metadata(
-    reg: Registration, filter_metadata: Mapping[str, Any] | None
-) -> bool:
+def _matches_metadata(reg: Registration, filter_metadata: Mapping[str, Any] | None) -> bool:
     """Return True if every key/value in ``filter_metadata`` matches ``reg.metadata``.
 
     Empty / ``None`` filter mapping is treated as no-filter (always matches).
@@ -359,11 +357,7 @@ class InMemoryBackend:
             List of active bot IDs
         """
         async with self._lock:
-            return [
-                reg.bot_id
-                for reg in self._registrations.values()
-                if reg.status == "active"
-            ]
+            return [reg.bot_id for reg in self._registrations.values() if reg.status == "active"]
 
     async def count_all(
         self,
@@ -399,9 +393,7 @@ class InMemoryBackend:
 
         Convenience for :meth:`count_all` with ``status="active"``.
         """
-        return await self.count_all(
-            status="active", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="active", filter_metadata=filter_metadata)
 
     async def count_inactive(
         self,
@@ -412,9 +404,7 @@ class InMemoryBackend:
 
         Convenience for :meth:`count_all` with ``status="inactive"``.
         """
-        return await self.count_all(
-            status="inactive", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="inactive", filter_metadata=filter_metadata)
 
     async def stream(
         self,

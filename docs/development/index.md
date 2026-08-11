@@ -120,7 +120,10 @@ source .venv/bin/activate  # On Linux/macOS
 # or
 .venv\Scripts\activate  # On Windows
 
-# Run quality checks before PRs (includes integration tests)
+# Run quality checks and produce the artifacts CI verifies (includes integration tests)
+./bin/dk pr
+
+# Or run the same checks without writing artifacts, while iterating
 ./bin/run-quality-checks.sh
 
 # Or run specific test types with the new test infrastructure
@@ -297,7 +300,7 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 ### 4. Testing
 - Write unit tests for all new functionality
 - Run integration tests with real services (PostgreSQL, Elasticsearch)
-- Ensure all tests pass with `./bin/run-quality-checks.sh`
+- Ensure all tests pass with `./bin/dk pr`
 - Achieve minimum code coverage targets (70% overall, 90% for new code)
 - Test across supported Python versions (3.12+)
 
@@ -384,8 +387,8 @@ pytest -m "not integration"            # Unit tests only
 pytest --cov=packages/                # Run with coverage
 pytest packages/structures/tests/     # Run specific package tests
 
-# Run quality checks (linting + tests + coverage)
-./bin/run-quality-checks.sh
+# Run quality checks (linting + tests + coverage), and write the PR artifacts
+./bin/dk pr
 ```
 
 ### Documentation

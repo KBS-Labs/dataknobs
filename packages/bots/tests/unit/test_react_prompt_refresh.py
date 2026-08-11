@@ -23,6 +23,7 @@ from dataknobs_llm.tools.base import Tool
 # Test tool
 # ---------------------------------------------------------------------------
 
+
 class StateMutatingTool(Tool):
     """Test tool that tracks execution and mutates shared state."""
 
@@ -53,8 +54,10 @@ class StateMutatingTool(Tool):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_system_prompt_from_call(
-    provider: EchoProvider, call_index: int,
+    provider: EchoProvider,
+    call_index: int,
 ) -> str:
     """Extract the system prompt from a specific EchoProvider call."""
     call = provider.get_call(call_index)
@@ -70,6 +73,7 @@ def _get_system_prompt_from_call(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestReActPromptRefresh:
     """Tests for prompt_refresher callback in ReAct loop."""
@@ -89,10 +93,12 @@ class TestReActPromptRefresh:
         manager, provider = conversation_manager_pair
 
         # Script: iteration 1 = tool call, iteration 2 = text response
-        provider.set_responses([
-            tool_call_response("mutate_state", {"value": "new"}),
-            text_response("Done with refreshed context"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("mutate_state", {"value": "new"}),
+                text_response("Done with refreshed context"),
+            ]
+        )
 
         shared_state: dict[str, Any] = {"value": "initial"}
         tool = StateMutatingTool(shared_state)
@@ -144,10 +150,12 @@ class TestReActPromptRefresh:
         """
         manager, provider = conversation_manager_pair
 
-        provider.set_responses([
-            tool_call_response("mutate_state", {"value": "new"}),
-            text_response("Done"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("mutate_state", {"value": "new"}),
+                text_response("Done"),
+            ]
+        )
 
         shared_state: dict[str, Any] = {"value": "initial"}
         tool = StateMutatingTool(shared_state)
@@ -183,11 +191,13 @@ class TestReActPromptRefresh:
 
         # All responses are tool calls — will exhaust max_iterations=2
         # Then the fallback manager.complete() is called (response 3)
-        provider.set_responses([
-            tool_call_response("mutate_state", {"value": "v1"}),
-            tool_call_response("mutate_state", {"value": "v2"}),
-            text_response("Final after max iterations"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("mutate_state", {"value": "v1"}),
+                tool_call_response("mutate_state", {"value": "v2"}),
+                text_response("Final after max iterations"),
+            ]
+        )
 
         shared_state: dict[str, Any] = {"value": "initial"}
         tool = StateMutatingTool(shared_state)
@@ -233,9 +243,11 @@ class TestReActPromptRefresh:
         """
         manager, provider = conversation_manager_pair
 
-        provider.set_responses([
-            text_response("Immediate answer"),
-        ])
+        provider.set_responses(
+            [
+                text_response("Immediate answer"),
+            ]
+        )
 
         shared_state: dict[str, Any] = {"value": "initial"}
         tool = StateMutatingTool(shared_state)

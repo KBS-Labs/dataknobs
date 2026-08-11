@@ -94,7 +94,8 @@ class VectorTextSynchronizer:
     def __init__(
         self,
         database: Database,
-        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        embedding_fn: Callable[[str], np.ndarray]
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         text_fields: list[str] | str | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -105,7 +106,7 @@ class VectorTextSynchronizer:
         config: SyncConfig | None = None,
     ):
         """Initialize the synchronizer with simplified API.
-        
+
         Args:
             database: The database to synchronize
             embedding_fn: Function to generate embeddings from text
@@ -169,11 +170,11 @@ class VectorTextSynchronizer:
 
     def _has_current_vector(self, record: Record, vector_field: str) -> bool:
         """Check if a record has a current vector for the given field.
-        
+
         Args:
             record: The record to check
             vector_field: Name of the vector field
-            
+
         Returns:
             True if the vector is current, False otherwise
         """
@@ -234,11 +235,11 @@ class VectorTextSynchronizer:
 
     def _needs_update(self, record: Record, vector_field: str) -> bool:
         """Check if a vector field needs to be updated.
-        
+
         Args:
             record: The record to check
             vector_field: Name of the vector field
-            
+
         Returns:
             True if the vector needs updating, False otherwise
         """
@@ -246,10 +247,10 @@ class VectorTextSynchronizer:
 
     async def _embed_text(self, text: str) -> np.ndarray | None:
         """Generate embedding for text with error handling.
-        
+
         Args:
             text: Text to embed
-            
+
         Returns:
             Embedding vector or None if failed
         """
@@ -260,8 +261,7 @@ class VectorTextSynchronizer:
             try:
                 if asyncio.iscoroutinefunction(self.embedding_fn):
                     result = await asyncio.wait_for(
-                        self.embedding_fn(text),
-                        timeout=self.config.embedding_timeout
+                        self.embedding_fn(text), timeout=self.config.embedding_timeout
                     )
                 else:
                     result = await asyncio.to_thread(self.embedding_fn, text)
@@ -286,16 +286,14 @@ class VectorTextSynchronizer:
         return None
 
     async def sync_record(
-        self,
-        record_or_id: Record | str,
-        force: bool = False
+        self, record_or_id: Record | str, force: bool = False
     ) -> tuple[bool, list[str]]:
         """Synchronize vectors for a single record.
-        
+
         Args:
             record_or_id: The record or record ID to synchronize
             force: Force update even if vectors appear current
-            
+
         Returns:
             Tuple of (success, list of updated fields)
         """
@@ -325,6 +323,7 @@ class VectorTextSynchronizer:
                 embedding = await self._embed_text(text)
                 if embedding is not None:
                     from ..fields import VectorField
+
                     # Compute content hash for change tracking
                     content_hash = self._compute_content_hash(text)
                     vector_field_obj = VectorField(
@@ -333,7 +332,7 @@ class VectorTextSynchronizer:
                         source_field=self.text_fields[0] if len(self.text_fields) == 1 else None,
                         model_name=self.model_name,
                         model_version=self.model_version,
-                        metadata={"content_hash": content_hash}
+                        metadata={"content_hash": content_hash},
                     )
                     record.fields[self.vector_field] = vector_field_obj
                     updated_fields.append(self.vector_field)
@@ -351,6 +350,7 @@ class VectorTextSynchronizer:
                     embedding = await self._embed_text(source_text)
                     if embedding is not None:
                         from ..fields import VectorField
+
                         # Compute content hash for change tracking
                         content_hash = self._compute_content_hash(source_text)
                         vector_field_obj = VectorField(
@@ -359,7 +359,7 @@ class VectorTextSynchronizer:
                             source_field=source_field,
                             model_name=self.model_name,
                             model_version=self.model_version,
-                            metadata={"content_hash": content_hash}
+                            metadata={"content_hash": content_hash},
                         )
                         record.fields[vector_field_name] = vector_field_obj
                         updated_fields.append(vector_field_name)
@@ -384,12 +384,12 @@ class VectorTextSynchronizer:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Synchronize all records in the database.
-        
+
         Args:
             batch_size: Batch size for processing (uses self.batch_size if None)
             force: Force update even if vectors appear current
             progress_callback: Callback for progress updates (done, total)
-            
+
         Returns:
             Dictionary with sync results
         """
@@ -407,7 +407,7 @@ class VectorTextSynchronizer:
 
         # Process in batches
         for i in range(0, total, batch_size):
-            batch = all_records[i:i + batch_size]
+            batch = all_records[i : i + batch_size]
 
             for record in batch:
                 success, fields = await self.sync_record(record, force=force)
@@ -435,12 +435,12 @@ class VectorTextSynchronizer:
         progress_callback: Callable[[SyncStatus], None] | None = None,
     ) -> SyncStatus:
         """Synchronize vectors for multiple records in batches.
-        
+
         Args:
             records: Records to sync (None for all records in database)
             force: Force update even if vectors appear current
             progress_callback: Callback for progress updates
-            
+
         Returns:
             Synchronization status
         """
@@ -455,7 +455,7 @@ class VectorTextSynchronizer:
 
             # Process in batches
             for i in range(0, len(records), self.config.batch_size):
-                batch = records[i:i + self.config.batch_size]
+                batch = records[i : i + self.config.batch_size]
 
                 for record in batch:
                     try:
@@ -472,10 +472,12 @@ class VectorTextSynchronizer:
 
                     except Exception as e:
                         status.failed_records += 1
-                        status.errors.append({
-                            "record_id": record.id,
-                            "error": str(e),
-                        })
+                        status.errors.append(
+                            {
+                                "record_id": record.id,
+                                "error": str(e),
+                            }
+                        )
                         logger.error(f"Failed to sync record {record.id}: {e}")
 
                 # Call progress callback
@@ -499,12 +501,12 @@ class VectorTextSynchronizer:
         new_data: dict[str, Any],
     ) -> bool:
         """Handle record updates and sync vectors if needed.
-        
+
         Args:
             record_id: ID of the updated record
             old_data: Previous data
             new_data: New data
-            
+
         Returns:
             True if sync was performed, False otherwise
         """
@@ -559,10 +561,10 @@ class VectorTextSynchronizer:
 
     async def sync_on_create(self, record: Record) -> bool:
         """Handle record creation and sync vectors if needed.
-        
+
         Args:
             record: The newly created record
-            
+
         Returns:
             True if sync was performed, False otherwise
         """
@@ -582,7 +584,8 @@ class VectorTextSynchronizer:
     def from_config(
         cls,
         database: Database,
-        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        embedding_fn: Callable[[str], np.ndarray]
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         config: SyncConfig,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
@@ -590,7 +593,7 @@ class VectorTextSynchronizer:
         model_version: str | None = None,
     ) -> VectorTextSynchronizer:
         """Create synchronizer from a config object for advanced use cases.
-        
+
         Args:
             database: The database to synchronize
             embedding_fn: Function to generate embeddings from text
@@ -599,7 +602,7 @@ class VectorTextSynchronizer:
             vector_field: Name of the vector field
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             Configured VectorTextSynchronizer instance
         """

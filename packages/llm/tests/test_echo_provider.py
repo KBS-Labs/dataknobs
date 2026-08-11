@@ -9,10 +9,7 @@ from dataknobs_llm.llm.providers import EchoProvider
 @pytest.fixture
 def echo_config():
     """Create basic echo config."""
-    return LLMConfig(
-        provider="echo",
-        model="echo-model"
-    )
+    return LLMConfig(provider="echo", model="echo-model")
 
 
 @pytest.fixture
@@ -25,8 +22,8 @@ def echo_config_custom():
             "echo_prefix": "Test: ",
             "embedding_dim": 384,
             "mock_tokens": True,
-            "stream_delay": 0.0
-        }
+            "stream_delay": 0.0,
+        },
     )
 
 
@@ -68,11 +65,7 @@ def test_echo_provider_custom_options(echo_config_custom):
 
 def test_echo_provider_from_dict():
     """Test EchoProvider creation from dict."""
-    config_dict = {
-        "provider": "echo",
-        "model": "echo-model",
-        "options": {"echo_prefix": ">>>"}
-    }
+    config_dict = {"provider": "echo", "model": "echo-model", "options": {"echo_prefix": ">>>"}}
     provider = EchoProvider(config_dict)
     assert provider.echo_prefix == ">>>"
 
@@ -125,7 +118,7 @@ async def test_echo_complete_messages(echo_provider):
     """Test EchoProvider complete with message list."""
     messages = [
         LLMMessage(role="system", content="You are helpful"),
-        LLMMessage(role="user", content="What is 2+2?")
+        LLMMessage(role="user", content="What is 2+2?"),
     ]
     response = await echo_provider.complete(messages)
 
@@ -139,7 +132,7 @@ async def test_echo_complete_multiple_user_messages(echo_provider):
     messages = [
         LLMMessage(role="user", content="First message"),
         LLMMessage(role="assistant", content="Response"),
-        LLMMessage(role="user", content="Second message")
+        LLMMessage(role="user", content="Second message"),
     ]
     response = await echo_provider.complete(messages)
 
@@ -149,9 +142,7 @@ async def test_echo_complete_multiple_user_messages(echo_provider):
 @pytest.mark.asyncio
 async def test_echo_complete_no_user_message(echo_provider):
     """Test EchoProvider with no user messages."""
-    messages = [
-        LLMMessage(role="system", content="You are helpful")
-    ]
+    messages = [LLMMessage(role="system", content="You are helpful")]
     response = await echo_provider.complete(messages)
 
     assert response.content == "Echo: (no user message)"
@@ -277,9 +268,7 @@ async def test_echo_embed_custom_dim(echo_provider_custom):
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_basic(echo_provider):
     """Test EchoProvider function_call basic usage."""
-    messages = [
-        LLMMessage(role="user", content="What's the weather in NYC?")
-    ]
+    messages = [LLMMessage(role="user", content="What's the weather in NYC?")]
     functions = [
         {
             "name": "get_weather",
@@ -287,16 +276,10 @@ async def test_echo_function_call_basic(echo_provider):
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "City name"
-                    },
-                    "units": {
-                        "type": "string",
-                        "description": "Temperature units"
-                    }
-                }
-            }
+                    "location": {"type": "string", "description": "City name"},
+                    "units": {"type": "string", "description": "Temperature units"},
+                },
+            },
         }
     ]
 
@@ -325,9 +308,9 @@ async def test_echo_function_call_mock_arguments(echo_provider):
                     "int_param": {"type": "integer"},
                     "bool_param": {"type": "boolean"},
                     "array_param": {"type": "array"},
-                    "obj_param": {"type": "object"}
-                }
-            }
+                    "obj_param": {"type": "object"},
+                },
+            },
         }
     ]
 
@@ -351,12 +334,7 @@ async def test_echo_function_call_deterministic(echo_provider):
     functions = [
         {
             "name": "test_func",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "value": {"type": "number"}
-                }
-            }
+            "parameters": {"type": "object", "properties": {"value": {"type": "number"}}},
         }
     ]
 
@@ -386,7 +364,7 @@ async def test_echo_function_call_multiple_functions(echo_provider):
     messages = [LLMMessage(role="user", content="Test")]
     functions = [
         {"name": "first_function", "parameters": {"type": "object", "properties": {}}},
-        {"name": "second_function", "parameters": {"type": "object", "properties": {}}}
+        {"name": "second_function", "parameters": {"type": "object", "properties": {}}},
     ]
 
     response = await echo_provider.function_call(messages, functions)
@@ -452,7 +430,7 @@ async def test_echo_with_system_prompt(echo_config):
         provider="echo",
         model="echo-model",
         system_prompt="You are helpful",
-        options={"echo_system": True}
+        options={"echo_system": True},
     )
     provider = EchoProvider(config)
     await provider.initialize()
@@ -468,11 +446,7 @@ async def test_echo_with_system_prompt(echo_config):
 @pytest.mark.asyncio
 async def test_echo_system_prompt_disabled_by_default(echo_config):
     """Test EchoProvider doesn't echo system prompt by default."""
-    config = LLMConfig(
-        provider="echo",
-        model="echo-model",
-        system_prompt="You are helpful"
-    )
+    config = LLMConfig(provider="echo", model="echo-model", system_prompt="You are helpful")
     provider = EchoProvider(config)
     await provider.initialize()
 
@@ -489,17 +463,13 @@ async def test_echo_system_prompt_disabled_by_default(echo_config):
 async def test_echo_usage_in_integration():
     """Test EchoProvider in integration scenario."""
     # Simulate a complete workflow
-    config = LLMConfig(
-        provider="echo",
-        model="echo-model",
-        options={"echo_prefix": "[DEBUG] "}
-    )
+    config = LLMConfig(provider="echo", model="echo-model", options={"echo_prefix": "[DEBUG] "})
 
     async with EchoProvider(config) as provider:
         # Test completion
         messages = [
             LLMMessage(role="system", content="Test system"),
-            LLMMessage(role="user", content="Hello")
+            LLMMessage(role="user", content="Hello"),
         ]
         response = await provider.complete(messages)
         assert "[DEBUG] Hello" in response.content

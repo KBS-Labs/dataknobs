@@ -14,6 +14,20 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Where this script's junit output lands. This is a checker — nothing in bin/
+# invokes it, a developer runs it directly — so it writes the diagnostics tier,
+# not .quality-artifacts/. It used to name the artifacts directory by literal
+# path, unconditionally: running it created that directory on a tree where the
+# gate had never run, which is enough for validate-quality-artifacts.sh to get
+# past its first check. The junit files themselves stayed out of the signature
+# only because .gitignore excludes them and the signature enumerates with
+# --exclude-standard — a bound that nothing states and nothing tests.
+#
+# Asked for by name so this cannot disagree with run-quality-checks.sh; the
+# literal is the fallback for when asking fails.
+REPORTS_DIR=$("$SCRIPT_DIR/run-quality-checks.sh" --print-output-dir 2>/dev/null) \
+    || REPORTS_DIR="$ROOT_DIR/.quality-reports"
+
 # Configuration
 COMPOSE_FILE="docker-compose.yml"
 COMPOSE_OVERRIDE="docker-compose.override.yml"
@@ -256,18 +270,19 @@ for pkg in "${TEST_PACKAGES[@]}"; do
     
     # Run ALL tests in the integration directory, not just marked ones
     # This ensures test_s3_backend.py is included
+    mkdir -p "$REPORTS_DIR"
     if command -v uv &> /dev/null; then
         uv run pytest "$TEST_PATH" \
             $VERBOSE \
             --tb=short \
             --color=yes \
-            --junit-xml=".quality-artifacts/${pkg}-integration-junit.xml" || OVERALL_RESULT=$?
+            --junit-xml="$REPORTS_DIR/${pkg}-integration-junit.xml" || OVERALL_RESULT=$?
     else
         python3 -m pytest "$TEST_PATH" \
             $VERBOSE \
             --tb=short \
             --color=yes \
-            --junit-xml=".quality-artifacts/${pkg}-integration-junit.xml" || OVERALL_RESULT=$?
+            --junit-xml="$REPORTS_DIR/${pkg}-integration-junit.xml" || OVERALL_RESULT=$?
     fi
 done
 

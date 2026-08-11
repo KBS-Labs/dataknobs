@@ -26,6 +26,7 @@ file is worth writing.
 from __future__ import annotations
 
 import configparser
+import json
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -37,14 +38,18 @@ from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
 
-#: Where the quality gate names the directory holding these tests. Extracted and
-#: resolved rather than searched for, so the guard cannot pass on a coincidence.
-GATE_TEST_DIR_RE = re.compile(r'^\s*WORKSPACE_TEST_DIR="\$PROJECT_ROOT/([^"]+)"', re.MULTILINE)
+#: How the gate asks for the guards in this directory. A named target on
+#: ``bin/test.sh`` rather than a directory the gate resolves itself: the gate
+#: used to call pytest here directly — ``test.sh`` took a package name and
+#: scanned ``packages/*``, so it could not reach a directory belonging to no
+#: package — which left one check the gate performed by a route no developer
+#: command shared, and so one place a gate pass and a local pass could differ.
+GATE_WORKSPACE_TARGET_RE = re.compile(r"\$TEST_CMD\s+workspace\b")
 
-#: Directories the gate excludes from the workspace run, read from the flags it
-#: actually passes. Frozen literals here would stop tracking the gate the first
-#: time a second exclusion is added — the same drift these guards exist to catch.
-GATE_IGNORE_RE = re.compile(r'--ignore="\$WORKSPACE_TEST_DIR/([^"]+)"')
+#: Directories excluded from the workspace run, read from the flag ``bin/test.sh``
+#: actually passes. Frozen literals here would stop tracking it the first time a
+#: second exclusion is added — the same drift these guards exist to catch.
+RUNNER_IGNORE_RE = re.compile(r"--ignore=\$test_path/(\S+)")
 
 #: The single declaration of which files outside packages/ affect a quality
 #: result. Read rather than restated so this guard cannot drift from the change
@@ -57,6 +62,15 @@ _load = load_toml
 
 
 def _mypy_inis() -> list[Path]:
+    """Every ``mypy.ini`` there is, which is currently none.
+
+    The root one is retired: two configurations meant two answers to "is this
+    clean", and mypy reads a ``mypy.ini`` in preference to ``pyproject.toml``
+    whenever one is present. This stays as a forward guard rather than being
+    deleted — a new one, here or in a package, would silently take precedence
+    over the strict configuration the ceilings are measured under, and the
+    readers below would then have something to check it against.
+    """
     return [p for p in [ROOT / "mypy.ini", *sorted(ROOT.glob("packages/*/mypy.ini"))] if p.exists()]
 
 
@@ -93,12 +107,18 @@ def test_workspace_tests_are_reachable():
     so the guards here can go red and stay red without a single check turning
     red with them.
 
-    Two mechanisms, because they cover different callers: ``testpaths`` covers
-    a bare ``pytest`` at the root, and the gate covers CI. Both are read for a
-    path and resolved, so neither can be satisfied by an unrelated mention of
-    the word "tests" — and the gate is checked for *running* that path, not
-    merely naming it, since a variable defined and never used would satisfy a
-    weaker check while running nothing.
+    Three mechanisms, because they cover different callers: ``testpaths``
+    covers a bare ``pytest`` at the root, ``bin/test.sh workspace`` covers a
+    developer, and the gate covers CI.
+
+    The runner half is *asked*, not parsed. The gate used to name this
+    directory itself and the guard read that string back; the string is gone
+    now — ``test.sh`` owns the target — and reading its replacement out of
+    ``test.sh`` would only move the same weakness one file over, since a target
+    that resolves to the wrong directory spells itself exactly like one that
+    resolves to the right one. Collecting through the real target answers the
+    question the string was standing in for: does asking for ``workspace``
+    reach *this file*.
     """
     here = Path(__file__).resolve().parent
     violations = []
@@ -107,29 +127,86 @@ def test_workspace_tests_are_reachable():
     parser.read(ROOT / "pytest.ini")
     testpaths = parser.get("pytest", "testpaths", fallback="").split()
     if not any((ROOT / p).resolve() == here for p in testpaths):
-        violations.append(f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}")
+        violations.append(
+            f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}"
+        )
 
-    gate = ROOT / "bin" / "run-quality-checks.sh"
-    gate_text = gate.read_text()
-    named = [(ROOT / m.group(1)).resolve() for m in GATE_TEST_DIR_RE.finditer(gate_text)]
-    if here not in named:
-        found = ", ".join(_rel(p) for p in named) or "nothing"
-        violations.append(f"bin/run-quality-checks.sh: names {found}, not {_rel(here)}")
-    else:
-        # Naming the directory is not running it. Both modes are checked: the
-        # gate defines the variable once and each branch has its own test path,
-        # so dropping either leaves a mode that reports green without the
-        # guards — the failure this whole file exists to make impossible.
-        runs = len(re.findall(r'uv run pytest "\$WORKSPACE_TEST_DIR"', gate_text))
-        if runs < 2:
-            violations.append(
-                f"bin/run-quality-checks.sh: names {_rel(here)} but runs pytest against it "
-                f"{runs} time(s) — expected both the PR-mode and dev-mode paths"
-            )
+    collected = subprocess.run(
+        [str(ROOT / "bin" / "test.sh"), "-n", "workspace", "--", "--collect-only", "-q"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        # A non-zero exit is a finding here, not an error to raise on: the
+        # assertion below reports what was collected and what the run returned.
+        check=False,
+    )
+    if Path(__file__).name not in collected.stdout:
+        violations.append(
+            "bin/test.sh workspace collects nothing from "
+            f"{_rel(here)} (exit {collected.returncode})"
+        )
+
+    # Reaching it is not running it, and the gate has three test paths: the
+    # per-package split, the quick loop over named packages, and the quick loop
+    # over none. The first two name the target; the third hands test.sh no
+    # target at all and gets the guards from the discovery fallback, which is
+    # what the test below covers. Dropping any of the three leaves a mode that
+    # reports green without the guards, which is the failure this whole file
+    # exists to make impossible.
+    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
+    runs = len(GATE_WORKSPACE_TARGET_RE.findall(gate_text))
+    if runs < 2:
+        violations.append(
+            "bin/run-quality-checks.sh: asks for the workspace target "
+            f"{runs} time(s) — expected the PR-mode path and the dev-mode "
+            "named-package path"
+        )
 
     assert not violations, "Workspace guards are unreachable:\n" + "\n".join(
         f"  - {v}" for v in violations
     )
+
+
+def _runner_targets(*args: str) -> list[str]:
+    """What ``bin/test.sh`` would run, for these arguments.
+
+    Asked rather than parsed, for the reason ``_validate_targets_for`` is:
+    reading the discovery block as text answers what it says, and a condition
+    wrapped around it later would leave that reading unchanged.
+    """
+    listing = subprocess.run(
+        [str(ROOT / "bin" / "test.sh"), *args, "--print-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
+
+
+def test_running_everything_includes_the_guards():
+    """A bare ``bin/test.sh`` is the command that reads as "run the suite".
+
+    It discovers by looping ``packages/*``, so this directory — which belongs
+    to no package — sat outside it, and the entry point named for running
+    everything ran every test except the ones checking the toolchain that runs
+    them. The gate's no-package path hands test.sh no target and depends on
+    this, so it is the third reachability mechanism, not a convenience.
+
+    The negative case is asserted too: these need no service and are not
+    integration tests, so an integration-only run must not pick them up — else
+    the fix is "always run them", which reports on a suite the caller did not
+    ask for.
+    """
+    assert "workspace" in _runner_targets(), (
+        "a bare bin/test.sh does not run the workspace guards, so the gate's "
+        "no-package path runs none of them either"
+    )
+    assert "workspace" not in _runner_targets("-t", "integration")
+    assert "workspace" not in _runner_targets("--only-integration")
+
+    # Naming a package is naming a target, not a filter over the default set.
+    assert _runner_targets("common") == ["common"]
 
 
 def test_a_change_to_these_guards_still_schedules_them():
@@ -583,12 +660,12 @@ def test_no_workspace_test_is_filed_where_nothing_runs_it():
     the moment someone has one rather than after it has silently not run.
     """
     here = Path(__file__).resolve().parent
-    gate_text = (ROOT / "bin" / "run-quality-checks.sh").read_text()
-    excluded = sorted(set(GATE_IGNORE_RE.findall(gate_text)))
+    runner_text = (ROOT / "bin" / "test.sh").read_text()
+    excluded = sorted(set(RUNNER_IGNORE_RE.findall(runner_text)))
     assert excluded, (
-        "bin/run-quality-checks.sh passes no --ignore for the workspace run — "
-        "either the gate stopped excluding a directory or this guard stopped "
-        "tracking how it spells the flag"
+        "bin/test.sh passes no --ignore for the workspace run — either the "
+        "runner stopped excluding a directory or this guard stopped tracking "
+        "how it spells the flag"
     )
 
     stranded = [
@@ -602,8 +679,8 @@ def test_no_workspace_test_is_filed_where_nothing_runs_it():
     assert not stranded, (
         "These tests are collected by no entry point:\n"
         + "\n".join(f"  - {_rel(p)}" for p in stranded)
-        + f"\n  The unit step passes --ignore for {', '.join(excluded)} and the "
-        "integration step only loops packages/*/tests/integration.\n"
+        + f"\n  The workspace target passes --ignore for {', '.join(excluded)} "
+        "and the integration step only loops packages/*/tests/integration.\n"
         "  Move them beside the other workspace guards if they need no "
         "service, or give the gate a step that runs them."
     )
@@ -738,25 +815,27 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes():
     )
 
 
-#: Directories of first-party Python that ``bin/validate.sh`` does not reach
-#: when run with no arguments, each with the size that makes it a project rather
-#: than an edit. Deferring is a legitimate answer; deferring *silently* is not,
-#: and silence is what kept ``bin/`` — which holds the checkers deciding whether
-#: a pull request passes — outside every lint invocation in this repo for as
-#: long as it has had one. Counts are from the root ruff config.
-#:
-#: Two rules keep this from becoming the excuse list it would otherwise decay
-#: into, both enforced below: an entry matching no tracked file is an error, and
-#: so is an entry matching a file that *is* linted — because the cheapest way to
-#: silence the coverage test is to drop a directory from the targets and add it
-#: here, and that must not be a passing move.
-DEFERRED_FROM_DEFAULT_LINT = {
-    "packages/*/tests": "~1,790 findings; wants each package's src cleared first",
-    "packages/*/examples": "241 findings, ~90% of them under data/ and fsm/",
-    "packages/*/scripts": "9 findings",
-    "packages/*/benchmarks": "2 findings",
-    "packages/*/docs": "7 findings, all in a single fsm/ module",
-}
+# ``DEFERRED_FROM_DEFAULT_LINT`` used to live here: five directory classes of
+# first-party Python that ``bin/validate.sh`` does not reach, each with a count
+# in its comment. It has moved to ``.dataknobs/quality-contract.json`` as that
+# file's ruff axis, and the two guards over it — every tracked file is linted or
+# deferred, and no entry is stale or contradicted — are in
+# ``tests/test_quality_contract.py``.
+#
+# Two things changed in the move rather than merely relocating.
+#
+# The counts became **ceilings that are compared**. In prose they were enforced
+# in one direction only: an entry matching nothing failed, while "241 findings"
+# stayed green at 400. A number nobody checks is one that stops being true
+# without anyone finding out, and this program has now found that shape in a
+# guard, a reader, an ignore rule and a status field.
+#
+# And the population became **partitioned rather than filtered**. The old pair
+# asked "is this file linted, or excused?", which is satisfiable by a file that
+# is neither — it just has to be excused. The contract asks which cell each file
+# is in and fails when the answer is none or several, so a directory added to
+# the repository and to no declaration fails immediately rather than the first
+# time somebody wonders.
 
 
 def _tracked(*pathspecs: str) -> list[PurePosixPath]:
@@ -836,19 +915,23 @@ VALIDATE_ARGS_ASSIGNMENT = re.compile(
 )
 
 
-def _validate_targets_for(*args: str) -> list[str]:
-    """What ``bin/validate.sh`` resolves as its target list, for these arguments.
+def _lint_targets_for(script: str, *args: str) -> list[str]:
+    """What ``script`` resolves as the linter's population, for these arguments.
 
     Asked rather than parsed, for the reason ``_workspace_targets`` is: the
-    question is what the script checks, and reading the appends as text answers
+    question is what the script reads, and reading the appends as text answers
     what it says. The earlier form read them out of the default branch and
     treated each as unconditional, so wrapping the package loop in a condition
     that skipped it left this reporting full coverage — the append was still
     textually present. ``--print-targets`` resolves the list through the real
-    code path and prints it before any check runs.
+    code path and prints it before anything is checked or rewritten.
+
+    Two scripts answer it, and their answers are not the same list: the check's
+    is what the contract holds to a lint ceiling, the fix's is that plus the
+    cells it may rewrite anyway.
     """
     listing = subprocess.run(
-        [str(ROOT / "bin" / "validate.sh"), *args, "--print-targets"],
+        [str(ROOT / "bin" / script), *args, "--print-targets"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -857,9 +940,78 @@ def _validate_targets_for(*args: str) -> list[str]:
     return listing.split()
 
 
+def _validate_targets_for(*args: str) -> list[str]:
+    """What ``bin/validate.sh`` resolves as its target list, for these arguments."""
+    return _lint_targets_for("validate.sh", *args)
+
+
 def _default_validate_targets() -> list[str]:
     """Every path ``bin/validate.sh`` validates when given no arguments."""
     return _validate_targets_for()
+
+
+def _format_targets_for(script: str, *args: str) -> list[str]:
+    """What ``script`` resolves as the formatter's population, for these arguments.
+
+    Asked rather than parsed, for the reason ``_validate_targets_for`` is. The
+    formatter has its own list because its declared coverage is not the
+    linter's, so a caller cannot substitute one for the other.
+    """
+    listing = subprocess.run(
+        [str(ROOT / "bin" / script), *args, "--print-format-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
+
+
+def _enforced_format_cells() -> list[str]:
+    """Every path the quality contract holds to a formatting ceiling."""
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"] for cell in contract["tools"]["format"]["cells"] if cell["tier"] == "enforced"
+    ]
+
+
+def _checked_lint_cells() -> list[str]:
+    """Every path the quality contract holds to a lint ceiling of zero.
+
+    Read from the tier rather than from what ``bin/validate.sh`` reaches. The
+    two agree — ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+    tests/test_quality_contract.py is what makes them — and deriving this from
+    the target set would make the guard below move whenever that set does,
+    which is the shape ``REQUIRED_DEFAULT_TARGETS`` exists to refuse.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"] for cell in contract["tools"]["ruff"]["cells"] if cell["tier"] == "checked"
+    ]
+
+
+def _cell_is_covered(cell: str, targets: set[str]) -> bool:
+    """Whether some target reaches the files ``cell`` names.
+
+    A cell is a glob over directories; a target is one of those directories, or
+    an ancestor of it. Compared by expansion rather than by string, because
+    ``packages/*/tests`` and ``packages/bots/tests`` are the same claim written
+    two ways and only one of them is what a script emits.
+
+    Named at length rather than ``_covers``, which is taken. The first draft of
+    this reused that name and, being defined later, silently replaced it — so
+    the CI-scheduling guard above began asking a question about formatter
+    targets and reported every guarded file untriggered. Ruff does not flag it
+    (F811 wants the earlier binding unused, and that one is called), so the
+    only thing that caught it was the suite this file belongs to.
+    """
+    expanded = {_rel(path) for path in ROOT.glob(cell)} if "*" in cell else {cell}
+    if not expanded:
+        return True  # A cell naming nothing on disk cannot be uncovered.
+    return all(
+        any(match == target or match.startswith(f"{target}/") for target in targets)
+        for match in expanded
+    )
 
 
 #: What the default target set must contain, stated here rather than derived.
@@ -868,8 +1020,8 @@ def _default_validate_targets() -> list[str]:
 #: answer to a specific hole. Every other assertion about coverage reads the
 #: target set and asks whether it reaches the tracked files — so dropping a
 #: directory from ``workspace_targets`` and naming it in
-#: ``DEFERRED_FROM_DEFAULT_LINT`` satisfied all of them at once: the files are no
-#: longer uncovered because they are now deferred, and the deferral is not
+#: the quality contract's deferred tier satisfied all of them at once: the files
+#: are no longer uncovered because they are now deferred, and the deferral is not
 #: contradicted because nothing lints them any more. Both guards green, ``bin/``
 #: unlinted again. A check derived from the thing it checks moves when that thing
 #: moves; this does not, so removing a member fails here and no entry elsewhere
@@ -877,51 +1029,21 @@ def _default_validate_targets() -> list[str]:
 REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py"})
 
 
-def _linted_by(path: PurePosixPath, targets: list[str]) -> bool:
-    """Whether some default target is this file, or a directory containing it."""
-    name = str(path)
-    return any(name == target or name.startswith(f"{target}/") for target in targets)
-
-
-def _deferred_by(path: PurePosixPath, patterns: set[str]) -> bool:
-    """Whether any ancestor directory of this file matches a deferral pattern."""
-    return any(
-        PurePosixPath(*path.parts[:depth]).match(pattern)
-        for depth in range(1, len(path.parts))
-        for pattern in patterns
-    )
-
-
-def test_every_first_party_python_file_is_linted_by_default():
-    """Being *run* is not the same as being *checked*, and neither is being *shipped*.
-
-    ``bin/validate.sh`` builds its default target list by looping ``packages/*``
-    and appending each ``src`` directory. Everything else was therefore outside
-    every lint and type-check invocation in the repo, and nothing said so: the
-    workspace guards asserting the toolchain is coherent, and ``bin/`` itself —
-    the scripts that decide whether a pull request passes, including the two
-    that enforce documentation mirroring and internal-label hygiene.
-
-    The first version of this guard asserted that one directory was in the
-    target set, keyed to its own location. That is the shape that let the same
-    omission survive one directory over, so it reads the whole tracked set now
-    and takes the exceptions as declared data.
-    """
-    targets = _default_validate_targets()
-    deferred = set(DEFERRED_FROM_DEFAULT_LINT)
-
-    uncovered = sorted(
-        str(path)
-        for path in _tracked_python()
-        if not _linted_by(path, targets) and not _deferred_by(path, deferred)
-    )
-    assert not uncovered, (
-        f"bin/validate.sh validates {targets} by default, which reaches none of "
-        f"these tracked files:\n"
-        + "\n".join(f"  - {name}" for name in uncovered)
-        + "\nAdd the directory to the default targets, or record it in "
-        "DEFERRED_FROM_DEFAULT_LINT with the size that makes deferring honest."
-    )
+# ``test_every_first_party_python_file_is_linted_by_default`` used to sit here,
+# with ``_linted_by`` and ``_deferred_by`` beneath it. It asked whether each
+# tracked file was reached by ``bin/validate.sh`` or excused by name, which the
+# quality contract now answers more completely: totality places every file in
+# exactly one cell, and the tier guards compare ``checked`` and ``deferred``
+# against the target set the script resolves, in both directions.
+#
+# The helpers went with it, and one of them was subtly wrong in a way the
+# replacement is not. ``_deferred_by`` matched with ``PurePosixPath.match``,
+# which anchors a *relative* pattern at the right-hand end — so a single-segment
+# entry would have matched any directory of that name at any depth, while its
+# sibling ``_linted_by`` compared string prefixes from the left. Two rules over
+# one question. Nothing had exercised the difference because every entry in the
+# old list began with ``packages/``; ``cell_matches`` in bin/quality-contract.py
+# compares segment by segment from the root for both tiers.
 
 
 def test_the_default_target_set_still_contains_what_it_must():
@@ -930,8 +1052,8 @@ def test_the_default_target_set_still_contains_what_it_must():
     The guard above compares the target set against the tracked files and takes
     the deferrals as declared data, which makes it complete about *accidents* and
     silent about one deliberate move: drop a directory from ``workspace_targets``,
-    add it to ``DEFERRED_FROM_DEFAULT_LINT``, and coverage is gone with both
-    checks still green. Replayed over the real repository before this was
+    re-file it in the quality contract's deferred tier, and coverage is gone
+    with both checks still green. Replayed over the real repository before this was
     written, the escape also worked for ``packages/*/src`` — all ten package
     sources could leave the target set without a single assertion failing.
 
@@ -963,8 +1085,8 @@ def test_the_default_target_set_still_contains_what_it_must():
             "These are not deferrable: tests/ holds the guards that check the "
             "toolchain, and bin/ holds the checkers that decide whether a pull "
             "request passes. Restore the target — recording it in "
-            "DEFERRED_FROM_DEFAULT_LINT is not the fix, it is the failure this "
-            "guard exists to catch."
+            "deferring it in .dataknobs/quality-contract.json is not the fix, "
+            "it is the failure this guard exists to catch."
         )
 
     #: The pin must also grow when the declaration does, or a directory added to
@@ -977,7 +1099,7 @@ def test_the_default_target_set_still_contains_what_it_must():
     assert not unpinned, (
         f"workspace_targets now declares {unpinned}, which REQUIRED_DEFAULT_TARGETS "
         "does not name. Add it there: until it is pinned, dropping it again and "
-        "recording it in DEFERRED_FROM_DEFAULT_LINT passes every check in this file."
+        "deferring it in .dataknobs/quality-contract.json passes every check here."
     )
 
     targets = set(_default_validate_targets())
@@ -989,6 +1111,155 @@ def test_the_default_target_set_still_contains_what_it_must():
     assert not missing_sources, (
         f"bin/validate.sh no longer validates {missing_sources} by default, so "
         "the shipped source of those packages is linted by nothing."
+    )
+
+
+def test_every_formatting_ceiling_is_reachable_by_the_check_and_by_the_fix() -> None:
+    """The formatter's two entry points must span what the contract enforces.
+
+    ``test_remediation_paths`` pins *which* scripts may run the formatter. This
+    is the other half — whether the ones that may, reach far enough — and it is
+    the half that was missing while a docstring there said it existed.
+
+    The gap it was written against: the format check iterated the *linter's*
+    target set. That set omits every cell whose ruff tier is deferred, and the
+    contract enforces ``format`` at ceiling 0 on all ten of its cells. So
+    ``validate.sh`` opened 597 of 1,471 files and printed "Formatting is clean"
+    over the other 874, while ``fix.sh`` could not repair 42 of them at all —
+    a finding the gate reports and no local command can clear.
+
+    Both directions matter and neither implies the other. A check that reads
+    less than the contract enforces is a green verdict over unexamined files;
+    a fix that reaches less than the check flags is a red gate with no remedy.
+    """
+    cells = _enforced_format_cells()
+    assert cells, "the contract enforces no formatting ceiling, so this proves nothing"
+
+    for script, role in (
+        ("validate.sh", "checks formatting"),
+        ("fix.sh", "repairs what the check reports"),
+    ):
+        targets = set(_format_targets_for(script))
+        uncovered = [cell for cell in cells if not _cell_is_covered(cell, targets)]
+        assert not uncovered, (
+            f"bin/{script} {role} over {sorted(targets)}, which does not reach "
+            f"{uncovered}. The quality contract holds those cells to a "
+            "formatting ceiling of 0, so a file arriving unformatted there "
+            f"fails `dk pr` while bin/{script} says nothing about it."
+        )
+
+
+def test_every_lint_ceiling_is_reachable_by_the_fix() -> None:
+    """The linter's half of the guard above — the half that was still missing.
+
+    The check side is already held, from the other end:
+    ``test_a_checked_cell_is_one_the_linter_actually_reaches`` compares the ruff
+    tiers against ``bin/validate.sh`` in both directions. Nothing compared the
+    *fix* side, and that is the direction with no symptom — a cell the check
+    reads and the fix cannot reach is a red gate with no local remedy, which
+    looks exactly like a developer who has not run ``bin/fix.sh`` yet.
+
+    Reachability, not repair. Half of ruff's rules have no autofix, so the
+    property here is that the pass runs over the cell at all; whether a given
+    finding is fixable is the rule's business. That is the whole claim, and it
+    is enough — a cell the pass never opens has *nothing* fixable in it.
+
+    Load-bearing now rather than later because promoting a cell is two
+    declarations, its tier and each script's reach, and shipping one without
+    the other is what 2c did: a check that passed over the territory the
+    contract had started enforcing. Every promotion still to come has the same
+    shape, and this is what makes the second declaration compulsory.
+
+    The deferred cells are deliberately outside this, and the gap is narrower
+    than it first looks: a bare ``bin/fix.sh`` reaches none of ``examples``,
+    ``scripts``, ``benchmarks`` or ``docs``, while their ceilings *are*
+    compared — but naming the directory does reach it, so the remedy exists and
+    is merely undiscoverable from the failure. Widening the default is a policy
+    call about rewriting files nobody has asked to be clean, which belongs with
+    their promotion rather than ahead of it.
+    """
+    cells = _checked_lint_cells()
+    assert cells, "the contract holds no cell to a lint ceiling, so this proves nothing"
+
+    targets = set(_lint_targets_for("fix.sh"))
+    uncovered = [cell for cell in cells if not _cell_is_covered(cell, targets)]
+    assert not uncovered, (
+        f"bin/fix.sh repairs lint findings over {sorted(targets)}, which does not "
+        f"reach {uncovered}. The quality contract holds those cells to a lint "
+        "ceiling of 0, so a finding arriving there fails `dk pr` while the "
+        "command the failure tells you to run cannot touch it."
+    )
+
+
+def test_the_named_opt_in_asks_for_the_format_target_set_rather_than_restating_it() -> None:
+    """The third owner, which cannot be asked and so is read instead.
+
+    ``bin/dk format`` runs the formatter directly and prints no target list, so
+    the check above cannot interrogate it. Its whole history is this defect:
+    it formatted ``packages/*/src`` alone, was widened once to add the workspace
+    set, and was still narrower than the check both times. A third answer to
+    *which code do we format* is what the single declaration exists to prevent.
+    """
+    source = (ROOT / "bin" / "dk").read_text("utf-8")
+    branch = source[source.index("format|fmt)") :]
+    branch = branch[: branch.index("\n            ;;")]
+
+    # Reading the branch alone proved it *named* the helper, not that the name
+    # resolves. bin/dk invokes package-discovery.sh rather than sourcing it, so
+    # each helper needs a wrapper here; the first draft of this called
+    # format_targets without one and would have died with command-not-found on
+    # every run, with this test green. Asked of the real script for that reason.
+    resolved = subprocess.run(
+        ["bash", "-c", f'source "{ROOT}/bin/dk" 2>/dev/null; format_targets'],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert resolved.returncode == 0 and resolved.stdout.split(), (
+        "bin/dk names format_targets but cannot run it: "
+        f"exit {resolved.returncode}, stdout {resolved.stdout!r}, "
+        f"stderr {resolved.stderr.strip()[:200]!r}. It invokes "
+        "package-discovery.sh rather than sourcing it, so the helper needs a "
+        "wrapper in bin/dk."
+    )
+
+    assert "$(format_targets)" in branch, (
+        "bin/dk's format branch no longer asks package-discovery.sh for the "
+        "target set. Restating it here is how this command came to format less "
+        "than bin/validate.sh checks, twice."
+    )
+    restated = [
+        line
+        for line in branch.splitlines()
+        if "packages/" in line and not line.lstrip().startswith("#")
+    ]
+    assert not restated, (
+        f"bin/dk's format branch names package paths directly: {restated}. "
+        "Those are format_targets' answer to give."
+    )
+
+
+def test_the_formatter_population_is_not_the_linters() -> None:
+    """Non-vacuity: the two sets must actually differ, or the guard above is free.
+
+    If the formatter's list were ever made equal to the linter's again, every
+    assertion above would still pass on the day the linter's list happened to
+    be wide enough — and would start failing later for a reason with nothing to
+    do with the formatter. Stating the difference keeps the guard anchored to
+    why the two lists exist separately.
+
+    This fails, correctly, on the day ``packages/*/tests`` graduates out of the
+    linter's deferred tier and the two populations legitimately converge. At
+    that point delete it; the check above is what carries the property.
+    """
+    linted = set(_validate_targets_for())
+    formatted = set(_format_targets_for("validate.sh"))
+    assert formatted - linted, (
+        "the formatter now checks exactly what the linter does. If the deferred "
+        "ruff cells were promoted, that is correct and this guard has expired — "
+        "delete it. Otherwise the format step has been pointed back at "
+        "VALIDATE_TARGETS and 874 files are unchecked again."
     )
 
 
@@ -1016,9 +1287,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     literal = sorted(
-        value
-        for value in assignments
-        if value and "$" not in value and not value.startswith("-")
+        value for value in assignments if value and "$" not in value and not value.startswith("-")
     )
     assert not literal, (
         f"bin/run-quality-checks.sh passes {literal} to validate.sh as a literal "
@@ -1033,9 +1302,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     # trigger, so it marked all ten packages changed and took that branch — which
     # means the change that started linting bin/ recorded a passing validation
     # without linting bin/.
-    silent = sorted(
-        value for value in assignments if value and "--workspace" not in value
-    )
+    silent = sorted(value for value in assignments if value and "--workspace" not in value)
     assert not silent, (
         f"bin/run-quality-checks.sh assigns VALIDATE_ARGS={silent} without "
         "--workspace, so that branch validates package sources alone and the "
@@ -1045,8 +1312,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     sources = {
-        name: (ROOT / name).read_text(encoding="utf-8")
-        for name in WORKSPACE_TARGET_CONSUMERS
+        name: (ROOT / name).read_text(encoding="utf-8") for name in WORKSPACE_TARGET_CONSUMERS
     }
 
     #: Delegation is only "not keeping your own copy" if what it delegates to is
@@ -1066,8 +1332,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     unread = sorted(
         name
         for name, text in sources.items()
-        if not WORKSPACE_TARGETS_CALL.search(text)
-        and not WORKSPACE_TARGETS_DELEGATION.search(text)
+        if not WORKSPACE_TARGETS_CALL.search(text) and not WORKSPACE_TARGETS_DELEGATION.search(text)
     )
     assert not unread, (
         f"{unread} build a default set of things to check without calling "
@@ -1174,6 +1439,7 @@ def test_the_print_check_recognises_test_files_by_name_not_by_substring():
         "consulting the shared predicate has silently grown its own answer again."
     )
 
+
 def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path):
     """The predicate being right does not mean the directory walk uses it.
 
@@ -1211,54 +1477,21 @@ def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_pa
     )
 
 
-def test_the_lint_deferrals_still_describe_the_repository():
-    """A deferral list nobody rechecks is how the omission it records becomes permanent.
-
-    Both directions are wrong and only one of them is obvious. An entry matching
-    nothing is stale, and leaves the reader believing a gap exists that closed.
-    An entry matching something already linted is worse: it is the cheapest way
-    to silence the test above — drop a directory from the targets, name it here,
-    and coverage is lost with every check still green.
-    """
-    tracked = _tracked_python()
-    targets = _default_validate_targets()
-
-    stale = sorted(
-        pattern
-        for pattern in DEFERRED_FROM_DEFAULT_LINT
-        if not any(_deferred_by(path, {pattern}) for path in tracked)
-    )
-    assert not stale, (
-        f"DEFERRED_FROM_DEFAULT_LINT records {stale}, which matches no tracked "
-        "Python file. Drop the entry — a gap that no longer exists reads as one "
-        "that does."
-    )
-
-    contradicted = sorted(
-        pattern
-        for pattern in DEFERRED_FROM_DEFAULT_LINT
-        if any(
-            _deferred_by(path, {pattern}) and _linted_by(path, targets) for path in tracked
-        )
-    )
-    assert not contradicted, (
-        f"DEFERRED_FROM_DEFAULT_LINT records {contradicted} as unlinted, but "
-        "bin/validate.sh does lint files there. Either the entry is obsolete and "
-        "should go, or a default target was removed and should come back."
-    )
-
-
-#: Variables the gate may interpolate into a direct ``pytest`` call. Everything
-#: else in scope there holds ``bin/test.sh`` flags, which pytest rejects.
-PYTEST_SAFE_VARS = frozenset({"WORKSPACE_TEST_DIR", "PYTEST_ARGS", "ARTIFACTS_DIR"})
+# ``test_the_lint_deferrals_still_describe_the_repository`` was here: a deferral
+# entry matching nothing is stale, and one matching something already linted is
+# the cheapest way to silence a coverage check. Both directions survive, over
+# every tool rather than just ruff, as
+# ``test_verify_names_a_cell_that_matches_no_tracked_file`` and
+# ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+# tests/test_quality_contract.py.
 
 
 def _gate_pytest_commands() -> list[str]:
-    """Every direct ``uv run pytest`` command in the gate, continuations joined."""
+    """Every direct ``pytest`` command in the gate, continuations joined."""
     lines = (ROOT / "bin" / "run-quality-checks.sh").read_text().splitlines()
     commands = []
     for i, line in enumerate(lines):
-        if "uv run pytest" not in line:
+        if "run pytest" not in line:
             continue
         parts, j = [line], i
         while j + 1 < len(lines) and lines[j].rstrip().endswith("\\"):
@@ -1268,29 +1501,31 @@ def _gate_pytest_commands() -> list[str]:
     return commands
 
 
-def test_the_gate_passes_only_pytest_arguments_to_pytest():
-    """``$TEST_FLAGS`` holds ``bin/test.sh`` flags, not pytest ones.
+def test_the_gate_runs_no_checker_itself():
+    """Every suite the gate records is run by the command a developer runs.
 
-    Every other test path in the gate goes through ``bin/test.sh``, which
-    translates ``--parallel`` / ``--quiet`` into pytest's own spelling. The
-    workspace step cannot: ``test.sh`` takes a package name and scans
-    ``packages/*``, so this one run calls pytest directly. Handing it a
-    variable holding ``--parallel`` makes pytest exit on a *usage* error —
-    which the gate counts as a failing test suite, while no test failed and
-    nothing in the summary says why.
+    This started as a narrower guard: the gate's one direct pytest call had to
+    receive only pytest arguments, because ``$TEST_FLAGS`` holds ``bin/test.sh``
+    spellings (``--parallel``, ``--quiet``) and handing one to pytest produces a
+    *usage* error — which the gate counts as a failing suite while no test
+    failed and nothing in the summary says why.
+
+    That hazard existed because the call was there at all. The workspace guards
+    were the one suite ``test.sh`` could not reach, so the gate ran them itself,
+    and a gate result and a local result had a place to differ that no assertion
+    covered. ``test.sh workspace`` closed it, and this became the emptiness
+    check it should always have been: a set that must stay empty cannot quietly
+    narrow to the one case someone remembered, and the flag-translation hazard
+    cannot come back without the call coming back first.
     """
     commands = _gate_pytest_commands()
-    assert commands, "no direct pytest invocation found in bin/run-quality-checks.sh"
 
-    violations = [
-        f"bin/run-quality-checks.sh: pytest receives ${var}, not a pytest argument"
-        for cmd in commands
-        for var in re.findall(r"\$([A-Z_]+)", cmd)
-        if var not in PYTEST_SAFE_VARS
-    ]
-
-    assert not violations, "Non-pytest arguments reach pytest:\n" + "\n".join(
-        f"  - {v}" for v in violations
+    assert not commands, (
+        "bin/run-quality-checks.sh runs pytest directly:\n"
+        + "\n".join(f"  - {c}" for c in commands)
+        + "\n  Every suite must go through bin/test.sh, so a gate run and a "
+        "developer run execute the same invocation. Add a target there if the "
+        "suite has no home."
     )
 
 
@@ -1469,37 +1704,174 @@ def test_mypy_path_entries_resolve():
     )
 
 
-def test_mypy_configs_declare_the_same_search_path():
-    """The two live configs may differ in strictness, but not in where source is.
+#: A cell naming one package's source root, as opposed to a glob over several
+#: (``packages/*/tests``) or a directory that is not an importable root
+#: (``bin``, ``tests``). Only these carry the property below: they are the
+#: directories whose modules another package imports *by name*.
+PACKAGE_SOURCE_CELL = "packages/*/src"
 
-    ``bin/validate.sh`` type-checks against ``mypy.ini`` by default and against
-    the root ``[tool.mypy]`` under ``--all-errors``, so both are live and which
-    one applies is decided by the flag. Strictness is *supposed* to differ
-    between them — that is the point of having two. A search path is not a
-    strictness knob: a package's source is in the same place either way, so a
-    package listed in one and not the other means the same code type-checks
-    differently depending on how the run was invoked, with the weaker side
-    resolving those imports to ``Any`` and reporting success.
 
-    Compared as sets, because order carries no meaning here.
+def _type_checked_package_sources() -> list[str]:
+    """Every package source root the mypy contract measures.
+
+    Read from the contract rather than from ``packages/*/src`` on disk. The
+    contract is what decides a directory is type-checked at all, so a package
+    the contract has deliberately left ``unchecked`` must not be demanded here
+    — and a package that appears on disk without a cell is already a failure,
+    of the totality rule in ``test_quality_contract.py``, reported there.
     """
-    declared: dict[str, set[str]] = {}
-    for path, entry in _mypy_path_entries():
-        declared.setdefault(_rel(path), set()).add(entry)
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"]
+        for cell in contract["tools"]["mypy"]["cells"]
+        if cell["tier"] != "unchecked" and PurePosixPath(cell["path"]).match(PACKAGE_SOURCE_CELL)
+    ]
 
-    if len(declared) < 2:
-        pytest.skip("only one config declares a mypy_path — nothing to compare")
 
-    names = sorted(declared)
-    reference = declared[names[0]]
+def test_type_checked_packages_are_on_the_search_path() -> None:
+    """A type-checked package missing from ``mypy_path`` is checked against ``Any``.
+
+    mypy resolves an import by name against its search path. A package under
+    check whose own root is *absent* from that path does not fail to resolve —
+    it falls back to ``ignore_missing_imports``, so every symbol crossing that
+    boundary comes back as ``Any`` and the errors that would have been reported
+    are never computed. The package still measures a number, and the number is
+    lower than the truth.
+
+    ``test_mypy_configs_declare_the_same_search_path`` used to sit here and
+    asserted that every config declared the *same* ``mypy_path``. Two failings,
+    and the second is why the replacement is shaped differently. It opened with
+    ``if len(declared) < 2: pytest.skip(...)``, so retiring ``mypy.ini`` would
+    have left it skipping forever — a check reporting green because it cannot
+    report anything else. And comparing two declarations to each other can only
+    find a *disagreement*: ``packages/legacy/src`` was missing from both, so the
+    guard read agreement and passed over the one real search-path fault in the
+    tree, which is the defect this test now names.
+
+    Stated as completeness against the contract, a shared omission has nothing
+    to hide behind: there is one declaration to check and one population to
+    check it against.
+
+    **Only this direction.** The converse — every ``mypy_path`` entry is a
+    measured cell — is not asserted, because an entry that is *not* a package
+    source root is legitimate (a stubs directory is the obvious one), so the
+    converse would forbid a correct future declaration to catch a fault that
+    ``test_mypy_path_entries_resolve`` already reports as a path pointing at
+    nothing.
+    """
+    declared = {entry for _, entry in _mypy_path_entries()}
+    cells = _type_checked_package_sources()
+
+    assert cells, (
+        "no package source cell found in the mypy contract — either every "
+        "package became unchecked or this guard stopped recognising the shape"
+    )
+
     violations = [
-        f"{name}: {sorted(reference ^ declared[name])} declared in one config but not the other"
-        for name in names[1:]
-        if declared[name] != reference
+        f"{cell}: type-checked by the contract, absent from mypy_path, so its "
+        f"modules resolve to Any when imported by name"
+        for cell in sorted(cells)
+        if cell not in declared
+    ]
+
+    assert not violations, "Type-checked packages missing from the search path:\n" + "\n".join(
+        f"  - {v}" for v in violations
+    )
+
+
+#: The rule a package's suppressions become readable under, and the one the
+#: adoption series turns on per package rather than tree-wide at once.
+ADOPTION_ERROR_CODE = "ignore-without-code"
+
+
+def _top_level_modules(cell_path: str) -> list[str]:
+    """The importable names a package source root contributes.
+
+    Read from disk rather than guessed from the package directory name: the two
+    agree today (``packages/utils/src`` holds ``dataknobs_utils``) and the one
+    place they do not is exactly where a guessed name would be wrong — the
+    legacy package's source root holds ``dataknobs``.
+
+    Single-file modules count too. Every package here ships a directory, so the
+    branch is unreached today — but a guard that stops seeing a package the day
+    it changes shape is a guard that reports green over it.
+    """
+    root = ROOT / cell_path
+    if not root.is_dir():
+        return []
+    return sorted(
+        child.stem if child.suffix == ".py" else child.name
+        for child in root.iterdir()
+        if not child.name.startswith((".", "_")) and (child.is_dir() or child.suffix == ".py")
+    )
+
+
+def _modules_with_code_disabled(code: str) -> set[str]:
+    """Top-level module names for which ``code`` is switched off by an override.
+
+    A pattern's leading segment is what identifies the package: ``dataknobs_fsm.*``
+    and a hypothetical ``dataknobs_fsm.vector.*`` both name fsm, and either one
+    leaves some of fsm's suppressions unreadable.
+    """
+    overrides = _load(ROOT / "pyproject.toml")["tool"]["mypy"].get("overrides", [])
+    disabled: set[str] = set()
+    for section in overrides:
+        if code not in section.get("disable_error_code", []):
+            continue
+        module = section.get("module", [])
+        patterns = [module] if isinstance(module, str) else module
+        disabled.update(pattern.split(".", 1)[0] for pattern in patterns)
+    return disabled
+
+
+def test_ignore_without_code_tracks_the_adopted_set() -> None:
+    """A package cannot be at tier ``strict`` with this rule switched off for it.
+
+    ``ignore-without-code`` is enabled tree-wide and paused per package, because
+    four of them hold a backlog of bare directives their ceilings already account
+    for. Each pause is meant to end when its package is adopted: the override
+    comes out, the directives get their codes, and the ceiling falls.
+
+    Nothing in mypy notices when one does not. ``warn_unused_configs`` reports a
+    section matching *no module*, and ``dataknobs_fsm.*`` goes on matching every
+    fsm module for as long as fsm exists — so an override that has outlived its
+    reason is indistinguishable, to mypy, from one still earning its place. The
+    result would be a package the contract calls ``strict`` whose suppressions
+    are still unreadable: a tier that reports clean because the rule that would
+    dirty it is off, which is the failure this whole series is about.
+
+    **Only this direction.** An override naming something that is not a module
+    at all — a typo, or a package that has been deleted — is the case mypy *does*
+    detect, as a note the contract's dead-override check reads and fails on. This
+    guard covers the case that check cannot see, and asserting the converse here
+    would duplicate it while forbidding a future pause on a cell that is not a
+    package source root.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    cells = [
+        cell
+        for cell in contract["tools"]["mypy"]["cells"]
+        if PurePosixPath(cell["path"]).match(PACKAGE_SOURCE_CELL)
+    ]
+    disabled = _modules_with_code_disabled(ADOPTION_ERROR_CODE)
+
+    assert cells, (
+        "no package source cell found in the mypy contract — either every "
+        "package became unchecked or this guard stopped recognising the shape"
+    )
+
+    violations = [
+        f"{cell['path']}: tier {cell['tier']!r}, but '{module}.*' still disables "
+        f"{ADOPTION_ERROR_CODE} in pyproject.toml, so its bare directives are "
+        f"unreachable and its ceiling of {cell['ceiling']} does not count them"
+        for cell in sorted(cells, key=lambda c: str(c["path"]))
+        if cell["tier"] == "strict"
+        for module in _top_level_modules(cell["path"])
+        if module in disabled
     ]
 
     assert not violations, (
-        f"mypy search paths disagree with {names[0]}:\n"
+        f"Adopted packages with {ADOPTION_ERROR_CODE} still switched off:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )
 
@@ -1584,8 +1956,12 @@ def test_the_type_check_fails_when_mypy_does(tmp_path):
     never set. The check could not fail, which is the shape the rest of this file
     exists to catch, in the script that does the checking.
 
-    Run against a file with an error ``mypy.ini`` still reports (most codes are
-    disabled there, so the probe has to use one that is not).
+    The probe is written outside the repository on purpose, and that is now a
+    second property rather than an accident of using ``tmp_path``. A path in no
+    cell has no ceiling to be within, so any finding there is a breach — while
+    inside a cell the verdict is ``measured <= ceiling`` and a lone type error
+    is absorbed by a backlog that already allows thousands. Both are correct;
+    this pins the half where "any error fails" still holds.
     """
     probe = tmp_path / "type_error_probe.py"
     probe.write_text("def broken() -> int:\n    return undefined_symbol_xyz\n", encoding="utf-8")
@@ -1666,9 +2042,10 @@ def test_every_state_that_should_validate_something_does():
             ["bash", "-c", script], capture_output=True, text=True, check=True
         ).stdout.strip()
         if (verdict == "VALIDATES") != must_validate:
-            wrong.append(f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}")
+            wrong.append(
+                f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}"
+            )
 
-    assert not wrong, (
-        "bin/run-quality-checks.sh decides the wrong validation scope:\n"
-        + "\n".join(f"  - {item}" for item in wrong)
+    assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
+        f"  - {item}" for item in wrong
     )

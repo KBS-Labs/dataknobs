@@ -25,9 +25,7 @@ from dataknobs_bots.config.validation import ConfigValidator, ValidationResult
 class TestConfigToolkitEndToEnd:
     """End-to-end integration tests for the ConfigBot toolkit."""
 
-    def test_template_to_builder_to_validate_to_draft_to_finalize(
-        self, tmp_path: Path
-    ) -> None:
+    def test_template_to_builder_to_validate_to_draft_to_finalize(self, tmp_path: Path) -> None:
         """Full lifecycle: template -> builder -> validate -> draft -> finalize."""
         # 1. Set up schema with an extension
         schema = DynaBotConfigSchema()
@@ -111,9 +109,7 @@ class TestConfigToolkitEndToEnd:
         draft_id = draft_mgr.create_draft(portable, stage="configure_llm")
 
         # Update draft
-        draft_mgr.update_draft(
-            draft_id, portable, stage="review", config_name="helper-bot"
-        )
+        draft_mgr.update_draft(draft_id, portable, stage="review", config_name="helper-bot")
 
         # Verify draft exists
         draft_result = draft_mgr.get_draft(draft_id)
@@ -206,11 +202,7 @@ class TestConfigToolkitEndToEnd:
     def test_built_in_templates_loadable(self) -> None:
         """Verify built-in templates can be loaded from the package."""
         templates_dir = (
-            Path(__file__).parent.parent.parent
-            / "src"
-            / "dataknobs_bots"
-            / "config"
-            / "templates"
+            Path(__file__).parent.parent.parent / "src" / "dataknobs_bots" / "config" / "templates"
         )
         if not templates_dir.exists():
             pytest.skip("Built-in templates directory not found")
@@ -254,9 +246,7 @@ class TestConfigToolkitEndToEnd:
             if isinstance(domain, dict) and "id" in domain:
                 domain_id = domain["id"]
                 if not isinstance(domain_id, str) or " " in domain_id:
-                    return ValidationResult.error(
-                        "domain.id must not contain spaces"
-                    )
+                    return ValidationResult.error("domain.id must not contain spaces")
             return ValidationResult.ok()
 
         validator.register_validator("domain_id", check_domain_id)

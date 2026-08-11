@@ -169,10 +169,12 @@ class TestSeedArtifactJSON:
         seed_file = tmp_path / "seed.dat"
         save_artifact(recipe, seed_file, compiled=True)
 
-        wizard = _make_wizard_with_seed({
-            "source": str(seed_file),
-            "format": "json",
-        })
+        wizard = _make_wizard_with_seed(
+            {
+                "source": str(seed_file),
+                "format": "json",
+            }
+        )
 
         assert wizard._artifact is not None
         assert wizard._artifact.field("recipe_name") == "Chocolate Chip Cookies"
@@ -188,10 +190,12 @@ class TestSeedArtifactJSONL:
         seed_file = tmp_path / "recipes.jsonl"
         save_book([recipe1, recipe2], seed_file, compiled=True)
 
-        wizard = _make_wizard_with_seed({
-            "source": str(seed_file),
-            "select": "Banana Bread",
-        })
+        wizard = _make_wizard_with_seed(
+            {
+                "source": str(seed_file),
+                "select": "Banana Bread",
+            }
+        )
 
         assert wizard._artifact is not None
         # The seed populates the artifact — recipe_name comes from
@@ -228,10 +232,12 @@ class TestSeedArtifactJSONL:
         seed_file = tmp_path / "seed.dat"
         save_book([recipe], seed_file, compiled=True)
 
-        wizard = _make_wizard_with_seed({
-            "source": str(seed_file),
-            "format": "jsonl",
-        })
+        wizard = _make_wizard_with_seed(
+            {
+                "source": str(seed_file),
+                "format": "jsonl",
+            }
+        )
 
         assert wizard._artifact is not None
         assert wizard._artifact.section("ingredients").count() == 2
@@ -242,9 +248,11 @@ class TestSeedArtifactGracefulFailure:
 
     def test_missing_seed_file_proceeds_empty(self, tmp_path: Path) -> None:
         """Missing seed file logs WARNING and continues with empty artifact."""
-        wizard = _make_wizard_with_seed({
-            "source": str(tmp_path / "nonexistent.json"),
-        })
+        wizard = _make_wizard_with_seed(
+            {
+                "source": str(tmp_path / "nonexistent.json"),
+            }
+        )
 
         assert wizard._artifact is not None
         assert wizard._artifact.section("ingredients").count() == 0
@@ -273,10 +281,12 @@ class TestSeedArtifactGracefulFailure:
         seed_file = tmp_path / "recipes.jsonl"
         save_book([recipe], seed_file, compiled=True)
 
-        wizard = _make_wizard_with_seed({
-            "source": str(seed_file),
-            "select": "Nonexistent Recipe",
-        })
+        wizard = _make_wizard_with_seed(
+            {
+                "source": str(seed_file),
+                "select": "Nonexistent Recipe",
+            }
+        )
 
         assert wizard._artifact is not None
         assert wizard._artifact.section("ingredients").count() == 0

@@ -31,6 +31,7 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 # max-depth enforcement on a self-recursive push
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.asyncio
 async def test_async_push_arc_enforces_max_depth() -> None:
     """A self-recursive push terminates at the nesting ceiling, not unbounded.
@@ -99,6 +100,7 @@ async def test_async_push_arc_enforces_max_depth() -> None:
 # push to a non-existent target network fails cleanly
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.asyncio
 async def test_async_push_to_nonexistent_network_fails() -> None:
     """A push whose target network does not exist fails the record cleanly.
@@ -138,14 +140,14 @@ async def test_async_push_to_nonexistent_network_fails() -> None:
         await fsm.close()
 
     assert result["success"] is False, (
-        "a push to an undefined network should fail the record, not succeed "
-        f"(got {result})"
+        f"a push to an undefined network should fail the record, not succeed (got {result})"
     )
 
 
 # --------------------------------------------------------------------------- #
 # custom initial state via the network:state target syntax
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_async_push_arc_custom_initial_state() -> None:
@@ -226,14 +228,14 @@ async def test_async_push_arc_custom_initial_state() -> None:
         "the sub-network was not entered at the custom initial state 'second'"
     )
     assert data.get("first_ran") is not True, (
-        "the declared start state 'first' ran — the custom initial state did not "
-        "override it"
+        "the declared start state 'first' ran — the custom initial state did not override it"
     )
 
 
 # --------------------------------------------------------------------------- #
 # push to a non-existent custom initial *state* rolls back cleanly
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_async_push_to_nonexistent_initial_state_rolls_back_clean() -> None:
@@ -326,6 +328,7 @@ async def test_async_push_to_nonexistent_initial_state_rolls_back_clean() -> Non
 # --------------------------------------------------------------------------- #
 # a resource inherited from the pushing state is visible across all sub states
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_async_subflow_inherited_resource_visible_across_substates() -> None:
@@ -425,8 +428,7 @@ async def test_async_subflow_inherited_resource_visible_across_substates() -> No
 
     data = result.get("data", {})
     assert data.get("s1_has_db") is True, (
-        "the first sub-network state did not inherit the pushing state's "
-        "'target_db' resource"
+        "the first sub-network state did not inherit the pushing state's 'target_db' resource"
     )
     assert data.get("s2_has_db") is True, (
         "a later sub-network state did not see the inherited 'target_db' "
@@ -441,6 +443,7 @@ async def test_async_subflow_inherited_resource_visible_across_substates() -> No
 # --------------------------------------------------------------------------- #
 # resource inheritance accumulates across three nested push levels
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_async_three_level_subflow_resource_inheritance() -> None:
@@ -477,7 +480,11 @@ async def test_async_three_level_subflow_resource_inheritance() -> None:
                         "is_start": True,
                         "resources": ["r1"],
                         "arcs": [
-                            {"target": "l1_end", "target_network": "level2", "return_state": "l1_end"}
+                            {
+                                "target": "l1_end",
+                                "target_network": "level2",
+                                "return_state": "l1_end",
+                            }
                         ],
                     },
                     {"name": "l1_end", "is_end": True},
@@ -491,7 +498,11 @@ async def test_async_three_level_subflow_resource_inheritance() -> None:
                         "is_start": True,
                         "resources": ["r2"],
                         "arcs": [
-                            {"target": "l2_end", "target_network": "level3", "return_state": "l2_end"}
+                            {
+                                "target": "l2_end",
+                                "target_network": "level3",
+                                "return_state": "l2_end",
+                            }
                         ],
                     },
                     {"name": "l2_end", "is_end": True},

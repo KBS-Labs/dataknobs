@@ -21,6 +21,7 @@ class ValidationLevel(Enum):
         WARN: Log warning for missing required parameters (default)
         IGNORE: Silently ignore missing required parameters
     """
+
     ERROR = "error"
     WARN = "warn"
     IGNORE = "ignore"
@@ -33,6 +34,7 @@ class TemplateMode(Enum):
         MIXED: Pre-process (( )) conditionals then render with Jinja2 (default)
         JINJA2: Pure Jinja2 rendering, skip (( )) preprocessing
     """
+
     MIXED = "mixed"
     JINJA2 = "jinja2"
 
@@ -53,8 +55,7 @@ class TemplateMode(Enum):
             return cls(value.lower())
         except ValueError as e:
             raise ValueError(
-                f"Invalid template mode: {value}. "
-                f"Valid modes: {', '.join(m.value for m in cls)}"
+                f"Invalid template mode: {value}. Valid modes: {', '.join(m.value for m in cls)}"
             ) from e
 
 
@@ -67,6 +68,7 @@ class ValidationConfig:
         required_params: Set of parameter names that must be provided
         optional_params: Set of parameter names that are optional
     """
+
     level: ValidationLevel | None = None
     required_params: set[str] = field(default_factory=set)
     optional_params: set[str] = field(default_factory=set)
@@ -75,7 +77,7 @@ class ValidationConfig:
         self,
         level: ValidationLevel | None = None,
         required_params: list[str] | None = None,
-        optional_params: list[str] | None = None
+        optional_params: list[str] | None = None,
     ):
         """Initialize validation configuration.
 
@@ -112,6 +114,7 @@ class PromptTemplateDict(TypedDict, total=False):
         rag_configs: Inline RAG configurations
         template_mode: Template rendering mode ("mixed" or "jinja2")
     """
+
     template: str
     template_syntax: str
     defaults: dict[str, Any]
@@ -120,7 +123,7 @@ class PromptTemplateDict(TypedDict, total=False):
     sections: dict[str, str]
     extends: str
     rag_config_refs: list[str]
-    rag_configs: list['RAGConfig']
+    rag_configs: list["RAGConfig"]
     template_mode: str
 
 
@@ -136,6 +139,7 @@ class RAGConfig(TypedDict, total=False):
         header: Header text to prepend to RAG results
         item_template: Template for formatting individual RAG items
     """
+
     adapter_name: str
     query: str
     k: int
@@ -156,6 +160,7 @@ class MessageIndex(TypedDict, total=False):
         rag_configs: RAG configurations for this message sequence
         metadata: Additional metadata for this message index
     """
+
     messages: list[dict[str, str]]
     rag_configs: list[RAGConfig]
     metadata: dict[str, Any]
@@ -174,6 +179,7 @@ class RenderResult:
         rag_metadata: Optional RAG metadata (if return_rag_metadata=True)
                     Contains details about RAG searches executed during rendering
     """
+
     content: str
     params_used: dict[str, Any] = field(default_factory=dict)
     params_missing: list[str] = field(default_factory=list)

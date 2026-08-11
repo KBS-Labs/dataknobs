@@ -49,9 +49,7 @@ def test_resolver_agrees_with_construction_registry_for_all_backends() -> None:
     keys = knowledge_base_backends.list_keys()
     assert keys, "expected the built-in rag backend to be registered"
     for key in keys:
-        expected = getattr(
-            knowledge_base_backends.get_factory(key), "CONFIG_CLS", None
-        )
+        expected = getattr(knowledge_base_backends.get_factory(key), "CONFIG_CLS", None)
         assert resolver({"type": key}) is expected, f"drift for backend {key!r}"
 
 

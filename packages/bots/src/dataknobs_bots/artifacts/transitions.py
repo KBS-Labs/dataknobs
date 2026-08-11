@@ -31,9 +31,7 @@ ARTIFACT_STATUS = TransitionValidator(
 )
 
 
-def validate_transition(
-    current: ArtifactStatus, target: ArtifactStatus
-) -> None:
+def validate_transition(current: ArtifactStatus, target: ArtifactStatus) -> None:
     """Validate an artifact status transition.
 
     Args:

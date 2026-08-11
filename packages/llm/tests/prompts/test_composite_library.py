@@ -29,10 +29,7 @@ class TestCompositeLibraryInit:
         lib1 = ConfigPromptLibrary({})
         lib2 = ConfigPromptLibrary({})
 
-        composite = CompositePromptLibrary(
-            libraries=[lib1, lib2],
-            names=["first", "second"]
-        )
+        composite = CompositePromptLibrary(libraries=[lib1, lib2], names=["first", "second"])
 
         assert composite.library_names == ["first", "second"]
 
@@ -42,10 +39,7 @@ class TestCompositeLibraryInit:
         lib2 = ConfigPromptLibrary({})
 
         with pytest.raises(ValueError, match="Number of names"):
-            CompositePromptLibrary(
-                libraries=[lib1, lib2],
-                names=["only_one"]
-            )
+            CompositePromptLibrary(libraries=[lib1, lib2], names=["only_one"])
 
     def test_default_library_names(self):
         """Test that default names are generated."""
@@ -61,12 +55,8 @@ class TestCompositeSystemPrompts:
 
     def test_system_prompt_from_first_library(self):
         """Test getting system prompt from first library."""
-        lib1 = ConfigPromptLibrary({
-            "system": {"test": {"template": "From lib1"}}
-        })
-        lib2 = ConfigPromptLibrary({
-            "system": {"test": {"template": "From lib2"}}
-        })
+        lib1 = ConfigPromptLibrary({"system": {"test": {"template": "From lib1"}}})
+        lib2 = ConfigPromptLibrary({"system": {"test": {"template": "From lib2"}}})
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
         template = composite.get_system_prompt("test")
@@ -77,9 +67,7 @@ class TestCompositeSystemPrompts:
     def test_system_prompt_fallback_to_second_library(self):
         """Test fallback to second library when not in first."""
         lib1 = ConfigPromptLibrary({"system": {}})
-        lib2 = ConfigPromptLibrary({
-            "system": {"test": {"template": "From lib2"}}
-        })
+        lib2 = ConfigPromptLibrary({"system": {"test": {"template": "From lib2"}}})
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
         template = composite.get_system_prompt("test")
@@ -99,22 +87,19 @@ class TestCompositeSystemPrompts:
 
     def test_system_prompt_priority_order(self):
         """Test that libraries are searched in priority order."""
-        lib1 = ConfigPromptLibrary({
-            "system": {"a": {"template": "A from lib1"}}
-        })
-        lib2 = ConfigPromptLibrary({
-            "system": {
-                "a": {"template": "A from lib2"},
-                "b": {"template": "B from lib2"}
+        lib1 = ConfigPromptLibrary({"system": {"a": {"template": "A from lib1"}}})
+        lib2 = ConfigPromptLibrary(
+            {"system": {"a": {"template": "A from lib2"}, "b": {"template": "B from lib2"}}}
+        )
+        lib3 = ConfigPromptLibrary(
+            {
+                "system": {
+                    "a": {"template": "A from lib3"},
+                    "b": {"template": "B from lib3"},
+                    "c": {"template": "C from lib3"},
+                }
             }
-        })
-        lib3 = ConfigPromptLibrary({
-            "system": {
-                "a": {"template": "A from lib3"},
-                "b": {"template": "B from lib3"},
-                "c": {"template": "C from lib3"}
-            }
-        })
+        )
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2, lib3])
 
@@ -133,12 +118,8 @@ class TestCompositeUserPrompts:
 
     def test_user_prompt_fallback(self):
         """Test user prompt with fallback behavior."""
-        lib1 = ConfigPromptLibrary({
-            "user": {"question": {"template": "From lib1"}}
-        })
-        lib2 = ConfigPromptLibrary({
-            "user": {"question": {"template": "From lib2"}}
-        })
+        lib1 = ConfigPromptLibrary({"user": {"question": {"template": "From lib1"}}})
+        lib2 = ConfigPromptLibrary({"user": {"question": {"template": "From lib2"}}})
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
         template = composite.get_user_prompt("question")
@@ -147,12 +128,10 @@ class TestCompositeUserPrompts:
 
     def test_user_prompt_different_names_different_libraries(self):
         """Test different user prompts from different libraries."""
-        lib1 = ConfigPromptLibrary({
-            "user": {"question": {"template": "Question from lib1"}}
-        })
-        lib2 = ConfigPromptLibrary({
-            "user": {"question_alt": {"template": "Alt question from lib2"}}
-        })
+        lib1 = ConfigPromptLibrary({"user": {"question": {"template": "Question from lib1"}}})
+        lib2 = ConfigPromptLibrary(
+            {"user": {"question_alt": {"template": "Alt question from lib2"}}}
+        )
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
 
@@ -169,13 +148,9 @@ class TestCompositeMessageIndexes:
     def test_message_index_fallback(self):
         """Test message index with fallback behavior."""
         lib1 = ConfigPromptLibrary({"messages": {}})
-        lib2 = ConfigPromptLibrary({
-            "messages": {
-                "conversation": {
-                    "messages": [{"role": "user", "content": "Hello"}]
-                }
-            }
-        })
+        lib2 = ConfigPromptLibrary(
+            {"messages": {"conversation": {"messages": [{"role": "user", "content": "Hello"}]}}}
+        )
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
         index = composite.get_message_index("conversation")
@@ -190,14 +165,9 @@ class TestCompositeRAGConfigs:
     def test_rag_config_fallback(self):
         """Test RAG config with fallback behavior."""
         lib1 = ConfigPromptLibrary({"rag": {}})
-        lib2 = ConfigPromptLibrary({
-            "rag": {
-                "docs_search": {
-                    "adapter_name": "docs",
-                    "query": "{{q}}"
-                }
-            }
-        })
+        lib2 = ConfigPromptLibrary(
+            {"rag": {"docs_search": {"adapter_name": "docs", "query": "{{q}}"}}}
+        )
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
         rag = composite.get_rag_config("docs_search")
@@ -250,10 +220,7 @@ class TestCompositeLibraryManagement:
         lib1 = ConfigPromptLibrary({"system": {"a": {"template": "A"}}})
         lib2 = ConfigPromptLibrary({"system": {"b": {"template": "B"}}})
 
-        composite = CompositePromptLibrary(
-            libraries=[lib1, lib2],
-            names=["first", "second"]
-        )
+        composite = CompositePromptLibrary(libraries=[lib1, lib2], names=["first", "second"])
 
         # Remove first library
         result = composite.remove_library("first")
@@ -275,10 +242,7 @@ class TestCompositeLibraryManagement:
         lib1 = ConfigPromptLibrary({"system": {"a": {"template": "A"}}})
         lib2 = ConfigPromptLibrary({"system": {"b": {"template": "B"}}})
 
-        composite = CompositePromptLibrary(
-            libraries=[lib1, lib2],
-            names=["first", "second"]
-        )
+        composite = CompositePromptLibrary(libraries=[lib1, lib2], names=["first", "second"])
 
         retrieved = composite.get_library_by_name("second")
         assert retrieved is lib2
@@ -304,25 +268,22 @@ class TestCompositeLibraryEdgeCases:
     def test_override_pattern(self):
         """Test common override pattern (custom + defaults)."""
         # Default library with many prompts
-        defaults = ConfigPromptLibrary({
-            "system": {
-                "greet": {"template": "Default greeting"},
-                "analyze": {"template": "Default analysis"},
-                "summarize": {"template": "Default summary"}
+        defaults = ConfigPromptLibrary(
+            {
+                "system": {
+                    "greet": {"template": "Default greeting"},
+                    "analyze": {"template": "Default analysis"},
+                    "summarize": {"template": "Default summary"},
+                }
             }
-        })
+        )
 
         # Custom library overriding specific prompts
-        custom = ConfigPromptLibrary({
-            "system": {
-                "greet": {"template": "Custom greeting"}
-            }
-        })
+        custom = ConfigPromptLibrary({"system": {"greet": {"template": "Custom greeting"}}})
 
         # Composite searches custom first, then defaults
         composite = CompositePromptLibrary(
-            libraries=[custom, defaults],
-            names=["custom", "defaults"]
+            libraries=[custom, defaults], names=["custom", "defaults"]
         )
 
         # Should get custom greeting

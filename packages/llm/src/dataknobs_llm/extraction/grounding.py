@@ -54,19 +54,79 @@ logger = logging.getLogger(__name__)
 # Module-level defaults
 # ──────────────────────────────────────────────────────────────────
 
-DEFAULT_STOPWORDS: frozenset[str] = frozenset({
-    "the", "a", "an", "is", "of", "for", "to", "or", "and", "whether",
-    "it", "in", "on", "at", "by", "with", "this", "that", "be", "as",
-    "can", "do", "does", "did", "has", "have", "had", "was", "were",
-    "are", "been", "being", "will", "would", "could", "should", "may",
-    "might", "shall", "must", "not", "but", "if", "then", "than",
-    "so", "just", "also", "very", "too", "really", "quite",
-})
+DEFAULT_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "of",
+        "for",
+        "to",
+        "or",
+        "and",
+        "whether",
+        "it",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "this",
+        "that",
+        "be",
+        "as",
+        "can",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "was",
+        "were",
+        "are",
+        "been",
+        "being",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "must",
+        "not",
+        "but",
+        "if",
+        "then",
+        "than",
+        "so",
+        "just",
+        "also",
+        "very",
+        "too",
+        "really",
+        "quite",
+    }
+)
 
-DEFAULT_NEGATION_KEYWORDS: frozenset[str] = frozenset({
-    "no", "skip", "none", "remove", "clear", "without", "blank",
-    "empty", "delete", "disable", "disabled", "off",
-})
+DEFAULT_NEGATION_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "no",
+        "skip",
+        "none",
+        "remove",
+        "clear",
+        "without",
+        "blank",
+        "empty",
+        "delete",
+        "disable",
+        "disabled",
+        "off",
+    }
+)
 
 # Known schema type → valid Python types for type-mismatch detection.
 # Used by is_field_grounded to reject values whose Python type doesn't
@@ -108,6 +168,7 @@ def value_matches_schema_type(value: Any, schema_type: str) -> bool:
 # ──────────────────────────────────────────────────────────────────
 # Configuration and result types
 # ──────────────────────────────────────────────────────────────────
+
 
 @dataclass(frozen=True)
 class GroundingConfig:
@@ -155,6 +216,7 @@ class FieldGroundingResult:
 # Text utilities
 # ──────────────────────────────────────────────────────────────────
 
+
 def _word_in_text(word: str, text: str) -> bool:
     r"""Check if *word* appears as a whole word in *text*.
 
@@ -187,8 +249,7 @@ def significant_words(
     return {
         w
         for raw in text.split()
-        if len(w := raw.lower().strip(".,;:!?\"'()[]{}")) > 2
-        and w not in sw
+        if len(w := raw.lower().strip(".,;:!?\"'()[]{}")) > 2 and w not in sw
     }
 
 
@@ -252,10 +313,7 @@ def has_negation(
         return any(_word_in_text(w, msg_lower) for w in negation_keywords)
 
     # Proximity check: split message into words, find positions.
-    words = [
-        raw.lower().strip(".,;:!?\"'()[]{}")
-        for raw in msg_lower.split()
-    ]
+    words = [raw.lower().strip(".,;:!?\"'()[]{}") for raw in msg_lower.split()]
     neg_positions: list[int] = []
     field_positions: list[int] = []
     for i, w in enumerate(words):
@@ -267,11 +325,7 @@ def has_negation(
     if not neg_positions or not field_positions:
         return False
 
-    return any(
-        abs(np - fp) <= proximity
-        for np in neg_positions
-        for fp in field_positions
-    )
+    return any(abs(np - fp) <= proximity for np in neg_positions for fp in field_positions)
 
 
 def detect_boolean_signal(
@@ -331,11 +385,7 @@ def detect_boolean_signal(
         KeywordIntentClassifier,
     )
 
-    neg_kw = (
-        negation_keywords
-        if negation_keywords is not None
-        else DEFAULT_NEGATION_KEYWORDS
-    )
+    neg_kw = negation_keywords if negation_keywords is not None else DEFAULT_NEGATION_KEYWORDS
 
     classifier = KeywordIntentClassifier(
         vocabulary={
@@ -365,9 +415,8 @@ def detect_boolean_signal(
     # a negative word is present, via the phrase tier beating the
     # word tier; that case is the legitimate affirmative verdict and
     # must not flip.)
-    has_neg_match = (
-        any(_word_in_text(w, msg_lower) for w in negative_signals)
-        or any(_word_in_text(p, msg_lower) for p in negative_phrases)
+    has_neg_match = any(_word_in_text(w, msg_lower) for w in negative_signals) or any(
+        _word_in_text(p, msg_lower) for p in negative_phrases
     )
     if not has_neg_match:
         check_neg = neg_kw - negative_signals
@@ -379,6 +428,7 @@ def detect_boolean_signal(
 # ──────────────────────────────────────────────────────────────────
 # Core grounding API
 # ──────────────────────────────────────────────────────────────────
+
 
 def is_field_grounded(
     field_name: str,
@@ -415,22 +465,27 @@ def is_field_grounded(
 
     if grounding_mode == "skip":
         return FieldGroundingResult(
-            field=field_name, grounded=True,
-            reason="grounding=skip", strategy="skip",
+            field=field_name,
+            grounded=True,
+            reason="grounding=skip",
+            strategy="skip",
         )
 
     if grounding_mode == "exact":
         grounded = _word_in_text(str(value).lower(), msg_lower)
         return FieldGroundingResult(
-            field=field_name, grounded=grounded,
+            field=field_name,
+            grounded=grounded,
             reason=f"exact match: {value!r} {'found' if grounded else 'not found'}",
             strategy="exact",
         )
 
     if grounding_mode == "fuzzy":
         return FieldGroundingResult(
-            field=field_name, grounded=True,
-            reason="grounding=fuzzy", strategy="fuzzy",
+            field=field_name,
+            grounded=True,
+            reason="grounding=fuzzy",
+            strategy="fuzzy",
         )
 
     # Resolve overlap threshold: per-field > config
@@ -448,7 +503,8 @@ def is_field_grounded(
     has_explicit_type = "type" in schema_property
     if has_explicit_type and not value_matches_schema_type(value, field_type):
         return FieldGroundingResult(
-            field=field_name, grounded=False,
+            field=field_name,
+            grounded=False,
             reason=(
                 f"type mismatch: field '{field_name}' expects {field_type}, "
                 f"got {type(value).__name__}"
@@ -458,10 +514,15 @@ def is_field_grounded(
 
     if field_type == "boolean":
         grounded = _ground_boolean(
-            field_name, value, schema_property, msg_lower, cfg,
+            field_name,
+            value,
+            schema_property,
+            msg_lower,
+            cfg,
         )
         return FieldGroundingResult(
-            field=field_name, grounded=grounded,
+            field=field_name,
+            grounded=grounded,
             reason=f"boolean keywords {'found' if grounded else 'not found'}",
             strategy="boolean",
         )
@@ -469,17 +530,23 @@ def is_field_grounded(
     if field_type in ("integer", "number"):
         grounded = _ground_number(value, user_message)
         return FieldGroundingResult(
-            field=field_name, grounded=grounded,
+            field=field_name,
+            grounded=grounded,
             reason=f"number {value!r} {'found' if grounded else 'not found'}",
             strategy="number",
         )
 
     if field_type == "array":
         grounded = _ground_array(
-            field_name, value, msg_lower, schema_property, cfg,
+            field_name,
+            value,
+            msg_lower,
+            schema_property,
+            cfg,
         )
         return FieldGroundingResult(
-            field=field_name, grounded=grounded,
+            field=field_name,
+            grounded=grounded,
             reason=f"array {'element found' if grounded else 'no elements found'}",
             strategy="array",
         )
@@ -488,21 +555,26 @@ def is_field_grounded(
     if isinstance(value, str):
         empty_allowed = x_ext.get("empty_allowed", False)
         grounded = _ground_string(
-            field_name, value, msg_lower, schema_property,
+            field_name,
+            value,
+            msg_lower,
+            schema_property,
             empty_allowed=empty_allowed,
             overlap_threshold=overlap_threshold,
             config=cfg,
         )
         strategy = "enum" if "enum" in schema_property and value else "string_overlap"
         return FieldGroundingResult(
-            field=field_name, grounded=grounded,
+            field=field_name,
+            grounded=grounded,
             reason=f"string {value!r} {'grounded' if grounded else 'not grounded'}",
             strategy=strategy,
         )
 
     # Unknown types: trust extraction
     return FieldGroundingResult(
-        field=field_name, grounded=True,
+        field=field_name,
+        grounded=True,
         reason=f"unknown type {field_type!r}: trusted",
         strategy="unknown",
     )
@@ -544,7 +616,11 @@ def ground_extraction(
         if schema_prop is None:
             continue
         results[fname] = is_field_grounded(
-            fname, fvalue, user_message, schema_prop, config=cfg,
+            fname,
+            fvalue,
+            user_message,
+            schema_prop,
+            config=cfg,
         )
 
     return results
@@ -553,6 +629,7 @@ def ground_extraction(
 # ──────────────────────────────────────────────────────────────────
 # Private type-dispatched grounding checks
 # ──────────────────────────────────────────────────────────────────
+
 
 def _ground_boolean(
     field_name: str,
@@ -563,7 +640,9 @@ def _ground_boolean(
 ) -> bool:
     """Grounded if field-related keywords appear in message."""
     keywords = field_keywords(
-        field_name, schema_property, stopwords=config.stopwords,
+        field_name,
+        schema_property,
+        stopwords=config.stopwords,
     )
     field_mentioned = any(_word_in_text(w, msg_lower) for w in keywords)
     if not field_mentioned:
@@ -575,14 +654,12 @@ def _ground_boolean(
         return True
 
     custom_neg = x_ext.get("negation_keywords")
-    neg_keywords = (
-        frozenset(custom_neg) if custom_neg is not None
-        else config.negation_keywords
-    )
+    neg_keywords = frozenset(custom_neg) if custom_neg is not None else config.negation_keywords
     proximity = x_ext.get("negation_proximity", 0)
 
     has_neg = has_negation(
-        msg_lower, neg_keywords,
+        msg_lower,
+        neg_keywords,
         field_keywords=keywords,
         proximity=proximity,
     )
@@ -613,26 +690,20 @@ def _ground_array(
         if x_ext.get("empty_allowed", False):
             return True
         keywords = field_keywords(
-            field_name, schema_property, stopwords=config.stopwords,
+            field_name,
+            schema_property,
+            stopwords=config.stopwords,
         )
         custom_neg = x_ext.get("negation_keywords")
-        neg_keywords = (
-            frozenset(custom_neg) if custom_neg is not None
-            else config.negation_keywords
-        )
+        neg_keywords = frozenset(custom_neg) if custom_neg is not None else config.negation_keywords
         proximity = x_ext.get("negation_proximity", 0)
-        return (
-            any(_word_in_text(w, msg_lower) for w in keywords)
-            and has_negation(
-                msg_lower, neg_keywords,
-                field_keywords=keywords,
-                proximity=proximity,
-            )
+        return any(_word_in_text(w, msg_lower) for w in keywords) and has_negation(
+            msg_lower,
+            neg_keywords,
+            field_keywords=keywords,
+            proximity=proximity,
         )
-    return any(
-        _word_in_text(str(item).lower(), msg_lower)
-        for item in value
-    )
+    return any(_word_in_text(str(item).lower(), msg_lower) for item in value)
 
 
 def _ground_string(
@@ -651,21 +722,18 @@ def _ground_string(
             return True
         x_ext = schema_property.get("x-extraction", {})
         keywords = field_keywords(
-            field_name, schema_property, stopwords=config.stopwords,
+            field_name,
+            schema_property,
+            stopwords=config.stopwords,
         )
         custom_neg = x_ext.get("negation_keywords")
-        neg_keywords = (
-            frozenset(custom_neg) if custom_neg is not None
-            else config.negation_keywords
-        )
+        neg_keywords = frozenset(custom_neg) if custom_neg is not None else config.negation_keywords
         proximity = x_ext.get("negation_proximity", 0)
-        return (
-            any(_word_in_text(w, msg_lower) for w in keywords)
-            and has_negation(
-                msg_lower, neg_keywords,
-                field_keywords=keywords,
-                proximity=proximity,
-            )
+        return any(_word_in_text(w, msg_lower) for w in keywords) and has_negation(
+            msg_lower,
+            neg_keywords,
+            field_keywords=keywords,
+            proximity=proximity,
         )
 
     # Enum: check if value matches an enum entry found in message

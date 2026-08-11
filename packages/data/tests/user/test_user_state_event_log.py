@@ -150,10 +150,7 @@ async def test_failed_update_appends_no_event_async() -> None:
     store = await AsyncUserStateStore.from_config(_config())
     try:
         # No such record → update returns False → nothing logged.
-        assert (
-            await store.update_record("u1", "alerts", "missing", {"text": "x"})
-            is False
-        )
+        assert await store.update_record("u1", "alerts", "missing", {"text": "x"}) is False
         assert await store.query_events("u1") == []
     finally:
         await store.close()
@@ -162,10 +159,7 @@ async def test_failed_update_appends_no_event_async() -> None:
 def test_failed_update_appends_no_event_sync() -> None:
     store = UserStateStore.from_config(_config())
     try:
-        assert (
-            store.update_record("u1", "alerts", "missing", {"text": "x"})
-            is False
-        )
+        assert store.update_record("u1", "alerts", "missing", {"text": "x"}) is False
         assert store.query_events("u1") == []
     finally:
         store.close()
@@ -199,9 +193,7 @@ def test_delete_record_appends_event_sync() -> None:
         rid = store.add_record("u1", "alerts", {"text": "a"})
         assert store.delete_record("u1", "alerts", rid) is True
 
-        delete_events = [
-            e for e in store.query_events("u1") if e.data["op"] == "delete_record"
-        ]
+        delete_events = [e for e in store.query_events("u1") if e.data["op"] == "delete_record"]
         assert len(delete_events) == 1
         data = delete_events[0].data
         assert data["op_section"] == "alerts"
@@ -244,9 +236,7 @@ async def test_single_section_prune_appends_event_async() -> None:
 
         assert await store.prune("u1", "activity") == 1
 
-        prune_events = [
-            e for e in await store.query_events("u1") if e.data["op"] == "prune"
-        ]
+        prune_events = [e for e in await store.query_events("u1") if e.data["op"] == "prune"]
         assert len(prune_events) == 1
         data = prune_events[0].data
         assert data["op_section"] == "activity"
@@ -264,9 +254,7 @@ def test_single_section_prune_appends_event_sync() -> None:
         clock.advance(days=40)
 
         assert store.prune("u1", "activity") == 1
-        prune_events = [
-            e for e in store.query_events("u1") if e.data["op"] == "prune"
-        ]
+        prune_events = [e for e in store.query_events("u1") if e.data["op"] == "prune"]
         assert len(prune_events) == 1
         data = prune_events[0].data
         assert data["op_section"] == "activity"
@@ -285,9 +273,7 @@ async def test_section_less_prune_appends_split_event_async() -> None:
 
         assert await store.prune("u1") == 1
 
-        prune_events = [
-            e for e in await store.query_events("u1") if e.data["op"] == "prune"
-        ]
+        prune_events = [e for e in await store.query_events("u1") if e.data["op"] == "prune"]
         assert len(prune_events) == 1
         data = prune_events[0].data
         assert data["op_section"] is None
@@ -305,9 +291,7 @@ def test_section_less_prune_appends_split_event_sync() -> None:
         clock.advance(days=40)
 
         assert store.prune("u1") == 1
-        prune_events = [
-            e for e in store.query_events("u1") if e.data["op"] == "prune"
-        ]
+        prune_events = [e for e in store.query_events("u1") if e.data["op"] == "prune"]
         assert len(prune_events) == 1
         data = prune_events[0].data
         assert data["op_section"] is None
@@ -324,9 +308,7 @@ async def test_empty_prune_appends_no_event_async() -> None:
         await store.add_record("u1", "activity", {"event": "fresh"})
         # Nothing has expired yet.
         assert await store.prune("u1", "activity") == 0
-        prune_events = [
-            e for e in await store.query_events("u1") if e.data["op"] == "prune"
-        ]
+        prune_events = [e for e in await store.query_events("u1") if e.data["op"] == "prune"]
         assert prune_events == []
     finally:
         await store.close()
@@ -341,9 +323,7 @@ async def test_clear_appends_no_persisted_event_but_fires_ephemeral_async() -> N
     store = await AsyncUserStateStore.from_config(_config())
     try:
         deleted_ops: list[str] = []
-        store._callbacks.register(
-            SECTION_DELETED_TOPIC, lambda p: deleted_ops.append(p["op"])
-        )
+        store._callbacks.register(SECTION_DELETED_TOPIC, lambda p: deleted_ops.append(p["op"]))
         await store.add_record("u1", "alerts", {"text": "a"})
         await store.put_document("u1", "prefs", {"theme": "dark"})
 
@@ -363,9 +343,7 @@ def test_clear_appends_no_persisted_event_but_fires_ephemeral_sync() -> None:
     store = UserStateStore.from_config(_config())
     try:
         deleted_ops: list[str] = []
-        store._callbacks.register(
-            SECTION_DELETED_TOPIC, lambda p: deleted_ops.append(p["op"])
-        )
+        store._callbacks.register(SECTION_DELETED_TOPIC, lambda p: deleted_ops.append(p["op"]))
         store.add_record("u1", "alerts", {"text": "a"})
         store.put_document("u1", "prefs", {"theme": "dark"})
 
@@ -383,11 +361,7 @@ def test_clear_appends_no_persisted_event_but_fires_ephemeral_sync() -> None:
 
 async def test_consent_refused_write_appends_no_event_async() -> None:
     store = await AsyncUserStateStore.from_config(
-        _config(
-            sections=[
-                {"name": "notes", "kind": "collection", "consent_scope": "pii"}
-            ]
-        )
+        _config(sections=[{"name": "notes", "kind": "collection", "consent_scope": "pii"}])
     )
     try:
         with pytest.raises(ConsentRequiredError):
@@ -399,11 +373,7 @@ async def test_consent_refused_write_appends_no_event_async() -> None:
 
 def test_consent_refused_write_appends_no_event_sync() -> None:
     store = UserStateStore.from_config(
-        _config(
-            sections=[
-                {"name": "notes", "kind": "collection", "consent_scope": "pii"}
-            ]
-        )
+        _config(sections=[{"name": "notes", "kind": "collection", "consent_scope": "pii"}])
     )
     try:
         with pytest.raises(ConsentRequiredError):
@@ -472,9 +442,7 @@ def test_query_events_raises_when_disabled_sync() -> None:
 
 async def test_event_log_honours_retention_window_async() -> None:
     clock = _Clock(_START)
-    store = await AsyncUserStateStore.from_config(
-        _config(event_log_retention_days=30), now=clock
-    )
+    store = await AsyncUserStateStore.from_config(_config(event_log_retention_days=30), now=clock)
     try:
         await store.add_record("u1", "alerts", {"text": "old"})  # logs 1 event
         clock.advance(days=40)
@@ -491,9 +459,7 @@ async def test_event_log_honours_retention_window_async() -> None:
 
 def test_event_log_honours_retention_window_sync() -> None:
     clock = _Clock(_START)
-    store = UserStateStore.from_config(
-        _config(event_log_retention_days=30), now=clock
-    )
+    store = UserStateStore.from_config(_config(event_log_retention_days=30), now=clock)
     try:
         store.add_record("u1", "alerts", {"text": "old"})
         clock.advance(days=40)
@@ -523,9 +489,7 @@ async def test_event_log_metadata_only_with_tenant_async() -> None:
             ]
         )
     )
-    store = AsyncUserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
+    store = AsyncUserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
     try:
         await store.add_record("u1", "profile", {"ssn": "secret"})
 
@@ -553,9 +517,7 @@ def test_event_log_metadata_only_with_tenant_sync() -> None:
             ]
         )
     )
-    store = UserStateStore.from_components(
-        cfg, db=db, tenant=BoundTenantContext("t1", "acme")
-    )
+    store = UserStateStore.from_components(cfg, db=db, tenant=BoundTenantContext("t1", "acme"))
     try:
         store.add_record("u1", "profile", {"ssn": "secret"})
 
@@ -577,9 +539,7 @@ def test_event_log_metadata_only_with_tenant_sync() -> None:
 
 def test_reserved_events_section_name_rejected() -> None:
     with pytest.raises(ConfigurationError):
-        UserStateStoreConfig.from_dict(
-            _config(sections=[{"name": "events", "kind": "collection"}])
-        )
+        UserStateStoreConfig.from_dict(_config(sections=[{"name": "events", "kind": "collection"}]))
 
 
 def test_non_positive_event_log_retention_rejected() -> None:
@@ -629,13 +589,9 @@ async def test_append_failure_does_not_fail_primary_write_async(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     cfg = UserStateStoreConfig.from_dict(_config())
-    store = AsyncUserStateStore.from_components(
-        cfg, db=_EventsAppendFailsAsyncDB()
-    )
+    store = AsyncUserStateStore.from_components(cfg, db=_EventsAppendFailsAsyncDB())
     try:
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_data.user.store"
-        ):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_data.user.store"):
             # The audit append raises inside _append_event; the primary
             # add_record must still return the persisted record's id.
             rid = await store.add_record("u1", "alerts", {"text": "a"})
@@ -661,9 +617,7 @@ def test_append_failure_does_not_fail_primary_write_sync(
     cfg = UserStateStoreConfig.from_dict(_config())
     store = UserStateStore.from_components(cfg, db=_EventsAppendFailsSyncDB())
     try:
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_data.user.store"
-        ):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_data.user.store"):
             rid = store.add_record("u1", "alerts", {"text": "a"})
 
         assert rid

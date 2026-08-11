@@ -233,12 +233,8 @@ class ToolCatalog(Registry[ToolEntry]):
         Raises:
             ValueError: If tool_class does not implement ``catalog_metadata()``.
         """
-        if not hasattr(tool_class, "catalog_metadata") or not callable(
-            tool_class.catalog_metadata
-        ):
-            raise ValueError(
-                f"{tool_class.__name__} does not implement catalog_metadata()"
-            )
+        if not hasattr(tool_class, "catalog_metadata") or not callable(tool_class.catalog_metadata):
+            raise ValueError(f"{tool_class.__name__} does not implement catalog_metadata()")
         meta = tool_class.catalog_metadata()
         class_path = f"{tool_class.__module__}.{tool_class.__qualname__}"
         self.register_tool(
@@ -315,10 +311,7 @@ class ToolCatalog(Registry[ToolEntry]):
             List of bot config dicts.
         """
         overrides = overrides or {}
-        return [
-            self.to_bot_config(name, **overrides.get(name, {}))
-            for name in names
-        ]
+        return [self.to_bot_config(name, **overrides.get(name, {})) for name in names]
 
     # -- Dependency validation --
 
@@ -359,10 +352,7 @@ class ToolCatalog(Registry[ToolEntry]):
             entry = self.get(name)
             for req in sorted(entry.requires):
                 if req not in config:
-                    warnings.append(
-                        f"Tool '{name}' requires '{req}' "
-                        f"but it is not configured"
-                    )
+                    warnings.append(f"Tool '{name}' requires '{req}' but it is not configured")
         return warnings
 
     # -- Instantiation --
@@ -394,9 +384,7 @@ class ToolCatalog(Registry[ToolEntry]):
         params = dict(entry.default_params)
         params.update(param_overrides)
 
-        if hasattr(tool_class, "from_config") and callable(
-            tool_class.from_config
-        ):
+        if hasattr(tool_class, "from_config") and callable(tool_class.from_config):
             return tool_class.from_config(params)
         return tool_class(**params) if params else tool_class()
 
@@ -433,9 +421,7 @@ class ToolCatalog(Registry[ToolEntry]):
             except Exception as e:
                 if strict:
                     raise
-                logger.warning(
-                    "Failed to instantiate tool '%s': %s", name, e
-                )
+                logger.warning("Failed to instantiate tool '%s': %s", name, e)
 
         return registry
 
@@ -447,9 +433,7 @@ class ToolCatalog(Registry[ToolEntry]):
         Returns:
             Dict with ``tools`` key containing list of tool dicts.
         """
-        return {
-            "tools": [entry.to_dict() for entry in self.list_items()]
-        }
+        return {"tools": [entry.to_dict() for entry in self.list_items()]}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolCatalog:

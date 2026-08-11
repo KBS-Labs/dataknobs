@@ -297,9 +297,7 @@ class CriterionResult:
             score=data["score"],
             evidence=data.get("evidence", []),
             notes=data.get("notes", ""),
-            scoring_method_used=ScoringType(data.get(
-                "scoring_method_used", "deterministic"
-            )),
+            scoring_method_used=ScoringType(data.get("scoring_method_used", "deterministic")),
             llm_invocation=data.get("llm_invocation"),
         )
 
@@ -360,9 +358,7 @@ class RubricEvaluation:
             rubric_version=data["rubric_version"],
             target_id=data["target_id"],
             target_type=data["target_type"],
-            criterion_results=[
-                CriterionResult.from_dict(r) for r in data["criterion_results"]
-            ],
+            criterion_results=[CriterionResult.from_dict(r) for r in data["criterion_results"]],
             weighted_score=data["weighted_score"],
             passed=data["passed"],
             feedback_summary=data.get("feedback_summary", ""),

@@ -114,9 +114,7 @@ class BroadExceptFinding(NamedTuple):
         )
 
 
-def _handler_is_broad(
-    handler: ast.ExceptHandler, unbounded: frozenset[str]
-) -> bool:
+def _handler_is_broad(handler: ast.ExceptHandler, unbounded: frozenset[str]) -> bool:
     """Whether this ``except`` catches something with unbounded text.
 
     A bare ``except:`` is broader than any named type and answers ``True``, but
@@ -182,20 +180,16 @@ def _reads_unsafely(node: ast.AST, tainted: frozenset[str]) -> bool:
     )
 
 
-def _assigned_names(node: ast.stmt) -> list[str]:
+_Assigning = ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr
+
+
+def _assigned_names(node: _Assigning) -> list[str]:
     """The plain names a statement binds, ignoring attribute/subscript targets."""
     if isinstance(node, ast.Assign):
         targets: list[ast.expr] = list(node.targets)
-    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-        targets = [node.target]
     else:
-        return []
-    return [
-        sub.id
-        for target in targets
-        for sub in ast.walk(target)
-        if isinstance(sub, ast.Name)
-    ]
+        targets = [node.target]
+    return [sub.id for target in targets for sub in ast.walk(target) if isinstance(sub, ast.Name)]
 
 
 def _tainted_names(handler: ast.ExceptHandler, bound: str) -> frozenset[str]:
@@ -275,9 +269,7 @@ def _scan_file(
             operands.extend(kw.value for kw in call.keywords)
             if any(_reads_unsafely(operand, tainted) for operand in operands):
                 findings.append(
-                    BroadExceptFinding(
-                        path, stmt.lineno, _raised_name(call) or "?", bound
-                    )
+                    BroadExceptFinding(path, stmt.lineno, _raised_name(call) or "?", bound)
                 )
 
     return findings
@@ -324,11 +316,7 @@ def assert_no_broad_except_in_error_text(
         for path in files:
             for finding in _scan_file(path, wanted, treat_as_unbounded):
                 key = f"{path.as_posix()}:{finding.lineno}"
-                matched = {
-                    entry
-                    for entry in exempt
-                    if key == entry or key.endswith(f"/{entry}")
-                }
+                matched = {entry for entry in exempt if key == entry or key.endswith(f"/{entry}")}
                 used |= matched
                 if not matched:
                     findings.append(finding)

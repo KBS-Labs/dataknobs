@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from dataknobs_common import NotFoundError, Registry
 from dataknobs_common.config_loading import (
     ConfigLoadError,
@@ -140,9 +140,7 @@ class Config:
                 f"Unsupported config file extension: {path.suffix!r} ({path.name})"
             ) from e
         except ConfigLoadError as e:
-            raise ValidationError(
-                f"Failed to load {path.name} ({type(e).__name__})"
-            ) from e
+            raise ValidationError(f"Failed to load {path.name} ({type(e).__name__})") from e
 
     def _load_file(self, path: Union[str, Path]) -> None:
         """Load configuration from a file.
@@ -532,9 +530,7 @@ class Config:
         """
         return self._object_builder.build(ref, cache=cache, **kwargs)
 
-    async def build_object_async(
-        self, ref: str, cache: bool = True, **kwargs: Any
-    ) -> Any:
+    async def build_object_async(self, ref: str, cache: bool = True, **kwargs: Any) -> Any:
         """Build an object asynchronously from a configuration reference.
 
         Async counterpart of :meth:`build_object`. Prefers a target's
@@ -550,9 +546,7 @@ class Config:
         Returns:
             Built object instance
         """
-        return await self._object_builder.build_async(
-            ref, cache=cache, **kwargs
-        )
+        return await self._object_builder.build_async(ref, cache=cache, **kwargs)
 
     def clear_object_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.
@@ -620,16 +614,16 @@ class Config:
 
     def register_factory(self, name: str, factory: Any) -> None:
         """Register a factory instance for use in configurations.
-        
+
         Registered factories take precedence over module paths. This allows:
         1. Cleaner configuration files (no module paths needed)
         2. Runtime factory substitution (useful for testing)
         3. Pre-configured factory instances
-        
+
         Args:
             name: Name to register the factory under
             factory: Factory instance or class
-            
+
         Example:
             ```python
             from dataknobs_config import Config
@@ -645,7 +639,7 @@ class Config:
                 }]
             })
             ```
-            
+
         Note:
             If a factory name matches both a registered factory and a module
             path, the registered factory takes precedence.
@@ -672,9 +666,10 @@ class Config:
         """Get all registered factories.
 
         Returns:
-            Dictionary mapping factory names to factory instances
+            Dictionary mapping factory names to factory instances, as a snapshot
+            the caller may mutate freely.
         """
-        return self._registered_factories.copy()
+        return dict(self._registered_factories.items())
 
     def get_instance(
         self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any

@@ -39,9 +39,7 @@ async def _build(kind: str, tmp_path) -> object:
 async def test_metadata_write_fires(kind: str, tmp_path) -> None:
     backend = await _build(kind, tmp_path)
     events: list[dict] = []
-    backend.state_write_callbacks.register(
-        INGEST_METADATA_WRITE, events.append
-    )
+    backend.state_write_callbacks.register(INGEST_METADATA_WRITE, events.append)
 
     # set_ingestion_status is a metadata state write on every backend.
     await backend.set_ingestion_status("d1", "ready")
@@ -59,9 +57,7 @@ async def test_metadata_write_fires(kind: str, tmp_path) -> None:
 async def test_snapshot_write_fires(kind: str, tmp_path) -> None:
     backend = await _build(kind, tmp_path)
     events: list[dict] = []
-    backend.state_write_callbacks.register(
-        INGEST_SNAPSHOT_WRITE, events.append
-    )
+    backend.state_write_callbacks.register(INGEST_SNAPSHOT_WRITE, events.append)
 
     # put_file records a content snapshot on every backend.
     await backend.put_file("d1", "intro.md", b"# Intro\n")
@@ -87,9 +83,7 @@ async def test_zero_overhead_when_no_callbacks(kind: str, tmp_path) -> None:
 
 @pytest.mark.parametrize("kind", ["memory", "file"])
 @pytest.mark.asyncio
-async def test_state_write_callbacks_stable_identity(
-    kind: str, tmp_path
-) -> None:
+async def test_state_write_callbacks_stable_identity(kind: str, tmp_path) -> None:
     backend = await _build(kind, tmp_path)
     assert backend.state_write_callbacks is backend.state_write_callbacks
 
@@ -118,9 +112,7 @@ async def test_s3_metadata_write_fires(s3_kb_config) -> None:
     backend = await _s3_backend(s3_kb_config)
     try:
         events: list[dict] = []
-        backend.state_write_callbacks.register(
-            INGEST_METADATA_WRITE, events.append
-        )
+        backend.state_write_callbacks.register(INGEST_METADATA_WRITE, events.append)
 
         await backend.set_ingestion_status("d1", "ready")
 
@@ -141,9 +133,7 @@ async def test_s3_snapshot_write_fires(s3_kb_config) -> None:
     backend = await _s3_backend(s3_kb_config)
     try:
         events: list[dict] = []
-        backend.state_write_callbacks.register(
-            INGEST_SNAPSHOT_WRITE, events.append
-        )
+        backend.state_write_callbacks.register(INGEST_SNAPSHOT_WRITE, events.append)
 
         await backend.put_file("d1", "intro.md", b"# Intro\n")
 

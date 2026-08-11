@@ -181,13 +181,16 @@ class TestSchemaBasedTransformation:
     def test_basic_schema(self):
         """Test basic schema transformation."""
         transformer = ContentTransformer()
-        transformer.register_schema("pattern", {
-            "title_field": "name",
-            "description_field": "description",
-            "sections": [
-                {"field": "use_case", "heading": "When to Use"},
-            ],
-        })
+        transformer.register_schema(
+            "pattern",
+            {
+                "title_field": "name",
+                "description_field": "description",
+                "sections": [
+                    {"field": "use_case", "heading": "When to Use"},
+                ],
+            },
+        )
 
         data = {
             "name": "Chain of Thought",
@@ -204,12 +207,15 @@ class TestSchemaBasedTransformation:
     def test_schema_with_code_format(self):
         """Test schema with code format sections."""
         transformer = ContentTransformer()
-        transformer.register_schema("example", {
-            "title_field": "name",
-            "sections": [
-                {"field": "code", "heading": "Code", "format": "code", "language": "python"},
-            ],
-        })
+        transformer.register_schema(
+            "example",
+            {
+                "title_field": "name",
+                "sections": [
+                    {"field": "code", "heading": "Code", "format": "code", "language": "python"},
+                ],
+            },
+        )
 
         data = {
             "name": "Sample",
@@ -223,12 +229,15 @@ class TestSchemaBasedTransformation:
     def test_schema_with_list_format(self):
         """Test schema with list format sections."""
         transformer = ContentTransformer()
-        transformer.register_schema("task", {
-            "title_field": "name",
-            "sections": [
-                {"field": "items", "heading": "Items", "format": "list"},
-            ],
-        })
+        transformer.register_schema(
+            "task",
+            {
+                "title_field": "name",
+                "sections": [
+                    {"field": "items", "heading": "Items", "format": "list"},
+                ],
+            },
+        )
 
         data = {
             "name": "Shopping",
@@ -243,10 +252,13 @@ class TestSchemaBasedTransformation:
     def test_schema_with_metadata_fields(self):
         """Test schema with metadata fields."""
         transformer = ContentTransformer()
-        transformer.register_schema("pattern", {
-            "title_field": "name",
-            "metadata_fields": ["category", "difficulty"],
-        })
+        transformer.register_schema(
+            "pattern",
+            {
+                "title_field": "name",
+                "metadata_fields": ["category", "difficulty"],
+            },
+        )
 
         data = {
             "name": "Test",
@@ -261,12 +273,15 @@ class TestSchemaBasedTransformation:
     def test_schema_with_subsections(self):
         """Test schema with subsections format."""
         transformer = ContentTransformer()
-        transformer.register_schema("config", {
-            "title_field": "name",
-            "sections": [
-                {"field": "settings", "heading": "Settings", "format": "subsections"},
-            ],
-        })
+        transformer.register_schema(
+            "config",
+            {
+                "title_field": "name",
+                "sections": [
+                    {"field": "settings", "heading": "Settings", "format": "subsections"},
+                ],
+            },
+        )
 
         data = {
             "name": "App Config",
@@ -284,10 +299,13 @@ class TestSchemaBasedTransformation:
     def test_list_of_items_with_schema(self):
         """Test transforming a list of items with schema."""
         transformer = ContentTransformer()
-        transformer.register_schema("pattern", {
-            "title_field": "name",
-            "description_field": "description",
-        })
+        transformer.register_schema(
+            "pattern",
+            {
+                "title_field": "name",
+                "description_field": "description",
+            },
+        )
 
         data = [
             {"name": "First", "description": "First desc"},

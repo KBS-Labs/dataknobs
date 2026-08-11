@@ -117,30 +117,23 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
         try:
             from pyrate_limiter import SQLiteBucket
         except ImportError as e:
-            raise ImportError(
-                "SQLiteBucket requires pyrate-limiter with sqlite support"
-            ) from e
+            raise ImportError("SQLiteBucket requires pyrate-limiter with sqlite support") from e
         sqlite_config = config.get("sqlite", {})
         db_path = sqlite_config.get("db_path", "rate_limits.db")
         table = sqlite_config.get("table", "rate_limits")
-        return SQLiteBucket.init_from_file(
-            rates, db_path=db_path, table=table
-        )
+        return SQLiteBucket.init_from_file(rates, db_path=db_path, table=table)
 
     elif bucket_type == "redis":
         try:
             from pyrate_limiter import RedisBucket
         except ImportError as e:
-            raise ImportError(
-                "RedisBucket requires: pip install pyrate-limiter[redis]"
-            ) from e
+            raise ImportError("RedisBucket requires: pip install pyrate-limiter[redis]") from e
         redis_config = config.get("redis", {})
         try:
             from redis import Redis
         except ImportError as e:
             raise ImportError(
-                "Redis bucket requires the 'redis' package: "
-                "pip install 'dataknobs-common[redis]'"
+                "Redis bucket requires the 'redis' package: pip install 'dataknobs-common[redis]'"
             ) from e
         # Using sync Redis client so RedisBucket.init() returns synchronously.
         # SSL is inferred from the URL scheme: use rediss:// for TLS.
@@ -159,9 +152,7 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
         pg_config = config.get("postgres", {})
         pool = pg_config.get("pool")
         if pool is None:
-            raise ValueError(
-                "PostgreSQL bucket requires 'postgres.pool' (a psycopg pool instance)"
-            )
+            raise ValueError("PostgreSQL bucket requires 'postgres.pool' (a psycopg pool instance)")
         table = pg_config.get("table", "rate_limits")
         return PostgresBucket(pool, table, rates)
 
@@ -172,7 +163,7 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
         )
 
 
-class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
+class _CategoryBucketFactory(BucketFactory):
     """BucketFactory that creates per-category buckets with different rates.
 
     Each category gets its own bucket with the rates configured for that
@@ -186,11 +177,9 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
     ) -> None:
         self._parsed = parsed_config
         self._raw = raw_config
-        self._buckets: dict[str, AbstractBucket] = {}  # type: ignore[no-any-unimported]
+        self._buckets: dict[str, AbstractBucket] = {}
 
-    def wrap_item(
-        self, name: str, weight: int = 1
-    ) -> RateItem:  # type: ignore[no-any-unimported]
+    def wrap_item(self, name: str, weight: int = 1) -> RateItem:
         """Wrap an item name and weight into a RateItem.
 
         pyrate-limiter uses millisecond timestamps internally
@@ -208,8 +197,9 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
         return RateItem(name, now_ms, weight=weight)
 
     def get(
-        self, item: RateItem  # type: ignore[no-any-unimported]
-    ) -> AbstractBucket:  # type: ignore[no-any-unimported]
+        self,
+        item: RateItem,
+    ) -> AbstractBucket:
         """Get or create the bucket for a given item's category.
 
         Args:
@@ -220,9 +210,7 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
         """
         name = item.name
         if name not in self._buckets:
-            rates_config = self._parsed.categories.get(
-                name, self._parsed.default_rates
-            )
+            rates_config = self._parsed.categories.get(name, self._parsed.default_rates)
             pyrate_rates = _to_pyrate_rates(rates_config)
             self._buckets[name] = _create_bucket(pyrate_rates, self._raw)
             logger.debug(
@@ -322,9 +310,7 @@ class PyrateRateLimiter:
         Returns:
             True if the acquire succeeded, False otherwise.
         """
-        call = functools.partial(
-            self._limiter.try_acquire, name, weight=weight, blocking=False
-        )
+        call = functools.partial(self._limiter.try_acquire, name, weight=weight, blocking=False)
         # Concurrent offloaded calls are thread-safe: Limiter.try_acquire runs
         # its whole body — including the factory's lazy _buckets mutation in
         # get() — under the Limiter's internal RLock, so worker threads landing
@@ -402,9 +388,7 @@ class PyrateRateLimiter:
             reset_after=0.0,
         )
 
-    def _release_buckets_sync(
-        self, buckets: list[Any]
-    ) -> None:
+    def _release_buckets_sync(self, buckets: list[Any]) -> None:
         """Close the transports of buckets WE allocated (ownership-aware).
 
         Releases only resources this limiter created in ``_create_bucket``:
@@ -442,9 +426,7 @@ class PyrateRateLimiter:
                 # Best-effort teardown: attempt every bucket, but surface the
                 # failure (WARNING, not DEBUG) so a stuck handle is visible
                 # without enabling debug logging globally.
-                logger.warning(
-                    "Error releasing pyrate %s bucket", bucket_type, exc_info=True
-                )
+                logger.warning("Error releasing pyrate %s bucket", bucket_type, exc_info=True)
 
     async def _release_buckets(self, buckets: list[Any]) -> None:
         """Release bucket transports off the loop for blocking backends.

@@ -126,9 +126,7 @@ class TestTupleReturnHandling:
         def return_false(data, context=None):
             return False
 
-        with create_advanced_fsm(
-            config, custom_functions={"return_false": return_false}
-        ) as fsm:
+        with create_advanced_fsm(config, custom_functions={"return_false": return_false}) as fsm:
             ctx = fsm.create_context({})
 
             fsm.execute_step_sync(ctx)
@@ -142,9 +140,7 @@ class TestTupleReturnHandling:
         def return_true(data, context=None):
             return True
 
-        with create_advanced_fsm(
-            config, custom_functions={"return_true": return_true}
-        ) as fsm:
+        with create_advanced_fsm(config, custom_functions={"return_true": return_true}) as fsm:
             ctx = fsm.create_context({})
 
             fsm.execute_step_sync(ctx)
@@ -175,9 +171,7 @@ class TestTupleReturnHandling:
         def return_none(data, context=None):
             return None
 
-        with create_advanced_fsm(
-            config, custom_functions={"return_none": return_none}
-        ) as fsm:
+        with create_advanced_fsm(config, custom_functions={"return_none": return_none}) as fsm:
             ctx = fsm.create_context({})
 
             fsm.execute_step_sync(ctx)
@@ -191,9 +185,7 @@ class TestTupleReturnHandling:
         def return_zero(data, context=None):
             return 0
 
-        with create_advanced_fsm(
-            config, custom_functions={"return_zero": return_zero}
-        ) as fsm:
+        with create_advanced_fsm(config, custom_functions={"return_zero": return_zero}) as fsm:
             ctx = fsm.create_context({})
 
             fsm.execute_step_sync(ctx)
@@ -233,7 +225,6 @@ class TestTupleReturnHandling:
         with create_advanced_fsm(
             config, custom_functions={"check_condition": check_condition}
         ) as fsm:
-
             # Test without approval - should not transition
             ctx = fsm.create_context({"approved": False})
             fsm.execute_step_sync(ctx)
@@ -257,7 +248,6 @@ class TestDataAccessInConditions:
         config = make_inline_condition_config("return data.get('value') == 'correct'")
 
         with create_advanced_fsm(config) as fsm:
-
             # Test with wrong value - should not transition
             ctx = fsm.create_context({"value": "wrong"})
             fsm.execute_step_sync(ctx)
@@ -271,9 +261,7 @@ class TestDataAccessInConditions:
     def test_inline_condition_with_missing_data_key(self):
         """Verify inline conditions handle missing data keys gracefully."""
         # Using .get() should handle missing keys
-        config = make_inline_condition_config(
-            "return data.get('nonexistent') is not None"
-        )
+        config = make_inline_condition_config("return data.get('nonexistent') is not None")
 
         with create_advanced_fsm(config) as fsm:
             ctx = fsm.create_context({})  # Empty data
@@ -289,7 +277,6 @@ class TestDataAccessInConditions:
         )
 
         with create_advanced_fsm(config) as fsm:
-
             # Test without nested data - should not transition
             ctx = fsm.create_context({"user": {}})
             fsm.execute_step_sync(ctx)

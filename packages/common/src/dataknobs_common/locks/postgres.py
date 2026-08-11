@@ -105,6 +105,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         connection_string: str | None = None,
         *,
         config: PostgresLockConfig | Mapping[str, Any] | None = None,
+        _components: Mapping[str, Any] | None = None,
     ) -> None:
         """Resolve and store the Postgres DSN.
 
@@ -152,12 +153,13 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
             merged: dict[str, Any] = dict(config or {})
             merged["connection_string"] = connection_string
             config = merged
-        super().__init__(config=config)
+        super().__init__(config=config, _components=_components)
 
     @classmethod
     def from_config(
         cls,
         config: Mapping[str, Any] | StructuredConfig,
+        **components: Any,
     ) -> PostgresAdvisoryLock:
         """Construct from a config dict or typed config.
 
@@ -167,8 +169,14 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         slot rather than the legacy ``connection_string`` positional.
         Reuses the inherited ``_coerce_config`` guard so a config of the
         wrong ``StructuredConfig`` subclass raises a clear ``TypeError``.
+
+        Injected collaborators reach ``self.components`` through the
+        mixin's ``_components`` channel, as they do on the base method.
+        Omitting ``**components`` here narrowed the override, which left
+        this class the one member of the family to raise ``TypeError``
+        when a registry factory forwarded one.
         """
-        return cls(config=cls._coerce_config(config))
+        return cls(config=cls._coerce_config(config), _components=components or None)
 
     def _setup(self) -> None:
         self._dsn: str = self._config.connection_string
@@ -191,9 +199,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         unsigned = int.from_bytes(digest, "big", signed=False)
         return unsigned - (1 << 63)  # → signed 64-bit, stable forever
 
-    async def acquire(
-        self, key: str, *, timeout: float | None = None
-    ) -> bool:
+    async def acquire(self, key: str, *, timeout: float | None = None) -> bool:
         """Acquire ``key`` cross-replica. See :meth:`DistributedLock.acquire`.
 
         Opens a dedicated session connection and takes a session-level
@@ -217,17 +223,11 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
                 await conn.execute("SELECT pg_advisory_lock($1)", lock_id)
                 got = True
             else:
-                got = bool(
-                    await conn.fetchval(
-                        "SELECT pg_try_advisory_lock($1)", lock_id
-                    )
-                )
+                got = bool(await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_id))
                 if not got:
                     try:
                         await asyncio.wait_for(
-                            conn.execute(
-                                "SELECT pg_advisory_lock($1)", lock_id
-                            ),
+                            conn.execute("SELECT pg_advisory_lock($1)", lock_id),
                             timeout,
                         )
                         got = True
@@ -262,9 +262,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         if conn is None:
             return
         try:
-            await conn.execute(
-                "SELECT pg_advisory_unlock($1)", self._key_to_bigint(key)
-            )
+            await conn.execute("SELECT pg_advisory_unlock($1)", self._key_to_bigint(key))
         except Exception:
             logger.warning(
                 "pg_advisory_unlock failed for key=%s; closing the "
@@ -275,9 +273,7 @@ class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
         finally:
             await conn.close()
 
-    def hold(
-        self, key: str, *, timeout: float | None = None
-    ) -> AbstractAsyncContextManager[bool]:
+    def hold(self, key: str, *, timeout: float | None = None) -> AbstractAsyncContextManager[bool]:
         """Async CM wrapping acquire/release. See the protocol."""
         return _hold(self, key, timeout)
 

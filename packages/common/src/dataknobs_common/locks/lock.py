@@ -65,9 +65,7 @@ class DistributedLock(Protocol):
         """Release ``key``. No-op if not held by this instance."""
         ...
 
-    def hold(
-        self, key: str, *, timeout: float | None = None
-    ) -> AbstractAsyncContextManager[bool]:
+    def hold(self, key: str, *, timeout: float | None = None) -> AbstractAsyncContextManager[bool]:
         """Async context manager wrapping acquire/release.
 
         ``async with lock.hold(key) as got:`` — ``got`` is the
@@ -83,9 +81,7 @@ class DistributedLock(Protocol):
 
 
 @asynccontextmanager
-async def _hold(
-    lock: DistributedLock, key: str, timeout: float | None
-) -> AsyncIterator[bool]:
+async def _hold(lock: DistributedLock, key: str, timeout: float | None) -> AsyncIterator[bool]:
     """Shared ``hold()`` implementation reused by every backend.
 
     ``acquire`` → yield the acquired flag → ``release`` in ``finally``

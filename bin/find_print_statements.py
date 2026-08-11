@@ -81,9 +81,9 @@ class PrintStatementFinder(ast.NodeVisitor):
         # Check if this is a print() call
         is_print = False
 
-        if isinstance(node.func, ast.Name) and node.func.id == 'print':
+        if isinstance(node.func, ast.Name) and node.func.id == "print":
             is_print = True
-        elif isinstance(node.func, ast.Attribute) and node.func.attr == 'print':
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "print":
             # Could be something like console.print, but we'll report it
             is_print = True
 
@@ -95,10 +95,7 @@ class PrintStatementFinder(ast.NodeVisitor):
 
             # Check if the print call uses the 'file' argument
             # If it does, it's considered proper usage and should be ignored
-            has_file_arg = any(
-                keyword.arg == 'file'
-                for keyword in node.keywords
-            )
+            has_file_arg = any(keyword.arg == "file" for keyword in node.keywords)
 
             if not has_file_arg:
                 # Only flag prints that don't specify a file argument
@@ -120,7 +117,7 @@ def find_prints_in_file(filepath: Path) -> list[tuple[int, int, str]]:
         List of tuples containing (line_number, column_offset, filepath)
     """
     try:
-        with open(filepath, encoding='utf-8') as f:
+        with open(filepath, encoding="utf-8") as f:
             source = f.read()
 
         # Parse the source code into an AST
@@ -144,7 +141,10 @@ def find_prints_in_file(filepath: Path) -> list[tuple[int, int, str]]:
 def main() -> None:
     """Main entry point for the script."""
     if len(sys.argv) < 2:
-        print("Usage: find_print_statements.py <file_or_directory> [file_or_directory...]", file=sys.stderr)
+        print(
+            "Usage: find_print_statements.py <file_or_directory> [file_or_directory...]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     all_prints = []
@@ -158,13 +158,13 @@ def main() -> None:
 
         # Collect Python files to check
         if path.is_file():
-            if path.suffix == '.py':
+            if path.suffix == ".py":
                 files = [path]
             else:
                 continue
         else:
             # Find all Python files in the directory
-            files = list(path.rglob('*.py'))
+            files = list(path.rglob("*.py"))
 
         # Find prints in each file
         for file in files:
@@ -179,7 +179,7 @@ def main() -> None:
         for line_num, col_offset, filepath in all_prints:
             # Read the actual line content
             try:
-                with open(filepath, encoding='utf-8') as f:
+                with open(filepath, encoding="utf-8") as f:
                     lines = f.readlines()
                     if line_num <= len(lines):
                         line_content = lines[line_num - 1].strip()
@@ -194,5 +194,5 @@ def main() -> None:
         sys.exit(0)  # Exit successfully if no prints found
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

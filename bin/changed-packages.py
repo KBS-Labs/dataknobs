@@ -67,8 +67,9 @@ ALL_PACKAGES = sorted(DEPENDENCIES.keys())
 # cannot import Python), and tests/test_toolchain_consistency.py.
 #
 # They used to be four hand-maintained lists, and they disagreed. That is how a
-# change to mypy.ini could match no CI pattern, leave every artifact hash
-# untouched, and report green through both mechanisms meant to catch it.
+# change to a type-checker config could match no CI pattern, leave every
+# artifact hash untouched, and report green through both mechanisms meant to
+# catch it.
 #
 # Splitting by blast radius is what keeps the fix from overcorrecting. Marking
 # everything global would re-run ten package suites because someone fixed a
@@ -77,7 +78,6 @@ _GLOBAL_QUALITY_INPUTS = [
     "pyproject.toml",  # root ruff + mypy config, and the dependency set
     "uv.lock",  # the resolved versions every package is tested against
     "conftest.py",  # root fixtures, on the path of every test run
-    "mypy.ini",  # bin/validate.sh type-checks against it on one branch
     "pytest.ini",  # testpaths, addopts, and asyncio_mode for every run
     ".python-version",  # the interpreter itself
     # The two scripts that *are* the lint and test steps. Every package's
@@ -167,6 +167,7 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".gitignore",  # what three artifact-contract guards are a verdict about
     ".gitattributes",  # ditto, for the merge-driver guard
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
+    ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
 ]
 
 # The inputs to the three documentation checks the gate records: the site build,
@@ -465,9 +466,7 @@ def detect_changes(base_ref: str = "main") -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Detect changed packages for targeted testing"
-    )
+    parser = argparse.ArgumentParser(description="Detect changed packages for targeted testing")
     parser.add_argument(
         "--base-ref",
         default="main",

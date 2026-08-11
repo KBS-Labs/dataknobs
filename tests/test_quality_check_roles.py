@@ -1,0 +1,357 @@
+"""The two roles are separate: checkers check, and one gate produces evidence.
+
+``bin/run-quality-checks.sh`` is a checker. ``bin/dk pr`` is the gate — it runs
+the same checks and additionally writes ``.quality-artifacts/``, the evidence CI
+verifies against the committed tree.
+
+Three of the checker's four modes used to write that directory, including the
+no-argument default, and the comment CI leaves on a failed gate told the
+developer to run exactly that form. So the documented remedy for a red gate was
+the command that rewrites the evidence the gate reads: run it, commit what came
+out, and the check passes because the artifacts now agree with the tree — which
+is the one thing they were never supposed to be able to do on their own.
+
+Nothing about that was visible. A checker that also writes produces no error, no
+warning, and no diff a reviewer would question; the only symptom is a gate that
+has stopped being able to fail.
+
+Two properties, and they are load-bearing together rather than separately:
+
+1. **Reachability** — the artifacts directory is named in exactly one place, the
+   line that resolves ``OUTPUT_DIR``. Every write in the script targets
+   ``OUTPUT_DIR``, so a run that does not resolve it to the artifacts directory
+   has no way to name it at all.
+2. **Resolution** — ``OUTPUT_DIR`` is the artifacts directory only under
+   ``--emit-artifacts``, in every mode, asked through the script's own
+   resolution rather than re-derived here.
+
+Either alone is satisfiable while the property fails: a correct resolution does
+not stop a second write path from naming the directory directly, and an
+unreachable name does not stop the resolution from pointing at it in dev mode.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from tests._workspace import ROOT, tracked_shell_files
+
+#: The checker under test, and the gate that wraps it.
+CHECKER = ROOT / "bin" / "run-quality-checks.sh"
+GATE = ROOT / "bin" / "dk"
+
+#: The directory whose contents CI reads back.
+ARTIFACTS = ROOT / ".quality-artifacts"
+
+#: Every scope selector the checker accepts, plus the bare invocation. Each is
+#: probed, because the defect was not that one mode wrote artifacts — it was
+#: that the *default* did, and the three that did were the ones nobody thought
+#: of as artifact modes.
+CHECK_ONLY_INVOCATIONS = (
+    (),
+    ("--pr",),
+    ("--all",),
+    ("--full",),
+    ("--dev",),
+    ("--dev", "data"),
+    ("data",),
+)
+
+#: Two ways a line writes the directory it names.
+#:
+#: First, a shell construct that creates or replaces a file, or moves the
+#: working directory somewhere a later relative write would land. ``cd`` belongs
+#: here: the coverage step changes directory and then writes relative paths, so
+#: a ``cd`` to the artifacts directory is a write path with no artifacts
+#: directory in the writing line at all.
+#:
+#: Second, the path handed to a tool as the value of a flag or a variable —
+#: ``--junit-xml=.quality-artifacts/...``. The first alternative alone does not
+#: see this, and missing it is not hypothetical: it is why
+#: ``run-integration-tests.sh`` wrote the artifacts directory on every run while
+#: a guard for exactly that reported green. A write does not have to be spelled
+#: in shell to be a write; it only has to be a path something opens.
+#:
+#: A quoted mention with no ``=`` in front is prose — "Directory
+#: .quality-artifacts/ not found" — and stays unflagged, which is what keeps the
+#: exemption list down to the files that genuinely own the directory.
+WRITE_CONTEXT_RE = re.compile(
+    r"(?:^|\s|\|)(?:>>?|mv|cp|mkdir|touch|tee|rm|ln|cd)\s"
+    r"|=[\"']?\.?/?\.quality-artifacts"
+)
+
+#: A read of the variable, in either spelling. The assignment is not a read.
+ARTIFACTS_READ_RE = re.compile(r"\$\{?ARTIFACTS_DIR\b")
+
+#: What that single read is allowed to be.
+ARTIFACTS_READ_SITE = 'OUTPUT_DIR="$ARTIFACTS_DIR"'
+
+
+def _checker_lines() -> list[tuple[int, str]]:
+    return list(enumerate(CHECKER.read_text(encoding="utf-8").splitlines(), start=1))
+
+
+def _output_dir_for(*args: str) -> subprocess.CompletedProcess[str]:
+    """Ask the checker where this invocation's writes would land.
+
+    Through ``--print-output-dir``, which resolves and prints without running a
+    check — the shape ``validate.sh --print-targets`` already uses here. Asking
+    the script rather than restating its rule is the point: a guard that
+    recomputes the answer agrees with itself, not with the script.
+    """
+    return subprocess.run(
+        [str(CHECKER), *args, "--print-output-dir"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        # The refusal case exits non-zero on purpose, and a test asserts it.
+        check=False,
+    )
+
+
+# --------------------------------------------------------------------------
+# Reachability
+# --------------------------------------------------------------------------
+
+
+def test_the_artifacts_directory_is_named_once_where_it_is_resolved():
+    """One read, on the line that resolves ``OUTPUT_DIR``.
+
+    This is what makes check-only a property of the code rather than a claim
+    about it. Gating each write site on a flag would put the property in the
+    hands of whoever adds the next write; leaving one name means a run that did
+    not ask for the artifacts directory cannot reach it however it is edited.
+    """
+    reads = [
+        (n, line.strip())
+        for n, line in _checker_lines()
+        if ARTIFACTS_READ_RE.search(line) and not line.lstrip().startswith("#")
+    ]
+
+    assert len(reads) == 1, (
+        f"bin/run-quality-checks.sh reads $ARTIFACTS_DIR {len(reads)} time(s):\n"
+        + "\n".join(f"  - line {n}: {text}" for n, text in reads)
+        + f"\n  Expected exactly one, {ARTIFACTS_READ_SITE!r}. Every other write "
+        "must target $OUTPUT_DIR, which is the artifacts directory only under "
+        "--emit-artifacts."
+    )
+
+    _, text = reads[0]
+    assert ARTIFACTS_READ_SITE in text, (
+        f"the one read of $ARTIFACTS_DIR is {text!r}, not the OUTPUT_DIR "
+        "resolution — so something other than the resolution can reach the "
+        "artifacts directory"
+    )
+
+
+#: Shell files allowed to name the artifacts directory in a write context, and
+#: why. Each is an exemption from the *checker* rule granted because the file is
+#: not a checker — not a style waiver, and not somewhere to file a checker that
+#: has become inconvenient to fix.
+LITERAL_WRITE_EXEMPT = {
+    "bin/dk": "the gate; `dk clean` removes the directory when asked to",
+}
+
+
+def _literal_write_lines(name: str) -> list[str]:
+    """Lines in ``name`` that build a path from the literal, in a write context."""
+    return [
+        f"{name}:{n}: {line.strip()}"
+        for n, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), start=1)
+        if ".quality-artifacts" in line
+        and not line.lstrip().startswith("#")
+        and not line.lstrip().startswith("ARTIFACTS_DIR=")
+        and WRITE_CONTEXT_RE.search(line)
+    ]
+
+
+def test_no_write_names_the_artifacts_directory_literally():
+    """The single-read rule is only worth having if the path has one spelling.
+
+    ``.quality-artifacts`` written out longhand routes around the variable and
+    around the resolution with it. Mentioning it in a comment or a message is
+    fine — the directory is what those are about.
+
+    Every tracked shell file, not just the checker. Scoped to
+    ``run-quality-checks.sh`` this looked like it held while
+    ``run-integration-tests.sh`` — itself a checker, and one nothing in ``bin/``
+    invokes, so a developer runs it directly — passed
+    ``--junit-xml=.quality-artifacts/...`` to pytest unconditionally. Running it
+    created the artifacts directory on a tree where the gate had never run,
+    which is enough to get past the first check in
+    ``validate-quality-artifacts.sh``. Those junit files stayed out of the
+    signature only because ``.gitignore`` excludes them and the signature
+    enumerates with ``--exclude-standard`` — a bound nothing stated and nothing
+    tested, holding by luck, one ``!`` rule away from not holding.
+    """
+    offenders = [
+        line
+        for name in tracked_shell_files()
+        if name not in LITERAL_WRITE_EXEMPT
+        for line in _literal_write_lines(name)
+    ]
+
+    assert not offenders, (
+        "these build a path from the literal .quality-artifacts:\n"
+        + "\n".join(f"  - {o}" for o in offenders)
+        + "\n  A checker writes the diagnostics tier — ask "
+        "`run-quality-checks.sh --print-output-dir` for it. Only these may name "
+        f"the artifacts directory: {sorted(LITERAL_WRITE_EXEMPT)}."
+    )
+
+
+def test_every_literal_write_exemption_is_still_needed():
+    """An exemption that matches nothing reads as a rule with a known hole.
+
+    The rule the suppression guards already apply repository-wide: a waiver
+    whose site has been fixed or moved is worse than no waiver, because it goes
+    on describing an exception that is not there and the next reader budgets
+    for it.
+    """
+    unused = [
+        f"{name} ({'no such file' if not (ROOT / name).exists() else 'no write-context mention left'})"
+        for name in LITERAL_WRITE_EXEMPT
+        if not (ROOT / name).exists() or not _literal_write_lines(name)
+    ]
+
+    assert not unused, (
+        "LITERAL_WRITE_EXEMPT names files that no longer need the exemption:\n"
+        + "\n".join(f"  - {u}" for u in unused)
+        + "\n  Remove the entry."
+    )
+
+
+# --------------------------------------------------------------------------
+# Resolution
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("args", CHECK_ONLY_INVOCATIONS, ids=lambda a: " ".join(a) or "(no args)")
+def test_a_run_without_the_flag_writes_where_nothing_can_be_committed(args: tuple[str, ...]):
+    """Every mode, because the default was one of the three that wrote.
+
+    Two properties, and the second is not "outside the repository" — that was
+    the first draft's shape, when a check-only run went to ``mktemp -d``. It
+    reads as the stronger claim and is the weaker one: it is satisfied by
+    throwing the output away, which is what that draft did, leaving the only
+    consumer of a check-only run's diagnostics with nothing to read unless the
+    developer had run the gate instead.
+
+    What has to hold is that nothing a checker writes can reach the committed
+    tree. Git-ignored says exactly that, and permits the output to live in the
+    working tree where a developer and ``bin/diagnose-quality-failures.sh`` can
+    find it.
+    """
+    result = _output_dir_for(*args)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    target = Path(result.stdout.strip())
+    assert target != ARTIFACTS, (
+        f"bin/run-quality-checks.sh {' '.join(args) or '(no args)'} writes to "
+        f"{ARTIFACTS.name}/ without --emit-artifacts"
+    )
+
+    if ROOT not in target.parents:
+        return  # outside the tree entirely; git has no say over it
+
+    # Asked about a file the run would write, not about the directory. The
+    # question is whether a checker's output can be committed, and a file is
+    # what gets committed; asking about the directory also answers a different
+    # question badly, because a trailing-slash ignore pattern is directory-only
+    # and `check-ignore` cannot tell that an absent path is a directory — so the
+    # probe reports "not ignored" for a directory that is, until the first run
+    # creates it.
+    probe = target / "quality-summary.json"
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", str(probe)],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    assert ignored.returncode == 0, (
+        f"bin/run-quality-checks.sh {' '.join(args) or '(no args)'} writes to "
+        f"{target}, which is inside the repository and not git-ignored — so a "
+        "checker's output can be committed"
+    )
+
+
+def test_the_flag_resolves_to_the_artifacts_directory():
+    """The other direction, so the fix cannot be "never write anything"."""
+    result = _output_dir_for("--pr", "--emit-artifacts")
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert Path(result.stdout.strip()) == ARTIFACTS
+
+
+def test_the_flag_is_refused_where_it_would_write_a_partial_set():
+    """Dev mode runs none of the steps that produce the artifacts.
+
+    Accepting the flag there would leave a directory holding whichever files
+    happened to fall out of a quick run — which still carries a signature, and
+    so still passes the check that exists to notice a stale one.
+    """
+    result = _output_dir_for("--dev", "--emit-artifacts")
+    assert result.returncode != 0, (
+        "--dev --emit-artifacts was accepted; it can only half-write the set"
+    )
+
+
+# --------------------------------------------------------------------------
+# Who passes the flag
+# --------------------------------------------------------------------------
+
+
+def _dk_checker_invocations() -> list[str]:
+    """Lines in ``bin/dk`` that run the checker."""
+    return [
+        line.strip()
+        for line in GATE.read_text(encoding="utf-8").splitlines()
+        if "run-quality-checks.sh" in line and not line.lstrip().startswith("#")
+    ]
+
+
+def test_the_pr_commands_emit_and_the_check_commands_do_not():
+    """``bin/dk pr`` is the gate; ``bin/dk check`` is a checker.
+
+    Read off the scope selector each invocation passes rather than off the
+    command name above it, so a new PR-preparation verb that forgets the flag
+    fails here instead of shipping a command that reports a clean gate and
+    leaves the evidence untouched.
+
+    Flags are matched as whole tokens, not as substrings. ``"--pr" in line`` is
+    also true of ``--print-output-dir``, so a resolution-only invocation — one
+    that runs no check and writes nothing — read as a gate-scope run missing its
+    flag, and this reported a violation against a line that could not have one.
+    """
+    invocations = _dk_checker_invocations()
+    assert invocations, "bin/dk no longer invokes bin/run-quality-checks.sh"
+
+    violations = []
+    for line in invocations:
+        tokens = set(re.findall(r"--[a-z-]+", line))
+        emits = "--emit-artifacts" in tokens
+        gate_scope = bool(tokens & {"--pr", "--all", "--full"})
+        if gate_scope and not emits:
+            violations.append(f"produces no artifacts: {line}")
+        if not gate_scope and emits:
+            violations.append(f"emits artifacts outside a PR scope: {line}")
+
+    assert not violations, "bin/dk:\n" + "\n".join(f"  - {v}" for v in violations)
+
+
+def test_nothing_else_in_the_workspace_passes_the_flag():
+    """One gate. A second one is a second thing that can rewrite the evidence."""
+    offenders = [
+        f"{name}:{n}: {line.strip()}"
+        for name in tracked_shell_files()
+        if name not in {"bin/dk", "bin/run-quality-checks.sh"}
+        for n, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1)
+        if "--emit-artifacts" in line and not line.lstrip().startswith("#")
+    ]
+
+    assert not offenders, "only bin/dk may ask for artifacts:\n" + "\n".join(
+        f"  - {o}" for o in offenders
+    )

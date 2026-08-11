@@ -69,14 +69,16 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     # mixin's base set (does not replace it).
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
         KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
-        | frozenset({
-            Capability.TENANT_SCOPED_STATE,
-            Capability.SNAPSHOT_ISOLATION,
-            # Conditional state writes are trivially race-free in a
-            # single-process backend: the version-counter check and
-            # increment in set_ingestion_status run synchronously.
-            Capability.CONDITIONAL_WRITE,
-        })
+        | frozenset(
+            {
+                Capability.TENANT_SCOPED_STATE,
+                Capability.SNAPSHOT_ISOLATION,
+                # Conditional state writes are trivially race-free in a
+                # single-process backend: the version-counter check and
+                # increment in set_ingestion_status run synchronously.
+                Capability.CONDITIONAL_WRITE,
+            }
+        )
     )
 
     def __init__(self) -> None:
@@ -160,9 +162,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # Auto-detect content type. The first mimetypes lookup lazily
         # reads the system mime database from disk, so offload it.
         if content_type is None:
-            content_type = await asyncio.to_thread(
-                self._guess_content_type, path
-            )
+            content_type = await asyncio.to_thread(self._guess_content_type, path)
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()
@@ -247,9 +247,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         return True
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[KnowledgeFile]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
         if domain_id not in self._file_metadata:
             return []
@@ -269,9 +267,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Knowledge Base Operations ---
 
-    async def create_kb(
-        self, domain_id: str, metadata: dict | None = None
-    ) -> KnowledgeBaseInfo:
+    async def create_kb(self, domain_id: str, metadata: dict | None = None) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
         if domain_id in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' already exists")
@@ -298,9 +294,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         return kb_info
 
-    def _info_overlay_key(
-        self, domain_id: str, ctx: TenantContext | None
-    ) -> str | None:
+    def _info_overlay_key(self, domain_id: str, ctx: TenantContext | None) -> str | None:
         """Per-tenant overlay key, or ``None`` for the single-tenant case.
 
         Returns ``None`` when the context contributes no state prefix
@@ -372,9 +366,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Ingestion Status ---
 
-    def _state_version_key(
-        self, domain_id: str, ctx: TenantContext | None
-    ) -> str:
+    def _state_version_key(self, domain_id: str, ctx: TenantContext | None) -> str:
         """State-version counter key (``{state-prefix}{domain_id}``).
 
         Matches the snapshot store's ``state_key`` shape: the bare
@@ -397,9 +389,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         if domain_id not in self._kb_info:
             return None
-        counter = self._state_versions.get(
-            self._state_version_key(domain_id, ctx)
-        )
+        counter = self._state_versions.get(self._state_version_key(domain_id, ctx))
         return str(counter) if counter is not None else None
 
     async def set_ingestion_status(
@@ -434,13 +424,10 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         version_key = self._state_version_key(domain_id, ctx)
         current_counter = self._state_versions.get(version_key)
-        current_token = (
-            str(current_counter) if current_counter is not None else None
-        )
+        current_token = str(current_counter) if current_counter is not None else None
         if expected_version is not None and expected_version != current_token:
             raise ConcurrencyError(
-                "Knowledge-base state document was modified by a "
-                "concurrent writer",
+                "Knowledge-base state document was modified by a concurrent writer",
                 context={
                     "domain_id": domain_id,
                     "expected_version": expected_version,
@@ -454,9 +441,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         else:
             kb_info = self._tenant_info.get(overlay_key)
             if kb_info is None:
-                kb_info = KnowledgeBaseInfo.from_dict(
-                    {"domain_id": domain_id}
-                )
+                kb_info = KnowledgeBaseInfo.from_dict({"domain_id": domain_id})
                 self._tenant_info[overlay_key] = kb_info
 
         kb_info.ingestion_status = normalize_ingestion_status(status)
@@ -523,9 +508,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     # additionally retains a per-version snapshot so it produces minimal
     # diffs rather than the mixin's full-set default.
 
-    async def _record_snapshot(
-        self, domain_id: str, *, ctx: TenantContext | None = None
-    ) -> None:
+    async def _record_snapshot(self, domain_id: str, *, ctx: TenantContext | None = None) -> None:
         """Snapshot the current file→checksum map under its version.
 
         Called after every mutation so a later
@@ -574,7 +557,6 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         snaps = self._snapshots.get(state_key, {})
         if version not in snaps:
             raise InvalidVersionError(
-                f"Version {version!r} is not retained for domain "
-                f"{domain_id!r}"
+                f"Version {version!r} is not retained for domain {domain_id!r}"
             )
         return snaps[version]

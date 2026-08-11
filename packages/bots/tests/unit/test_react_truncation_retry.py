@@ -158,9 +158,7 @@ def _make_provider(responses: list[Any]) -> EchoProvider:
 
 
 async def _make_manager(provider: EchoProvider) -> ConversationManager:
-    library = ConfigPromptLibrary(
-        {"system": {"assistant": {"template": "You are a test bot."}}}
-    )
+    library = ConfigPromptLibrary({"system": {"assistant": {"template": "You are a test bot."}}})
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     mgr = await ConversationManager.create(
@@ -196,9 +194,7 @@ class TestTruncationRetrySucceeds:
             },
             main_responses=[
                 # iter0: truncated mid-tool-call — triggers the retry.
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 # retry at the larger budget: a clean, complete tool call.
                 tool_call_response("echo_tool", {"message": "whole"}),
                 # next iteration returns the final answer.
@@ -234,13 +230,9 @@ class TestTruncationRetryStillTruncatedTerminal:
             },
             main_responses=[
                 # iter0: truncated — triggers the retry.
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 # retry: still truncated — abandon, no second retry.
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 # terminal synthesis without tools.
                 text_response("Synthesized answer"),
             ],
@@ -271,9 +263,7 @@ class TestTruncationRetryDefaultOffUnchanged:
                 "reasoning": {"strategy": "react"},
             },
             main_responses=[
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 text_response("Synthesized answer"),
             ],
             tools=[tool],
@@ -303,9 +293,7 @@ class TestTruncationRetryBranchesOffTruncatedNode:
                 },
             },
             main_responses=[
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 tool_call_response("echo_tool", {"message": "whole"}),
                 text_response("Recovered answer"),
             ],
@@ -319,9 +307,7 @@ class TestTruncationRetryBranchesOffTruncatedNode:
             # abandon-only path's synthesis call and wouldn't discriminate the
             # branch_from mechanic.
             retry_call = harness.provider.calls[1]
-            assert (retry_call["config_overrides"] or {}).get(
-                "max_tokens"
-            ) == RETRY_BUDGET
+            assert (retry_call["config_overrides"] or {}).get("max_tokens") == RETRY_BUDGET
             # Because the loop branched off the truncated node, the retry's
             # request history excludes the incomplete tool_use — no dangling
             # tool_use reaches the provider.  Removing branch_from would leave
@@ -341,18 +327,14 @@ class TestTruncationRetryMonolithic:
     async def test_generate_retry_succeeds(self) -> None:
         provider = _make_provider(
             [
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 tool_call_response("echo_tool", {"message": "whole"}),
                 text_response("Recovered answer"),
             ]
         )
         manager = await _make_manager(provider)
         tool = EchoTool()
-        strategy = ReActReasoning(
-            ReActReasoningConfig(truncation_retry_max_tokens=RETRY_BUDGET)
-        )
+        strategy = ReActReasoning(ReActReasoningConfig(truncation_retry_max_tokens=RETRY_BUDGET))
 
         response = await strategy.generate(manager, provider, tools=[tool])
 
@@ -364,9 +346,7 @@ class TestTruncationRetryMonolithic:
     async def test_generate_default_off_no_retry(self) -> None:
         provider = _make_provider(
             [
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 text_response("Synthesized answer"),
             ]
         )
@@ -408,9 +388,7 @@ class TestTruncationRetryConfigValidation:
         # dataclass, so __post_init__ fires there too — a YAML typo is caught
         # at parse time, not at the first truncated turn.
         with pytest.raises(ValueError, match="must be a positive integer"):
-            ReActReasoningConfig.from_dict(
-                {"truncation_retry_max_tokens": 0}
-            )
+            ReActReasoningConfig.from_dict({"truncation_retry_max_tokens": 0})
 
     def test_positive_budget_accepted(self) -> None:
         cfg = ReActReasoningConfig(truncation_retry_max_tokens=RETRY_BUDGET)
@@ -452,9 +430,7 @@ class TestTruncationRetryErrorDegrades:
             },
             main_responses=[
                 # iter0: truncated — triggers the retry.
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 # retry: the provider raises (rate-limit / network / bad call).
                 ErrorResponse(RuntimeError("provider unavailable")),
                 # terminal synthesis still runs — the turn degrades, not aborts.
@@ -499,18 +475,14 @@ class TestTruncationRetryMergesOverrides:
     async def test_retry_call_carries_caller_override_and_budget(self) -> None:
         provider = _make_provider(
             [
-                tool_call_response(
-                    "echo_tool", {"message": "part"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "part"}, truncated=True),
                 tool_call_response("echo_tool", {"message": "whole"}),
                 text_response("Recovered answer"),
             ]
         )
         manager = await _make_manager(provider)
         tool = EchoTool()
-        strategy = ReActReasoning(
-            ReActReasoningConfig(truncation_retry_max_tokens=RETRY_BUDGET)
-        )
+        strategy = ReActReasoning(ReActReasoningConfig(truncation_retry_max_tokens=RETRY_BUDGET))
 
         await strategy.generate(
             manager,

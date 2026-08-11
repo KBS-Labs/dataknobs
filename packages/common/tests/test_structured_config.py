@@ -95,9 +95,7 @@ class TestStructuredConfigFromDict:
         assert cfg.optional_default == 0
 
     def test_field_projection_preserves_explicit_none(self) -> None:
-        cfg = _Simple.from_dict(
-            {"required": "x", "optional_none": None}
-        )
+        cfg = _Simple.from_dict({"required": "x", "optional_none": None})
         assert cfg.optional_none is None
 
     def test_default_factory_runs(self) -> None:
@@ -257,9 +255,7 @@ class TestNestedComposition:
         assert cfg.leaf.value == 7
 
     def test_list_of_dicts_becomes_list_of_typed(self) -> None:
-        cfg = _ListNested.from_dict(
-            {"leaves": [{"value": 1}, {"value": 2}]}
-        )
+        cfg = _ListNested.from_dict({"leaves": [{"value": 1}, {"value": 2}]})
         assert cfg.leaves == [_Leaf(value=1), _Leaf(value=2)]
         assert all(isinstance(item, _Leaf) for item in cfg.leaves)
 
@@ -269,19 +265,13 @@ class TestNestedComposition:
         assert cfg.leaves == (_Leaf(value=5),)
 
     def test_dict_of_dicts_becomes_dict_of_typed(self) -> None:
-        cfg = _DictNested.from_dict(
-            {"leaves": {"a": {"value": 1}, "b": {"value": 2}}}
-        )
+        cfg = _DictNested.from_dict({"leaves": {"a": {"value": 1}, "b": {"value": 2}}})
         assert cfg.leaves == {"a": _Leaf(value=1), "b": _Leaf(value=2)}
 
     def test_dict_of_lists_recurses_both_levels(self) -> None:
-        cfg = _DictListNested.from_dict(
-            {"groups": {"g": [{"value": 1}, {"value": 2}]}}
-        )
+        cfg = _DictListNested.from_dict({"groups": {"g": [{"value": 1}, {"value": 2}]}})
         assert cfg.groups == {"g": [_Leaf(value=1), _Leaf(value=2)]}
-        assert all(
-            isinstance(item, _Leaf) for item in cfg.groups["g"]
-        )
+        assert all(isinstance(item, _Leaf) for item in cfg.groups["g"])
 
     def test_pretyped_value_passes_through(self) -> None:
         """A field already holding a typed instance is left untouched."""
@@ -318,23 +308,17 @@ class TestNestedRoundTrip:
     """Round-trip now holds for nested configs without ``_normalize_dict``."""
 
     def test_single_nested_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            _Nested(name="n", leaf=_Leaf(value=3))
-        )
+        assert_structured_config_roundtrip(_Nested(name="n", leaf=_Leaf(value=3)))
 
     def test_optional_nested_roundtrip(self) -> None:
         assert_structured_config_roundtrip(_OptionalNested(leaf=_Leaf(value=1)))
         assert_structured_config_roundtrip(_OptionalNested(leaf=None))
 
     def test_list_nested_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            _ListNested(leaves=[_Leaf(value=1), _Leaf(value=2)])
-        )
+        assert_structured_config_roundtrip(_ListNested(leaves=[_Leaf(value=1), _Leaf(value=2)]))
 
     def test_dict_list_nested_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            _DictListNested(groups={"g": [_Leaf(value=1)]})
-        )
+        assert_structured_config_roundtrip(_DictListNested(groups={"g": [_Leaf(value=1)]}))
 
 
 class TestFlatConfigUnchanged:
@@ -654,9 +638,7 @@ class TestNestedMappingRedaction:
     def test_repr_masks_secret_in_mapping_inside_list(self) -> None:
         """A mapping inside a ``list`` field is reached (e.g. a strategies
         list of raw dicts)."""
-        cfg = _WithRawMapping(
-            items=[{"connection_string": "postgresql://u:pw@h/db"}]
-        )
+        cfg = _WithRawMapping(items=[{"connection_string": "postgresql://u:pw@h/db"}])
         rendered = repr(cfg)
         assert "pw" not in rendered
         assert "'connection_string': '***'" in rendered
@@ -789,13 +771,8 @@ class TestNestedMappingRedaction:
 
     def test_to_dict_keeps_real_nested_secret(self) -> None:
         """Display-only: ``to_dict`` returns the real nested value verbatim."""
-        cfg = _WithRawMapping(
-            section={"connection_string": "postgresql://u:pw@h/db"}
-        )
-        assert (
-            cfg.to_dict()["section"]["connection_string"]
-            == "postgresql://u:pw@h/db"
-        )
+        cfg = _WithRawMapping(section={"connection_string": "postgresql://u:pw@h/db"})
+        assert cfg.to_dict()["section"]["connection_string"] == "postgresql://u:pw@h/db"
 
     def test_roundtrip_preserved_with_nested_secret(self) -> None:
         """The nested-mapping round-trip still holds — repr descent is not
@@ -860,9 +837,7 @@ class TestNestedMappingRedaction:
         assert "'secret': True" in rendered
         assert "***" not in rendered
 
-    def test_runtime_registered_interior_key_is_masked(
-        self, isolate_interior_keys: None
-    ) -> None:
+    def test_runtime_registered_interior_key_is_masked(self, isolate_interior_keys: None) -> None:
         """``register_sensitive_interior_key`` extends the interior set
         process-wide (and case-insensitively) so a consumer's custom
         opaque-section credential is masked everywhere — the per-class cache is

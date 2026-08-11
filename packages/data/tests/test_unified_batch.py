@@ -4,8 +4,12 @@ import dataclasses
 
 import pytest
 from dataknobs_data import (
-    Record, StreamConfig, StreamResult, StreamProcessor,
-    SyncDatabase, AsyncDatabase
+    Record,
+    StreamConfig,
+    StreamResult,
+    StreamProcessor,
+    SyncDatabase,
+    AsyncDatabase,
 )
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 from dataknobs_data.streaming import process_batch_with_fallback, async_process_batch_with_fallback
@@ -19,8 +23,8 @@ class TestStreamResultEnhancements:
         result = StreamResult()
 
         # Verify new properties exist and have correct defaults
-        assert hasattr(result, 'total_batches')
-        assert hasattr(result, 'failed_indices')
+        assert hasattr(result, "total_batches")
+        assert hasattr(result, "failed_indices")
         assert result.total_batches == 0
         assert result.failed_indices == []
 
@@ -75,10 +79,7 @@ class TestBatchProcessingWithIndices:
 
     def test_process_batch_with_fallback_tracks_batches(self):
         """Test that batch processing tracks batch counts."""
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(5)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(5)]
 
         config = StreamConfig(batch_size=10)
         result = StreamResult()
@@ -91,12 +92,7 @@ class TestBatchProcessingWithIndices:
             return rec.id
 
         success = process_batch_with_fallback(
-            records,
-            batch_create,
-            single_create,
-            result,
-            config,
-            batch_index=0
+            records, batch_create, single_create, result, config, batch_index=0
         )
 
         assert success
@@ -107,10 +103,7 @@ class TestBatchProcessingWithIndices:
 
     def test_process_batch_fallback_tracks_failed_indices(self):
         """Test that failed record indices are tracked correctly."""
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(5)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(5)]
 
         config = StreamConfig(batch_size=5)
         result = StreamResult()
@@ -135,7 +128,7 @@ class TestBatchProcessingWithIndices:
             single_create,
             result,
             config,
-            batch_index=2  # Third batch (index 2)
+            batch_index=2,  # Third batch (index 2)
         )
 
         assert success
@@ -155,16 +148,13 @@ class TestStreamProcessorAdapters:
 
     def test_list_to_iterator(self):
         """Test converting list to iterator."""
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(3)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(3)]
 
         iterator = StreamProcessor.list_to_iterator(records)
 
         # Verify it's an iterator
-        assert hasattr(iterator, '__iter__')
-        assert hasattr(iterator, '__next__')
+        assert hasattr(iterator, "__iter__")
+        assert hasattr(iterator, "__next__")
 
         # Consume iterator
         result = list(iterator)
@@ -175,16 +165,13 @@ class TestStreamProcessorAdapters:
     @pytest.mark.asyncio
     async def test_list_to_async_iterator(self):
         """Test converting list to async iterator."""
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(3)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(3)]
 
         async_iter = StreamProcessor.list_to_async_iterator(records)
 
         # Verify it's an async iterator
-        assert hasattr(async_iter, '__aiter__')
-        assert hasattr(async_iter, '__anext__')
+        assert hasattr(async_iter, "__aiter__")
+        assert hasattr(async_iter, "__anext__")
 
         # Consume async iterator
         result = []
@@ -198,10 +185,7 @@ class TestStreamProcessorAdapters:
     @pytest.mark.asyncio
     async def test_iterator_to_async_iterator(self):
         """Test converting sync iterator to async iterator."""
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(3)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(3)]
 
         sync_iter = iter(records)
         async_iter = StreamProcessor.iterator_to_async_iterator(sync_iter)
@@ -222,10 +206,7 @@ class TestIntegrationWithDatabases:
         """Test sync database streaming tracks batch information."""
         db = SyncMemoryDatabase()
 
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(25)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(25)]
 
         config = StreamConfig(batch_size=10)
 
@@ -244,10 +225,7 @@ class TestIntegrationWithDatabases:
         """Test async database streaming tracks batch information."""
         db = AsyncMemoryDatabase()
 
-        records = [
-            Record(id=f"rec_{i}", data={"value": i})
-            for i in range(25)
-        ]
+        records = [Record(id=f"rec_{i}", data={"value": i}) for i in range(25)]
 
         config = StreamConfig(batch_size=10)
 
@@ -278,16 +256,15 @@ class TestBatchConfigCompatibility:
         assert batch_config.chunk_size == 500
 
         # Both have error handling
-        assert hasattr(stream_config, 'on_error')
-        assert hasattr(batch_config, 'error_handling')
+        assert hasattr(stream_config, "on_error")
+        assert hasattr(batch_config, "error_handling")
 
     def test_usage_documentation_exists(self):
         """Test that documentation exists for when to use each config."""
         import os
+
         docs_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "docs",
-            "BATCH_PROCESSING_GUIDE.md"
+            os.path.dirname(os.path.dirname(__file__)), "docs", "BATCH_PROCESSING_GUIDE.md"
         )
 
         assert os.path.exists(docs_path)

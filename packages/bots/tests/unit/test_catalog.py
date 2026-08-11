@@ -188,10 +188,12 @@ class TestArtifactBankCatalog:
         assert catalog.count() == 1
 
     def test_from_config_explicit_memory(self) -> None:
-        catalog = ArtifactBankCatalog.from_config({
-            "backend": "memory",
-            "backend_config": {},
-        })
+        catalog = ArtifactBankCatalog.from_config(
+            {
+                "backend": "memory",
+                "backend_config": {},
+            }
+        )
         assert catalog.count() == 0
 
 
@@ -201,7 +203,8 @@ class TestCatalogEntryNameField:
     def test_save_uses_entry_name_field(self) -> None:
         """Catalog with entry_name_field saves under the field value."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         artifact = _make_artifact(
             recipe_name="Chocolate Cookies",
@@ -226,7 +229,8 @@ class TestCatalogEntryNameField:
     def test_save_entry_name_field_empty_fallback(self) -> None:
         """entry_name_field configured but field is empty → fallback."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         # Create artifact with required field set (for validation),
         # but entry_name_field points to recipe_name.  We need it set.
@@ -241,7 +245,8 @@ class TestCatalogEntryNameField:
     def test_save_returns_entry_name(self) -> None:
         """save() returns the resolved entry name string."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         artifact = _make_artifact(
             recipe_name="Pasta",
@@ -254,7 +259,8 @@ class TestCatalogEntryNameField:
     def test_separate_entries_for_different_names(self) -> None:
         """Different field values create separate catalog entries."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         a1 = _make_artifact(recipe_name="Cookies", ingredients=[{"name": "flour"}])
         a2 = _make_artifact(recipe_name="Pasta", ingredients=[{"name": "noodles"}])
@@ -267,7 +273,8 @@ class TestCatalogEntryNameField:
     def test_list_with_entry_name_field(self) -> None:
         """list() returns storage key as name, not artifact type."""
         catalog = ArtifactBankCatalog(
-            SyncMemoryDatabase(), entry_name_field="recipe_name",
+            SyncMemoryDatabase(),
+            entry_name_field="recipe_name",
         )
         a1 = _make_artifact(
             recipe_name="Chocolate Chip Cookies",
@@ -304,10 +311,12 @@ class TestCatalogEntryNameField:
 
     def test_from_config_entry_name_field(self) -> None:
         """from_config passes through entry_name_field."""
-        catalog = ArtifactBankCatalog.from_config({
-            "backend": "memory",
-            "entry_name_field": "recipe_name",
-        })
+        catalog = ArtifactBankCatalog.from_config(
+            {
+                "backend": "memory",
+                "entry_name_field": "recipe_name",
+            }
+        )
         artifact = _make_artifact(
             recipe_name="Test",
             ingredients=[{"name": "salt"}],

@@ -54,9 +54,7 @@ def _progress_capture() -> tuple[list[str], object]:
 
 
 @pytest.fixture
-async def wired() -> tuple[
-    InMemoryKnowledgeBackend, RAGKnowledgeBase, KnowledgeIngestionManager
-]:
+async def wired() -> tuple[InMemoryKnowledgeBackend, RAGKnowledgeBase, KnowledgeIngestionManager]:
     backend = InMemoryKnowledgeBackend()
     await _seed(backend)
     rag = await _make_rag()
@@ -85,9 +83,7 @@ async def test_ingest_changes_reembeds_only_modified(wired) -> None:
     await backend.put_file("d", "docs/b.md", b"# B\n\nBeta REVISED.\n")
 
     seen, cb = _progress_capture()
-    result = await manager.ingest_changes(
-        "d", version, progress_callback=cb
-    )
+    result = await manager.ingest_changes("d", version, progress_callback=cb)
 
     assert result.files_processed == 1
     assert result.files_deleted == 0
@@ -99,12 +95,8 @@ async def test_ingest_changes_reembeds_only_modified(wired) -> None:
     # a.md / c.md were never re-enumerated, so their chunks are intact
     # and the total is unchanged (old b chunk purged, new one added).
     assert await rag.count(filter={"domain_id": "d"}) == total_before
-    assert await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/b.md"}
-    ) == 1
-    assert await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/a.md"}
-    ) == 1
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/b.md"}) == 1
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"}) == 1
 
 
 async def test_ingest_changes_purges_deleted_file_chunks(wired) -> None:
@@ -118,39 +110,27 @@ async def test_ingest_changes_purges_deleted_file_chunks(wired) -> None:
     assert await backend.delete_file("d", "docs/c.md") is True
 
     seen, cb = _progress_capture()
-    result = await manager.ingest_changes(
-        "d", version, progress_callback=cb
-    )
+    result = await manager.ingest_changes("d", version, progress_callback=cb)
 
     assert result.files_deleted == 1
     assert result.files_processed == 0
     assert result.success
     assert seen == []  # nothing re-embedded — pure deletion
-    assert await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/c.md"}
-    ) == 0
-    assert await rag.count(
-        filter={"domain_id": "d", "source_path": "docs/a.md"}
-    ) == 1
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/c.md"}) == 0
+    assert await rag.count(filter={"domain_id": "d", "source_path": "docs/a.md"}) == 1
     assert await rag.count(filter={"domain_id": "d"}) == 2
 
 
-async def test_ingest_changes_invalid_version_falls_back_to_full(
-    wired, caplog
-) -> None:
+async def test_ingest_changes_invalid_version_falls_back_to_full(wired, caplog) -> None:
     """An unresolvable version → full re-ingest, not a silent skip."""
     backend, rag, manager = wired
 
     await manager.ingest("d")
 
     with caplog.at_level(logging.WARNING):
-        result = await manager.ingest_changes(
-            "d", "not-a-retained-snapshot-id"
-        )
+        result = await manager.ingest_changes("d", "not-a-retained-snapshot-id")
 
-    assert any(
-        "predates snapshot retention" in r.message for r in caplog.records
-    )
+    assert any("predates snapshot retention" in r.message for r in caplog.records)
     # Full re-ingest of every file (the fallback ran ingest()).
     assert result.files_processed == 3
     assert result.success
@@ -166,9 +146,7 @@ async def test_ingest_changes_noop_when_unchanged(wired) -> None:
     assert version
 
     seen, cb = _progress_capture()
-    result = await manager.ingest_changes(
-        "d", version, progress_callback=cb
-    )
+    result = await manager.ingest_changes("d", version, progress_callback=cb)
 
     assert result.files_processed == 0
     assert result.files_deleted == 0

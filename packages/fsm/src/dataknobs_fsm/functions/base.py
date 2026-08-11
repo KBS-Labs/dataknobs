@@ -28,7 +28,7 @@ T = TypeVar("T")
 
 class FunctionType(Enum):
     """Types of functions in the FSM."""
-    
+
     VALIDATION = "validation"
     TRANSFORM = "transform"
     STATE_TEST = "state_test"
@@ -37,16 +37,16 @@ class FunctionType(Enum):
 
 class ExecutionResult:
     """Result of function execution."""
-    
+
     def __init__(
         self,
         success: bool,
         data: Any | None = None,
         error: str | None = None,
-        metadata: Dict[str, Any] | None = None
+        metadata: Dict[str, Any] | None = None,
     ):
         """Initialize execution result.
-        
+
         Args:
             success: Whether execution succeeded.
             data: Result data if successful.
@@ -57,22 +57,24 @@ class ExecutionResult:
         self.data = data
         self.error = error
         self.metadata = metadata or {}
-    
+
     @classmethod
-    def success_result(cls, data: Any, metadata: Dict[str, Any] | None = None) -> 'ExecutionResult':
+    def success_result(cls, data: Any, metadata: Dict[str, Any] | None = None) -> "ExecutionResult":
         """Create a successful result.
-        
+
         Args:
             data: The result data.
             metadata: Optional metadata.
-            
+
         Returns:
             A successful ExecutionResult.
         """
         return cls(success=True, data=data, metadata=metadata)
-    
+
     @classmethod
-    def failure_result(cls, error: str, metadata: Dict[str, Any] | None = None) -> 'ExecutionResult':
+    def failure_result(
+        cls, error: str, metadata: Dict[str, Any] | None = None
+    ) -> "ExecutionResult":
         """Create a failure result.
 
         Args:
@@ -91,10 +93,10 @@ class ExecutionResult:
             Dictionary representation of the result.
         """
         return {
-            'success': self.success,
-            'data': self.data,
-            'error': self.error,
-            'metadata': self.metadata
+            "success": self.success,
+            "data": self.data,
+            "error": self.error,
+            "metadata": self.metadata,
         }
 
     def __json__(self) -> Dict[str, Any]:
@@ -118,6 +120,7 @@ class FunctionContext:
     :meth:`resource_for_role` accessors cover both models without hand-rolling
     dict plumbing.
     """
+
     state_name: str
     function_name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -184,24 +187,24 @@ class FunctionContext:
 
 class IValidationFunction(ABC):
     """Interface for validation functions."""
-    
+
     @abstractmethod
     def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         """Validate data according to function logic.
-        
+
         Args:
             data: The data to validate.
             context: Optional execution context.
-            
+
         Returns:
             ExecutionResult with validation outcome.
         """
         pass
-    
+
     @abstractmethod
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules this function implements.
-        
+
         Returns:
             Dictionary describing the validation rules.
         """
@@ -210,7 +213,7 @@ class IValidationFunction(ABC):
 
 class ITransformFunction(ABC):
     """Interface for transform functions."""
-    
+
     @abstractmethod
     def transform(
         self,
@@ -225,16 +228,16 @@ class ITransformFunction(ABC):
                 ``FunctionContext`` (carrying injected ``resources`` and the
                 ``resource_roles`` map); a plain ``dict`` is accepted for
                 lightweight/standalone invocation.
-            
+
         Returns:
             ExecutionResult with transformed data.
         """
         pass
-    
+
     @abstractmethod
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
-        
+
         Returns:
             String describing what this transform does.
         """
@@ -243,7 +246,7 @@ class ITransformFunction(ABC):
 
 class IStateTestFunction(ABC):
     """Interface for state test functions."""
-    
+
     @abstractmethod
     def test(
         self,
@@ -258,16 +261,16 @@ class IStateTestFunction(ABC):
                 ``FunctionContext`` (carrying injected ``resources`` and the
                 ``resource_roles`` map); a plain ``dict`` is accepted for
                 lightweight/standalone invocation.
-            
+
         Returns:
             Tuple of (test_passed, reason).
         """
         pass
-    
+
     @abstractmethod
     def get_test_description(self) -> str:
         """Get a description of what this test checks.
-        
+
         Returns:
             String describing the test condition.
         """
@@ -276,20 +279,22 @@ class IStateTestFunction(ABC):
 
 class IEndStateTestFunction(ABC):
     """Interface for end state test functions."""
-    
+
     @abstractmethod
-    def should_end(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
+    def should_end(
+        self, data: Any, context: Dict[str, Any] | None = None
+    ) -> Tuple[bool, str | None]:
         """Test if processing should end.
-        
+
         Args:
             data: The current data.
             context: Optional execution context.
-            
+
         Returns:
             Tuple of (should_end, reason).
         """
         pass
-    
+
     @abstractmethod
     def get_end_condition(self) -> str:
         """Get a description of the end condition.
@@ -335,7 +340,7 @@ def as_state_test_callable(func: Any) -> Any:
 
 class ResourceStatus(Enum):
     """Status of a resource."""
-    
+
     UNINITIALIZED = "uninitialized"
     INITIALIZING = "initializing"
     READY = "ready"
@@ -347,7 +352,7 @@ class ResourceStatus(Enum):
 @dataclass(frozen=True)
 class ResourceConfig(StructuredConfig):
     """Configuration for a resource."""
-    
+
     name: str
     type: str
     connection_params: Dict[str, Any]
@@ -359,55 +364,55 @@ class ResourceConfig(StructuredConfig):
 
 class IResource(ABC):
     """Interface for external resources."""
-    
+
     @abstractmethod
     async def initialize(self, config: ResourceConfig) -> None:
         """Initialize the resource.
-        
+
         Args:
             config: Resource configuration.
         """
         pass
-    
+
     @abstractmethod
     async def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a connection/handle to the resource.
-        
+
         Args:
             timeout: Optional timeout for acquisition.
-            
+
         Returns:
             A resource handle/connection.
         """
         pass
-    
+
     @abstractmethod
     async def release(self, handle: Any) -> None:
         """Release a resource handle/connection.
-        
+
         Args:
             handle: The handle to release.
         """
         pass
-    
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Check if the resource is healthy.
-        
+
         Returns:
             True if healthy, False otherwise.
         """
         pass
-    
+
     @abstractmethod
     async def shutdown(self) -> None:
         """Shutdown the resource and cleanup."""
         pass
-    
+
     @abstractmethod
     def get_status(self) -> ResourceStatus:
         """Get the current resource status.
-        
+
         Returns:
             Current ResourceStatus.
         """
@@ -479,9 +484,7 @@ class ValidationError(BaseValidationError, FSMError):
         """
         super().__init__(
             message,
-            context={"validation_errors": list(validation_errors)}
-            if validation_errors
-            else None,
+            context={"validation_errors": list(validation_errors)} if validation_errors else None,
         )
         self.validation_errors = validation_errors or []
 
@@ -493,6 +496,7 @@ class TransformError(OperationError, FSMError):
     fails is a failed operation, and unlike a validation failure it is not
     the caller's input that is at fault.
     """
+
     pass
 
 
@@ -521,9 +525,7 @@ class StateTransitionError(OperationError, FSMError):
                 "FunctionError for a failed function -- the FunctionError "
                 "alias here conflates the two.",
             )
-        super().__init__(
-            message, context={"from_state": from_state, "to_state": to_state}
-        )
+        super().__init__(message, context={"from_state": from_state, "to_state": to_state})
         self.from_state = from_state
         self.to_state = to_state
 
@@ -575,12 +577,13 @@ class ConfigurationError(BaseConfigurationError, FSMError):
 
 # Base implementations
 
+
 class BaseFunction:
     """Base class for functions with common functionality."""
-    
+
     def __init__(self, name: str, description: str = ""):
         """Initialize base function.
-        
+
         Args:
             name: Function name.
             description: Function description.
@@ -589,20 +592,20 @@ class BaseFunction:
         self.description = description
         self.execution_count = 0
         self.error_count = 0
-    
+
     def _record_execution(self, success: bool) -> None:
         """Record execution statistics.
-        
+
         Args:
             success: Whether execution succeeded.
         """
         self.execution_count += 1
         if not success:
             self.error_count += 1
-    
+
     def get_stats(self) -> Dict[str, int]:
         """Get execution statistics.
-        
+
         Returns:
             Dictionary with execution stats.
         """
@@ -611,17 +614,18 @@ class BaseFunction:
             "errors": self.error_count,
             "success_rate": float(  # type: ignore
                 (self.execution_count - self.error_count) / self.execution_count
-                if self.execution_count > 0 else 0
-            )
+                if self.execution_count > 0
+                else 0
+            ),
         }
 
 
 class CompositeFunction(BaseFunction):
     """Base class for functions that compose multiple sub-functions."""
-    
+
     def __init__(self, name: str, functions: List[BaseFunction], description: str = ""):
         """Initialize composite function.
-        
+
         Args:
             name: Function name.
             functions: List of sub-functions to compose.
@@ -629,21 +633,21 @@ class CompositeFunction(BaseFunction):
         """
         super().__init__(name, description)
         self.functions = functions
-    
+
     def add_function(self, function: BaseFunction) -> None:
         """Add a function to the composite.
-        
+
         Args:
             function: Function to add.
         """
         self.functions.append(function)
-    
+
     def remove_function(self, function_name: str) -> bool:
         """Remove a function from the composite.
-        
+
         Args:
             function_name: Name of function to remove.
-            
+
         Returns:
             True if removed, False if not found.
         """
@@ -657,15 +661,15 @@ class CompositeFunction(BaseFunction):
 # Simple Function class for basic use
 class Function(ABC):
     """Abstract base class for simple functions."""
-    
+
     @abstractmethod
-    def execute(self, data: Any, context: 'FunctionContext') -> Any:
+    def execute(self, data: Any, context: "FunctionContext") -> Any:
         """Execute the function.
-        
+
         Args:
             data: Input data.
             context: Function context.
-            
+
         Returns:
             Function result.
         """
@@ -675,16 +679,16 @@ class Function(ABC):
 # FunctionRegistry for managing functions
 class FunctionRegistry:
     """Registry for managing FSM functions."""
-    
+
     def __init__(self):
         """Initialize function registry."""
         self.functions: Dict[str, Any] = {}
         self.validators: Dict[str, IValidationFunction] = {}
         self.transforms: Dict[str, ITransformFunction] = {}
-    
+
     def register(self, name: str, function: Any) -> None:
         """Register a function.
-        
+
         Args:
             name: Function name.
             function: Function instance.
@@ -698,13 +702,13 @@ class FunctionRegistry:
         else:
             # Store as generic function
             self.functions[name] = function
-    
+
     def get_function(self, name: str) -> Any | None:
         """Get a function by name.
-        
+
         Args:
             name: Function name.
-            
+
         Returns:
             Function instance or None.
         """
@@ -716,13 +720,13 @@ class FunctionRegistry:
         elif name in self.transforms:
             return self.transforms[name]
         return None
-    
+
     def remove(self, name: str) -> bool:
         """Remove a function.
-        
+
         Args:
             name: Function name.
-            
+
         Returns:
             True if removed.
         """
@@ -736,10 +740,10 @@ class FunctionRegistry:
             del self.transforms[name]
             return True
         return False
-    
+
     def list_functions(self) -> List[str]:
         """List all registered functions.
-        
+
         Returns:
             List of function names.
         """
@@ -748,7 +752,7 @@ class FunctionRegistry:
         all_names.extend(self.validators.keys())
         all_names.extend(self.transforms.keys())
         return sorted(all_names)
-    
+
     def clear(self) -> None:
         """Clear all registered functions."""
         self.functions.clear()

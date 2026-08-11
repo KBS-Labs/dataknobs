@@ -89,12 +89,8 @@ async def test_get_items(registry: ArtifactRegistry, config: CorpusConfig) -> No
 @pytest.mark.asyncio
 async def test_get_items_isolation(registry: ArtifactRegistry) -> None:
     """Items are scoped to their corpus, not shared across corpora."""
-    config_a = CorpusConfig(
-        corpus_type="quiz_bank", item_type="quiz_question", name="Quiz A"
-    )
-    config_b = CorpusConfig(
-        corpus_type="quiz_bank", item_type="quiz_question", name="Quiz B"
-    )
+    config_a = CorpusConfig(corpus_type="quiz_bank", item_type="quiz_question", name="Quiz A")
+    config_b = CorpusConfig(corpus_type="quiz_bank", item_type="quiz_question", name="Quiz B")
 
     corpus_a = await ArtifactCorpus.create(registry, config_a)
     corpus_b = await ArtifactCorpus.create(registry, config_b)
@@ -199,9 +195,7 @@ async def test_load_restores_dedup(registry: ArtifactRegistry) -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_without_dedup_config(
-    registry: ArtifactRegistry, config: CorpusConfig
-) -> None:
+async def test_load_without_dedup_config(registry: ArtifactRegistry, config: CorpusConfig) -> None:
     """Loading a corpus created without dedup has no dedup checker."""
     corpus = await ArtifactCorpus.create(registry, config)
     await corpus.add_item(content={"stem": "Q1"})
@@ -284,9 +278,7 @@ async def test_check_dedup(registry: ArtifactRegistry) -> None:
 
 
 @pytest.mark.asyncio
-async def test_check_dedup_no_checker(
-    registry: ArtifactRegistry, config: CorpusConfig
-) -> None:
+async def test_check_dedup_no_checker(registry: ArtifactRegistry, config: CorpusConfig) -> None:
     """check_dedup returns None when no dedup checker is configured."""
     corpus = await ArtifactCorpus.create(registry, config)
     result = await corpus.check_dedup({"stem": "anything"})

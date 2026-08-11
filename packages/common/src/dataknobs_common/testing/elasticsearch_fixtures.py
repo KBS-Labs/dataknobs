@@ -233,8 +233,7 @@ def sweep_stale_test_indices(
 
     if not response.succeeded:
         logger.warning(
-            "Listing stale Elasticsearch test indices at %s:%s returned "
-            "status %s; skipping sweep.",
+            "Listing stale Elasticsearch test indices at %s:%s returned status %s; skipping sweep.",
             host,
             port,
             response.status,
@@ -265,9 +264,7 @@ def sweep_stale_test_indices(
         try:
             del_response = helper.delete(name)
         except (requests.exceptions.RequestException, ValueError) as exc:
-            logger.warning(
-                "Failed to delete stale Elasticsearch index %s: %s", name, exc
-            )
+            logger.warning("Failed to delete stale Elasticsearch index %s: %s", name, exc)
             continue
         if del_response.succeeded:
             deleted.append(name)

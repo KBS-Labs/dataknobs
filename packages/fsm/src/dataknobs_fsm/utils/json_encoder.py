@@ -17,18 +17,20 @@ class FSMJSONEncoder(json.JSONEncoder):
             JSON-serializable representation
         """
         # Check for our custom serialization methods
-        if hasattr(obj, '__json__'):
+        if hasattr(obj, "__json__"):
             return obj.__json__()
-        if hasattr(obj, 'to_dict'):
+        if hasattr(obj, "to_dict"):
             return obj.to_dict()
 
         # Handle FSMData specifically
         from dataknobs_fsm.core.data_wrapper import FSMData
+
         if isinstance(obj, FSMData):
             return obj.to_dict()
 
         # Handle ExecutionResult specifically
         from dataknobs_fsm.functions.base import ExecutionResult
+
         if isinstance(obj, ExecutionResult):
             return obj.to_dict()
 
@@ -46,7 +48,7 @@ def dumps(obj: Any, **kwargs) -> str:
     Returns:
         JSON string
     """
-    kwargs.setdefault('cls', FSMJSONEncoder)
+    kwargs.setdefault("cls", FSMJSONEncoder)
     return json.dumps(obj, **kwargs)
 
 

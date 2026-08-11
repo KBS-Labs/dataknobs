@@ -23,9 +23,7 @@ from dataknobs_fsm.functions.library.validators import (
 
 
 def test_dict_schema_required_and_type() -> None:
-    check = build_record_validator(
-        {"name": {"required": True, "type": "str"}, "active": True}
-    )
+    check = build_record_validator({"name": {"required": True, "type": "str"}, "active": True})
     assert check({"name": "alice", "active": True}, None) is True
     assert check({"active": True}, None) is False  # missing required name
     assert check({"name": 5, "active": True}, None) is False  # wrong type

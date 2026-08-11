@@ -504,17 +504,13 @@ class HTTPRegistryBackend(RegistryBackend):
         url = f"{self._base_url}/configs"
         params: dict[str, Any] = {}
         if filter_metadata:
-            params["filter_metadata"] = json.dumps(
-                dict(filter_metadata), sort_keys=True
-            )
+            params["filter_metadata"] = json.dumps(dict(filter_metadata), sort_keys=True)
         if status is not None:
             params["status"] = status
         if sort:
             # Repeated query param — aiohttp handles list values by
             # serializing one ``?sort=`` per entry, preserving order.
-            params["sort"] = [
-                f"{spec.field}:{spec.order.value}" for spec in sort
-            ]
+            params["sort"] = [f"{spec.field}:{spec.order.value}" for spec in sort]
         if limit is not None:
             params["limit"] = str(limit)
         if offset is not None:
@@ -546,9 +542,7 @@ class HTTPRegistryBackend(RegistryBackend):
             if status is not None:
                 regs = [r for r in regs if r.status == status]
             if sort:
-                regs = _apply_sort_limit_offset(
-                    regs, sort, limit=None, offset=None
-                )
+                regs = _apply_sort_limit_offset(regs, sort, limit=None, offset=None)
             return regs
 
     async def list_ids(self) -> list[str]:
@@ -582,11 +576,7 @@ class HTTPRegistryBackend(RegistryBackend):
         ``filter_metadata`` / ``status``, this method must be updated
         to issue a server-side count instead.
         """
-        return len(
-            await self.list_all(
-                status=status, filter_metadata=filter_metadata
-            )
-        )
+        return len(await self.list_all(status=status, filter_metadata=filter_metadata))
 
     async def count(
         self,
@@ -597,9 +587,7 @@ class HTTPRegistryBackend(RegistryBackend):
 
         Convenience for :meth:`count_all` with ``status="active"``.
         """
-        return await self.count_all(
-            status="active", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="active", filter_metadata=filter_metadata)
 
     async def count_inactive(
         self,
@@ -610,9 +598,7 @@ class HTTPRegistryBackend(RegistryBackend):
 
         Convenience for :meth:`count_all` with ``status="inactive"``.
         """
-        return await self.count_all(
-            status="inactive", filter_metadata=filter_metadata
-        )
+        return await self.count_all(status="inactive", filter_metadata=filter_metadata)
 
     async def stream(
         self,

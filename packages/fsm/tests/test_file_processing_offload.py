@@ -108,9 +108,7 @@ async def test_process_whole_does_not_block(tmp_path: Path) -> None:
     assert metrics["records_processed"] == 3
 
 
-async def test_process_whole_read_runs_off_event_loop(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_process_whole_read_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
     """Tighter reproduce-first for the in-scope fix: the whole-file read.
 
     The detector cannot prove this in ``_process_whole`` because the FSM
@@ -142,9 +140,7 @@ async def test_process_whole_processes_all_records(tmp_path: Path) -> None:
 @requires_blockbuster
 async def test_write_output_does_not_block(tmp_path: Path) -> None:
     out = tmp_path / "out.json"
-    proc = _processor(
-        output_path=out, fmt=FileFormat.JSON, output_format=FileFormat.JSON
-    )
+    proc = _processor(output_path=out, fmt=FileFormat.JSON, output_format=FileFormat.JSON)
     results = [
         {"data": {"x": 1}, "success": True},
         {"data": {"x": 2}, "success": True},
@@ -170,9 +166,7 @@ async def test_read_batches_honours_chunk_size(tmp_path: Path) -> None:
     assert proc._metrics["lines_read"] == 5
 
 
-async def test_read_batches_opens_on_worker_thread(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_read_batches_opens_on_worker_thread(tmp_path: Path, monkeypatch) -> None:
     """Structural reproduce-first for the line-iterating batch reader.
 
     The detector cannot see ``readline``; this proves the open + read run
@@ -202,9 +196,7 @@ async def test_read_batches_counts_json_errors(tmp_path: Path) -> None:
 
 async def test_write_output_csv_round_trip(tmp_path: Path) -> None:
     out = tmp_path / "out.csv"
-    proc = _processor(
-        output_path=out, fmt=FileFormat.CSV, output_format=FileFormat.CSV
-    )
+    proc = _processor(output_path=out, fmt=FileFormat.CSV, output_format=FileFormat.CSV)
     results = [
         {"data": {"name": "alice", "value": "1"}, "success": True},
         {"data": {"name": "bob", "value": "2"}, "success": True},

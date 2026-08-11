@@ -157,10 +157,12 @@ class QueryTransformer:
         from dataknobs_llm.llm import LLMProviderFactory
 
         factory = LLMProviderFactory(is_async=True)
-        self._llm = factory.create({
-            "provider": self.config.llm_provider,
-            "model": self.config.llm_model,
-        })
+        self._llm = factory.create(
+            {
+                "provider": self.config.llm_provider,
+                "model": self.config.llm_model,
+            }
+        )
         await self._llm.initialize()
         self._initialized = True
         self._owns_provider = True
@@ -196,9 +198,7 @@ class QueryTransformer:
             return [user_input]
 
         if not self._initialized:
-            raise RuntimeError(
-                "QueryTransformer not initialized. Call initialize() first."
-            )
+            raise RuntimeError("QueryTransformer not initialized. Call initialize() first.")
 
         num = num_queries or self.config.num_queries
         prompt = self._build_prompt(user_input, num)
@@ -228,13 +228,13 @@ class QueryTransformer:
             return [user_input]
 
         if not self._initialized:
-            raise RuntimeError(
-                "QueryTransformer not initialized. Call initialize() first."
-            )
+            raise RuntimeError("QueryTransformer not initialized. Call initialize() first.")
 
         num = num_queries or self.config.num_queries
         prompt = self._build_contextual_prompt(
-            user_input, conversation_context, num,
+            user_input,
+            conversation_context,
+            num,
         )
 
         response_text = await self._call_llm(prompt)
@@ -327,7 +327,8 @@ class QueryTransformer:
             config_overrides = {"options": {"think": False}}
 
         response = await self._llm.complete(
-            prompt, config_overrides=config_overrides,
+            prompt,
+            config_overrides=config_overrides,
         )
         if hasattr(response, "content"):
             return response.content

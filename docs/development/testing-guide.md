@@ -46,6 +46,34 @@ bin/test.sh -t integration -n
 bin/run-integration-tests.sh -s
 ```
 
+### Workspace Guards
+
+The suite under `tests/` checks the root config, every package's config, and
+`bin/`. It belongs to no package, so no package name reaches it — it has a
+target of its own:
+
+```bash
+# Run the workspace guards alone (no services, no coverage)
+bin/test.sh workspace
+```
+
+A bare `bin/test.sh` runs them too, ahead of the discovered packages: "run
+everything" has to mean everything, and package discovery loops `packages/*`.
+An integration-only run (`-t integration`, `--only-integration`) leaves them
+out — they need no service and are not integration tests.
+
+Naming any target — a package, a path, or `workspace` — replaces the default
+set rather than adding to it, so `bin/test.sh data` runs `data` alone.
+
+The quality gate asks for them by this same target, so a gate run and a local
+run execute one invocation rather than two that have to agree.
+
+```bash
+# What would this invocation run? (resolves and prints, runs nothing)
+bin/test.sh --print-targets
+bin/test.sh -t integration --print-targets
+```
+
 ## Available Commands
 
 ### bin/dev.sh test
@@ -64,6 +92,9 @@ Advanced test runner with fine-grained control.
 bin/test.sh [OPTIONS] [PACKAGE]
 ```
 
+`PACKAGE` may be a package name, a test file or directory path, or `workspace`
+for the guards under `tests/`.
+
 Options:
 - `-t, --type TYPE` - Test type: unit, integration, or both (default: both)
 - `-p, --package PACKAGE` - Package to test (e.g., data, config, structures)
@@ -72,6 +103,7 @@ Options:
 - `-v, --verbose` - Run tests in verbose mode
 - `-k EXPRESSION` - Only run tests matching the expression (pytest -k)
 - `-x, --exitfirst` - Exit on first failure
+- `--print-targets` - Print what the invocation would run and exit, running nothing
 - `-h, --help` - Show help message
 
 ### bin/run-integration-tests.sh

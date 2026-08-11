@@ -1,5 +1,4 @@
-"""Validation result types with consistent, predictable behavior.
-"""
+"""Validation result types with consistent, predictable behavior."""
 
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ from typing import Any
 @dataclass
 class ValidationResult:
     """Unified result object for all validation operations.
-    
+
     This class provides a consistent return type for all validation operations,
     making the API predictable and easy to use.
     """
@@ -26,10 +25,10 @@ class ValidationResult:
 
     def merge(self, other: ValidationResult) -> ValidationResult:
         """Combine results for composite validation.
-        
+
         Args:
             other: Another ValidationResult to merge with this one
-            
+
         Returns:
             New ValidationResult with combined state
         """
@@ -37,15 +36,15 @@ class ValidationResult:
             valid=self.valid and other.valid,
             value=other.value if other.valid else self.value,
             errors=self.errors + other.errors,
-            warnings=self.warnings + other.warnings
+            warnings=self.warnings + other.warnings,
         )
 
     def add_error(self, error: str) -> ValidationResult:
         """Add an error and mark as invalid (fluent API).
-        
+
         Args:
             error: Error message to add
-            
+
         Returns:
             Self for chaining
         """
@@ -55,10 +54,10 @@ class ValidationResult:
 
     def add_warning(self, warning: str) -> ValidationResult:
         """Add a warning without affecting validity (fluent API).
-        
+
         Args:
             warning: Warning message to add
-            
+
         Returns:
             Self for chaining
         """
@@ -68,45 +67,37 @@ class ValidationResult:
     @classmethod
     def success(cls, value: Any, warnings: list[str] | None = None) -> ValidationResult:
         """Create a successful validation result.
-        
+
         Args:
             value: The validated value
             warnings: Optional list of warnings
-            
+
         Returns:
             Successful ValidationResult
         """
-        return cls(
-            valid=True,
-            value=value,
-            errors=[],
-            warnings=warnings or []
-        )
+        return cls(valid=True, value=value, errors=[], warnings=warnings or [])
 
     @classmethod
-    def failure(cls, value: Any, errors: list[str], warnings: list[str] | None = None) -> ValidationResult:
+    def failure(
+        cls, value: Any, errors: list[str], warnings: list[str] | None = None
+    ) -> ValidationResult:
         """Create a failed validation result.
-        
+
         Args:
             value: The value that failed validation
             errors: List of error messages
             warnings: Optional list of warnings
-            
+
         Returns:
             Failed ValidationResult
         """
-        return cls(
-            valid=False,
-            value=value,
-            errors=errors,
-            warnings=warnings or []
-        )
+        return cls(valid=False, value=value, errors=errors, warnings=warnings or [])
 
 
 @dataclass
 class ValidationContext:
     """Context for stateful validation operations.
-    
+
     Used by constraints like Unique that need to track state across
     multiple validations.
     """
@@ -116,11 +107,11 @@ class ValidationContext:
 
     def has_seen(self, field: str, value: Any) -> bool:
         """Check if a value has been seen for a field.
-        
+
         Args:
             field: Field name
             value: Value to check
-            
+
         Returns:
             True if value has been seen for this field
         """
@@ -128,7 +119,7 @@ class ValidationContext:
 
     def mark_seen(self, field: str, value: Any) -> None:
         """Mark a value as seen for a field.
-        
+
         Args:
             field: Field name
             value: Value to mark as seen
@@ -139,7 +130,7 @@ class ValidationContext:
 
     def clear(self, field: str | None = None) -> None:
         """Clear seen values.
-        
+
         Args:
             field: Optional field to clear. If None, clears all fields.
         """
@@ -150,7 +141,7 @@ class ValidationContext:
 
     def set_metadata(self, key: str, value: Any) -> None:
         """Store metadata in the context.
-        
+
         Args:
             key: Metadata key
             value: Metadata value
@@ -159,11 +150,11 @@ class ValidationContext:
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Retrieve metadata from the context.
-        
+
         Args:
             key: Metadata key
             default: Default value if key not found
-            
+
         Returns:
             Metadata value or default
         """

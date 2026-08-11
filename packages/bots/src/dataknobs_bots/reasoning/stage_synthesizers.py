@@ -43,6 +43,7 @@ by default — stage synthesizers are typically auto-registered at
 module import, and consumers often want to replace the in-tree
 synthesizer with a customized one for the same field name.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -111,7 +112,9 @@ def register_stage_synthesizer(synthesizer: StageSynthesizer) -> None:
             method, optional ``validate(stage)``).
     """
     stage_synthesizer_backends.register(
-        synthesizer.field, synthesizer, allow_overwrite=True,
+        synthesizer.field,
+        synthesizer,
+        allow_overwrite=True,
     )
 
 
@@ -127,8 +130,7 @@ def unregister_stage_synthesizer(field: str) -> None:
 def iter_stage_synthesizers() -> Mapping[str, StageSynthesizer]:
     """Read-only snapshot of the registered synthesizers."""
     return {
-        key: stage_synthesizer_backends.get(key)
-        for key in stage_synthesizer_backends.list_keys()
+        key: stage_synthesizer_backends.get(key) for key in stage_synthesizer_backends.list_keys()
     }
 
 

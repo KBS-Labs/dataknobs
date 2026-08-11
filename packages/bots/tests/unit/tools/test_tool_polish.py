@@ -150,8 +150,7 @@ class TestEffectsMetadata:
         metadata = tool_class.catalog_metadata()
         effects = metadata["effects"]
         assert isinstance(effects, tuple), (
-            f"{tool_class.__name__} effects is {type(effects).__name__}, "
-            "expected tuple"
+            f"{tool_class.__name__} effects is {type(effects).__name__}, expected tuple"
         )
 
     @pytest.mark.parametrize(
@@ -165,8 +164,7 @@ class TestEffectsMetadata:
         effects = metadata["effects"]
         for effect in effects:
             assert effect in VALID_EFFECTS, (
-                f"{tool_class.__name__} has invalid effect '{effect}'. "
-                f"Valid: {VALID_EFFECTS}"
+                f"{tool_class.__name__} has invalid effect '{effect}'. Valid: {VALID_EFFECTS}"
             )
 
     def test_expected_effects_per_tool(self) -> None:
@@ -190,8 +188,7 @@ class TestEffectsMetadata:
             name = metadata["name"]
             assert name in expected, f"Unexpected tool name: {name}"
             assert metadata["effects"] == expected[name], (
-                f"{name}: expected effects {expected[name]}, "
-                f"got {metadata['effects']}"
+                f"{name}: expected effects {expected[name]}, got {metadata['effects']}"
             )
 
 
@@ -207,7 +204,8 @@ class TestResponseFormatConsistency:
         tool = ListBankRecordsTool()
 
         result = await tool.execute_with_context(
-            context, bank_name="ingredients",
+            context,
+            bank_name="ingredients",
         )
         assert result["success"] is True
         assert result["count"] == 1
@@ -222,7 +220,8 @@ class TestResponseFormatConsistency:
         tool = ListBankRecordsTool()
 
         result = await tool.execute_with_context(
-            context, bank_name="ingredients",
+            context,
+            bank_name="ingredients",
         )
         assert result["success"] is True
         assert result["count"] == 0
@@ -271,9 +270,7 @@ class TestCatalogMetadataStructure:
         """catalog_metadata() must include name, description, tags, effects."""
         metadata = tool_class.catalog_metadata()
         for key in ("name", "description", "tags", "effects"):
-            assert key in metadata, (
-                f"{tool_class.__name__}.catalog_metadata() missing '{key}'"
-            )
+            assert key in metadata, f"{tool_class.__name__}.catalog_metadata() missing '{key}'"
 
     @pytest.mark.parametrize(
         "tool_class",

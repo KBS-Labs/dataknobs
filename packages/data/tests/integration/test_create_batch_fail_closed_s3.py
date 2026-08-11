@@ -91,9 +91,7 @@ async def async_db(s3_config: dict[str, Any]) -> AsyncIterator[AsyncS3Database]:
 def test_sync_streaming_insert_fails_closed(sync_db: SyncS3Database) -> None:
     sync_db.create(Record({"v": "old"}, id="2"))
     records = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
-    result = sync_db.stream_write(
-        iter(records), StreamConfig(on_error=lambda e, r: True)
-    )
+    result = sync_db.stream_write(iter(records), StreamConfig(on_error=lambda e, r: True))
     assert result.failed == 1
     assert result.successful == 2
     assert sync_db.read("2").get_value("v") == "old"
@@ -108,9 +106,7 @@ async def test_async_streaming_insert_fails_closed(async_db: AsyncS3Database) ->
             yield Record({"v": "src"}, id=str(i))
 
     with assert_no_blocking():
-        result = await async_db.stream_write(
-            gen(), StreamConfig(on_error=lambda e, r: True)
-        )
+        result = await async_db.stream_write(gen(), StreamConfig(on_error=lambda e, r: True))
     assert result.failed == 1
     assert result.successful == 2
     assert (await async_db.read("2")).get_value("v") == "old"

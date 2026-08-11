@@ -1,4 +1,5 @@
 """IntentClassifier protocol and shared data types."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -27,6 +28,7 @@ class IntentSpec:
             classifiers explicitly via
             :class:`CompositeIntentClassifier`.
     """
+
     name: str
     target: str
     keywords: tuple[str, ...] | None = None
@@ -56,6 +58,7 @@ class IntentMatchResult:
             shape so that consumers reading ``result.confidence`` see
             a uniform schema across backend kinds.
     """
+
     intent: IntentSpec | None
     extracted: str | None
     rule_based: bool

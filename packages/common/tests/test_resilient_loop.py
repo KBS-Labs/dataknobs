@@ -47,7 +47,7 @@ async def test_backoff_is_exponential_with_jitter_and_resets_after_clean():
         [
             "raise",  # failure 1 -> attempt 1 -> ~[0.9, 1.1]
             "raise",  # failure 2 -> attempt 2 -> ~[1.8, 2.2]
-            "ok",     # clean -> resets failure counter
+            "ok",  # clean -> resets failure counter
             "raise",  # failure 1 again -> attempt 1 -> ~[0.9, 1.1]
             "stop",
         ]
@@ -70,8 +70,8 @@ async def test_backoff_is_exponential_with_jitter_and_resets_after_clean():
     )
 
     assert len(sleep.delays) == 3
-    assert 0.9 <= sleep.delays[0] <= 1.1   # attempt 1
-    assert 1.8 <= sleep.delays[1] <= 2.2   # attempt 2 (escalated)
+    assert 0.9 <= sleep.delays[0] <= 1.1  # attempt 1
+    assert 1.8 <= sleep.delays[1] <= 2.2  # attempt 2 (escalated)
     # After the clean iteration the counter reset, so this is attempt 1:
     assert 0.9 <= sleep.delays[2] <= 1.1
 
@@ -218,5 +218,5 @@ async def test_does_not_self_terminate_while_running_and_failing():
         sleep=sleep,
     )
 
-    assert calls["n"] == 10           # did not give up despite 10 failures
-    assert len(sleep.delays) == 10    # backed off after each
+    assert calls["n"] == 10  # did not give up despite 10 failures
+    assert len(sleep.delays) == 10  # backed off after each

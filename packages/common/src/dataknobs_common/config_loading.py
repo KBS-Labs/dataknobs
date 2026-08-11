@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 DEFAULT_CONFIG_EXTENSIONS: tuple[str, ...] = (".yaml", ".yml", ".json")
 
@@ -81,14 +81,36 @@ def find_config_file(
         exists.
     """
     directory = Path(config_dir)
-    normalized = tuple(
-        ext if ext.startswith(".") else f".{ext}" for ext in extensions
-    )
+    normalized = tuple(ext if ext.startswith(".") else f".{ext}" for ext in extensions)
     for ext in normalized:
         candidate = directory / f"{name}{ext}"
         if candidate.exists():
             return candidate
     return None
+
+
+#: ``require_dict`` decides the return type, so it is spelled as overloads
+#: rather than left to the docstring. Every caller that passes ``True`` (or
+#: takes the default) declares a ``dict[str, Any]`` return of its own, and a
+#: helper returning bare ``Any`` made each of those a *Returning Any from
+#: function declared to return* finding — a whole class of them, one per
+#: caller, all traceable to one signature.
+@overload
+def load_yaml_or_json(
+    path: str | Path,
+    *,
+    require_dict: Literal[True] = ...,
+    encoding: str = ...,
+) -> dict[str, Any]: ...
+
+
+@overload
+def load_yaml_or_json(
+    path: str | Path,
+    *,
+    require_dict: bool,
+    encoding: str = ...,
+) -> Any: ...
 
 
 def load_yaml_or_json(
@@ -145,6 +167,26 @@ def load_yaml_or_json(
     )
 
 
+@overload
+def parse_yaml_or_json(
+    data: bytes | str,
+    *,
+    format: Literal["yaml", "json"],
+    source_name: str | None = ...,
+    require_dict: Literal[True] = ...,
+) -> dict[str, Any]: ...
+
+
+@overload
+def parse_yaml_or_json(
+    data: bytes | str,
+    *,
+    format: Literal["yaml", "json"],
+    source_name: str | None = ...,
+    require_dict: bool,
+) -> Any: ...
+
+
 def parse_yaml_or_json(
     data: bytes | str,
     *,
@@ -185,9 +227,7 @@ def parse_yaml_or_json(
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as e:
-            raise ConfigParseError(
-                f"Failed to decode bytes as UTF-8 ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to decode bytes as UTF-8 ({name}): {e}") from e
     else:
         text = data
 
@@ -195,23 +235,18 @@ def parse_yaml_or_json(
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ConfigParseError(
-                f"Failed to parse JSON ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to parse JSON ({name}): {e}") from e
     elif format == "yaml":
         try:
             import yaml
         except ImportError as e:
             raise ConfigYAMLNotInstalledError(
-                f"PyYAML is required to parse YAML ({name}). "
-                "Install with: pip install pyyaml"
+                f"PyYAML is required to parse YAML ({name}). Install with: pip install pyyaml"
             ) from e
         try:
             parsed = yaml.safe_load(text)
         except yaml.YAMLError as e:
-            raise ConfigParseError(
-                f"Failed to parse YAML ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to parse YAML ({name}): {e}") from e
     else:
         raise ConfigUnsupportedFormatError(
             f"Unsupported format: {format!r} (must be 'yaml' or 'json')"
@@ -219,8 +254,7 @@ def parse_yaml_or_json(
 
     if require_dict and not isinstance(parsed, dict):
         raise ConfigShapeError(
-            f"Expected a dict at the root of {name}, "
-            f"got {type(parsed).__name__}"
+            f"Expected a dict at the root of {name}, got {type(parsed).__name__}"
         )
 
     return parsed

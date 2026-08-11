@@ -93,9 +93,7 @@ class EnsureIngestionResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    completed_at: datetime = field(
-        default_factory=lambda: datetime.now(UTC)
-    )
+    completed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def success(self) -> bool:

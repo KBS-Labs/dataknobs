@@ -76,6 +76,54 @@ workspace_targets() {
     echo "${targets[@]:-}"
 }
 
+# Function to list the per-package directories the formatter covers
+#
+# The formatter's population is NOT the linter's, and the difference is
+# declared rather than incidental. `bin/validate.sh` lints packages/*/src alone
+# because every other per-package directory sits in the quality contract's
+# deferred tier for ruff. The contract holds `format` to a ceiling of 0 on all
+# ten of its cells, so the formatter reaches every one of these.
+#
+# Kept here, beside workspace_targets, because three entry points need the same
+# answer: the check in validate.sh, its write side in fix.sh, and `dk format`.
+# They had three answers before this existed — the check and `dk format` read
+# packages/*/src, fix.sh also read packages/*/tests, and none of them reached
+# examples, scripts, benchmarks or docs. So the check passed over 874 files it
+# never opened, and 42 of those had no local command that could format them.
+#
+# tests/test_toolchain_consistency.py compares this against the contract's
+# enforced format cells, so a cell added there fails until it is named here.
+format_subdirs() {
+    echo "src tests examples scripts benchmarks docs"
+}
+
+# Function to list every path the formatter covers by default
+#
+# The whole population: each package's format directories, plus the code that
+# belongs to no package. Callers narrowing to named packages compose
+# format_subdirs themselves; this is the answer when nothing is named.
+format_targets() {
+    local targets=() package subdir
+    local discovered
+    discovered=$(discover_packages) || return 1
+
+    while IFS= read -r package; do
+        [[ -z "$package" ]] && continue
+        for subdir in $(format_subdirs); do
+            [[ -d "$ROOT_DIR/packages/$package/$subdir" ]] && targets+=("packages/$package/$subdir")
+        done
+    done <<< "${discovered// /$'\n'}"
+
+    local workspace_target
+    for workspace_target in $(workspace_targets); do
+        targets+=("$workspace_target")
+    done
+
+    # Empty is legitimate and must not read as failure under `set -e`, for the
+    # reason workspace_targets says.
+    echo "${targets[@]:-}"
+}
+
 # Function to get packages in dependency order
 # This reads from pyproject.toml to determine dependencies
 get_packages_in_order() {
@@ -196,6 +244,12 @@ else
             ;;
         workspace-targets)
             workspace_targets
+            ;;
+        format-subdirs)
+            format_subdirs
+            ;;
+        format-targets)
+            format_targets
             ;;
         exists)
             if [[ -z "${2:-}" ]]; then

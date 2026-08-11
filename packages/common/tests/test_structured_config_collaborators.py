@@ -245,9 +245,7 @@ class TestSignatureAwareDelivery:
 
         dep = object()
         extra = object()
-        c = await _NarrowAinit.from_config_async(
-            {"label": "a"}, dep=dep, extra=extra
-        )
+        c = await _NarrowAinit.from_config_async({"label": "a"}, dep=dep, extra=extra)
         # Declared param delivered; undeclared extra dropped but retained.
         assert c.dep is dep
         assert c.components["extra"] is extra
@@ -265,9 +263,7 @@ class TestSignatureAwareDelivery:
 
         store = object()
         extra = object()
-        c = _NarrowAdopt.from_components(
-            {"label": "a"}, store=store, extra=extra
-        )
+        c = _NarrowAdopt.from_components({"label": "a"}, store=store, extra=extra)
         # Declared param delivered; undeclared extra dropped but retained.
         assert c.store is store
         assert c.components["extra"] is extra
@@ -319,9 +315,7 @@ class TestCreateAsync:
         async def _abuild(config: dict[str, Any]) -> _AsyncDepConsumer:
             return _AsyncDepConsumer(config)
 
-        def _coro_factory(
-            config: dict[str, Any], **_: Any
-        ) -> _AsyncDepConsumer:
+        def _coro_factory(config: dict[str, Any], **_: Any) -> _AsyncDepConsumer:
             coro = _abuild(config)
             coros.append(coro)
             return coro  # type: ignore[return-value]
@@ -483,9 +477,7 @@ class TestSetComponents:
         original = object()
         c = _SyncDepConsumer.from_config({"label": "a"}, dep=original)
         with pytest.raises(ValueError, match="already present"):
-            c.set_components(
-                {"dep": object(), "b": object()}, allow_overwrite=False
-            )
+            c.set_components({"dep": object(), "b": object()}, allow_overwrite=False)
         # A single clash aborts the whole write — no partial subset applied.
         assert c.components["dep"] is original
         assert "b" not in c.components
@@ -574,9 +566,7 @@ class TestExpectedComponents:
         # The instance method is the live-default wrapper over the classmethod:
         # both agree for the same available-set.
         c = _ExpectingConsumer.from_config({"label": "a"})
-        assert c.missing_components({"other"}) == _ExpectingConsumer.missing_from(
-            {"other"}
-        )
+        assert c.missing_components({"other"}) == _ExpectingConsumer.missing_from({"other"})
 
     def test_require_components_treats_none_value_as_present(self) -> None:
         # Presence-of-key, not truthiness: an injected None satisfies the

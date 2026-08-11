@@ -133,14 +133,16 @@ class TestSchemaMigration1_0To1_1:
         if function_call is not None:
             assistant_meta["function_call"] = function_call
 
-        nodes.append({
-            "node_id": "0.0",
-            "message": assistant_message,
-            "timestamp": "2024-01-01T00:00:02",
-            "prompt_name": None,
-            "branch_name": None,
-            "metadata": assistant_meta,
-        })
+        nodes.append(
+            {
+                "node_id": "0.0",
+                "message": assistant_message,
+                "timestamp": "2024-01-01T00:00:02",
+                "prompt_name": None,
+                "branch_name": None,
+                "metadata": assistant_meta,
+            }
+        )
 
         return {
             "schema_version": "1.0.0",

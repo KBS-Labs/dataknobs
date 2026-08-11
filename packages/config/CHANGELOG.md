@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Config.get_registered_factories()` raised `AttributeError` on every
+  call.** It asked its backing `Registry` for a `copy()` method that registry
+  does not have, so a documented, exported accessor could not be called at all.
+  It now returns a snapshot mapping the caller may mutate freely. The three
+  methods of the runtime factory registry had no test between them, which is
+  how this shipped; they have one now.
+
 - **A configuration value whose own text contains `${...}` was expanded
   twice, replacing it with the value of an unrelated environment variable.**
   Substitution ran in two layers that did not know about each other — once

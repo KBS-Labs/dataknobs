@@ -59,9 +59,7 @@ def test_transaction_manager_symbols_removed():
         "create_transaction_manager",
     ):
         with pytest.raises(ImportError):
-            __import__(
-                "dataknobs_fsm.core.transactions", fromlist=[symbol]
-            )
+            __import__("dataknobs_fsm.core.transactions", fromlist=[symbol])
 
 
 def test_transaction_config_removed_from_schema():

@@ -29,9 +29,7 @@ WIZARD_CLARIFICATION_HEADER: PromptTemplateDict = {
 }
 
 WIZARD_CLARIFICATION_PREAMBLE: PromptTemplateDict = {
-    "template": (
-        "I wasn't able to clearly understand the user's response for this stage."
-    ),
+    "template": ("I wasn't able to clearly understand the user's response for this stage."),
     "template_syntax": "format",
 }
 
@@ -78,8 +76,7 @@ WIZARD_VALIDATION_HEADER: PromptTemplateDict = {
 
 WIZARD_VALIDATION_ISSUES: PromptTemplateDict = {
     "template": (
-        "The user's input for this stage needs clarification:\n\n"
-        "**Issues**:\n{error_list}"
+        "The user's input for this stage needs clarification:\n\n**Issues**:\n{error_list}"
     ),
     "template_syntax": "format",
 }
@@ -120,7 +117,7 @@ WIZARD_TRANSFORM_ERROR_HEADER: PromptTemplateDict = {
 
 WIZARD_TRANSFORM_ERROR_DETAIL: PromptTemplateDict = {
     "template": (
-        'An error occurred while processing the transition from the '
+        "An error occurred while processing the transition from the "
         '"{stage_name}" stage:\n\n'
         "**Error**: {error}"
     ),
@@ -176,10 +173,7 @@ WIZARD_RESTART_OFFER_OPTIONS: PromptTemplateDict = {
 }
 
 WIZARD_RESTART_OFFER_INSTRUCTIONS: PromptTemplateDict = {
-    "template": (
-        "Be empathetic and helpful - acknowledge that the questions might not "
-        "be clear."
-    ),
+    "template": ("Be empathetic and helpful - acknowledge that the questions might not be clear."),
     "template_syntax": "format",
 }
 

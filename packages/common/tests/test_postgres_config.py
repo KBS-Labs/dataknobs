@@ -59,18 +59,13 @@ def test_asyncpg_dialect_prefix_normalized() -> None:
 
 
 def test_database_url_env_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(
-        "DATABASE_URL", "postgresql://u:p@env-host:5999/env-db"
-    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@env-host:5999/env-db")
     result = normalize_postgres_connection_config({})
     assert result is not None
     assert result["host"] == "env-host"
     assert result["port"] == 5999
     assert result["database"] == "env-db"
-    assert (
-        result["connection_string"]
-        == "postgresql://u:p@env-host:5999/env-db"
-    )
+    assert result["connection_string"] == "postgresql://u:p@env-host:5999/env-db"
 
 
 def test_individual_keys_win_over_connection_string() -> None:
@@ -97,10 +92,7 @@ def test_individual_keys_win_over_connection_string() -> None:
     assert result["port"] == 5433
     assert result["password"] == "p"
     # The synthesized connection_string reflects the merged values.
-    assert (
-        result["connection_string"]
-        == "postgresql://override-user:p@url-host:5433/override-db"
-    )
+    assert result["connection_string"] == "postgresql://override-user:p@url-host:5433/override-db"
 
 
 def test_individual_keys_fill_gaps_in_connection_string() -> None:
@@ -128,9 +120,7 @@ def test_individual_keys_synthesize_connection_string() -> None:
         }
     )
     assert result is not None
-    assert (
-        result["connection_string"] == "postgresql://u:p@h:5433/db"
-    )
+    assert result["connection_string"] == "postgresql://u:p@h:5433/db"
     assert result["port"] == 5433
 
 
@@ -333,9 +323,7 @@ def test_partial_config_warns_on_defaulted_keys(
     """
     import logging
 
-    with caplog.at_level(
-        logging.WARNING, logger="dataknobs_common.postgres_config"
-    ):
+    with caplog.at_level(logging.WARNING, logger="dataknobs_common.postgres_config"):
         result = normalize_postgres_connection_config({"host": "foo"})
     assert result is not None
     assert "user" in caplog.text

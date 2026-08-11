@@ -147,9 +147,7 @@ def _parse_rates(raw: list[dict[str, Any]]) -> list[RateLimit]:
     rates: list[RateLimit] = []
     for entry in raw:
         if "limit" not in entry or "interval" not in entry:
-            raise ValueError(
-                f"Each rate must have 'limit' and 'interval' keys, got: {entry}"
-            )
+            raise ValueError(f"Each rate must have 'limit' and 'interval' keys, got: {entry}")
         rates.append(RateLimit(limit=entry["limit"], interval=entry["interval"]))
     return rates
 
@@ -170,9 +168,7 @@ def _parse_config(config: dict[str, Any]) -> RateLimiterConfig:
     """
     raw_rates = config.get("default_rates") or config.get("rates")
     if not raw_rates:
-        raise ValueError(
-            "Rate limiter config must include 'rates' or 'default_rates'"
-        )
+        raise ValueError("Rate limiter config must include 'rates' or 'default_rates'")
     default_rates = _parse_rates(raw_rates)
 
     categories: dict[str, list[RateLimit]] = {}
@@ -211,17 +207,13 @@ checks.
 """
 
 
-def _create_memory_limiter(
-    config: dict[str, Any], *, parsed: RateLimiterConfig
-) -> RateLimiter:
+def _create_memory_limiter(config: dict[str, Any], *, parsed: RateLimiterConfig) -> RateLimiter:
     from .memory import InMemoryRateLimiter
 
     return InMemoryRateLimiter(parsed)
 
 
-def _create_pyrate_limiter(
-    config: dict[str, Any], *, parsed: RateLimiterConfig
-) -> RateLimiter:
+def _create_pyrate_limiter(config: dict[str, Any], *, parsed: RateLimiterConfig) -> RateLimiter:
     # Lazy import keeps ``limiter.py`` (and ``dataknobs_common.ratelimit``)
     # importable without ``pyrate-limiter`` installed — the optional
     # ``pyrate`` extra is only required when this backend is selected.
@@ -333,6 +325,4 @@ async def create_rate_limiter_async(config: dict[str, Any]) -> RateLimiter:
             behaviour as the sync :func:`create_rate_limiter`.
     """
     parsed = _parse_config(config)
-    return await rate_limiter_backends.create_async(
-        config=config, parsed=parsed
-    )
+    return await rate_limiter_backends.create_async(config=config, parsed=parsed)

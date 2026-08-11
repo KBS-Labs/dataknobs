@@ -67,11 +67,26 @@ packages/data/coverage.xml
 # quality-summary.json directly. Committing the report cost a merge conflict per
 # pull request (it appeared in 399 of the last 404 artifact commits) and over a
 # gigabyte of object history, to carry one float.
+#
+# Every `!` line below enlarges what CI attests, not just what git tracks: the
+# signature enumerates this directory by glob (`git ls-files --cached --others
+# --exclude-standard -- '*.json' '*.xml'`), so a file un-ignored here joins the
+# signed set the moment something writes it. lint-report.json was un-ignored for
+# a writer that never existed — a reader in diagnose-quality-failures.sh and an
+# allowance, with nothing in between. Removed rather than left as a slot a future
+# write could fall into silently.
 .quality-artifacts/*
 !.quality-artifacts/quality-summary.json
 !.quality-artifacts/environment.json
 !.quality-artifacts/unit-test-results.xml
 !.quality-artifacts/integration-test-results.xml
-!.quality-artifacts/lint-report.json
 !.quality-artifacts/style-check.json
 !.quality-artifacts/signature.sha256
+
+# Diagnostics from a check-only run: per-package test output, coverage reports,
+# validation and docs logs. Read by bin/diagnose-quality-failures.sh and by
+# whoever is looking at a failure; read by no CI step, and deliberately outside
+# .quality-artifacts/ so that a checker can write freely without being able to
+# reach the evidence the gate produces. Cleared at the start of each run, so what
+# is here is one run's.
+.quality-reports/

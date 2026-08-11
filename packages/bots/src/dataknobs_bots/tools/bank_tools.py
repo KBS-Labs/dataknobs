@@ -77,8 +77,7 @@ def _get_bank_from_context(
     bank = banks.get(bank_name)
     if bank is None:
         raise ValueError(
-            f"Bank '{bank_name}' not found in context. "
-            f"Available banks: {list(banks.keys())}"
+            f"Bank '{bank_name}' not found in context. Available banks: {list(banks.keys())}"
         )
     return bank
 
@@ -133,9 +132,7 @@ def _validate_record_id(record_id: str) -> dict[str, Any] | None:
     return None
 
 
-def create_auto_save_hook(
-    catalog: Any, artifact: Any
-) -> Callable[[BankRecord], None]:
+def create_auto_save_hook(catalog: Any, artifact: Any) -> Callable[[BankRecord], None]:
     """Create a lifecycle hook that auto-saves artifact to catalog.
 
     The hook validates the artifact and, on success, saves it to the
@@ -380,13 +377,12 @@ class AddBankRecordTool(ContextAwareTool):
 
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
-            return error_response(
-                "Missing required parameter: data (must be a dict)"
-            )
+            return error_response("Missing required parameter: data (must be a dict)")
 
         bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
         _register_auto_save(
-            bank, context,
+            bank,
+            context,
             catalog_override=self._catalog,
             artifact_override=self._artifact,
         )
@@ -499,10 +495,7 @@ class UpdateBankRecordTool(ContextAwareTool):
                 },
                 "record_id": {
                     "type": "string",
-                    "description": (
-                        "ID of the record to update "
-                        "(from list_bank_records)."
-                    ),
+                    "description": ("ID of the record to update (from list_bank_records)."),
                 },
                 "data": {
                     "type": "object",
@@ -540,13 +533,12 @@ class UpdateBankRecordTool(ContextAwareTool):
 
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
-            return error_response(
-                "Missing required parameter: data (must be a dict)"
-            )
+            return error_response("Missing required parameter: data (must be a dict)")
 
         bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
         _register_auto_save(
-            bank, context,
+            bank,
+            context,
             catalog_override=self._catalog,
             artifact_override=self._artifact,
         )
@@ -639,10 +631,7 @@ class RemoveBankRecordTool(ContextAwareTool):
                 },
                 "record_id": {
                     "type": "string",
-                    "description": (
-                        "ID of the record to remove "
-                        "(from list_bank_records)."
-                    ),
+                    "description": ("ID of the record to remove (from list_bank_records)."),
                 },
             },
             "required": ["bank_name", "record_id"],
@@ -676,7 +665,8 @@ class RemoveBankRecordTool(ContextAwareTool):
 
         bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
         _register_auto_save(
-            bank, context,
+            bank,
+            context,
             catalog_override=self._catalog,
             artifact_override=self._artifact,
         )
@@ -869,8 +859,7 @@ class CompileArtifactTool(ContextAwareTool):
         artifact = self._artifact or context.extra.get("artifact")
         if artifact is None:
             return error_response(
-                "No artifact configured. "
-                "Ensure the wizard has an artifact configuration.",
+                "No artifact configured. Ensure the wizard has an artifact configuration.",
             )
 
         errors = artifact.validate()
@@ -967,8 +956,7 @@ class FinalizeArtifactTool(ContextAwareTool):
         artifact = self._artifact or context.extra.get("artifact")
         if artifact is None:
             return error_response(
-                "No artifact configured. "
-                "Ensure the wizard has an artifact configuration.",
+                "No artifact configured. Ensure the wizard has an artifact configuration.",
             )
 
         # Idempotent: already finalized -> return compiled without error
@@ -1065,10 +1053,7 @@ class CompleteWizardTool(ContextAwareTool):
             "properties": {
                 "summary": {
                     "type": "string",
-                    "description": (
-                        "Optional closing notes or summary of the "
-                        "completed workflow."
-                    ),
+                    "description": ("Optional closing notes or summary of the completed workflow."),
                 },
             },
         }
@@ -1163,10 +1148,7 @@ class RestartWizardTool(ContextAwareTool):
         """
         super().__init__(
             name=tool_name or "restart_wizard",
-            description=(
-                "Restart the wizard from the beginning, "
-                "clearing all collected data."
-            ),
+            description=("Restart the wizard from the beginning, clearing all collected data."),
         )
 
     @property

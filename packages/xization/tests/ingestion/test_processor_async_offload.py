@@ -48,9 +48,7 @@ async def _process(directory: Path) -> list[ProcessedDocument]:
 
 @requires_blockbuster
 async def test_process_async_yaml_does_not_block(tmp_path: Path) -> None:
-    (tmp_path / "data.yaml").write_text(
-        "title: Doc\nbody: content for the knowledge base\n"
-    )
+    (tmp_path / "data.yaml").write_text("title: Doc\nbody: content for the knowledge base\n")
     with assert_no_blocking():
         docs = await _process(tmp_path)
 
@@ -61,9 +59,7 @@ async def test_process_async_yaml_does_not_block(tmp_path: Path) -> None:
 
 @requires_blockbuster
 async def test_process_async_csv_does_not_block(tmp_path: Path) -> None:
-    (tmp_path / "table.csv").write_text(
-        "question,answer\nWhat is it?,A knowledge base entry.\n"
-    )
+    (tmp_path / "table.csv").write_text("question,answer\nWhat is it?,A knowledge base entry.\n")
     with assert_no_blocking():
         docs = await _process(tmp_path)
 
@@ -89,9 +85,7 @@ async def test_stream_json_local_jsonl_does_not_block(tmp_path: Path) -> None:
         {"id": 2, "text": "second knowledge entry"},
         {"id": 3, "text": "third knowledge entry"},
     ]
-    (tmp_path / "data.jsonl").write_text(
-        "".join(f"{json.dumps(obj)}\n" for obj in lines)
-    )
+    (tmp_path / "data.jsonl").write_text("".join(f"{json.dumps(obj)}\n" for obj in lines))
 
     with assert_no_blocking():
         docs = await _process(tmp_path)

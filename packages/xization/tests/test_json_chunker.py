@@ -293,13 +293,7 @@ class TestJSONChunker:
     def test_flatten_nested_structure(self):
         """Test flattening of deeply nested structures."""
         chunker = JSONChunker()
-        data = {
-            "level1": {
-                "level2": {
-                    "level3": "deep_value"
-                }
-            }
-        }
+        data = {"level1": {"level2": {"level3": "deep_value"}}}
 
         chunks = chunker.chunk(data)
 
@@ -310,13 +304,7 @@ class TestJSONChunker:
         """Test custom nested key separator."""
         config = JSONChunkConfig(nested_separator="/")
         chunker = JSONChunker(config)
-        data = {
-            "config": {
-                "database": {
-                    "host": "localhost"
-                }
-            }
-        }
+        data = {"config": {"database": {"host": "localhost"}}}
 
         chunks = chunker.chunk(data)
 
@@ -330,9 +318,7 @@ class TestJSONChunkerStreaming:
         """Test streaming from a JSONL file."""
         chunker = JSONChunker()
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             f.write('{"title": "First"}\n')
             f.write('{"title": "Second"}\n')
             f.write('{"title": "Third"}\n')
@@ -351,11 +337,9 @@ class TestJSONChunkerStreaming:
         """Test that streaming skips empty lines in JSONL."""
         chunker = JSONChunker()
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             f.write('{"title": "First"}\n')
-            f.write('\n')  # Empty line
+            f.write("\n")  # Empty line
             f.write('{"title": "Second"}\n')
             temp_path = f.name
 
@@ -369,11 +353,9 @@ class TestJSONChunkerStreaming:
         """Test that streaming skips malformed JSON lines."""
         chunker = JSONChunker()
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             f.write('{"title": "Valid"}\n')
-            f.write('not valid json\n')
+            f.write("not valid json\n")
             f.write('{"title": "Also Valid"}\n')
             temp_path = f.name
 
@@ -421,9 +403,7 @@ class TestJSONChunkerStreaming:
         chunker = JSONChunker()
         wrapped = io.TextIOWrapper(io.BytesIO(body), encoding="utf-8")
         try:
-            chunks = list(
-                chunker.stream_chunks(wrapped, is_jsonl=True)
-            )
+            chunks = list(chunker.stream_chunks(wrapped, is_jsonl=True))
         finally:
             wrapped.detach()
         assert len(chunks) == 2
@@ -435,9 +415,7 @@ class TestJSONChunkerStreaming:
         import tempfile
 
         chunker = JSONChunker()
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             f.write('{"title": "One"}\n{"title": "Two"}\n')
             temp_path = f.name
         try:
@@ -456,9 +434,7 @@ class TestJSONChunkerTemplate:
         """Test Jinja2 template rendering."""
         pytest.importorskip("jinja2")
 
-        config = JSONChunkConfig(
-            text_template="Title: {{ title }}\nDescription: {{ description }}"
-        )
+        config = JSONChunkConfig(text_template="Title: {{ title }}\nDescription: {{ description }}")
         chunker = JSONChunker(config)
         data = {"title": "Hello", "description": "World"}
 
@@ -471,9 +447,7 @@ class TestJSONChunkerTemplate:
         """Test template with missing field uses empty string."""
         pytest.importorskip("jinja2")
 
-        config = JSONChunkConfig(
-            text_template="{{ title }} - {{ missing_field }}"
-        )
+        config = JSONChunkConfig(text_template="{{ title }} - {{ missing_field }}")
         chunker = JSONChunker(config)
         data = {"title": "Present"}
 

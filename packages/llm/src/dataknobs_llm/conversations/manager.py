@@ -554,7 +554,10 @@ class ConversationManager:
 
         # Create message
         message = LLMMessage(
-            role=role, content=content, name=name, tool_call_id=tool_call_id,
+            role=role,
+            content=content,
+            name=name,
+            tool_call_id=tool_call_id,
         )
 
         # Prepare node metadata
@@ -651,13 +654,9 @@ class ConversationManager:
         if system_prompt_override is not None:
             messages = list(messages)  # shallow copy
             if messages and messages[0].role == "system":
-                messages[0] = LLMMessage(
-                    role="system", content=system_prompt_override
-                )
+                messages[0] = LLMMessage(role="system", content=system_prompt_override)
             else:
-                messages.insert(
-                    0, LLMMessage(role="system", content=system_prompt_override)
-                )
+                messages.insert(0, LLMMessage(role="system", content=system_prompt_override))
             logger.debug(
                 "System prompt overridden for this completion (%d chars)",
                 len(system_prompt_override),
@@ -782,9 +781,7 @@ class ConversationManager:
         # Add assistant message as child
         current_tree_node = self.state.get_current_node()
         if current_tree_node is None:
-            raise ValueError(
-                f"Current node '{self.state.current_node_id}' not found"
-            )
+            raise ValueError(f"Current node '{self.state.current_node_id}' not found")
 
         # Create assistant message node, including tool_calls on the
         # message itself so providers can include them in message history.
@@ -795,17 +792,19 @@ class ConversationManager:
         )
 
         assistant_metadata = metadata or {}
-        assistant_metadata.update({
-            "usage": response.usage,
-            "model": response.model,
-            # The canonical family key, not ``config.provider`` — which is
-            # stored verbatim, so a ``provider: OpenAI`` deployment would
-            # persist a spelling that no other consumer of provider identity
-            # uses. This metadata is durable, so a mismatch here outlives the
-            # process and splits any join against cost or telemetry.
-            "provider": self.llm.provider_name,
-            "finish_reason": response.finish_reason,
-        })
+        assistant_metadata.update(
+            {
+                "usage": response.usage,
+                "model": response.model,
+                # The canonical family key, not ``config.provider`` — which is
+                # stored verbatim, so a ``provider: OpenAI`` deployment would
+                # persist a spelling that no other consumer of provider identity
+                # uses. This metadata is durable, so a mismatch here outlives the
+                # process and splits any join against cost or telemetry.
+                "provider": self.llm.provider_name,
+                "finish_reason": response.finish_reason,
+            }
+        )
 
         # Track config overrides if they were applied
         if llm_config_overrides:
@@ -975,7 +974,10 @@ class ConversationManager:
         )
 
         return await self._finalize_completion(
-            response, branch_name, metadata, llm_config_overrides,
+            response,
+            branch_name,
+            metadata,
+            llm_config_overrides,
             system_prompt_override=system_prompt_override,
         )
 
@@ -1066,15 +1068,19 @@ class ConversationManager:
         # Assemble a complete LLMResponse from accumulated stream data
         response = LLMResponse(
             content=full_content,
-            model=(final_chunk.model if final_chunk and final_chunk.model
-                   else self.llm.config.model),
+            model=(
+                final_chunk.model if final_chunk and final_chunk.model else self.llm.config.model
+            ),
             finish_reason=final_chunk.finish_reason if final_chunk else "stop",
             usage=final_chunk.usage if final_chunk else None,
             tool_calls=final_chunk.tool_calls if final_chunk else None,
         )
 
         await self._finalize_completion(
-            response, branch_name, metadata, llm_config_overrides,
+            response,
+            branch_name,
+            metadata,
+            llm_config_overrides,
             system_prompt_override=system_prompt_override,
         )
 
@@ -1139,14 +1145,11 @@ class ConversationManager:
 
         sibling_node = get_node_by_id(self.state.message_tree, sibling_node_id)
         if sibling_node is None:
-            raise ValueError(
-                f"Node '{sibling_node_id}' not found in conversation tree"
-            )
+            raise ValueError(f"Node '{sibling_node_id}' not found in conversation tree")
 
         if sibling_node.parent is None:
             raise ValueError(
-                f"Node '{sibling_node_id}' is the root and has no parent to "
-                "branch from"
+                f"Node '{sibling_node_id}' is the root and has no parent to branch from"
             )
 
         parent_id = calculate_node_id(sibling_node.parent)
@@ -1208,19 +1211,13 @@ class ConversationManager:
         if not self.state:
             return 0
 
-        current_tree = get_node_by_id(
-            self.state.message_tree, self.state.current_node_id
-        )
+        current_tree = get_node_by_id(self.state.message_tree, self.state.current_node_id)
         if current_tree is None:
             return 0
 
         # Root -> current path, restricted to real conversation nodes so the
         # tree-node list and message list stay index-aligned.
-        conv_nodes = [
-            tn
-            for tn in current_tree.get_path()
-            if isinstance(tn.data, ConversationNode)
-        ]
+        conv_nodes = [tn for tn in current_tree.get_path() if isinstance(tn.data, ConversationNode)]
         messages = [tn.data.message for tn in conv_nodes]
 
         # Anchor at the LAST user message — the start of the current tool loop.
@@ -1232,23 +1229,20 @@ class ConversationManager:
         if head_end is None:
             return 0  # no user anchor — nothing safely compactable
 
-        body_nodes = conv_nodes[head_end + 1:]
-        body_messages = messages[head_end + 1:]
+        body_nodes = conv_nodes[head_end + 1 :]
+        body_messages = messages[head_end + 1 :]
         if not body_messages:
             return 0
 
         # Segment the body into iteration units: a unit begins at each non-tool
         # message and absorbs the following tool observations. A tool result is
         # never a unit start, so it can never be split from its tool_use.
-        unit_starts = [
-            i for i, m in enumerate(body_messages) if m.role != "tool"
-        ]
+        unit_starts = [i for i, m in enumerate(body_messages) if m.role != "tool"]
         if not unit_starts or unit_starts[0] != 0:
             # Leading tool messages with no owning assistant in the body — a
             # malformed sequence; refuse to compact rather than risk a split.
             logger.debug(
-                "compact_history: body does not start at an iteration "
-                "boundary; skipping compaction"
+                "compact_history: body does not start at an iteration boundary; skipping compaction"
             )
             return 0
         if len(unit_starts) <= keep_recent_iterations:
@@ -1299,9 +1293,7 @@ class ConversationManager:
         return dropped_count
 
     async def execute_flow(
-        self,
-        flow: ConversationFlow,
-        initial_params: Dict[str, Any] | None = None
+        self, flow: ConversationFlow, initial_params: Dict[str, Any] | None = None
     ) -> AsyncIterator[ConversationNode]:
         """Execute a conversation flow using FSM.
 
@@ -1355,9 +1347,7 @@ class ConversationManager:
 
         # Create adapter
         adapter = ConversationFlowAdapter(
-            flow=flow,
-            prompt_builder=self.prompt_builder,
-            llm=self.llm
+            flow=flow, prompt_builder=self.prompt_builder, llm=self.llm
         )
 
         # Execute flow and yield nodes
@@ -1376,17 +1366,12 @@ class ConversationManager:
                     role="assistant",
                     content=response,
                     timestamp=datetime.now(),
-                    metadata={
-                        "state": state_name,
-                        "flow_name": flow.name,
-                        "flow_execution": True
-                    }
+                    metadata={"state": state_name, "flow_name": flow.name, "flow_execution": True},
                 )
 
                 # Add to conversation tree
                 current_tree_node = get_node_by_id(
-                    self.state.message_tree,
-                    self.state.current_node_id
+                    self.state.message_tree, self.state.current_node_id
                 )
 
                 new_tree_node = Tree(node)
@@ -1403,6 +1388,7 @@ class ConversationManager:
 
         except Exception as e:
             import logging
+
             logging.error(f"Flow execution failed: {e}")
             raise ValueError(f"Flow execution failed: {e!s}") from e
 
@@ -1457,13 +1443,15 @@ class ConversationManager:
         branches = []
         for child in node.children:
             data = child.data
-            branches.append({
-                "node_id": data.node_id,
-                "branch_name": data.branch_name,
-                "role": data.message.role,
-                "preview": data.message.content[:100],
-                "timestamp": data.timestamp,
-            })
+            branches.append(
+                {
+                    "node_id": data.node_id,
+                    "branch_name": data.branch_name,
+                    "role": data.message.role,
+                    "preview": data.message.content[:100],
+                    "timestamp": data.timestamp,
+                }
+            )
 
         return branches
 
@@ -1494,10 +1482,7 @@ class ConversationManager:
         await self._save_state()
 
     async def _find_cached_rag(
-        self,
-        prompt_name: str,
-        role: str,
-        params: Dict[str, Any]
+        self, prompt_name: str, role: str, params: Dict[str, Any]
     ) -> Dict[str, Any] | None:
         """Search conversation history for cached RAG metadata.
 
@@ -1523,8 +1508,7 @@ class ConversationManager:
 
         # Get RAG configs for this prompt to determine what queries we're looking for
         rag_configs = self.prompt_builder.library.get_prompt_rag_configs(
-            prompt_name=prompt_name,
-            prompt_type="system" if role == "system" else "user"
+            prompt_name=prompt_name, prompt_type="system" if role == "system" else "user"
         )
 
         if not rag_configs:
@@ -1532,6 +1516,7 @@ class ConversationManager:
 
         # Compute the query hashes we're looking for
         from jinja2 import Template
+
         target_hashes_by_placeholder = {}
         for rag_config in rag_configs:
             placeholder = rag_config.get("placeholder", "RAG_CONTENT")
@@ -1544,7 +1529,9 @@ class ConversationManager:
                 resolved_query = template.render(params)
 
                 # Compute hash
-                query_hash = self.prompt_builder._compute_rag_query_hash(adapter_name, resolved_query)
+                query_hash = self.prompt_builder._compute_rag_query_hash(
+                    adapter_name, resolved_query
+                )
                 target_hashes_by_placeholder[placeholder] = query_hash
             except Exception:
                 # If query rendering fails, we can't match cache
@@ -1555,6 +1542,7 @@ class ConversationManager:
 
         # Search entire tree for matching cached RAG (BFS to find any match)
         from collections import deque
+
         queue = deque([self.state.message_tree])
 
         while queue:
@@ -1562,9 +1550,7 @@ class ConversationManager:
             node_data = tree_node.data
 
             # Check if this node has the same prompt name and role
-            if (node_data.prompt_name == prompt_name and
-                node_data.message.role == role):
-
+            if node_data.prompt_name == prompt_name and node_data.message.role == role:
                 # Check if RAG metadata exists
                 rag_metadata = node_data.metadata.get("rag_metadata")
                 if rag_metadata:
@@ -2204,7 +2190,7 @@ class ConversationManager:
         def walk_tree(node: Tree) -> None:
             nonlocal total
             if node.data and node.data.metadata:
-                cost = node.data.metadata.get('cost_usd')
+                cost = node.data.metadata.get("cost_usd")
                 if cost is not None:
                     total += cost
 
@@ -2253,17 +2239,13 @@ class ConversationManager:
             if idx < len(current.children):
                 current = current.children[idx]
                 if current.data and current.data.metadata:
-                    cost = current.data.metadata.get('cost_usd')
+                    cost = current.data.metadata.get("cost_usd")
                     if cost is not None:
                         total += cost
 
         return total
 
-    def _calculate_and_track_cost(
-        self,
-        response: LLMResponse,
-        metadata: Dict[str, Any]
-    ) -> None:
+    def _calculate_and_track_cost(self, response: LLMResponse, metadata: Dict[str, Any]) -> None:
         """Calculate cost for a response and add to metadata.
 
         This is an internal helper that uses the CostCalculator utility
@@ -2287,8 +2269,8 @@ class ConversationManager:
                     response.cumulative_cost_usd = cumulative
 
                     # Store in metadata
-                    metadata['cost_usd'] = cost
-                    metadata['cumulative_cost_usd'] = cumulative
+                    metadata["cost_usd"] = cost
+                    metadata["cumulative_cost_usd"] = cumulative
         except Exception as e:
             # Don't fail the conversation if cost calculation fails
             logger.warning("Failed to calculate cost: %s", e)

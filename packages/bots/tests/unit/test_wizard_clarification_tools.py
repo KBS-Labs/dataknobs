@@ -122,9 +122,7 @@ class TestClarificationToolsPassed:
         tools = [SimpleTool("list_catalog"), SimpleTool("list_bank_records")]
 
         # Extraction returns invalid JSON → low confidence → clarification
-        reasoning, _ = _build_clarification_wizard(
-            extraction_responses=["not valid json at all"]
-        )
+        reasoning, _ = _build_clarification_wizard(extraction_responses=["not valid json at all"])
 
         await manager.add_message(role="user", content="something vague")
 
@@ -157,9 +155,7 @@ class TestClarificationToolsPassed:
         manager, conv_provider = conversation_manager_pair
         tools = [SimpleTool("list_catalog")]
 
-        reasoning, _ = _build_clarification_wizard(
-            extraction_responses=["not valid json"]
-        )
+        reasoning, _ = _build_clarification_wizard(extraction_responses=["not valid json"])
 
         await manager.add_message(role="user", content="something vague")
         conv_provider.set_responses(["Could you clarify?"])
@@ -199,18 +195,14 @@ class TestRestartOfferToolsPassed:
 
         # Three rounds of failed extraction
         for i in range(3):
-            await manager.add_message(
-                role="user", content=f"vague message {i}"
-            )
+            await manager.add_message(role="user", content=f"vague message {i}")
             conv_provider.set_responses([f"Clarification attempt {i}"])
             await reasoning.generate(manager, llm=None, tools=tools)
 
         # The third call triggers _generate_restart_offer
         last_call = conv_provider.get_last_call()
         assert last_call is not None
-        assert last_call["tools"] is not None, (
-            "Restart-offer response must include tools"
-        )
+        assert last_call["tools"] is not None, "Restart-offer response must include tools"
         tool_names = [t.name for t in last_call["tools"]]
         assert "list_catalog" in tool_names
 
@@ -228,9 +220,7 @@ class TestClarificationWithoutTools:
         """
         manager, conv_provider = conversation_manager_pair
 
-        reasoning, _ = _build_clarification_wizard(
-            extraction_responses=["not valid json"]
-        )
+        reasoning, _ = _build_clarification_wizard(extraction_responses=["not valid json"])
 
         await manager.add_message(role="user", content="something vague")
         conv_provider.set_responses(["Could you clarify?"])

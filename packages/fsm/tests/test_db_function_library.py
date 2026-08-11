@@ -179,9 +179,7 @@ def test_callable_identity_overrides_derivation() -> None:
 def test_resolve_identity_picks_one_strategy() -> None:
     assert resolve_identity() is None
     assert isinstance(resolve_identity(key_columns=["id"]), KeyColumnsIdentity)
-    assert isinstance(
-        resolve_identity(id_fn=lambda r: r["id"]), CallableIdentity
-    )
+    assert isinstance(resolve_identity(id_fn=lambda r: r["id"]), CallableIdentity)
     with pytest.raises(ConfigurationError):
         resolve_identity(key_columns=["id"], id_fn=lambda r: r["id"])
 
@@ -264,9 +262,7 @@ async def test_bulk_insert_on_duplicate_update_overwrites(tmp_path: Path) -> Non
 async def test_bulk_insert_no_identity_creates_all(tmp_path: Path) -> None:
     adapter = _file_adapter(tmp_path, "create")
     try:
-        res = await adapter.bulk_insert(
-            "t", [{"v": "a"}, {"v": "b"}]
-        )
+        res = await adapter.bulk_insert("t", [{"v": "a"}, {"v": "b"}])
         assert res["affected_rows"] == 2
     finally:
         await adapter.aclose()
@@ -308,9 +304,7 @@ async def test_bulk_insert_no_identity_mints_ids_ignoring_payload_id(
     # The payload id/record_id was NOT promoted to the storage key.
     assert all(r.storage_id not in ("x", "y") for r in stored)
     # …and it survives untouched as row data.
-    data_ids = sorted(
-        r.get_value("id") or r.get_value("record_id") for r in stored
-    )
+    data_ids = sorted(r.get_value("id") or r.get_value("record_id") for r in stored)
     assert data_ids == ["x", "x", "y"]
 
 
@@ -326,9 +320,7 @@ async def test_commit_batch_no_identity_mints_ids_ignoring_payload_id(
     """
     adapter = _duckdb_adapter(tmp_path, "mintbatch")
     try:
-        res = await adapter.commit_batch(
-            [{"id": "x", "v": "a"}, {"id": "x", "v": "b"}]
-        )
+        res = await adapter.commit_batch([{"id": "x", "v": "a"}, {"id": "x", "v": "b"}])
         assert res["affected_rows"] == 2
     finally:
         await adapter.aclose()
@@ -419,9 +411,7 @@ async def test_bulk_insert_transform_surfaces_validation_error(
     generic ``TransformError`` wrapper.
     """
     adapter = _file_adapter(tmp_path, "biv")
-    fn = DatabaseBulkInsert(
-        "target_db", "t", key_columns=["id"], on_duplicate="update"
-    )
+    fn = DatabaseBulkInsert("target_db", "t", key_columns=["id"], on_duplicate="update")
     try:
         with pytest.raises(ValidationError):
             await fn.transform(
@@ -484,9 +474,7 @@ async def test_commit_batch_require_raises_on_non_transactional(tmp_path: Path) 
 async def test_commit_batch_require_succeeds_on_sqlite(tmp_path: Path) -> None:
     adapter = _sqlite_adapter(tmp_path, "sq")
     try:
-        res = await adapter.commit_batch(
-            [{"v": "a"}, {"v": "b"}], atomicity="require"
-        )
+        res = await adapter.commit_batch([{"v": "a"}, {"v": "b"}], atomicity="require")
         assert res["affected_rows"] == 2
     finally:
         await adapter.aclose()
@@ -508,9 +496,7 @@ async def test_commit_batch_require_with_identity_succeeds_on_transactional(
     """
     ext = "db" if backend == "sqlite" else "duckdb"
     path = tmp_path / f"reqid.{ext}"
-    adapter = AsyncDatabaseResourceAdapter(
-        name="reqid", backend=backend, path=str(path)
-    )
+    adapter = AsyncDatabaseResourceAdapter(name="reqid", backend=backend, path=str(path))
     ident = KeyColumnsIdentity(["id"])
     batch = [{"id": "1", "v": "a"}, {"id": "2", "v": "b"}]
     try:
@@ -538,9 +524,7 @@ async def test_commit_batch_require_with_identity_raises_on_non_transactional(
     ident = KeyColumnsIdentity(["id"])
     try:
         with pytest.raises(CapabilityNotSupportedError):
-            await adapter.commit_batch(
-                [{"id": "1", "v": "a"}], identity=ident, atomicity="require"
-            )
+            await adapter.commit_batch([{"id": "1", "v": "a"}], identity=ident, atomicity="require")
     finally:
         await adapter.aclose()
 
@@ -593,9 +577,7 @@ async def test_batch_commit_batch_size_chunks_best_effort(tmp_path: Path) -> Non
     """``batch_size`` bounds each best_effort commit: 5 rows at batch_size=2
     must reach the adapter as 3 ``commit_batch`` calls (not silently inert).
     """
-    adapter = _CountingAdapter(
-        name="chunk", backend="file", path=str(tmp_path / "chunk.json")
-    )
+    adapter = _CountingAdapter(name="chunk", backend="file", path=str(tmp_path / "chunk.json"))
     fn = BatchCommit("target_db", batch_size=2)
     batch = [{"v": str(i)} for i in range(5)]
     try:
@@ -616,9 +598,7 @@ async def test_batch_commit_require_issues_single_atomic_batch(
     batch — ``batch_size`` does not chunk it, so a 5-row batch at batch_size=2
     is a SINGLE ``commit_batch`` call (whole-batch atomicity wins).
     """
-    adapter = _CountingAdapter(
-        name="atomic", backend="sqlite", path=str(tmp_path / "atomic.db")
-    )
+    adapter = _CountingAdapter(name="atomic", backend="sqlite", path=str(tmp_path / "atomic.db"))
     fn = BatchCommit("target_db", batch_size=2, atomicity="require")
     batch = [{"v": str(i)} for i in range(5)]
     try:
@@ -642,9 +622,7 @@ async def test_batch_commit_require_with_identity_single_atomic_batch(
     adapter = _CountingAdapter(
         name="atomicid", backend="sqlite", path=str(tmp_path / "atomicid.db")
     )
-    fn = BatchCommit(
-        "target_db", batch_size=2, key_columns=["id"], atomicity="require"
-    )
+    fn = BatchCommit("target_db", batch_size=2, key_columns=["id"], atomicity="require")
     batch = [{"id": str(i), "v": str(i)} for i in range(5)]
     try:
         result = await fn.transform({"batch": batch}, _ctx("target_db", adapter))
@@ -687,9 +665,7 @@ def test_batch_commit_nonpositive_batch_size_is_configuration_error() -> None:
 # --------------------------------------------------------------------------- #
 # Full-FSM behavioral coverage (mirrors the W2 reference idiom)
 # --------------------------------------------------------------------------- #
-def _single_state_fsm(
-    name: str, func, target_cfg: dict[str, Any]
-) -> AsyncSimpleFSM:
+def _single_state_fsm(name: str, func, target_cfg: dict[str, Any]) -> AsyncSimpleFSM:
     config = {
         "name": name,
         "data_mode": DataHandlingMode.COPY.value,
@@ -720,9 +696,7 @@ async def test_batch_commit_through_fsm_persists(tmp_path: Path) -> None:
     fsm = _single_state_fsm("batch", BatchCommit("target_db"), target)
     try:
         with assert_no_blocking():
-            result = await fsm.process(
-                {"batch": [{"v": "a"}, {"v": "b"}, {"v": "c"}]}
-            )
+            result = await fsm.process({"batch": [{"v": "a"}, {"v": "b"}, {"v": "c"}]})
         assert result["success"], f"FSM did not complete cleanly: {result}"
     finally:
         await fsm.close()
@@ -732,9 +706,7 @@ async def test_batch_commit_through_fsm_persists(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_bulk_insert_through_fsm_persists(tmp_path: Path) -> None:
     target = {"type": "file", "path": str(tmp_path / "fsm_bulk.json")}
-    fsm = _single_state_fsm(
-        "bulk", DatabaseBulkInsert("target_db", "rows"), target
-    )
+    fsm = _single_state_fsm("bulk", DatabaseBulkInsert("target_db", "rows"), target)
     try:
         with assert_no_blocking():
             result = await fsm.process({"records": [{"v": "a"}, {"v": "b"}]})
@@ -912,10 +884,7 @@ async def test_database_transaction_commit_without_handle_warns_and_commits_noth
         assert out["committed_count"] == 0
         assert out["transaction_active"] is False
         assert out["_transaction"] is None
-        assert any(
-            "no active transaction" in r.getMessage().lower()
-            for r in caplog.records
-        )
+        assert any("no active transaction" in r.getMessage().lower() for r in caplog.records)
     finally:
         await adapter.aclose()
 

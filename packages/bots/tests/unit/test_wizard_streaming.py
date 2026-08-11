@@ -133,9 +133,7 @@ class TestWizardStreamChat:
             extraction_results=[[{"name": "Alice"}]],
         ) as harness:
             chunks: list[LLMStreamResponse] = []
-            async for chunk in harness.bot.stream_chat(
-                "My name is Alice", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("My name is Alice", harness.context):
                 chunks.append(chunk)
 
             assert len(chunks) > 0
@@ -164,9 +162,7 @@ class TestWizardStreamChat:
             extraction_results=[[{}]],
         ) as harness:
             chunks: list[LLMStreamResponse] = []
-            async for chunk in harness.bot.stream_chat(
-                "hmm", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("hmm", harness.context):
                 chunks.append(chunk)
 
             # Clarification is a single chunk (early return, not streamed)
@@ -185,9 +181,7 @@ class TestWizardStreamChat:
             extraction_results=[[{"name": "Bob"}]],
         ) as harness:
             chunks: list[LLMStreamResponse] = []
-            async for chunk in harness.bot.stream_chat(
-                "My name is Bob", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("My name is Bob", harness.context):
                 chunks.append(chunk)
 
             # Template stage emits single chunk
@@ -438,9 +432,7 @@ class TestStreamingSubflowPush:
             # next user message. (dk-42: was incorrectly 1 before fix.)
             state = harness.wizard_state
             assert state is not None
-            render_counts = state.get("data", {}).get(
-                "_stage_render_counts", {}
-            )
+            render_counts = state.get("data", {}).get("_stage_render_counts", {})
             assert render_counts.get("detail_gather", 0) == 0
 
 
@@ -472,9 +464,7 @@ class TestTemplateRenderCount:
             # count should be 1 after the first render.
             state = harness.wizard_state
             assert state is not None
-            render_counts = state.get("data", {}).get(
-                "_stage_render_counts", {}
-            )
+            render_counts = state.get("data", {}).get("_stage_render_counts", {})
             assert render_counts.get("review", 0) == 1
 
 
@@ -515,9 +505,7 @@ class TestCompletionSummary:
             main_responses=[
                 # Turn 1: extraction succeeds, transitions to "finalize"
                 # Finalize stage uses ReAct — tool call then text
-                tool_call_response(
-                    "complete_wizard", {"summary": "All data collected"}
-                ),
+                tool_call_response("complete_wizard", {"summary": "All data collected"}),
                 text_response("Everything is wrapped up!"),
             ],
             extraction_results=[[{"name": "Fiona"}]],
@@ -526,10 +514,7 @@ class TestCompletionSummary:
             result = await harness.stream_chat("My name is Fiona")
 
             # Completion summary should be in wizard data
-            assert (
-                harness.wizard_data.get("_completion_summary")
-                == "All data collected"
-            )
+            assert harness.wizard_data.get("_completion_summary") == "All data collected"
             # Wizard should be marked completed
             assert harness.wizard_state is not None
             assert harness.wizard_state.get("completed") is True

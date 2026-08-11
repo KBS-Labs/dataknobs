@@ -66,18 +66,15 @@ class TestMiddlewareBase:
         assert result is None
         await mw.after_turn(turn)
         from dataknobs_bots.bot.turn import ToolExecution
-        await mw.on_tool_executed(
-            ToolExecution(tool_name="t", parameters={}), bot_context
-        )
+
+        await mw.on_tool_executed(ToolExecution(tool_name="t", parameters={}), bot_context)
 
 
 class TestCostTrackingMiddleware:
     """Tests for CostTrackingMiddleware."""
 
     @pytest.mark.asyncio
-    async def test_on_turn_start_runs_without_error(
-        self, bot_context: BotContext
-    ):
+    async def test_on_turn_start_runs_without_error(self, bot_context: BotContext):
         """on_turn_start logs estimated tokens without error."""
         middleware = CostTrackingMiddleware()
         turn = _make_turn(bot_context, message="Hello, world!")
@@ -85,9 +82,7 @@ class TestCostTrackingMiddleware:
         assert result is None  # No message transform
 
     @pytest.mark.asyncio
-    async def test_after_turn_tracks_usage_with_real_data(
-        self, bot_context: BotContext
-    ):
+    async def test_after_turn_tracks_usage_with_real_data(self, bot_context: BotContext):
         """after_turn tracks token usage from real provider data."""
         middleware = CostTrackingMiddleware()
 
@@ -108,9 +103,7 @@ class TestCostTrackingMiddleware:
         assert stats["total_cost_usd"] > 0
 
     @pytest.mark.asyncio
-    async def test_after_turn_estimates_when_no_usage(
-        self, bot_context: BotContext
-    ):
+    async def test_after_turn_estimates_when_no_usage(self, bot_context: BotContext):
         """after_turn estimates tokens from text when provider has no usage data."""
         middleware = CostTrackingMiddleware()
 
@@ -130,9 +123,7 @@ class TestCostTrackingMiddleware:
         assert stats["chat_turns"] == 1
 
     @pytest.mark.asyncio
-    async def test_after_turn_streaming_increments_stream_counter(
-        self, bot_context: BotContext
-    ):
+    async def test_after_turn_streaming_increments_stream_counter(self, bot_context: BotContext):
         """Streaming turns increment the stream_turns stat counter."""
         middleware = CostTrackingMiddleware()
 
@@ -151,9 +142,7 @@ class TestCostTrackingMiddleware:
         assert stats["chat_turns"] == 0
 
     @pytest.mark.asyncio
-    async def test_after_turn_with_disabled_tracking(
-        self, bot_context: BotContext
-    ):
+    async def test_after_turn_with_disabled_tracking(self, bot_context: BotContext):
         """Disabled tracking doesn't record stats."""
         middleware = CostTrackingMiddleware(track_tokens=False)
 
@@ -182,9 +171,7 @@ class TestCostTrackingMiddleware:
         assert stats["stream_turns"] == 0
 
     @pytest.mark.asyncio
-    async def test_counters_accumulate_across_turn_types(
-        self, bot_context: BotContext
-    ):
+    async def test_counters_accumulate_across_turn_types(self, bot_context: BotContext):
         """Counters track chat vs stream requests and errors."""
         middleware = CostTrackingMiddleware()
 
@@ -417,9 +404,7 @@ class TestLoggingMiddleware:
         await middleware.after_turn(turn)
 
     @pytest.mark.asyncio
-    async def test_after_turn_logs_both_provider_axes(
-        self, bot_context: BotContext, caplog
-    ):
+    async def test_after_turn_logs_both_provider_axes(self, bot_context: BotContext, caplog):
         """The structured payload carries the family *and* the implementation.
 
         ``provider`` was redefined by the provider-identity contract: it used
@@ -447,9 +432,7 @@ class TestLoggingMiddleware:
             await middleware.after_turn(turn)
 
         payloads = [
-            _json.loads(r.getMessage())
-            for r in caplog.records
-            if r.getMessage().startswith("{")
+            _json.loads(r.getMessage()) for r in caplog.records if r.getMessage().startswith("{")
         ]
         completions = [p for p in payloads if p.get("event") == "turn_complete"]
         assert completions, "no turn_complete payload was logged"

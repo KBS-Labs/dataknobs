@@ -58,9 +58,7 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         self.embedding_provider: Any = None
         self._owns_vector_store = False
         self._owns_embedding_provider = False
-        self._compiled_redactions = compile_history_redactions(
-            self.config.history_redactions
-        )
+        self._compiled_redactions = compile_history_redactions(self.config.history_redactions)
 
     @classmethod
     async def from_config(  # type: ignore[override]
@@ -137,8 +135,7 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         """Adopt caller-owned store + embedder for ``from_components``."""
         if vector_store is None or embedding_provider is None:
             raise TypeError(
-                "VectorMemory.from_components requires vector_store and "
-                "embedding_provider"
+                "VectorMemory.from_components requires vector_store and embedding_provider"
             )
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -173,12 +170,14 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
 
         # Merge order: defaults < base fields (system-controlled) < caller metadata
         msg_metadata = dict(self._default_metadata)
-        msg_metadata.update({
-            "content": content,
-            "role": role,
-            "timestamp": datetime.now().isoformat(),
-            "id": str(uuid4()),
-        })
+        msg_metadata.update(
+            {
+                "content": content,
+                "role": role,
+                "timestamp": datetime.now().isoformat(),
+                "id": str(uuid4()),
+            }
+        )
         if metadata:
             msg_metadata.update(metadata)
 
@@ -303,9 +302,7 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         await close_if_owned(
             self.embedding_provider,
             self._owns_embedding_provider,
-            on_error=lambda _exc: logger.exception(
-                "Error closing embedding provider"
-            ),
+            on_error=lambda _exc: logger.exception("Error closing embedding provider"),
         )
         await close_if_owned(
             self.vector_store,
@@ -313,9 +310,7 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
             on_error=lambda _exc: logger.exception("Error closing vector store"),
         )
 
-    async def clear(
-        self, filter_metadata: dict[str, Any] | None = None
-    ) -> None:
+    async def clear(self, filter_metadata: dict[str, Any] | None = None) -> None:
         """Clear vectors from this memory.
 
         The effective filter AND-composes ``default_filter`` and

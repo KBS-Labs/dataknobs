@@ -51,9 +51,7 @@ async def test_none_and_single_tenant_are_identical(kind, tmp_path) -> None:
     assert via_none.ingestion_status == via_single.ingestion_status
 
     # Writing through SingleTenantContext also lands on the shared store.
-    await b.set_ingestion_status(
-        "kb", "ingesting", ctx=SingleTenantContext("kb")
-    )
+    await b.set_ingestion_status("kb", "ingesting", ctx=SingleTenantContext("kb"))
     refreshed = await b.get_info("kb")
     again = await b.get_info("kb", ctx=SingleTenantContext("kb"))
     assert refreshed.ingestion_status == again.ingestion_status
@@ -86,9 +84,7 @@ async def test_tenant_state_requires_existing_domain(kind, tmp_path) -> None:
     """KB existence stays keyed by ``domain_id`` even with a tenant ctx."""
     b = await _build(kind, tmp_path)
     with pytest.raises(ValueError, match="does not exist"):
-        await b.set_ingestion_status(
-            "missing", "ready", ctx=BoundTenantContext("alpha", "missing")
-        )
+        await b.set_ingestion_status("missing", "ready", ctx=BoundTenantContext("alpha", "missing"))
     await b.close()
 
 
@@ -141,9 +137,7 @@ async def test_memory_snapshot_store_is_tenant_isolated(tmp_path) -> None:
     assert await b._load_snapshot("kb", version, ctx=alpha) == expected
     # A different tenant does not.
     with pytest.raises(InvalidVersionError):
-        await b._load_snapshot(
-            "kb", version, ctx=BoundTenantContext("beta", "kb")
-        )
+        await b._load_snapshot("kb", version, ctx=BoundTenantContext("beta", "kb"))
     # The single-tenant store (content mutation) resolves it too.
     assert await b._load_snapshot("kb", version) == expected
 
@@ -165,17 +159,13 @@ async def test_file_snapshot_store_is_tenant_isolated(tmp_path) -> None:
 
     assert await b._load_snapshot("kb", version, ctx=alpha) == expected
     with pytest.raises(InvalidVersionError):
-        await b._load_snapshot(
-            "kb", version, ctx=BoundTenantContext("beta", "kb")
-        )
+        await b._load_snapshot("kb", version, ctx=BoundTenantContext("beta", "kb"))
 
     await b.close()
 
 
 @pytest.mark.parametrize("kind", ["memory", "file"])
-async def test_tenant_change_detection_uses_shared_content_snapshot(
-    kind, tmp_path
-) -> None:
+async def test_tenant_change_detection_uses_shared_content_snapshot(kind, tmp_path) -> None:
     """A tenant sees a *minimal* diff against the shared domain-keyed
     content snapshot lineage — even though it never recorded a
     tenant-scoped snapshot itself.

@@ -94,24 +94,18 @@ class TestConfigHierarchy:
         assert cfg.vector_metric == "cosine"
 
     def test_from_dict_projects_documented_keys(self) -> None:
-        cfg = MemoryDatabaseConfig.from_dict(
-            {"vector_enabled": True, "vector_metric": "euclidean"}
-        )
+        cfg = MemoryDatabaseConfig.from_dict({"vector_enabled": True, "vector_metric": "euclidean"})
         assert cfg.vector_enabled is True
         assert cfg.vector_metric == "euclidean"
 
     def test_from_dict_ignores_routing_keys(self) -> None:
         # The factory passes the whole config dict, including the
         # ``backend`` routing key — unknown keys must pass through.
-        cfg = MemoryDatabaseConfig.from_dict(
-            {"backend": "memory", "vector_enabled": True}
-        )
+        cfg = MemoryDatabaseConfig.from_dict({"backend": "memory", "vector_enabled": True})
         assert cfg.vector_enabled is True
 
     def test_schema_dict_normalized_to_database_schema(self) -> None:
-        cfg = MemoryDatabaseConfig.from_dict(
-            {"schema": {"fields": {"age": "integer"}}}
-        )
+        cfg = MemoryDatabaseConfig.from_dict({"schema": {"fields": {"age": "integer"}}})
         assert isinstance(cfg.schema, DatabaseSchema)
         assert "age" in cfg.schema.fields
 
@@ -164,27 +158,17 @@ class TestMemoryConstructionParity:
         assert isinstance(db.config, MemoryDatabaseConfig)
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_dict_and_typed_reach_identical_state(
-        self, backend_cls: type
-    ) -> None:
-        from_dict = backend_cls(
-            {"vector_enabled": True, "vector_metric": "euclidean"}
-        )
+    def test_dict_and_typed_reach_identical_state(self, backend_cls: type) -> None:
+        from_dict = backend_cls({"vector_enabled": True, "vector_metric": "euclidean"})
         from_typed = backend_cls(
             MemoryDatabaseConfig(vector_enabled=True, vector_metric="euclidean")
         )
         assert from_dict.config == from_typed.config
         assert from_dict.vector_enabled == from_typed.vector_enabled is True
-        assert (
-            from_dict.vector_metric
-            == from_typed.vector_metric
-            == DistanceMetric.EUCLIDEAN
-        )
+        assert from_dict.vector_metric == from_typed.vector_metric == DistanceMetric.EUCLIDEAN
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_typed_config_passes_through_identity(
-        self, backend_cls: type
-    ) -> None:
+    def test_typed_config_passes_through_identity(self, backend_cls: type) -> None:
         cfg = MemoryDatabaseConfig(vector_enabled=True)
         db = backend_cls(cfg)
         assert db.config is cfg
@@ -196,24 +180,18 @@ class TestMemoryConstructionParity:
         assert isinstance(db.config, MemoryDatabaseConfig)
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_mixing_typed_config_with_kwargs_raises(
-        self, backend_cls: type
-    ) -> None:
+    def test_mixing_typed_config_with_kwargs_raises(self, backend_cls: type) -> None:
         with pytest.raises(TypeError):
             backend_cls(MemoryDatabaseConfig(), vector_enabled=True)
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_empty_construction_uses_defaults(
-        self, backend_cls: type
-    ) -> None:
+    def test_empty_construction_uses_defaults(self, backend_cls: type) -> None:
         db = backend_cls()
         assert db.config.vector_enabled is False
         assert db.vector_metric == DistanceMetric.COSINE
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_invalid_metric_falls_back_to_cosine(
-        self, backend_cls: type
-    ) -> None:
+    def test_invalid_metric_falls_back_to_cosine(self, backend_cls: type) -> None:
         db = backend_cls({"vector_metric": "not-a-metric"})
         assert db.vector_metric == DistanceMetric.COSINE
 
@@ -222,18 +200,14 @@ class TestMemorySchemaHandling:
     """The ``Database(config=..., schema=...)`` kwarg is preserved."""
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_schema_kwarg_lands_on_config_field(
-        self, backend_cls: type
-    ) -> None:
+    def test_schema_kwarg_lands_on_config_field(self, backend_cls: type) -> None:
         sch = DatabaseSchema.create(name=FieldType.STRING)
         db = backend_cls(config={"vector_enabled": True}, schema=sch)
         assert db.config.schema is sch
         assert db.schema is sch
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_schema_dict_in_config_builds_schema(
-        self, backend_cls: type
-    ) -> None:
+    def test_schema_dict_in_config_builds_schema(self, backend_cls: type) -> None:
         db = backend_cls({"schema": {"fields": {"age": "integer"}}})
         assert isinstance(db.schema, DatabaseSchema)
         assert "age" in db.schema.fields
@@ -248,9 +222,7 @@ class TestMemoryCooperativeInit:
     """The cooperative construction chain wires every collaborator."""
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
-    def test_storage_lock_and_vector_state_initialized(
-        self, backend_cls: type
-    ) -> None:
+    def test_storage_lock_and_vector_state_initialized(self, backend_cls: type) -> None:
         db = backend_cls({"vector_enabled": True})
         # ``_setup`` ran: storage + lock present.
         assert hasattr(db, "_storage")
@@ -358,18 +330,14 @@ class TestSQLiteConfigHierarchy:
         ("raw", "expected"),
         [("false", False), ("0", False), ("no", False), ("true", True)],
     )
-    def test_auto_create_table_string_coercion(
-        self, raw: str, expected: bool
-    ) -> None:
+    def test_auto_create_table_string_coercion(self, raw: str, expected: bool) -> None:
         # YAML/env string values coerce as the legacy ``__init__`` did.
         cfg = SyncSQLiteDatabaseConfig.from_dict({"auto_create_table": raw})
         assert cfg.auto_create_table is expected
 
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(SyncSQLiteDatabaseConfig())
-        assert_structured_config_roundtrip(
-            AsyncSQLiteDatabaseConfig(path="/tmp/x.db", pool_size=3)
-        )
+        assert_structured_config_roundtrip(AsyncSQLiteDatabaseConfig(path="/tmp/x.db", pool_size=3))
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +355,7 @@ class TestSQLiteConstructionParity:
     """Dict, typed-config, ``from_config``, and factory paths agree."""
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
-    def test_is_structured_config_consumer(
-        self, backend_cls: type, config_cls: type
-    ) -> None:
+    def test_is_structured_config_consumer(self, backend_cls: type, config_cls: type) -> None:
         assert issubclass(backend_cls, StructuredConfigConsumer)
         assert backend_cls.CONFIG_CLS is config_cls
 
@@ -400,9 +366,7 @@ class TestSQLiteConstructionParity:
         assert_structured_config_consumer(backend_cls)
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
-    def test_self_config_is_typed_not_dict(
-        self, backend_cls: type, config_cls: type
-    ) -> None:
+    def test_self_config_is_typed_not_dict(self, backend_cls: type, config_cls: type) -> None:
         db = backend_cls({"table": "items"})
         assert isinstance(db.config, config_cls)
         assert db.config.table == "items"
@@ -428,9 +392,7 @@ class TestSQLiteConstructionParity:
         assert db.config is cfg
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
-    def test_from_config_matches_direct(
-        self, backend_cls: type, config_cls: type
-    ) -> None:
+    def test_from_config_matches_direct(self, backend_cls: type, config_cls: type) -> None:
         db = backend_cls.from_config({"table": "items"})
         assert isinstance(db.config, config_cls)
         assert db.table_name == "items"
@@ -443,16 +405,12 @@ class TestSQLiteConstructionParity:
             backend_cls(config_cls(), table="items")
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
-    def test_invalid_metric_falls_back_to_cosine(
-        self, backend_cls: type, config_cls: type
-    ) -> None:
+    def test_invalid_metric_falls_back_to_cosine(self, backend_cls: type, config_cls: type) -> None:
         db = backend_cls({"vector_metric": "not-a-metric"})
         assert db.vector_metric == DistanceMetric.COSINE
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
-    def test_schema_kwarg_lands_on_config_field(
-        self, backend_cls: type, config_cls: type
-    ) -> None:
+    def test_schema_kwarg_lands_on_config_field(self, backend_cls: type, config_cls: type) -> None:
         sch = DatabaseSchema.create(name=FieldType.STRING)
         db = backend_cls(config={"table": "items"}, schema=sch)
         assert db.config.schema is sch
@@ -471,9 +429,7 @@ class TestSQLiteAsyncJournalDefault:
         assert db.journal_mode is None
 
     def test_explicit_journal_mode_honored(self) -> None:
-        db = AsyncSQLiteDatabase(
-            {"path": "/tmp/dk-test.sqlite", "journal_mode": "DELETE"}
-        )
+        db = AsyncSQLiteDatabase({"path": "/tmp/dk-test.sqlite", "journal_mode": "DELETE"})
         assert db.journal_mode == "DELETE"
 
 
@@ -550,24 +506,16 @@ class TestPostgresConfigHierarchy:
         assert cfg.schema is None  # structural-schema field untouched
 
     def test_schema_wins_over_schema_name(self) -> None:
-        cfg = PostgresDatabaseConfig.from_dict(
-            {"schema": "winner", "schema_name": "loser"}
-        )
+        cfg = PostgresDatabaseConfig.from_dict({"schema": "winner", "schema_name": "loser"})
         assert cfg.schema_name == "winner"
 
     def test_table_name_alias(self) -> None:
-        assert PostgresDatabaseConfig.from_dict(
-            {"table_name": "items"}
-        ).table == "items"
+        assert PostgresDatabaseConfig.from_dict({"table_name": "items"}).table == "items"
         # `table` wins over the alias.
-        assert PostgresDatabaseConfig.from_dict(
-            {"table": "a", "table_name": "b"}
-        ).table == "a"
+        assert PostgresDatabaseConfig.from_dict({"table": "a", "table_name": "b"}).table == "a"
 
     def test_connection_string_resolved_into_keys(self) -> None:
-        cfg = PostgresDatabaseConfig.from_dict(
-            {"connection_string": "postgresql://u:p@h:5433/db"}
-        )
+        cfg = PostgresDatabaseConfig.from_dict({"connection_string": "postgresql://u:p@h:5433/db"})
         assert cfg.host == "h"
         assert cfg.port == 5433
         assert cfg.database == "db"
@@ -603,9 +551,7 @@ class TestPostgresConfigHierarchy:
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(PostgresDatabaseConfig())
         assert_structured_config_roundtrip(
-            PostgresDatabaseConfig(
-                schema_name="s", table="t", ssl="require", max_pool_size=9
-            )
+            PostgresDatabaseConfig(schema_name="s", table="t", ssl="require", max_pool_size=9)
         )
 
 
@@ -635,16 +581,12 @@ class TestPostgresConstructionParity:
         assert db.table_name == "items"
 
     @pytest.mark.parametrize("backend_cls", _POSTGRES_BACKENDS)
-    def test_mixing_typed_config_with_kwargs_raises(
-        self, backend_cls: type
-    ) -> None:
+    def test_mixing_typed_config_with_kwargs_raises(self, backend_cls: type) -> None:
         with pytest.raises(TypeError):
             backend_cls(PostgresDatabaseConfig(), table="items")
 
     @pytest.mark.parametrize("backend_cls", _POSTGRES_BACKENDS)
-    def test_non_string_schema_raises_at_construction(
-        self, backend_cls: type
-    ) -> None:
+    def test_non_string_schema_raises_at_construction(self, backend_cls: type) -> None:
         with pytest.raises(ConfigurationError):
             backend_cls({"schema": object()})
 
@@ -665,9 +607,7 @@ class TestPostgresSslUnification:
         ("ssl_value", "expected"),
         [("require", "require"), (True, "require"), (False, "disable"), (None, None)],
     )
-    def test_sync_translates_ssl_to_sslmode(
-        self, ssl_value: object, expected: str | None
-    ) -> None:
+    def test_sync_translates_ssl_to_sslmode(self, ssl_value: object, expected: str | None) -> None:
         db = SyncPostgresDatabase({"ssl": ssl_value})
         assert db._sslmode == expected
 
@@ -708,20 +648,10 @@ class TestElasticsearchConfigHierarchy:
 
     def test_hierarchy(self) -> None:
         assert issubclass(ElasticsearchDatabaseConfigBase, VectorBackendConfig)
-        assert issubclass(
-            SyncElasticsearchDatabaseConfig, ElasticsearchDatabaseConfigBase
-        )
-        assert issubclass(
-            AsyncElasticsearchDatabaseConfig, ElasticsearchDatabaseConfigBase
-        )
-        assert (
-            SyncElasticsearchDatabase.CONFIG_CLS
-            is SyncElasticsearchDatabaseConfig
-        )
-        assert (
-            AsyncElasticsearchDatabase.CONFIG_CLS
-            is AsyncElasticsearchDatabaseConfig
-        )
+        assert issubclass(SyncElasticsearchDatabaseConfig, ElasticsearchDatabaseConfigBase)
+        assert issubclass(AsyncElasticsearchDatabaseConfig, ElasticsearchDatabaseConfigBase)
+        assert SyncElasticsearchDatabase.CONFIG_CLS is SyncElasticsearchDatabaseConfig
+        assert AsyncElasticsearchDatabase.CONFIG_CLS is AsyncElasticsearchDatabaseConfig
 
     def test_sync_defaults(self) -> None:
         cfg = SyncElasticsearchDatabaseConfig()
@@ -744,9 +674,7 @@ class TestElasticsearchConfigHierarchy:
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(SyncElasticsearchDatabaseConfig())
         assert_structured_config_roundtrip(
-            SyncElasticsearchDatabaseConfig(
-                host="h", port=9201, index="i", vector_enabled=True
-            )
+            SyncElasticsearchDatabaseConfig(host="h", port=9201, index="i", vector_enabled=True)
         )
         assert_structured_config_roundtrip(AsyncElasticsearchDatabaseConfig())
         assert_structured_config_roundtrip(
@@ -783,9 +711,7 @@ class TestElasticsearchConstructionParity:
         assert db.index_name == "ix"
 
     def test_sync_vector_metric_parsed(self) -> None:
-        db = SyncElasticsearchDatabase(
-            {"vector_enabled": True, "vector_metric": "euclidean"}
-        )
+        db = SyncElasticsearchDatabase({"vector_enabled": True, "vector_metric": "euclidean"})
         assert db._vector_enabled is True
         assert db.vector_metric is DistanceMetric.EUCLIDEAN
 
@@ -800,9 +726,7 @@ class TestElasticsearchConstructionParity:
         assert db._pool_config.hosts == ["http://es1:9202"]
 
     def test_async_explicit_hosts_win(self) -> None:
-        db = AsyncElasticsearchDatabase(
-            {"hosts": ["https://a:9200", "https://b:9200"]}
-        )
+        db = AsyncElasticsearchDatabase({"hosts": ["https://a:9200", "https://b:9200"]})
         assert db._pool_config.hosts == ["https://a:9200", "https://b:9200"]
 
     def test_async_auth_and_tls_forwarded(self) -> None:
@@ -893,9 +817,7 @@ class TestS3ConfigHierarchy:
     def test_sync_prefix_normalization(self) -> None:
         assert SyncS3DatabaseConfig(bucket="b").prefix == "records/"
         assert SyncS3DatabaseConfig(bucket="b", prefix="recs").prefix == "recs/"
-        assert (
-            SyncS3DatabaseConfig(bucket="b", prefix="recs/").prefix == "recs/"
-        )
+        assert SyncS3DatabaseConfig(bucket="b", prefix="recs/").prefix == "recs/"
 
     def test_async_prefix_default_empty(self) -> None:
         assert AsyncS3DatabaseConfig(bucket="b").prefix == ""
@@ -910,9 +832,7 @@ class TestS3ConfigHierarchy:
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(SyncS3DatabaseConfig(bucket="b"))
         assert_structured_config_roundtrip(
-            SyncS3DatabaseConfig(
-                bucket="b", prefix="p/", region_name="r", max_pool_connections=4
-            )
+            SyncS3DatabaseConfig(bucket="b", prefix="p/", region_name="r", max_pool_connections=4)
         )
         assert_structured_config_roundtrip(AsyncS3DatabaseConfig(bucket="b"))
         assert_structured_config_roundtrip(
@@ -935,9 +855,7 @@ class TestS3ConstructionParity:
         assert backend_cls.CONFIG_CLS is config_cls
         assert_structured_config_consumer(backend_cls)
 
-    @pytest.mark.parametrize(
-        "backend_cls", [SyncS3Database, AsyncS3Database]
-    )
+    @pytest.mark.parametrize("backend_cls", [SyncS3Database, AsyncS3Database])
     def test_bucket_required_at_construction(self, backend_cls: type) -> None:
         with pytest.raises(ValueError, match="requires 'bucket'"):
             backend_cls({})
@@ -1021,9 +939,7 @@ class TestDuckDBConfigHierarchy:
 
     def test_no_vector_fields(self) -> None:
         # vector_enabled / vector_metric live on VectorBackendConfig only.
-        field_names = {
-            f.name for f in dataclasses.fields(SyncDuckDBDatabaseConfig)
-        }
+        field_names = {f.name for f in dataclasses.fields(SyncDuckDBDatabaseConfig)}
         assert "vector_enabled" not in field_names
         assert "vector_metric" not in field_names
 
@@ -1037,21 +953,21 @@ class TestDuckDBConfigHierarchy:
         assert AsyncDuckDBDatabaseConfig().max_workers == 4
 
     def test_auto_create_table_bool_coercion(self) -> None:
-        assert SyncDuckDBDatabaseConfig.from_dict(
-            {"auto_create_table": "false"}
-        ).auto_create_table is False
-        assert AsyncDuckDBDatabaseConfig.from_dict(
-            {"auto_create_table": "0"}
-        ).auto_create_table is False
+        assert (
+            SyncDuckDBDatabaseConfig.from_dict({"auto_create_table": "false"}).auto_create_table
+            is False
+        )
+        assert (
+            AsyncDuckDBDatabaseConfig.from_dict({"auto_create_table": "0"}).auto_create_table
+            is False
+        )
 
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(SyncDuckDBDatabaseConfig())
         assert_structured_config_roundtrip(
             SyncDuckDBDatabaseConfig(path="/tmp/x.duckdb", read_only=True)
         )
-        assert_structured_config_roundtrip(
-            AsyncDuckDBDatabaseConfig(max_workers=8)
-        )
+        assert_structured_config_roundtrip(AsyncDuckDBDatabaseConfig(max_workers=8))
 
 
 class TestDuckDBConstructionParity:
@@ -1142,22 +1058,16 @@ class TestFileConfigHierarchy:
 
     def test_roundtrip_holds(self) -> None:
         assert_structured_config_roundtrip(FileDatabaseConfig())
+        assert_structured_config_roundtrip(FileDatabaseConfig(path="/tmp/x.json", format="json"))
         assert_structured_config_roundtrip(
-            FileDatabaseConfig(path="/tmp/x.json", format="json")
-        )
-        assert_structured_config_roundtrip(
-            FileDatabaseConfig(
-                path="/tmp/x.csv", format="csv", vector_enabled=True
-            )
+            FileDatabaseConfig(path="/tmp/x.csv", format="csv", vector_enabled=True)
         )
 
 
 class TestFileConstructionParity:
     """Both File backends construct from the shared typed config."""
 
-    @pytest.mark.parametrize(
-        "backend_cls", [SyncFileDatabase, AsyncFileDatabase]
-    )
+    @pytest.mark.parametrize("backend_cls", [SyncFileDatabase, AsyncFileDatabase])
     def test_parity_guard(self, backend_cls: type) -> None:
         assert issubclass(backend_cls, StructuredConfigConsumer)
         assert backend_cls.CONFIG_CLS is FileDatabaseConfig
@@ -1198,9 +1108,7 @@ class TestFileConstructionParity:
             db.close()
 
     def test_sync_vector_metric_parsed(self) -> None:
-        db = SyncFileDatabase(
-            {"vector_enabled": True, "vector_metric": "euclidean"}
-        )
+        db = SyncFileDatabase({"vector_enabled": True, "vector_metric": "euclidean"})
         try:
             assert db._vector_enabled is True
             assert db.vector_metric is DistanceMetric.EUCLIDEAN
@@ -1215,12 +1123,8 @@ class TestFileConstructionParity:
         finally:
             db.close()
 
-    @pytest.mark.parametrize(
-        "backend_cls", [SyncFileDatabase, AsyncFileDatabase]
-    )
-    def test_mixing_typed_config_with_kwargs_raises(
-        self, backend_cls: type
-    ) -> None:
+    @pytest.mark.parametrize("backend_cls", [SyncFileDatabase, AsyncFileDatabase])
+    def test_mixing_typed_config_with_kwargs_raises(self, backend_cls: type) -> None:
         with pytest.raises(TypeError):
             backend_cls(FileDatabaseConfig(), format="json")
 
@@ -1229,9 +1133,7 @@ class TestFileFactory:
     """Registry factories build the migrated File backends unchanged."""
 
     def test_sync_factory(self, tmp_path) -> None:
-        db = database_factory.create(
-            backend="file", path=str(tmp_path / "f.json")
-        )
+        db = database_factory.create(backend="file", path=str(tmp_path / "f.json"))
         try:
             assert isinstance(db, SyncFileDatabase)
             assert isinstance(db.config, FileDatabaseConfig)
@@ -1239,9 +1141,7 @@ class TestFileFactory:
             db.close()
 
     def test_async_factory(self, tmp_path) -> None:
-        db = async_database_factory.create(
-            backend="file", path=str(tmp_path / "f.json")
-        )
+        db = async_database_factory.create(backend="file", path=str(tmp_path / "f.json"))
         try:
             assert isinstance(db, AsyncFileDatabase)
             assert isinstance(db.config, FileDatabaseConfig)

@@ -25,9 +25,9 @@ subject is agreement *between* packages — a copy of it inside any one is a
 copy that can be deleted by a refactor of that package alone.
 
 **Two of these assertions are deliberately written against a computed value
-rather than a literal.** ``test_entry_points_agree_on_the_failure_type``
-collects the exception type every entry point actually raises and asserts the
-set has one element. A test naming ``DottedPathError`` outright would pass the
+rather than a literal.** ``test_single_reference_resolvers_agree_on_the_failure_type``
+collects the exception type every single-reference entry point actually raises
+and asserts the set has one element. A test naming ``DottedPathError`` outright would pass the
 day the last site was converted and say nothing before then; this one fails
 today, names the disagreement, and keeps failing for as long as any site
 disagrees — including a site added later that nobody thought to convert.
@@ -105,9 +105,7 @@ def _via_task_injection(ref: str) -> Any:
     """
     from dataknobs_bots.reasoning.task_injection import TaskInjector
 
-    injector = TaskInjector.from_config(
-        {"hooks": {"artifact_created": [{"function": ref}]}}
-    )
+    injector = TaskInjector.from_config({"hooks": {"artifact_created": [{"function": ref}]}})
     return len(injector._hooks["artifact_created"]) or None
 
 
@@ -160,9 +158,7 @@ def _via_middleware_factory(ref: str) -> Any:
     from dataknobs_bots.middleware.base import Middleware
     from dataknobs_bots.middleware.factory import resolve_middleware_from_spec
 
-    return resolve_middleware_from_spec(
-        {"class": ref}, Middleware, label="middleware"
-    )
+    return resolve_middleware_from_spec({"class": ref}, Middleware, label="middleware")
 
 
 def _via_resolve_tool(ref: str) -> Any:
@@ -331,9 +327,7 @@ def _failure_types(ref: str, names: frozenset[str] | None = None) -> dict[str, s
     ("case", "ref"),
     [("missing module", MISSING_MODULE), ("missing attribute", MISSING_ATTRIBUTE)],
 )
-def test_single_reference_resolvers_agree_on_the_failure_type(
-    case: str, ref: str
-) -> None:
+def test_single_reference_resolvers_agree_on_the_failure_type(case: str, ref: str) -> None:
     """One dotted-path failure has one type, whichever key it was written under.
 
     Asserted against the observed set rather than against ``DottedPathError``
@@ -351,8 +345,7 @@ def test_single_reference_resolvers_agree_on_the_failure_type(
         + "\n".join(f"  {n:34} {t}" for n, t in sorted(observed.items()))
     )
     assert distinct[0] == "DottedPathError", (
-        f"{case}: entry points agree on {distinct[0]!r}, which is not the "
-        "family's own type"
+        f"{case}: entry points agree on {distinct[0]!r}, which is not the family's own type"
     )
 
 

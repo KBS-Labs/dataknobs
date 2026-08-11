@@ -22,6 +22,7 @@ FSMError = DataknobsError
 
 class InvalidConfigurationError(ConfigurationError):
     """Raised when FSM configuration is invalid."""
+
     pass
 
 
@@ -29,20 +30,18 @@ class StateExecutionError(OperationError):
     """Raised when state execution fails."""
 
     def __init__(self, state_name: str, message: str, details: Dict[str, Any] | None = None):
-        super().__init__(
-            f"State '{state_name}' execution failed: {message}",
-            context=details
-        )
+        super().__init__(f"State '{state_name}' execution failed: {message}", context=details)
         self.state_name = state_name
 
 
 class TransitionError(OperationError):
     """Raised when state transition fails."""
 
-    def __init__(self, from_state: str, to_state: str, message: str, details: Dict[str, Any] | None = None):
+    def __init__(
+        self, from_state: str, to_state: str, message: str, details: Dict[str, Any] | None = None
+    ):
         super().__init__(
-            f"Transition from '{from_state}' to '{to_state}' failed: {message}",
-            context=details
+            f"Transition from '{from_state}' to '{to_state}' failed: {message}", context=details
         )
         self.from_state = from_state
         self.to_state = to_state
@@ -55,10 +54,7 @@ class ResourceError(BaseResourceError):
     """
 
     def __init__(self, resource_id: str, message: str, details: Dict[str, Any] | None = None):
-        super().__init__(
-            f"Resource '{resource_id}' error: {message}",
-            context=details
-        )
+        super().__init__(f"Resource '{resource_id}' error: {message}", context=details)
         self.resource_id = resource_id
 
 
@@ -140,6 +136,7 @@ class CircuitBreakerError(BaseResourceError):
 
 class ETLError(OperationError):
     """Raised when ETL operations fail."""
+
     pass
 
 
@@ -155,4 +152,5 @@ class BulkheadTimeoutError(BaseTimeoutError):
     was called. That is a rendering preference, not a wrong base, so it belongs
     in a caller's status table rather than here.
     """
+
     pass

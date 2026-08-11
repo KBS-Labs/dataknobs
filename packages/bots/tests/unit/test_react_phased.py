@@ -80,11 +80,13 @@ def _make_provider() -> EchoProvider:
 
 async def _make_manager(provider: EchoProvider) -> ConversationManager:
     """Create a ConversationManager for unit tests."""
-    library = ConfigPromptLibrary({
-        "system": {
-            "assistant": {"template": "You are a test bot."},
-        },
-    })
+    library = ConfigPromptLibrary(
+        {
+            "system": {
+                "assistant": {"template": "You are a test bot."},
+            },
+        }
+    )
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     mgr = await ConversationManager.create(
@@ -181,9 +183,7 @@ class TestReActBeginTurn:
         tool = EchoTool()
         strategy = ReActReasoning(max_iterations=3, store_trace=True)
 
-        handle = await strategy.begin_turn(
-            manager, provider, tools=[tool], temperature=0.5
-        )
+        handle = await strategy.begin_turn(manager, provider, tools=[tool], temperature=0.5)
 
         assert handle.early_response is None
         assert isinstance(handle, ReActTurnHandle)
@@ -243,9 +243,11 @@ class TestReActProcessInput:
     async def test_tool_calls_returns_iterate(self) -> None:
         """LLM returns tool_calls -> iterate=True, needs_tool_execution=True."""
         provider = _make_provider()
-        provider.set_responses([
-            tool_call_response("echo_tool", {"message": "hello"}),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("echo_tool", {"message": "hello"}),
+            ]
+        )
         manager = await _make_manager(provider)
         tool = EchoTool()
         strategy = ReActReasoning()
@@ -264,10 +266,12 @@ class TestReActProcessInput:
     async def test_duplicate_detection(self) -> None:
         """Same tool calls twice in a row -> action='duplicate_break'."""
         provider = _make_provider()
-        provider.set_responses([
-            tool_call_response("echo_tool", {"message": "same"}),
-            tool_call_response("echo_tool", {"message": "same"}),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("echo_tool", {"message": "same"}),
+                tool_call_response("echo_tool", {"message": "same"}),
+            ]
+        )
         manager = await _make_manager(provider)
         tool = EchoTool()
         strategy = ReActReasoning()
@@ -372,11 +376,13 @@ class TestReActFinalizeTurn:
     async def test_synthesis_call_when_no_stored_response(self) -> None:
         """finalize_turn calls manager.complete() when no final_response."""
         provider = _make_provider()
-        provider.set_responses([
-            tool_call_response("echo_tool", {"message": "same"}),
-            tool_call_response("echo_tool", {"message": "same"}),
-            text_response("Synthesized response"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("echo_tool", {"message": "same"}),
+                tool_call_response("echo_tool", {"message": "same"}),
+                text_response("Synthesized response"),
+            ]
+        )
         manager = await _make_manager(provider)
         tool = EchoTool()
         strategy = ReActReasoning()
@@ -385,9 +391,7 @@ class TestReActFinalizeTurn:
 
         # First iteration: tool calls
         await strategy.process_input(handle)
-        await manager.add_message(
-            content="Observation", role="tool", name="echo_tool"
-        )
+        await manager.add_message(content="Observation", role="tool", name="echo_tool")
         # Second iteration: duplicate -> handle.final_response = None
         result = await strategy.process_input(handle)
         assert result.action == "duplicate_break"
@@ -522,9 +526,7 @@ class TestReActPhasedEndToEnd:
             def __init__(self) -> None:
                 self.executions: list[ToolExecution] = []
 
-            async def on_tool_executed(
-                self, execution: ToolExecution, context: Any
-            ) -> None:
+            async def on_tool_executed(self, execution: ToolExecution, context: Any) -> None:
                 self.executions.append(execution)
 
         tool = EchoTool()
@@ -643,16 +645,24 @@ class TestStreamingIterativePhasedLoop:
         @dataclass
         class _IterHandle(TurnHandle):
             """Turn handle for the test strategy."""
+
             call_count: int = 0
 
         class _IterStreamStrategy(ReasoningStrategy):
             """Minimal strategy: iterate once with a tool call, then stream."""
 
             async def begin_turn(
-                self, manager: Any, llm: Any, tools: Any = None, **kw: Any,
+                self,
+                manager: Any,
+                llm: Any,
+                tools: Any = None,
+                **kw: Any,
             ) -> _IterHandle:
                 return _IterHandle(
-                    manager=manager, llm=llm, tools=tools, kwargs=kw,
+                    manager=manager,
+                    llm=llm,
+                    tools=tools,
+                    kwargs=kw,
                 )
 
             async def process_input(self, handle: TurnHandle) -> ProcessResult:
@@ -665,7 +675,8 @@ class TestStreamingIterativePhasedLoop:
                         iterate=True,
                         pending_tool_calls=[
                             ToolCallSpec(
-                                name="echo_tool", parameters={"message": "hi"},
+                                name="echo_tool",
+                                parameters={"message": "hi"},
                             ),
                         ],
                         action="tool_calls",
@@ -694,11 +705,17 @@ class TestStreamingIterativePhasedLoop:
             async def _stream(self, handle: TurnHandle) -> AsyncIterator[Any]:
                 yield LLMStreamResponse(delta="streamed ", is_final=False)
                 yield LLMStreamResponse(
-                    delta="done", is_final=True, finish_reason="stop",
+                    delta="done",
+                    is_final=True,
+                    finish_reason="stop",
                 )
 
             async def generate(
-                self, manager: Any, llm: Any, tools: Any = None, **kw: Any,
+                self,
+                manager: Any,
+                llm: Any,
+                tools: Any = None,
+                **kw: Any,
             ) -> Any:
                 return LLMResponse(
                     content="fallback",

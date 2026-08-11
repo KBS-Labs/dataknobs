@@ -110,9 +110,7 @@ def test_pool_config_to_session_config_round_trip() -> None:
 
 def test_pool_config_from_dict_accepts_both_region_keys() -> None:
     cfg_legacy = S3PoolConfig.from_dict({"bucket": "b", "region": "eu-west-1"})
-    cfg_native = S3PoolConfig.from_dict(
-        {"bucket": "b", "region_name": "eu-west-1"}
-    )
+    cfg_native = S3PoolConfig.from_dict({"bucket": "b", "region_name": "eu-west-1"})
     assert cfg_legacy.region_name == "eu-west-1"
     assert cfg_native.region_name == "eu-west-1"
 

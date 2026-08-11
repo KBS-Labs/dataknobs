@@ -400,7 +400,7 @@ class SimpleFSM:
         config: str | Path | dict[str, Any],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         resources: dict[str, Any] | None = None,
-        custom_functions: dict[str, Callable] | None = None
+        custom_functions: dict[str, Callable] | None = None,
     ):
         """Initialize SimpleFSM from configuration.
 
@@ -504,7 +504,7 @@ class SimpleFSM:
             config=config,
             data_mode=data_mode,
             resources=resources,
-            custom_functions=custom_functions
+            custom_functions=custom_functions,
         )
 
         # Expose internal attributes for compatibility
@@ -539,7 +539,7 @@ class SimpleFSM:
         self,
         data: dict[str, Any] | Record,
         initial_state: str | None = None,
-        timeout: float | None = None
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Process a single record through the FSM synchronously.
 
@@ -556,6 +556,7 @@ class SimpleFSM:
             - success: Whether processing succeeded
             - error: Any error message (None if successful)
         """
+
         # Create the coroutine with the async process method
         async def _process():
             # Import here to avoid circular dependency
@@ -566,6 +567,7 @@ class SimpleFSM:
             # Convert to Record if needed
             if isinstance(data, dict):
                 from dataknobs_data import Record
+
                 record = Record(data)
             else:
                 record = data
@@ -576,7 +578,7 @@ class SimpleFSM:
                 data=record,
                 initial_state=initial_state,
                 data_mode=ProcessingMode.SINGLE,
-                resource_manager=self._resource_manager
+                resource_manager=self._resource_manager,
             )
 
             try:
@@ -585,21 +587,16 @@ class SimpleFSM:
 
                 # Format result
                 return ResultFormatter.format_single_result(
-                    context=context,
-                    success=success,
-                    result=result
+                    context=context, success=success, result=result
                 )
             except TimeoutError:
                 # Return error result instead of raising
                 return ResultFormatter.format_error_result(
                     context=context,
-                    error=TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
+                    error=TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds"),
                 )
             except Exception as e:
-                return ResultFormatter.format_error_result(
-                    context=context,
-                    error=e
-                )
+                return ResultFormatter.format_error_result(context=context, error=e)
 
         if timeout:
             # Bound the wait via the bridge timeout: it cancels the still-running
@@ -612,11 +609,11 @@ class SimpleFSM:
             except TimeoutError:
                 # Return an error result instead of raising.
                 return {
-                    'success': False,
-                    'error': f"FSM execution exceeded timeout of {timeout} seconds",
-                    'final_state': None,
-                    'data': data if isinstance(data, dict) else data.data,
-                    'path': []
+                    "success": False,
+                    "error": f"FSM execution exceeded timeout of {timeout} seconds",
+                    "final_state": None,
+                    "data": data if isinstance(data, dict) else data.data,
+                    "path": [],
                 }
         else:
             return self._run_async(_process())
@@ -627,7 +624,7 @@ class SimpleFSM:
         batch_size: int = 10,
         max_workers: int = 4,
         on_progress: Callable | None = None,
-        timeout: float | None = None
+        timeout: float | None = None,
     ) -> list[dict[str, Any]]:
         """Process multiple records in parallel batches synchronously.
 
@@ -648,12 +645,9 @@ class SimpleFSM:
         """
         return self._run_async(
             self._async_fsm.process_batch(
-                data=data,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                on_progress=on_progress
+                data=data, batch_size=batch_size, max_workers=max_workers, on_progress=on_progress
             ),
-            timeout=timeout
+            timeout=timeout,
         )
 
     def process_stream(
@@ -662,13 +656,13 @@ class SimpleFSM:
         sink: str | None = None,
         chunk_size: int = 100,
         on_progress: Callable | None = None,
-        input_format: str = 'auto',
-        text_field_name: str = 'text',
-        csv_delimiter: str = ',',
+        input_format: str = "auto",
+        text_field_name: str = "text",
+        csv_delimiter: str = ",",
         csv_has_header: bool = True,
         skip_empty_lines: bool = True,
         use_streaming: bool = False,
-        timeout: float | None = None
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Process a stream of data through the FSM synchronously.
 
@@ -706,9 +700,9 @@ class SimpleFSM:
                     csv_delimiter=csv_delimiter,
                     csv_has_header=csv_has_header,
                     skip_empty_lines=skip_empty_lines,
-                    use_streaming=use_streaming
+                    use_streaming=use_streaming,
                 ),
-                timeout=timeout
+                timeout=timeout,
             )
         else:
             # Source is an async iterator, need to handle it properly
@@ -723,8 +717,9 @@ class SimpleFSM:
                     csv_delimiter=csv_delimiter,
                     csv_has_header=csv_has_header,
                     skip_empty_lines=skip_empty_lines,
-                    use_streaming=use_streaming
+                    use_streaming=use_streaming,
                 )
+
             return self._run_async(_process(), timeout=timeout)
 
     def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
@@ -802,7 +797,7 @@ class SimpleFSM:
 def create_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs
+    **kwargs,
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
 
@@ -819,19 +814,20 @@ def create_fsm(
 
 # Convenience functions for common operations
 
+
 def process_file(
     fsm_config: str | Path | dict[str, Any],
     input_file: str,
     output_file: str | None = None,
-    input_format: str = 'auto',
+    input_format: str = "auto",
     chunk_size: int = 1000,
     timeout: float | None = None,
-    text_field_name: str = 'text',
-    csv_delimiter: str = ',',
+    text_field_name: str = "text",
+    csv_delimiter: str = ",",
     csv_has_header: bool = True,
     skip_empty_lines: bool = True,
     use_streaming: bool = False,
-    custom_functions: dict[str, Callable] | None = None
+    custom_functions: dict[str, Callable] | None = None,
 ) -> dict[str, Any]:
     """Process a file through an FSM with automatic format detection.
 
@@ -883,21 +879,18 @@ def process_file(
             csv_has_header=csv_has_header,
             skip_empty_lines=skip_empty_lines,
             use_streaming=use_streaming,
-            timeout=timeout
+            timeout=timeout,
         )
     except TimeoutError as e:
         if timeout is not None:
-            raise TimeoutError(
-                f"File processing exceeded timeout of {timeout} seconds"
-            ) from e
+            raise TimeoutError(f"File processing exceeded timeout of {timeout} seconds") from e
         raise
     finally:
         fsm.close()
 
 
 def validate_data(
-    fsm_config: str | Path | dict[str, Any],
-    data: list[dict[str, Any]]
+    fsm_config: str | Path | dict[str, Any], data: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Validate multiple data records against FSM schema.
 
@@ -925,7 +918,7 @@ def batch_process(
     batch_size: int = 10,
     max_workers: int = 4,
     timeout: float | None = None,
-    custom_functions: dict[str, Callable] | None = None
+    custom_functions: dict[str, Callable] | None = None,
 ) -> list[dict[str, Any]]:
     """Process multiple records in parallel.
 
@@ -953,16 +946,11 @@ def batch_process(
 
     try:
         return fsm.process_batch(
-            data=data,
-            batch_size=batch_size,
-            max_workers=max_workers,
-            timeout=timeout
+            data=data, batch_size=batch_size, max_workers=max_workers, timeout=timeout
         )
     except TimeoutError as e:
         if timeout is not None:
-            raise TimeoutError(
-                f"Batch processing exceeded timeout of {timeout} seconds"
-            ) from e
+            raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds") from e
         raise
     finally:
         fsm.close()

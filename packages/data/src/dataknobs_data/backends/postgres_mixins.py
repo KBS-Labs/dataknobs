@@ -80,7 +80,8 @@ class PostgresBaseConfig(VectorConfigMixin):
     """Shared configuration logic for PostgreSQL backends."""
 
     def _parse_postgres_config(
-        self, config: dict[str, Any],
+        self,
+        config: dict[str, Any],
     ) -> tuple[str, str, dict, bool, bool]:
         """Extract table, schema, connection configuration, and boolean flags.
 
@@ -135,7 +136,8 @@ class PostgresBaseConfig(VectorConfigMixin):
         # failures surface at ``connect()`` time with asyncpg's native
         # errors.
         normalized = normalize_postgres_connection_config(
-            config, require=False,
+            config,
+            require=False,
         )
         if normalized is not None:
             config.update(normalized)
@@ -228,32 +230,34 @@ class PostgresTableManager:
         """
         return sql, (schema_name, table_name)
 
+
 class PostgresVectorSupport:
     """Shared vector support detection and management."""
 
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if record has vector fields.
-        
+
         Args:
             record: Record to check
-            
+
         Returns:
             True if record has vector fields
         """
         from ..fields import VectorField
-        return any(isinstance(field, VectorField)
-                   for field in record.fields.values())
+
+        return any(isinstance(field, VectorField) for field in record.fields.values())
 
     def _extract_vector_dimensions(self, record: Record) -> dict[str, int]:
         """Extract dimensions from vector fields in a record.
-        
+
         Args:
             record: Record containing potential vector fields
-            
+
         Returns:
             Dictionary mapping field names to dimensions
         """
         from ..fields import VectorField
+
         dimensions = {}
         for name, field in record.fields.items():
             if isinstance(field, VectorField) and field.dimensions:
@@ -262,11 +266,11 @@ class PostgresVectorSupport:
 
     def _update_vector_dimensions(self, record: Record) -> None:
         """Update tracked vector dimensions from a record.
-        
+
         Args:
             record: Record containing vector fields
         """
-        if hasattr(self, '_vector_dimensions'):
+        if hasattr(self, "_vector_dimensions"):
             dimensions = self._extract_vector_dimensions(record)
             self._vector_dimensions.update(dimensions)
 
@@ -277,10 +281,10 @@ class PostgresErrorHandler:
     @staticmethod
     def handle_connection_error(e: Exception) -> None:
         """Handle and log connection errors consistently.
-        
+
         Args:
             e: The exception that occurred
-            
+
         Raises:
             RuntimeError: With a user-friendly message
         """
@@ -290,11 +294,11 @@ class PostgresErrorHandler:
     @staticmethod
     def handle_query_error(e: Exception, operation: str) -> None:
         """Handle and log query execution errors.
-        
+
         Args:
             e: The exception that occurred
             operation: The operation that failed (e.g., "create", "update")
-            
+
         Raises:
             RuntimeError: With a user-friendly message
         """
@@ -304,7 +308,7 @@ class PostgresErrorHandler:
     @staticmethod
     def log_operation(operation: str, details: str = "") -> None:
         """Log a database operation for debugging.
-        
+
         Args:
             operation: The operation being performed
             details: Additional details about the operation
@@ -320,18 +324,18 @@ class PostgresConnectionValidator:
 
     def _check_connection(self) -> None:
         """Check if database is connected.
-        
+
         Raises:
             RuntimeError: If not connected
         """
-        if not getattr(self, '_connected', False):
+        if not getattr(self, "_connected", False):
             raise RuntimeError("Database not connected. Call connect() first.")
 
     def _check_async_connection(self) -> None:
         """Check if async database is connected with pool.
-        
+
         Raises:
             RuntimeError: If not connected or pool not initialized
         """
-        if not getattr(self, '_connected', False) or not getattr(self, '_pool', None):
+        if not getattr(self, "_connected", False) or not getattr(self, "_pool", None):
             raise RuntimeError("Database not connected. Call connect() first.")

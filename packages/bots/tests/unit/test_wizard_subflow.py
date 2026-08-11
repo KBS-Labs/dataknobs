@@ -408,9 +408,7 @@ class TestSubflowStateSerialization:
             }
         ]
 
-        restored_stack = [
-            SubflowContext.from_dict(s) for s in serialized_stack
-        ]
+        restored_stack = [SubflowContext.from_dict(s) for s in serialized_stack]
 
         assert len(restored_stack) == 1
         assert restored_stack[0].parent_stage == "configure_knowledge"
@@ -605,9 +603,7 @@ class TestShouldPushSubflowGuard:
         }
 
     @pytest.fixture
-    def wizard_with_subflow(
-        self, wizard_config_with_subflow: dict
-    ) -> "WizardReasoning":
+    def wizard_with_subflow(self, wizard_config_with_subflow: dict) -> "WizardReasoning":
         """Create a WizardReasoning instance with subflow support."""
         from dataknobs_bots.reasoning.wizard import WizardReasoning
         from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
@@ -645,9 +641,7 @@ class TestShouldPushSubflowGuard:
         assert wizard_state.is_in_subflow is True
 
         # The guard should return None - no new subflow should be pushed
-        result = wizard_with_subflow._subflows.should_push(
-            wizard_state, "user message"
-        )
+        result = wizard_with_subflow._subflows.should_push(wizard_state, "user message")
 
         assert result is None
 
@@ -668,17 +662,13 @@ class TestShouldPushSubflowGuard:
         )
 
         # Set up the FSM to be at the configure stage via the public API
-        wizard_with_subflow._fsm.restore(
-            {"current_stage": "configure", "data": {}}
-        )
+        wizard_with_subflow._fsm.restore({"current_stage": "configure", "data": {}})
 
         # Verify the state is not in a subflow
         assert wizard_state.is_in_subflow is False
 
         # Should return the subflow config since condition matches
-        result = wizard_with_subflow._subflows.should_push(
-            wizard_state, "user message"
-        )
+        result = wizard_with_subflow._subflows.should_push(wizard_state, "user message")
 
         assert result is not None
         assert result.get("network") == "feature_setup"
@@ -701,17 +691,13 @@ class TestShouldPushSubflowGuard:
         )
 
         # Set up the FSM to be at the configure stage via the public API
-        wizard_with_subflow._fsm.restore(
-            {"current_stage": "configure", "data": {}}
-        )
+        wizard_with_subflow._fsm.restore({"current_stage": "configure", "data": {}})
 
         # Verify the state is not in a subflow
         assert wizard_state.is_in_subflow is False
 
         # Should return None since condition doesn't match
-        result = wizard_with_subflow._subflows.should_push(
-            wizard_state, "user message"
-        )
+        result = wizard_with_subflow._subflows.should_push(wizard_state, "user message")
 
         assert result is None
 
@@ -756,19 +742,17 @@ class TestShouldPushSubflowGuard:
 
         # Even if called again (e.g., on next message after bot recreation),
         # the guard should prevent a duplicate push
-        result = wizard_with_subflow._subflows.should_push(
-            restored_state, "continue working"
-        )
+        result = wizard_with_subflow._subflows.should_push(restored_state, "continue working")
 
         assert result is None, (
-            "Guard failed: would have pushed duplicate subflow after "
-            "state restoration"
+            "Guard failed: would have pushed duplicate subflow after state restoration"
         )
 
 
 # =========================================================================
 # Integration: subflow push through finalize_turn / stream_finalize_turn
 # =========================================================================
+
 
 def _build_subflow_wizard_config() -> dict[str, Any]:
     """Build wizard config with a subflow using WizardConfigBuilder."""
@@ -781,34 +765,36 @@ def _build_subflow_wizard_config() -> dict[str, Any]:
             response_template="Please configure the feature.",
             confirm_first_render=False,
         )
-            .field("enable_feature", field_type="boolean")
-            .transition(
-                "complete",
-                condition="data.get('enable_feature') == True",
-                subflow_network="feature_setup",
-                result_mapping={"setup_done": "setup_done"},
-            )
-            .transition("complete")
-        .stage("complete", is_end=True, prompt="All done!",
-               response_template="Setup complete.")
-        .subflow("feature_setup", {
-            "stages": [
-                {
-                    "name": "detail_gather",
-                    "is_start": True,
-                    "prompt": "Enter feature details.",
-                    "response_template": "Now entering feature setup.",
-                    "confirm_first_render": False,
-                    "transitions": [{"target": "subflow_done"}],
-                },
-                {
-                    "name": "subflow_done",
-                    "is_end": True,
-                    "prompt": "Feature configured!",
-                    "response_template": "Feature setup complete.",
-                },
-            ]
-        })
+        .field("enable_feature", field_type="boolean")
+        .transition(
+            "complete",
+            condition="data.get('enable_feature') == True",
+            subflow_network="feature_setup",
+            result_mapping={"setup_done": "setup_done"},
+        )
+        .transition("complete")
+        .stage("complete", is_end=True, prompt="All done!", response_template="Setup complete.")
+        .subflow(
+            "feature_setup",
+            {
+                "stages": [
+                    {
+                        "name": "detail_gather",
+                        "is_start": True,
+                        "prompt": "Enter feature details.",
+                        "response_template": "Now entering feature setup.",
+                        "confirm_first_render": False,
+                        "transitions": [{"target": "subflow_done"}],
+                    },
+                    {
+                        "name": "subflow_done",
+                        "is_end": True,
+                        "prompt": "Feature configured!",
+                        "response_template": "Feature setup complete.",
+                    },
+                ]
+            },
+        )
         .build()
     )
 
@@ -904,44 +890,46 @@ def _build_subflow_confirmation_config() -> dict[str, Any]:
             response_template="Please enter the project name.",
             confirm_first_render=False,
         )
-            .field("project_name", field_type="string", required=True)
-            .transition(
-                "done",
-                condition="data.get('project_name')",
-                subflow_network="team_details",
-                result_mapping={"lead_name": "lead_name"},
-            )
-        .stage("done", is_end=True, prompt="All done!",
-               response_template="Project setup complete.")
-        .subflow("team_details", {
-            "stages": [
-                {
-                    "name": "team_lead",
-                    "is_start": True,
-                    "prompt": "Who is the team lead?",
-                    "response_template": "Who is the team lead?",
-                    # confirm_first_render defaults to True —
-                    # confirmation SHOULD fire after first extraction.
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "lead_name": {
-                                "type": "string",
-                                "description": "Team lead name",
+        .field("project_name", field_type="string", required=True)
+        .transition(
+            "done",
+            condition="data.get('project_name')",
+            subflow_network="team_details",
+            result_mapping={"lead_name": "lead_name"},
+        )
+        .stage("done", is_end=True, prompt="All done!", response_template="Project setup complete.")
+        .subflow(
+            "team_details",
+            {
+                "stages": [
+                    {
+                        "name": "team_lead",
+                        "is_start": True,
+                        "prompt": "Who is the team lead?",
+                        "response_template": "Who is the team lead?",
+                        # confirm_first_render defaults to True —
+                        # confirmation SHOULD fire after first extraction.
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "lead_name": {
+                                    "type": "string",
+                                    "description": "Team lead name",
+                                },
                             },
+                            "required": ["lead_name"],
                         },
-                        "required": ["lead_name"],
+                        "transitions": [{"target": "subflow_done"}],
                     },
-                    "transitions": [{"target": "subflow_done"}],
-                },
-                {
-                    "name": "subflow_done",
-                    "is_end": True,
-                    "prompt": "Team details captured.",
-                    "response_template": "Team details complete.",
-                },
-            ],
-        })
+                    {
+                        "name": "subflow_done",
+                        "is_end": True,
+                        "prompt": "Team details captured.",
+                        "response_template": "Team details complete.",
+                    },
+                ],
+            },
+        )
         .build()
     )
 
@@ -980,8 +968,10 @@ class TestSubflowPushRenderCount:
             # CRITICAL: render_count for team_lead must be 0.
             # The subflow's first stage template was displayed as a
             # question — the user hasn't responded yet.
-            assert "_stage_render_counts" not in harness.wizard_data or \
-                harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0, (
+            assert (
+                "_stage_render_counts" not in harness.wizard_data
+                or harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0
+            ), (
                 "render_count for team_lead should be 0 after subflow push, "
                 f"got {harness.wizard_data.get('_stage_render_counts', {}).get('team_lead', 0)}"
             )
@@ -1065,45 +1055,45 @@ class TestSubflowPushRenderCount:
                 response_template="Enter the project name.",
                 confirm_first_render=False,
             )
-                .field("project_name", field_type="string", required=True)
-                .transition(
-                    "done",
-                    condition="data.get('project_name')",
-                    subflow_network="team_details",
-                    result_mapping={"lead_name": "lead_name"},
-                )
-            .stage("done", is_end=True, prompt="Done.",
-                   response_template="Complete.")
-            .subflow("team_details", {
-                "stages": [
-                    {
-                        "name": "team_lead",
-                        "is_start": True,
-                        "prompt": "Who is the team lead?",
-                        "response_template": "Who is the team lead?",
-                        "confirmation_template": (
-                            "Lead: {{ lead_name }}. Correct?"
-                        ),
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "lead_name": {
-                                    "type": "string",
-                                    "description": "Team lead name",
+            .field("project_name", field_type="string", required=True)
+            .transition(
+                "done",
+                condition="data.get('project_name')",
+                subflow_network="team_details",
+                result_mapping={"lead_name": "lead_name"},
+            )
+            .stage("done", is_end=True, prompt="Done.", response_template="Complete.")
+            .subflow(
+                "team_details",
+                {
+                    "stages": [
+                        {
+                            "name": "team_lead",
+                            "is_start": True,
+                            "prompt": "Who is the team lead?",
+                            "response_template": "Who is the team lead?",
+                            "confirmation_template": ("Lead: {{ lead_name }}. Correct?"),
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "lead_name": {
+                                        "type": "string",
+                                        "description": "Team lead name",
+                                    },
                                 },
+                                "required": ["lead_name"],
                             },
-                            "required": ["lead_name"],
+                            "transitions": [{"target": "subflow_done"}],
                         },
-                        "transitions": [{"target": "subflow_done"}],
-                    },
-                    {
-                        "name": "subflow_done",
-                        "is_end": True,
-                        "prompt": "Done.",
-                        "response_template": "Team details complete.",
-                    },
-                ],
-            })
+                        {
+                            "name": "subflow_done",
+                            "is_end": True,
+                            "prompt": "Done.",
+                            "response_template": "Team details complete.",
+                        },
+                    ],
+                },
+            )
             .build()
         )
         async with await BotTestHarness.create(
@@ -1138,48 +1128,51 @@ class TestSubflowPushRenderCount:
                 response_template="Starting.",
                 confirm_first_render=False,
             )
-                .field("trigger", field_type="string", required=True)
-                .transition(
-                    "done",
-                    condition="data.get('trigger')",
-                    subflow_network="details",
-                    result_mapping={
-                        "name": "name", "age": "age",
-                    },
-                )
-            .stage("done", is_end=True, prompt="Done.",
-                   response_template="Complete.")
-            .subflow("details", {
-                "stages": [
-                    {
-                        "name": "gather",
-                        "is_start": True,
-                        "prompt": "Enter details.",
-                        "response_template": "Name and age?",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "Full name",
+            .field("trigger", field_type="string", required=True)
+            .transition(
+                "done",
+                condition="data.get('trigger')",
+                subflow_network="details",
+                result_mapping={
+                    "name": "name",
+                    "age": "age",
+                },
+            )
+            .stage("done", is_end=True, prompt="Done.", response_template="Complete.")
+            .subflow(
+                "details",
+                {
+                    "stages": [
+                        {
+                            "name": "gather",
+                            "is_start": True,
+                            "prompt": "Enter details.",
+                            "response_template": "Name and age?",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Full name",
+                                    },
+                                    "age": {
+                                        "type": "integer",
+                                        "description": "Age in years",
+                                    },
                                 },
-                                "age": {
-                                    "type": "integer",
-                                    "description": "Age in years",
-                                },
+                                "required": ["name", "age"],
                             },
-                            "required": ["name", "age"],
+                            "transitions": [{"target": "sub_done"}],
                         },
-                        "transitions": [{"target": "sub_done"}],
-                    },
-                    {
-                        "name": "sub_done",
-                        "is_end": True,
-                        "prompt": "Done.",
-                        "response_template": "Details complete.",
-                    },
-                ],
-            })
+                        {
+                            "name": "sub_done",
+                            "is_end": True,
+                            "prompt": "Done.",
+                            "response_template": "Details complete.",
+                        },
+                    ],
+                },
+            )
             .build()
         )
         async with await BotTestHarness.create(
@@ -1219,8 +1212,10 @@ class TestSubflowPushRenderCount:
 
             assert harness.wizard_stage == "team_lead"
 
-            assert "_stage_render_counts" not in harness.wizard_data or \
-                harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0, (
+            assert (
+                "_stage_render_counts" not in harness.wizard_data
+                or harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0
+            ), (
                 "render_count for team_lead should be 0 after subflow push "
                 f"(streaming), got {harness.wizard_data.get('_stage_render_counts', {}).get('team_lead', 0)}"
             )

@@ -23,6 +23,7 @@ from dataknobs_llm import EchoProvider
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _echo_provider() -> EchoProvider:
     """Create a pre-built EchoProvider (simulates shared provider)."""
     return EchoProvider({"provider": "echo", "model": "shared-echo"})
@@ -42,6 +43,7 @@ class TrackingMiddleware(Middleware):
 # ---------------------------------------------------------------------------
 # LLM injection tests
 # ---------------------------------------------------------------------------
+
 
 class TestFromConfigLLMInjection:
     """from_config() accepts a pre-built LLM provider via the ``llm`` kwarg."""
@@ -156,6 +158,7 @@ class TestFromConfigLLMInjection:
 # Middleware injection tests
 # ---------------------------------------------------------------------------
 
+
 class TestFromConfigMiddlewareInjection:
     """from_config() accepts pre-built middleware via the ``middleware`` kwarg."""
 
@@ -187,9 +190,11 @@ class TestFromConfigMiddlewareInjection:
             {
                 "llm": {"provider": "echo", "model": "test"},
                 "conversation_storage": {"backend": "memory"},
-                "middleware": [{
-                    "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
-                }],
+                "middleware": [
+                    {
+                        "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
+                    }
+                ],
             },
             middleware=[tracker],
         )
@@ -205,9 +210,11 @@ class TestFromConfigMiddlewareInjection:
             {
                 "llm": {"provider": "echo", "model": "test"},
                 "conversation_storage": {"backend": "memory"},
-                "middleware": [{
-                    "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
-                }],
+                "middleware": [
+                    {
+                        "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
+                    }
+                ],
             },
             middleware=[],
         )
@@ -221,9 +228,11 @@ class TestFromConfigMiddlewareInjection:
             {
                 "llm": {"provider": "echo", "model": "test"},
                 "conversation_storage": {"backend": "memory"},
-                "middleware": [{
-                    "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
-                }],
+                "middleware": [
+                    {
+                        "class": "dataknobs_bots.middleware.logging.LoggingMiddleware",
+                    }
+                ],
             },
         )
         async with bot:
@@ -236,6 +245,7 @@ class TestFromConfigMiddlewareInjection:
 # ---------------------------------------------------------------------------
 # Combined injection tests
 # ---------------------------------------------------------------------------
+
 
 class TestFromConfigCombinedInjection:
     """Both llm and middleware can be injected together."""
@@ -299,10 +309,7 @@ class TestFromConfigConversationMiddleware:
                 "conversation_storage": {"backend": "memory"},
                 "conversation_middleware": [
                     {
-                        "class": (
-                            "dataknobs_llm.conversations."
-                            "HistoryRedactionMiddleware"
-                        ),
+                        "class": ("dataknobs_llm.conversations.HistoryRedactionMiddleware"),
                         "params": {
                             "redactions": [
                                 {"pattern": r"\bbib:\d+\b", "replacement": "[x]"},
@@ -317,10 +324,7 @@ class TestFromConfigConversationMiddleware:
             # First chat creates the manager; we then inspect its middleware.
             await bot.chat("hello", ctx)
             manager = bot.get_conversation_manager(ctx.conversation_id)
-            assert any(
-                isinstance(mw, HistoryRedactionMiddleware)
-                for mw in manager.middleware
-            ), (
+            assert any(isinstance(mw, HistoryRedactionMiddleware) for mw in manager.middleware), (
                 "HistoryRedactionMiddleware from conversation_middleware: "
                 "should be wired onto the ConversationManager"
             )
@@ -340,10 +344,7 @@ class TestFromConfigConversationMiddleware:
                 "conversation_storage": {"backend": "memory"},
                 "conversation_middleware": [
                     {
-                        "class": (
-                            "dataknobs_llm.conversations."
-                            "HistoryRedactionMiddleware"
-                        ),
+                        "class": ("dataknobs_llm.conversations.HistoryRedactionMiddleware"),
                         "params": {
                             "redactions": [
                                 {"pattern": r"\bbib:\d+\b", "replacement": "[b]"},
@@ -359,10 +360,7 @@ class TestFromConfigConversationMiddleware:
             await bot.chat("hello", ctx)
             manager = bot.get_conversation_manager(ctx.conversation_id)
             # Only the injected instance — config-driven list is replaced.
-            convo_mws = [
-                m for m in manager.middleware
-                if isinstance(m, HistoryRedactionMiddleware)
-            ]
+            convo_mws = [m for m in manager.middleware if isinstance(m, HistoryRedactionMiddleware)]
             assert len(convo_mws) == 1
             assert convo_mws[0] is injected
 
@@ -377,10 +375,7 @@ class TestFromConfigConversationMiddleware:
                 "conversation_storage": {"backend": "memory"},
                 "conversation_middleware": [
                     {
-                        "class": (
-                            "dataknobs_llm.conversations."
-                            "HistoryRedactionMiddleware"
-                        ),
+                        "class": ("dataknobs_llm.conversations.HistoryRedactionMiddleware"),
                         "params": {
                             "redactions": [
                                 {"pattern": r"\bbib:\d+\b", "replacement": "[b]"},
@@ -395,10 +390,7 @@ class TestFromConfigConversationMiddleware:
             ctx = BotContext(conversation_id="conv-3", client_id="t1")
             await bot.chat("hello", ctx)
             manager = bot.get_conversation_manager(ctx.conversation_id)
-            convo_mws = [
-                m for m in manager.middleware
-                if isinstance(m, HistoryRedactionMiddleware)
-            ]
+            convo_mws = [m for m in manager.middleware if isinstance(m, HistoryRedactionMiddleware)]
             assert convo_mws == []
 
     @pytest.mark.asyncio
@@ -420,10 +412,7 @@ class TestFromConfigConversationMiddleware:
                     "conversation_middleware": [
                         # A bot-turn Middleware in the LLM-call slot.
                         {
-                            "class": (
-                                "dataknobs_bots.middleware.logging."
-                                "LoggingMiddleware"
-                            ),
+                            "class": ("dataknobs_bots.middleware.logging.LoggingMiddleware"),
                         },
                     ],
                 },
@@ -439,9 +428,7 @@ class TestFromConfigConversationMiddleware:
 
 
 _BOT_MIDDLEWARE_CLASS = "dataknobs_bots.middleware.logging.LoggingMiddleware"
-_CONVERSATION_MIDDLEWARE_CLASS = (
-    "dataknobs_llm.conversations.HistoryRedactionMiddleware"
-)
+_CONVERSATION_MIDDLEWARE_CLASS = "dataknobs_llm.conversations.HistoryRedactionMiddleware"
 
 
 # Module-level fixture for the no-ctor-side-effects guarantee. Imported by
@@ -493,9 +480,7 @@ class TestMiddlewareSpecResolution:
         from dataknobs_common.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError) as exc:
-            DynaBot._create_conversation_middleware(
-                {"class": _BOT_MIDDLEWARE_CLASS}
-            )
+            DynaBot._create_conversation_middleware({"class": _BOT_MIDDLEWARE_CLASS})
 
         message = str(exc.value)
         # Names both the resolved class and the expected base.
@@ -509,9 +494,7 @@ class TestMiddlewareSpecResolution:
         from dataknobs_common.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError) as exc:
-            DynaBot._create_bot_middleware(
-                {"class": _CONVERSATION_MIDDLEWARE_CLASS}
-            )
+            DynaBot._create_bot_middleware({"class": _CONVERSATION_MIDDLEWARE_CLASS})
 
         message = str(exc.value)
         assert _CONVERSATION_MIDDLEWARE_CLASS in message
@@ -591,9 +574,7 @@ class TestMiddlewareSpecResolution:
         from dataknobs_common.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError) as exc:
-            DynaBot._create_conversation_middleware(
-                {"class": _CONVERSATION_MIDDLEWARE_CLASS}
-            )
+            DynaBot._create_conversation_middleware({"class": _CONVERSATION_MIDDLEWARE_CLASS})
 
         message = str(exc.value)
         assert "Failed to instantiate" in message

@@ -26,9 +26,7 @@ try:
 except ImportError:
     ASYNCPG_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not ASYNCPG_AVAILABLE, reason="asyncpg not installed"
-)
+pytestmark = pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 
 if ASYNCPG_AVAILABLE:
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
@@ -87,9 +85,7 @@ def test_individual_keys_synthesize_connection_string() -> None:
 def test_database_url_env_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "DATABASE_URL", "postgresql://u:p@env-h:6000/env-db"
-    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@env-h:6000/env-db")
     store = PgVectorStore({"dimensions": 4})
     assert store.connection_string == "postgresql://u:p@env-h:6000/env-db"
 
@@ -103,9 +99,7 @@ def test_postgres_env_vars_fallback(
     monkeypatch.setenv("POSTGRES_USER", "env-u")
     monkeypatch.setenv("POSTGRES_PASSWORD", "env-p")
     store = PgVectorStore({"dimensions": 4})
-    assert store.connection_string == (
-        "postgresql://env-u:env-p@env-h:5678/env-db"
-    )
+    assert store.connection_string == ("postgresql://env-u:env-p@env-h:5678/env-db")
 
 
 def test_asyncpg_dialect_prefix_normalized() -> None:

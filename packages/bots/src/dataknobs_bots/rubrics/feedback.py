@@ -53,7 +53,9 @@ async def generate_feedback_summary(
     if llm is not None:
         try:
             return await _generate_llm_summary(
-                rubric, evaluation, llm,
+                rubric,
+                evaluation,
+                llm,
                 prompt_resolver=prompt_resolver,
             )
         except Exception as e:
@@ -149,9 +151,7 @@ def _add_improvement_suggestion(
     )
     if current_idx >= 0 and current_idx < len(sorted_levels) - 1:
         next_level = sorted_levels[current_idx + 1]
-        issues.append(
-            f"{criterion.name}: aim for '{next_level.label}' — {next_level.description}"
-        )
+        issues.append(f"{criterion.name}: aim for '{next_level.label}' — {next_level.description}")
     elif result.level_id == "unable_to_evaluate":
         issues.append(f"{criterion.name}: could not be evaluated by LLM")
 

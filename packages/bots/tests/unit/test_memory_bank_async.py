@@ -18,6 +18,7 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 # Helpers
 # =====================================================================
 
+
 async def _make_async_bank(
     name: str = "items",
     schema: dict[str, Any] | None = None,
@@ -43,8 +44,8 @@ async def _make_async_bank(
 # Async CRUD tests
 # =====================================================================
 
-class TestAsyncMemoryBankCRUD:
 
+class TestAsyncMemoryBankCRUD:
     @pytest.mark.asyncio
     async def test_add_and_get(self) -> None:
         bank = await _make_async_bank()
@@ -116,8 +117,8 @@ class TestAsyncMemoryBankCRUD:
 # Validation
 # =====================================================================
 
-class TestAsyncMemoryBankValidation:
 
+class TestAsyncMemoryBankValidation:
     @pytest.mark.asyncio
     async def test_missing_required(self) -> None:
         bank = await _make_async_bank(schema={"required": ["name"]})
@@ -156,8 +157,8 @@ class TestAsyncMemoryBankValidation:
 # Duplicate detection
 # =====================================================================
 
-class TestAsyncMemoryBankDuplicates:
 
+class TestAsyncMemoryBankDuplicates:
     @pytest.mark.asyncio
     async def test_reject(self) -> None:
         bank = await _make_async_bank(duplicate_strategy="reject")
@@ -210,8 +211,8 @@ class TestAsyncMemoryBankDuplicates:
 # Find
 # =====================================================================
 
-class TestAsyncMemoryBankFind:
 
+class TestAsyncMemoryBankFind:
     @pytest.mark.asyncio
     async def test_find(self) -> None:
         bank = await _make_async_bank()
@@ -232,8 +233,8 @@ class TestAsyncMemoryBankFind:
 # Serialization
 # =====================================================================
 
-class TestAsyncMemoryBankSerialization:
 
+class TestAsyncMemoryBankSerialization:
     @pytest.mark.asyncio
     async def test_inline_roundtrip(self) -> None:
         bank = await _make_async_bank(storage_mode="inline")
@@ -283,9 +284,7 @@ class TestAsyncMemoryBankSerialization:
         await bank.add({"name": "sugar"}, source_stage="collect")
 
         original_records = await bank.all()
-        original_timestamps = [
-            (r.created_at, r.updated_at) for r in original_records
-        ]
+        original_timestamps = [(r.created_at, r.updated_at) for r in original_records]
 
         d = await bank.to_dict()
         restored = await AsyncMemoryBank.from_dict(d)

@@ -181,11 +181,13 @@ class TestOllamaThinkTagParsing:
         """'think' option is forwarded to the Ollama API payload."""
         from dataknobs_llm.llm.providers.ollama import OllamaProvider
 
-        provider = OllamaProvider({
-            "provider": "ollama",
-            "model": "qwen3",
-            "options": {"think": True},
-        })
+        provider = OllamaProvider(
+            {
+                "provider": "ollama",
+                "model": "qwen3",
+                "options": {"think": True},
+            }
+        )
         runtime_config = provider._get_runtime_config(None)
         assert runtime_config.options.get("think") is True
 
@@ -224,9 +226,11 @@ class TestEchoProviderAnalyzeResponse:
     async def test_echo_tool_call_response_not_flagged(self) -> None:
         """EchoProvider tool call responses don't get thinking_only flag."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            tool_call_response("search", {"query": "test"}),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("search", {"query": "test"}),
+            ]
+        )
         await provider.initialize()
         result = await provider.complete(_msg(), tools=["search"])
         assert "thinking_only" not in result.metadata

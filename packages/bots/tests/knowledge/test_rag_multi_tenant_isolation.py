@@ -136,8 +136,7 @@ async def test_shared_kb_two_tenants_isolated_after_ingest_via_extra_metadata() 
         f"Expected tenant B to own {rows_after_a} rows; got {len(b_ids)}"
     )
     assert a_ids.isdisjoint(b_ids), (
-        "Tenants' chunk_id sets must be disjoint; collision sets "
-        f"= {a_ids & b_ids}"
+        f"Tenants' chunk_id sets must be disjoint; collision sets = {a_ids & b_ids}"
     )
 
 
@@ -158,12 +157,8 @@ async def test_shared_kb_two_tenants_isolated_after_ingest_via_managers() -> Non
     await _populate(backend_a, "prompts")
     await _populate(backend_b, "prompts")
 
-    mgr_a = KnowledgeIngestionManager(
-        source=backend_a, destination=kb, tenant_id="tenant_a"
-    )
-    mgr_b = KnowledgeIngestionManager(
-        source=backend_b, destination=kb, tenant_id="tenant_b"
-    )
+    mgr_a = KnowledgeIngestionManager(source=backend_a, destination=kb, tenant_id="tenant_a")
+    mgr_b = KnowledgeIngestionManager(source=backend_b, destination=kb, tenant_id="tenant_b")
 
     await mgr_a.ingest(domain_id="prompts")
     rows_after_a = len(_stored_metadata(kb))
@@ -203,9 +198,7 @@ async def test_same_tenant_reingest_upserts_in_place() -> None:
     backend = InMemoryKnowledgeBackend()
     await _populate(backend, "prompts")
 
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="tenant_a"
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="tenant_a")
 
     await mgr.ingest(domain_id="prompts", swap_mode=IngestSwapMode.APPEND)
     first_ids = set(_stored_metadata(kb).keys())
@@ -299,9 +292,7 @@ async def test_bound_tenant_stamps_chunk_metadata_and_id_prefix() -> None:
     injection through :meth:`_compose_extra_metadata`.
     """
     kb = await _make_shared_kb(tenant_id="acme")
-    await kb.load_markdown_text(
-        "# Title\n\nBody.", source="snippet.md"
-    )
+    await kb.load_markdown_text("# Title\n\nBody.", source="snippet.md")
 
     stored = _stored_metadata(kb)
     assert stored, "Expected chunks to have been stored"
@@ -309,9 +300,7 @@ async def test_bound_tenant_stamps_chunk_metadata_and_id_prefix() -> None:
         assert meta.get("tenant_id") == "acme", (
             f"chunk {chunk_id} missing bound tenant; got meta={meta}"
         )
-        assert chunk_id.startswith("acme\x1f"), (
-            f"chunk_id {chunk_id!r} must be tenant-prefixed"
-        )
+        assert chunk_id.startswith("acme\x1f"), f"chunk_id {chunk_id!r} must be tenant-prefixed"
 
 
 # ---------------------------------------------------------------------------
@@ -383,9 +372,7 @@ async def test_bound_tenant_overrides_extra_metadata_tenant_id() -> None:
     # bound tenant.
     backend = InMemoryKnowledgeBackend()
     await _populate(backend, "real-domain")
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
     # Fresh KB for clean inspection.
     kb2 = await _make_shared_kb()
     mgr._destination = kb2  # type: ignore[attr-defined]
@@ -420,9 +407,9 @@ async def test_compose_preserves_non_identity_metadata_keys() -> None:
         "# Title\n\nBody.",
         source="snippet.md",
         extra_metadata={
-            "tenant_id": "evil",        # auto-derived wins
-            "region": "us-west",         # preserved
-            "cohort": "beta",            # preserved
+            "tenant_id": "evil",  # auto-derived wins
+            "region": "us-west",  # preserved
+            "cohort": "beta",  # preserved
         },
     )
     for chunk_id, meta in _stored_metadata(kb).items():
@@ -546,9 +533,7 @@ async def test_per_call_tenant_kwarg_stamps_when_unbound(
     kb = await _make_shared_kb()  # unbound
     # Override the entry point invocation to pass tenant_id kwarg.
     if entry_point is _k1:
-        await kb.load_markdown_text(
-            "# T\n\nBody.", source="snippet.md", tenant_id="acme"
-        )
+        await kb.load_markdown_text("# T\n\nBody.", source="snippet.md", tenant_id="acme")
     else:
         corpus = _write_corpus(tmp_path)
         await kb.load_from_directory(corpus, tenant_id="acme")
@@ -580,9 +565,7 @@ class _RecordingRAG(RAGKnowledgeBase):
 
     async def ingest_from_backend(self, *args: Any, **kwargs: Any) -> Any:
         self.captured_extra_metadata.append(
-            dict(kwargs["extra_metadata"])
-            if kwargs.get("extra_metadata") is not None
-            else None
+            dict(kwargs["extra_metadata"]) if kwargs.get("extra_metadata") is not None else None
         )
         return await super().ingest_from_backend(*args, **kwargs)
 
@@ -605,9 +588,7 @@ async def test_manager_threads_tenant_into_extra_metadata() -> None:
     backend = InMemoryKnowledgeBackend()
     await _populate(backend, "domain-x")
 
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
     await mgr.ingest(domain_id="domain-x", swap_mode=IngestSwapMode.APPEND)
 
     assert _RecordingRAG.captured_extra_metadata, (
@@ -638,26 +619,16 @@ async def test_tombstone_swap_preserves_tenant_scoping() -> None:
     await _populate(backend_a, "prompts")
     await _populate(backend_b, "prompts")
 
-    mgr_a = KnowledgeIngestionManager(
-        source=backend_a, destination=kb, tenant_id="a"
-    )
-    mgr_b = KnowledgeIngestionManager(
-        source=backend_b, destination=kb, tenant_id="b"
-    )
+    mgr_a = KnowledgeIngestionManager(source=backend_a, destination=kb, tenant_id="a")
+    mgr_b = KnowledgeIngestionManager(source=backend_b, destination=kb, tenant_id="b")
 
     await mgr_a.ingest("prompts", swap_mode=IngestSwapMode.TOMBSTONE)
     await mgr_b.ingest("prompts", swap_mode=IngestSwapMode.TOMBSTONE)
 
     stored = _stored_metadata(kb)
 
-    a_rows = [
-        (cid, meta) for cid, meta in stored.items()
-        if meta.get("tenant_id") == "a"
-    ]
-    b_rows = [
-        (cid, meta) for cid, meta in stored.items()
-        if meta.get("tenant_id") == "b"
-    ]
+    a_rows = [(cid, meta) for cid, meta in stored.items() if meta.get("tenant_id") == "a"]
+    b_rows = [(cid, meta) for cid, meta in stored.items() if meta.get("tenant_id") == "b"]
     assert a_rows, "Tenant A's TOMBSTONE swap produced no live rows"
     assert b_rows, "Tenant B's TOMBSTONE swap produced no live rows"
 
@@ -666,12 +637,9 @@ async def test_tombstone_swap_preserves_tenant_scoping() -> None:
     # `_CHUNK_ID_PREFIX_KEYS` order).
     for cid, meta in a_rows:
         gen = meta.get("_generation")
-        assert isinstance(gen, str) and gen, (
-            f"Tenant A row {cid} missing _generation; meta={meta}"
-        )
+        assert isinstance(gen, str) and gen, f"Tenant A row {cid} missing _generation; meta={meta}"
         assert cid.startswith(f"a\x1fprompts\x1f{gen}\x1f"), (
-            f"Tenant A chunk_id {cid!r} order mismatch; expected "
-            f"`a\\x1fprompts\\x1f{gen}\\x1f...`"
+            f"Tenant A chunk_id {cid!r} order mismatch; expected `a\\x1fprompts\\x1f{gen}\\x1f...`"
         )
 
     # Cross-tenant isolation pin: the chunk_id sets are disjoint AND
@@ -705,9 +673,7 @@ async def test_ingest_changes_threads_extra_metadata_onto_stored_chunks() -> Non
     backend = InMemoryKnowledgeBackend()
     await _populate(backend, "prompts")
 
-    mgr = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    mgr = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
 
     # Baseline full ingest — capture the canonical snapshot id and the
     # baseline metadata for the file we're about to modify. APPEND mode
@@ -730,9 +696,7 @@ async def test_ingest_changes_threads_extra_metadata_onto_stored_chunks() -> Non
         assert "cohort" not in meta
 
     # Modify one file to create a single-file delta.
-    await backend.put_file(
-        "prompts", "guide.md", b"# Guide v2\n\nUpdated body.\n"
-    )
+    await backend.put_file("prompts", "guide.md", b"# Guide v2\n\nUpdated body.\n")
 
     # Incremental re-ingest with non-identity cohort tag + hostile
     # tenant_id override (which must lose to the bound tenant).
@@ -741,21 +705,17 @@ async def test_ingest_changes_threads_extra_metadata_onto_stored_chunks() -> Non
         since_version=baseline,
         swap_mode=IngestSwapMode.APPEND,
         extra_metadata={
-            "tenant_id": "evil",   # auto-derived bound tenant wins
-            "domain_id": "fake",   # auto-derived domain wins
-            "cohort": "beta",       # preserved
+            "tenant_id": "evil",  # auto-derived bound tenant wins
+            "domain_id": "fake",  # auto-derived domain wins
+            "cohort": "beta",  # preserved
         },
     )
 
     stored = _stored_metadata(kb)
     refreshed_guide_chunks = {
-        cid: meta
-        for cid, meta in stored.items()
-        if meta.get("source_path") == "guide.md"
+        cid: meta for cid, meta in stored.items() if meta.get("source_path") == "guide.md"
     }
-    assert refreshed_guide_chunks, (
-        "ingest_changes purged guide.md chunks without re-embedding them"
-    )
+    assert refreshed_guide_chunks, "ingest_changes purged guide.md chunks without re-embedding them"
     for chunk_id, meta in refreshed_guide_chunks.items():
         assert meta.get("tenant_id") == "acme", (
             f"chunk {chunk_id} hostile tenant_id leaked: meta={meta}"
@@ -777,8 +737,7 @@ async def test_ingest_changes_threads_extra_metadata_onto_stored_chunks() -> Non
     assert untouched, "intro/ref chunks must survive the delta re-ingest"
     for chunk_id, meta in untouched.items():
         assert "cohort" not in meta, (
-            f"chunk {chunk_id} for non-modified file leaked cohort tag: "
-            f"meta={meta}"
+            f"chunk {chunk_id} for non-modified file leaked cohort tag: meta={meta}"
         )
 
 
@@ -805,10 +764,7 @@ async def test_rag_knowledge_base_advertises_tenant_scoped_chunks_only() -> None
         # Raw-string equivalence — consumer-extensibility contract.
         assert kb.supports("tenant_scoped_chunks") is True
         assert Capability.TENANT_SCOPED_CHUNKS in kb.instance_capabilities()
-        assert (
-            Capability.TENANT_SCOPED_CHUNKS
-            in RAGKnowledgeBase.supported_capabilities()
-        )
+        assert Capability.TENANT_SCOPED_CHUNKS in RAGKnowledgeBase.supported_capabilities()
         # Backend-state-layer and concurrency-layer are deliberately
         # NOT advertised until W4 activates them.
         assert kb.supports(Capability.TENANT_SCOPED_STATE) is False
@@ -836,27 +792,17 @@ async def test_ingestion_manager_advertises_chunk_and_state_not_locks() -> None:
     await backend.initialize()
 
     for mgr in (
-        KnowledgeIngestionManager(
-            source=backend, destination=kb, tenant_id="acme"
-        ),
+        KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme"),
         KnowledgeIngestionManager(source=backend, destination=kb),
     ):
         assert mgr.supports(Capability.TENANT_SCOPED_CHUNKS) is True
         assert mgr.supports("tenant_scoped_chunks") is True
-        assert (
-            Capability.TENANT_SCOPED_CHUNKS in mgr.instance_capabilities()
-        )
-        assert (
-            Capability.TENANT_SCOPED_CHUNKS
-            in KnowledgeIngestionManager.supported_capabilities()
-        )
+        assert Capability.TENANT_SCOPED_CHUNKS in mgr.instance_capabilities()
+        assert Capability.TENANT_SCOPED_CHUNKS in KnowledgeIngestionManager.supported_capabilities()
         # The state capabilities are structural (always advertised).
         assert mgr.supports(Capability.TENANT_SCOPED_STATE) is True
         assert mgr.supports(Capability.SNAPSHOT_ISOLATION) is True
-        assert (
-            Capability.TENANT_SCOPED_STATE
-            in KnowledgeIngestionManager.supported_capabilities()
-        )
+        assert Capability.TENANT_SCOPED_STATE in KnowledgeIngestionManager.supported_capabilities()
         # Locking is the orchestrator's contract, not the manager's.
         assert mgr.supports(Capability.TENANT_SCOPED_LOCKS) is False
         assert mgr.supports(Capability.CONDITIONAL_WRITE) is False
@@ -878,18 +824,13 @@ async def test_ingestion_manager_event_bus_emission_is_dynamic() -> None:
     bus = InMemoryEventBus()
 
     busless = KnowledgeIngestionManager(source=backend, destination=kb)
-    bus_bound = KnowledgeIngestionManager(
-        source=backend, destination=kb, event_bus=bus
-    )
+    bus_bound = KnowledgeIngestionManager(source=backend, destination=kb, event_bus=bus)
 
     assert busless.supports(Capability.EVENT_BUS_EMISSION) is False
     assert bus_bound.supports(Capability.EVENT_BUS_EMISSION) is True
 
     # Instance-dependent, so NOT in the class-level set.
-    assert (
-        Capability.EVENT_BUS_EMISSION
-        not in KnowledgeIngestionManager.supported_capabilities()
-    )
+    assert Capability.EVENT_BUS_EMISSION not in KnowledgeIngestionManager.supported_capabilities()
 
     # Always-true capabilities are advertised regardless of the bus.
     for mgr in (busless, bus_bound):
@@ -925,15 +866,17 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
     (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
     backend.
     """
-    advertised = frozenset({
-        Capability.KEY_PATTERN_FILTERING,
-        Capability.CHANGE_SUBSCRIPTION,
-        Capability.BACKEND_STATE_OBSERVABILITY,
-        Capability.CALLBACK_REGISTRY,
-        Capability.TENANT_SCOPED_STATE,
-        Capability.SNAPSHOT_ISOLATION,
-        Capability.CONDITIONAL_WRITE,
-    })
+    advertised = frozenset(
+        {
+            Capability.KEY_PATTERN_FILTERING,
+            Capability.CHANGE_SUBSCRIPTION,
+            Capability.BACKEND_STATE_OBSERVABILITY,
+            Capability.CALLBACK_REGISTRY,
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
+            Capability.CONDITIONAL_WRITE,
+        }
+    )
     backend_classes: list[type[Any]] = [
         InMemoryKnowledgeBackend,
         FileKnowledgeBackend,
@@ -942,8 +885,7 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
     for cls in backend_classes:
         # Capability-contract conformance via the Protocol.
         assert issubclass(cls, CapabilityMixin), (
-            f"{cls.__name__} must inherit CapabilityMixin via the "
-            "KnowledgeResourceBackendMixin"
+            f"{cls.__name__} must inherit CapabilityMixin via the KnowledgeResourceBackendMixin"
         )
         assert cls.supported_capabilities() == advertised, (
             f"{cls.__name__} must advertise the state-observability + "
@@ -951,9 +893,9 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
         )
         # Capabilities whose behaviour has not shipped stay unadvertised.
         for cap in (
-            Capability.TENANT_SCOPED_CHUNKS,    # chunk layer, not backend
-            Capability.TENANT_SCOPED_LOCKS,     # no architectural lock
-            Capability.STREAMING_READS,          # not yet shipped
+            Capability.TENANT_SCOPED_CHUNKS,  # chunk layer, not backend
+            Capability.TENANT_SCOPED_LOCKS,  # no architectural lock
+            Capability.STREAMING_READS,  # not yet shipped
         ):
             assert cls.SUPPORTED_CAPABILITIES.isdisjoint({cap}), (
                 f"{cls.__name__} unexpectedly advertises {cap.value!r}"
@@ -968,12 +910,14 @@ def test_in_memory_backend_satisfies_capability_contract_protocol() -> None:
     """
     backend = InMemoryKnowledgeBackend()
     assert isinstance(backend, CapabilityContract)
-    assert backend.instance_capabilities() == frozenset({
-        Capability.KEY_PATTERN_FILTERING,
-        Capability.CHANGE_SUBSCRIPTION,
-        Capability.BACKEND_STATE_OBSERVABILITY,
-        Capability.CALLBACK_REGISTRY,
-        Capability.TENANT_SCOPED_STATE,
-        Capability.SNAPSHOT_ISOLATION,
-        Capability.CONDITIONAL_WRITE,
-    })
+    assert backend.instance_capabilities() == frozenset(
+        {
+            Capability.KEY_PATTERN_FILTERING,
+            Capability.CHANGE_SUBSCRIPTION,
+            Capability.BACKEND_STATE_OBSERVABILITY,
+            Capability.CALLBACK_REGISTRY,
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
+            Capability.CONDITIONAL_WRITE,
+        }
+    )

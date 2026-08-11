@@ -141,17 +141,28 @@ class ContextGenerationConfig(StructuredConfig):
 
 # Nested dataclass fields — rebuilt by the inherited from_dict; to_dict()
 # serializes them explicitly via .to_dict() and skips them in the generic loop
-_NESTED_FIELDS: frozenset[str] = frozenset({
-    "transitions", "intent_detection", "context_generation",
-})
+_NESTED_FIELDS: frozenset[str] = frozenset(
+    {
+        "transitions",
+        "intent_detection",
+        "context_generation",
+    }
+)
 # Tuple fields containing dicts — list[dict] ↔ tuple[dict, ...]
-_TUPLE_DICT_FIELDS: frozenset[str] = frozenset({
-    "tasks", "tool_result_mapping",
-})
+_TUPLE_DICT_FIELDS: frozenset[str] = frozenset(
+    {
+        "tasks",
+        "tool_result_mapping",
+    }
+)
 # Tuple fields containing primitives — list ↔ tuple
-_TUPLE_PRIMITIVE_FIELDS: frozenset[str] = frozenset({
-    "suggestions", "tools", "routing_transforms",
-})
+_TUPLE_PRIMITIVE_FIELDS: frozenset[str] = frozenset(
+    {
+        "suggestions",
+        "tools",
+        "routing_transforms",
+    }
+)
 # All tuple fields (union of the two above)
 _TUPLE_FIELDS: frozenset[str] = _TUPLE_DICT_FIELDS | _TUPLE_PRIMITIVE_FIELDS
 # Required fields always present in serialized output
@@ -333,8 +344,7 @@ class WizardConfig(StructuredConfig):
             d["global_tasks"] = [dict(t) for t in self.global_tasks]
         if self.subflows:
             d["subflows"] = {
-                name: [dict(s) for s in stages]
-                for name, stages in self.subflows.items()
+                name: [dict(s) for s in stages] for name, stages in self.subflows.items()
             }
         return d
 
@@ -827,9 +837,7 @@ class WizardConfigBuilder:
         builder._version = config.get("version", "1.0")
         builder._description = config.get("description", "")
         builder._settings = dict(config.get("settings", {}))
-        builder._global_tasks = [
-            dict(t) for t in config.get("global_tasks", [])
-        ]
+        builder._global_tasks = [dict(t) for t in config.get("global_tasks", [])]
 
         for stage_dict in config.get("stages", []):
             stage = _stage_from_dict(stage_dict)
@@ -945,9 +953,7 @@ class WizardConfigBuilder:
 
         # Must have at least one stage
         if not stages:
-            return ValidationResult.error(
-                "Wizard must have at least one stage"
-            )
+            return ValidationResult.error("Wizard must have at least one stage")
 
         stage_names = {s.name for s in stages}
 
@@ -956,9 +962,7 @@ class WizardConfigBuilder:
         for stage in stages:
             if stage.name in seen:
                 result = result.merge(
-                    ValidationResult.error(
-                        f"Duplicate stage name: '{stage.name}'"
-                    )
+                    ValidationResult.error(f"Duplicate stage name: '{stage.name}'")
                 )
             seen.add(stage.name)
 
@@ -971,18 +975,13 @@ class WizardConfigBuilder:
         elif len(start_stages) > 1:
             names = [s.name for s in start_stages]
             result = result.merge(
-                ValidationResult.error(
-                    f"Wizard has multiple start stages: {names}"
-                )
+                ValidationResult.error(f"Wizard has multiple start stages: {names}")
             )
 
         # All transition targets reference existing stages
         for stage in stages:
             for transition in stage.transitions:
-                if (
-                    transition.target not in stage_names
-                    and transition.target != "_subflow"
-                ):
+                if transition.target not in stage_names and transition.target != "_subflow":
                     result = result.merge(
                         ValidationResult.error(
                             f"Stage '{stage.name}' has transition to "
@@ -995,8 +994,7 @@ class WizardConfigBuilder:
             if from_stage not in stage_names:
                 result = result.merge(
                     ValidationResult.error(
-                        f"Transition from unknown stage '{from_stage}' "
-                        f"to '{transition.target}'"
+                        f"Transition from unknown stage '{from_stage}' to '{transition.target}'"
                     )
                 )
 
@@ -1005,8 +1003,7 @@ class WizardConfigBuilder:
             if stage_name not in stage_names:
                 result = result.merge(
                     ValidationResult.error(
-                        f"Intent detection references unknown stage "
-                        f"'{stage_name}'"
+                        f"Intent detection references unknown stage '{stage_name}'"
                     )
                 )
 
@@ -1017,10 +1014,7 @@ class WizardConfigBuilder:
         registry = get_registry()
         valid_reasoning = {"single"} | set(registry.list_keys())
         for stage in stages:
-            if (
-                stage.reasoning is not None
-                and stage.reasoning.lower() not in valid_reasoning
-            ):
+            if stage.reasoning is not None and stage.reasoning.lower() not in valid_reasoning:
                 result = result.merge(
                     ValidationResult.error(
                         f"Stage '{stage.name}' has invalid reasoning "
@@ -1045,8 +1039,7 @@ class WizardConfigBuilder:
             if stage.max_iterations is not None and stage.reasoning is None:
                 result = result.merge(
                     ValidationResult.warning(
-                        f"Stage '{stage.name}' sets max_iterations "
-                        f"but has no reasoning mode"
+                        f"Stage '{stage.name}' sets max_iterations but has no reasoning mode"
                     )
                 )
 
@@ -1055,8 +1048,7 @@ class WizardConfigBuilder:
             if stage.is_end and stage.transitions:
                 result = result.merge(
                     ValidationResult.warning(
-                        f"End stage '{stage.name}' has transitions "
-                        f"that will never be followed"
+                        f"End stage '{stage.name}' has transitions that will never be followed"
                     )
                 )
 
@@ -1067,8 +1059,7 @@ class WizardConfigBuilder:
                 if stage.name not in reachable and not stage.is_start:
                     result = result.merge(
                         ValidationResult.warning(
-                            f"Stage '{stage.name}' is not reachable "
-                            f"from the start stage"
+                            f"Stage '{stage.name}' is not reachable from the start stage"
                         )
                     )
 
@@ -1109,8 +1100,7 @@ class WizardConfigBuilder:
                     if not self._tool_catalog.has(tool_name):
                         result = result.merge(
                             ValidationResult.error(
-                                f"Stage '{stage.name}' references unknown "
-                                f"tool: '{tool_name}'"
+                                f"Stage '{stage.name}' references unknown tool: '{tool_name}'"
                             )
                         )
 
@@ -1121,10 +1111,7 @@ def _find_reachable(stages: list[StageConfig], start: str) -> set[str]:
     """Find all stages reachable from a start stage via BFS."""
     adjacency: dict[str, list[str]] = {}
     for stage in stages:
-        targets = [
-            t.target for t in stage.transitions
-            if t.target != "_subflow"
-        ]
+        targets = [t.target for t in stage.transitions if t.target != "_subflow"]
         adjacency[stage.name] = targets
 
     visited: set[str] = set()

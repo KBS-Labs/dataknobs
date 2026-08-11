@@ -21,26 +21,18 @@ def create_test_prompts(prompt_dir: Path):
     system_dir = prompt_dir / "system"
     system_dir.mkdir(parents=True, exist_ok=True)
 
-    (system_dir / "helpful.yaml").write_text(
-        yaml.dump({"template": "You are a helpful assistant"})
-    )
-    (system_dir / "assistant.yaml").write_text(
-        yaml.dump({"template": "You are an AI assistant"})
-    )
+    (system_dir / "helpful.yaml").write_text(yaml.dump({"template": "You are a helpful assistant"}))
+    (system_dir / "assistant.yaml").write_text(yaml.dump({"template": "You are an AI assistant"}))
 
     # User prompts
     user_dir = prompt_dir / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    (user_dir / "question.yaml").write_text(
-        yaml.dump({"template": "What is {{topic}}?"})
-    )
+    (user_dir / "question.yaml").write_text(yaml.dump({"template": "What is {{topic}}?"}))
     (user_dir / "followup_question.yaml").write_text(
         yaml.dump({"template": "Tell me more about {{topic}}."})
     )
-    (user_dir / "greeting.yaml").write_text(
-        yaml.dump({"template": "Hello!"})
-    )
+    (user_dir / "greeting.yaml").write_text(yaml.dump({"template": "Hello!"}))
 
 
 @pytest.fixture
@@ -55,7 +47,7 @@ async def test_components():
         config = LLMConfig(
             provider="echo",
             model="echo-model",
-            options={"echo_prefix": ""}  # No prefix for cleaner test output
+            options={"echo_prefix": ""},  # No prefix for cleaner test output
         )
         llm = EchoProvider(config)
 
@@ -66,11 +58,7 @@ async def test_components():
         # Create storage
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
-        yield {
-            "llm": llm,
-            "builder": builder,
-            "storage": storage
-        }
+        yield {"llm": llm, "builder": builder, "storage": storage}
 
         # Cleanup
         await llm.close()
@@ -811,9 +799,7 @@ class TestConversationManagerReset:
     """
 
     @pytest.mark.asyncio
-    async def test_reset_empties_messages_and_current_node(
-        self, test_components
-    ):
+    async def test_reset_empties_messages_and_current_node(self, test_components):
         """After reset: no messages, no current node, no materialized state."""
         manager = await ConversationManager.create(
             llm=test_components["llm"],
@@ -830,9 +816,7 @@ class TestConversationManagerReset:
         assert manager.state is None
 
     @pytest.mark.asyncio
-    async def test_reset_preserves_auto_generated_id_on_rebuild(
-        self, test_components
-    ):
+    async def test_reset_preserves_auto_generated_id_on_rebuild(self, test_components):
         """A conversation whose id was auto-generated keeps it across reset.
 
         The id is minted at first materialization and never written back to
@@ -859,9 +843,7 @@ class TestConversationManagerReset:
         assert contents == ["Fresh"]  # no phantom "First"
 
     @pytest.mark.asyncio
-    async def test_reset_preserves_explicit_id_on_rebuild(
-        self, test_components
-    ):
+    async def test_reset_preserves_explicit_id_on_rebuild(self, test_components):
         """An explicitly-supplied conversation id also survives reset."""
         manager = await ConversationManager.create(
             llm=test_components["llm"],
@@ -878,9 +860,7 @@ class TestConversationManagerReset:
         assert manager.conversation_id == "conv-explicit"
 
     @pytest.mark.asyncio
-    async def test_reset_preserves_seed_metadata_on_rebuild(
-        self, test_components
-    ):
+    async def test_reset_preserves_seed_metadata_on_rebuild(self, test_components):
         """Seed metadata is reapplied to the rebuilt root after reset."""
         manager = await ConversationManager.create(
             llm=test_components["llm"],
@@ -938,9 +918,7 @@ class TestConversationManagerReset:
         assert manager.state is None
 
     @pytest.mark.asyncio
-    async def test_reset_drops_transient_post_turn_metadata(
-        self, test_components
-    ):
+    async def test_reset_drops_transient_post_turn_metadata(self, test_components):
         """Reset drops per-turn metadata written after materialization.
 
         Post-state, ``state.metadata`` IS ``_initial_metadata`` (aliased by
@@ -969,9 +947,7 @@ class TestConversationManagerReset:
         assert "wizard" not in manager.metadata
 
     @pytest.mark.asyncio
-    async def test_reset_preserves_pre_message_seed_writes(
-        self, test_components
-    ):
+    async def test_reset_preserves_pre_message_seed_writes(self, test_components):
         """Seed writes made BEFORE the first message survive reset.
 
         The pristine seed is snapshotted at first materialization, not at
@@ -995,4 +971,3 @@ class TestConversationManagerReset:
         assert manager.metadata.get("tenant") == "acme"
         assert manager.metadata.get("locale") == "en-US"
         assert "transient" not in manager.metadata
-

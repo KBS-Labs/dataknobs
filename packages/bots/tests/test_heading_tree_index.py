@@ -54,22 +54,49 @@ def _chunk(
 def _rfc_chunks() -> list[SourceResult]:
     """Build chunks mimicking an RFC with security sections."""
     return [
-        _chunk("title", ["OAuth 2.0 Authorization Framework"], [0],
-               content="This document describes OAuth 2.0"),
-        _chunk("intro", ["1. Introduction"], [1],
-               content="OAuth provides authorization flows"),
-        _chunk("sec_overview", ["10. Security Considerations"], [1],
-               content="This section describes security considerations"),
-        _chunk("csrf", ["10. Security Considerations", "10.12 CSRF"], [1, 2],
-               content="CSRF attacks exploit trust in authorized users"),
-        _chunk("csrf_mit", ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"], [1, 2, 3],
-               content="Use state parameter to prevent CSRF"),
-        _chunk("token", ["10. Security Considerations", "10.3 Token Leakage"], [1, 2],
-               content="Tokens may leak through logs or referrer headers"),
-        _chunk("redirect", ["10. Security Considerations", "10.5 Redirect URI"], [1, 2],
-               content="Open redirectors can be exploited for token theft"),
-        _chunk("client_auth", ["10. Security Considerations", "10.1 Client Authentication"], [1, 2],
-               content="Clients must authenticate to the authorization server"),
+        _chunk(
+            "title",
+            ["OAuth 2.0 Authorization Framework"],
+            [0],
+            content="This document describes OAuth 2.0",
+        ),
+        _chunk("intro", ["1. Introduction"], [1], content="OAuth provides authorization flows"),
+        _chunk(
+            "sec_overview",
+            ["10. Security Considerations"],
+            [1],
+            content="This section describes security considerations",
+        ),
+        _chunk(
+            "csrf",
+            ["10. Security Considerations", "10.12 CSRF"],
+            [1, 2],
+            content="CSRF attacks exploit trust in authorized users",
+        ),
+        _chunk(
+            "csrf_mit",
+            ["10. Security Considerations", "10.12 CSRF", "10.12.1 Mitigation"],
+            [1, 2, 3],
+            content="Use state parameter to prevent CSRF",
+        ),
+        _chunk(
+            "token",
+            ["10. Security Considerations", "10.3 Token Leakage"],
+            [1, 2],
+            content="Tokens may leak through logs or referrer headers",
+        ),
+        _chunk(
+            "redirect",
+            ["10. Security Considerations", "10.5 Redirect URI"],
+            [1, 2],
+            content="Open redirectors can be exploited for token theft",
+        ),
+        _chunk(
+            "client_auth",
+            ["10. Security Considerations", "10.1 Client Authentication"],
+            [1, 2],
+            content="Clients must authenticate to the authorization server",
+        ),
     ]
 
 
@@ -77,6 +104,7 @@ def _make_vector_fn(
     chunks: list[SourceResult],
 ) -> Any:
     """Create a simple vector query fn that returns chunks matching query words."""
+
     async def vector_fn(
         query: str,
         top_k: int,
@@ -90,6 +118,7 @@ def _make_vector_fn(
             if any(w in content_lower for w in query_lower.split()):
                 matches.append(c)
         return matches[:top_k]
+
     return vector_fn
 
 
@@ -208,7 +237,9 @@ class TestVectorStrategy:
         vector_fn = _make_vector_fn(chunks)
         config = HeadingTreeConfig(entry_strategy="vector")
         index = HeadingTreeIndex.from_chunks(
-            chunks, vector_query_fn=vector_fn, config=config,
+            chunks,
+            vector_query_fn=vector_fn,
+            config=config,
         )
 
         results = await index.resolve("CSRF attacks")
@@ -231,7 +262,8 @@ class TestVectorStrategy:
         """In eager mode, vector strategy uses the pre-built tree nodes."""
         config = HeadingTreeConfig(entry_strategy="vector")
         index = HeadingTreeIndex.from_chunks(
-            _rfc_chunks(), config=config,
+            _rfc_chunks(),
+            config=config,
         )  # No vector_query_fn but tree is pre-built
 
         results = await index.resolve("security")
@@ -256,7 +288,9 @@ class TestVectorStrategy:
 
         config = HeadingTreeConfig(entry_strategy="vector")
         index = HeadingTreeIndex.from_chunks(
-            chunks, vector_query_fn=safety_to_security, config=config,
+            chunks,
+            vector_query_fn=safety_to_security,
+            config=config,
         )
 
         results = await index.resolve("safety concerns")
@@ -281,7 +315,8 @@ class TestLazyMode:
         vector_fn = _make_vector_fn(chunks)
         config = HeadingTreeConfig(entry_strategy="vector")
         index = HeadingTreeIndex(
-            vector_query_fn=vector_fn, config=config,
+            vector_query_fn=vector_fn,
+            config=config,
         )
 
         # No pre-built tree
@@ -299,7 +334,8 @@ class TestLazyMode:
         vector_fn = _make_vector_fn(chunks)
         config = HeadingTreeConfig(entry_strategy="both")
         index = HeadingTreeIndex(
-            vector_query_fn=vector_fn, config=config,
+            vector_query_fn=vector_fn,
+            config=config,
         )
 
         results = await index.resolve("security CSRF")
@@ -317,6 +353,7 @@ class TestLazyMode:
     @pytest.mark.asyncio
     async def test_lazy_no_heading_metadata_returns_empty(self) -> None:
         """Seeds with no heading metadata produce no tree."""
+
         async def no_heading_fn(
             query: str,
             top_k: int,
@@ -345,7 +382,9 @@ class TestBothStrategy:
         vector_fn = _make_vector_fn(chunks)
         config = HeadingTreeConfig(entry_strategy="both")
         index = HeadingTreeIndex.from_chunks(
-            chunks, vector_query_fn=vector_fn, config=config,
+            chunks,
+            vector_query_fn=vector_fn,
+            config=config,
         )
 
         results = await index.resolve("security CSRF")
@@ -361,7 +400,9 @@ class TestBothStrategy:
         vector_fn = _make_vector_fn(chunks)
         config = HeadingTreeConfig(entry_strategy="both")
         index = HeadingTreeIndex.from_chunks(
-            chunks, vector_query_fn=vector_fn, config=config,
+            chunks,
+            vector_query_fn=vector_fn,
+            config=config,
         )
 
         results = await index.resolve("CSRF")
@@ -462,7 +503,8 @@ class TestScopeProfiles:
             scope="focused",
         )
         results = await index.resolve(
-            "security considerations", intent=intent,
+            "security considerations",
+            intent=intent,
         )
         ids = {r.source_id for r in results}
 
@@ -486,7 +528,8 @@ class TestScopeProfiles:
             raw_data={"topic_index": {"expansion_mode": "leaves"}},
         )
         results = await index.resolve(
-            "security considerations", intent=intent,
+            "security considerations",
+            intent=intent,
         )
         ids = {r.source_id for r in results}
 
@@ -508,7 +551,8 @@ class TestScopeProfiles:
             scope="unknown_scope",
         )
         results = await index.resolve(
-            "security considerations", intent=intent,
+            "security considerations",
+            intent=intent,
         )
         ids = {r.source_id for r in results}
 
@@ -614,7 +658,9 @@ class TestLLMHeadingSelection:
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         llm = EchoProvider(_ECHO_CONFIG)
-        llm.set_response_function(lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("LLM failed")))
+        llm.set_response_function(
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("LLM failed"))
+        )
 
         results = await index.resolve("security", llm=llm)
         assert len(results) > 0
@@ -672,7 +718,8 @@ class TestLLMHeadingSelection:
         dedicated_llm.set_responses([text_response("(A)")])
 
         index = HeadingTreeIndex.from_chunks(
-            chunks, config=config,
+            chunks,
+            config=config,
             heading_selection_llm=dedicated_llm,
         )
 
@@ -750,8 +797,12 @@ class TestResultLimits:
             filter_metadata: dict[str, Any] | None = None,
         ) -> list[SourceResult]:
             return [
-                _chunk("weak", ["10. Security Considerations", "10.3 Token Leakage"], [1, 2],
-                       relevance=0.1),  # Below threshold
+                _chunk(
+                    "weak",
+                    ["10. Security Considerations", "10.3 Token Leakage"],
+                    [1, 2],
+                    relevance=0.1,
+                ),  # Below threshold
             ]
 
         config = HeadingTreeConfig(
@@ -759,7 +810,8 @@ class TestResultLimits:
             seed_score_threshold=0.3,
         )
         index = HeadingTreeIndex(
-            vector_query_fn=low_score_fn, config=config,
+            vector_query_fn=low_score_fn,
+            config=config,
         )
 
         results = await index.resolve("token leakage")
@@ -775,41 +827,49 @@ class TestHeadingTreeConfig:
     """Tests for configuration construction."""
 
     def test_from_dict_basic(self) -> None:
-        cfg = HeadingTreeConfig.from_dict({
-            "entry_strategy": "heading_match",
-            "expansion_mode": "children",
-            "max_expanded_results": 25,
-        })
+        cfg = HeadingTreeConfig.from_dict(
+            {
+                "entry_strategy": "heading_match",
+                "expansion_mode": "children",
+                "max_expanded_results": 25,
+            }
+        )
         assert cfg.entry_strategy == "heading_match"
         assert cfg.expansion_mode == "children"
         assert cfg.max_expanded_results == 25
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
-        cfg = HeadingTreeConfig.from_dict({
-            "entry_strategy": "both",
-            "unknown_key": "ignored",
-        })
+        cfg = HeadingTreeConfig.from_dict(
+            {
+                "entry_strategy": "both",
+                "unknown_key": "ignored",
+            }
+        )
         assert cfg.entry_strategy == "both"
 
     def test_from_dict_nested_heading_match(self) -> None:
-        cfg = HeadingTreeConfig.from_dict({
-            "heading_match": {
-                "stopwords": ["the", "a", "custom"],
-                "min_word_length": 3,
-                "min_heading_depth": 2,
-            },
-        })
+        cfg = HeadingTreeConfig.from_dict(
+            {
+                "heading_match": {
+                    "stopwords": ["the", "a", "custom"],
+                    "min_word_length": 3,
+                    "min_heading_depth": 2,
+                },
+            }
+        )
         assert "custom" in cfg.heading_match.stopwords
         assert cfg.heading_match.min_word_length == 3
         assert cfg.heading_match.min_heading_depth == 2
 
     def test_from_dict_scope_profiles(self) -> None:
-        cfg = HeadingTreeConfig.from_dict({
-            "scope_profiles": {
-                "focused": {"expansion_mode": "children"},
-                "broad": {"max_expansion_depth": None},
-            },
-        })
+        cfg = HeadingTreeConfig.from_dict(
+            {
+                "scope_profiles": {
+                    "focused": {"expansion_mode": "children"},
+                    "broad": {"max_expansion_depth": None},
+                },
+            }
+        )
         assert cfg.scope_profiles["focused"]["expansion_mode"] == "children"
 
     def test_defaults(self) -> None:

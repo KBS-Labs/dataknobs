@@ -115,9 +115,11 @@ class KnowledgeBaseConfig:
     """
 
     name: str
-    default_chunking: dict[str, Any] = field(default_factory=lambda: {
-        "max_chunk_size": 500,
-    })
+    default_chunking: dict[str, Any] = field(
+        default_factory=lambda: {
+            "max_chunk_size": 500,
+        }
+    )
     default_quality_filter: dict[str, Any] | None = None
     patterns: list[FilePatternConfig] = field(default_factory=list)
     exclude_patterns: list[str] = field(default_factory=list)
@@ -149,9 +151,7 @@ class KnowledgeBaseConfig:
 
         if config_path is None:
             # Return default config with directory name
-            logger.debug(
-                f"No knowledge_base config found in {directory}, using defaults"
-            )
+            logger.debug(f"No knowledge_base config found in {directory}, using defaults")
             return cls(name=directory.name)
 
         try:
@@ -164,8 +164,7 @@ class KnowledgeBaseConfig:
             # `api_key` puts the key in the text. The file name says which
             # config; __cause__ carries the parser's own words to the logs.
             raise IngestionConfigError(
-                f"Failed to load config from '{config_path.name}' "
-                f"({type(e).__name__})"
+                f"Failed to load config from '{config_path.name}' ({type(e).__name__})"
             ) from e
 
         return cls.from_dict(data, default_name=directory.name)
@@ -192,9 +191,12 @@ class KnowledgeBaseConfig:
 
         return cls(
             name=data.get("name", default_name),
-            default_chunking=data.get("default_chunking", {
-                "max_chunk_size": 500,
-            }),
+            default_chunking=data.get(
+                "default_chunking",
+                {
+                    "max_chunk_size": 500,
+                },
+            ),
             default_quality_filter=data.get("default_quality_filter"),
             patterns=patterns,
             exclude_patterns=data.get("exclude_patterns", []),
@@ -244,17 +246,12 @@ class KnowledgeBaseConfig:
         except ConfigYAMLNotInstalledError as err:
             # Preserve the historical user-facing PyYAML-missing message.
             raise IngestionConfigError(
-                "PyYAML is required to load YAML config files. "
-                "Install with: pip install pyyaml"
+                "PyYAML is required to load YAML config files. Install with: pip install pyyaml"
             ) from err
         except ConfigLoadError as err:
-            raise IngestionConfigError(
-                f"Failed to load config from {path}: {err}"
-            ) from err
+            raise IngestionConfigError(f"Failed to load config from {path}: {err}") from err
         except OSError as err:
-            raise IngestionConfigError(
-                f"Failed to read config from {path}: {err}"
-            ) from err
+            raise IngestionConfigError(f"Failed to read config from {path}: {err}") from err
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""

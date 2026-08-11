@@ -40,9 +40,7 @@ from dataknobs_bots.reasoning.react_config import ReActReasoningConfig
 logger = logging.getLogger(__name__)
 
 
-class HybridReasoning(
-    StructuredConfigConsumer[HybridReasoningConfig], ReasoningStrategy
-):
+class HybridReasoning(StructuredConfigConsumer[HybridReasoningConfig], ReasoningStrategy):
     """Reasoning strategy combining grounded retrieval with ReAct tool use.
 
     Holds a :class:`GroundedReasoning` instance for the mandatory
@@ -117,9 +115,7 @@ class HybridReasoning(
         """
         config = self.config
         self._greeting_template = config.greeting_template
-        prompt_resolver: PromptResolver | None = self.components.get(
-            "prompt_resolver"
-        )
+        prompt_resolver: PromptResolver | None = self.components.get("prompt_resolver")
         # Forward the bot-wide envelope so the grounded child renders
         # its synthesis-prompt KB block in the same style as the bot's
         # user-prompt context blocks. Without this, hybrid silently
@@ -144,10 +140,7 @@ class HybridReasoning(
         # Check the grounded child's config sources to avoid double-wrapping
         # when the config already declares a vector_kb source.
         knowledge_base = self.components.get("knowledge_base")
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb"
-            for s in config.grounded.sources
-        )
+        has_vector_kb_source = any(s.source_type == "vector_kb" for s in config.grounded.sources)
         if knowledge_base is not None and not has_vector_kb_source:
             self.set_knowledge_base(knowledge_base)
 
@@ -241,7 +234,10 @@ class HybridReasoning(
 
         # Phase 3: ReAct tool loop
         response = await self._react.generate(
-            manager, llm, tools=tools, **kwargs,
+            manager,
+            llm,
+            tools=tools,
+            **kwargs,
         )
 
         # Phase 4: Collect tool executions from ReAct
@@ -253,7 +249,10 @@ class HybridReasoning(
 
         # Phase 6: Post-ReAct synthesis formatting
         response = self._apply_post_react_synthesis(
-            response, context, manager, provenance,
+            response,
+            context,
+            manager,
+            provenance,
             system_prompt=augmented_prompt,
         )
 
@@ -296,14 +295,20 @@ class HybridReasoning(
         if tools:
             # Tools available — must run full ReAct loop (buffered)
             response = await self._react.generate(
-                manager, llm, tools=tools, **kwargs,
+                manager,
+                llm,
+                tools=tools,
+                **kwargs,
             )
             react_executions = self._react.get_and_clear_tool_executions()
             self._tool_executions.extend(react_executions)
             self._merge_provenance(manager, provenance, react_executions)
 
             response = self._apply_post_react_synthesis(
-                response, context, manager, provenance,
+                response,
+                context,
+                manager,
+                provenance,
                 system_prompt=augmented_prompt,
             )
             yield response
@@ -311,7 +316,9 @@ class HybridReasoning(
             # No tools — resolve synthesis style to decide streaming approach
             self._merge_provenance(manager, provenance, [])
             plan = self._grounded.resolve_synthesis(
-                context, manager, provenance,
+                context,
+                manager,
+                provenance,
                 system_prompt=augmented_prompt,
             )
 
@@ -323,6 +330,7 @@ class HybridReasoning(
                 async for chunk in manager.stream_complete(**kwargs):
                     yield chunk
                 from dataknobs_llm import LLMResponse as _LLMResponse
+
                 if plan.template_text:
                     yield _LLMResponse(
                         content="\n\n" + plan.template_text,
@@ -352,12 +360,18 @@ class HybridReasoning(
         template.  Falls back to the base class greeting_template.
         """
         grounded_greeting = await self._grounded.greet(
-            manager, llm, initial_context=initial_context, **kwargs,
+            manager,
+            llm,
+            initial_context=initial_context,
+            **kwargs,
         )
         if grounded_greeting is not None:
             return grounded_greeting
         return await super().greet(
-            manager, llm, initial_context=initial_context, **kwargs,
+            manager,
+            llm,
+            initial_context=initial_context,
+            **kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -434,7 +448,9 @@ class HybridReasoning(
                 forwarded to :meth:`GroundedReasoning.resolve_synthesis`.
         """
         plan = self._grounded.resolve_synthesis(
-            context, manager, provenance,
+            context,
+            manager,
+            provenance,
             system_prompt=system_prompt,
             synthesis_config=synthesis_config,
         )

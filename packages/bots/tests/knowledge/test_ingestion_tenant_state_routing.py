@@ -72,14 +72,10 @@ async def test_tenant_bound_manager_isolates_ingest_status() -> None:
     """A tenant-bound manager's status write is visible only under its
     own tenant context — not to another tenant, and not to the shared
     domain view."""
-    backend = await _seed_backend(
-        ("doc.md", b"# Heading\n\nBody content for the shared kb.\n")
-    )
+    backend = await _seed_backend(("doc.md", b"# Heading\n\nBody content for the shared kb.\n"))
     acme_kb = await _make_kb()
 
-    acme = KnowledgeIngestionManager(
-        source=backend, destination=acme_kb, tenant_id="acme"
-    )
+    acme = KnowledgeIngestionManager(source=backend, destination=acme_kb, tenant_id="acme")
     result = await acme.ingest("shared_kb")
     assert result.success
 
@@ -114,22 +110,14 @@ async def test_two_tenants_track_status_independently() -> None:
     acme_kb = await _make_kb()
     beta_kb = await _make_kb()
 
-    acme = KnowledgeIngestionManager(
-        source=backend, destination=acme_kb, tenant_id="acme"
-    )
-    beta = KnowledgeIngestionManager(
-        source=backend, destination=beta_kb, tenant_id="beta"
-    )
+    acme = KnowledgeIngestionManager(source=backend, destination=acme_kb, tenant_id="acme")
+    beta = KnowledgeIngestionManager(source=backend, destination=beta_kb, tenant_id="beta")
 
     await acme.ingest("shared_kb")
     await beta.ingest("shared_kb")
 
-    acme_info = await backend.get_info(
-        "shared_kb", ctx=BoundTenantContext("acme", "shared_kb")
-    )
-    beta_info = await backend.get_info(
-        "shared_kb", ctx=BoundTenantContext("beta", "shared_kb")
-    )
+    acme_info = await backend.get_info("shared_kb", ctx=BoundTenantContext("acme", "shared_kb"))
+    beta_info = await backend.get_info("shared_kb", ctx=BoundTenantContext("beta", "shared_kb"))
     assert acme_info is not None and beta_info is not None
     # Both succeeded → both READY, each under its own prefix. The point
     # is independence: neither manager wrote the other's state doc.
@@ -154,9 +142,7 @@ async def test_tenant_change_detection_is_minimal_via_shared_lineage() -> None:
     """
     backend = await _seed_backend(("a.md", b"# A\n\nFirst doc.\n"))
     kb = await _make_kb()
-    acme = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    acme = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
 
     # Full ingest, then capture the content-identity version.
     await acme.ingest("shared_kb")
@@ -191,20 +177,14 @@ async def test_fresh_tenant_get_info_is_default_view_through_manager() -> None:
     kb = await _make_kb()
 
     # An existing tenant ingests, leaving READY under its own prefix.
-    acme = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    acme = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
     await acme.ingest("shared_kb")
 
     # A brand-new tenant's manager reads version → get_info under the
     # newcomer context returns a fresh default, not acme's / the
     # domain's state.
-    newcomer = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="newcomer"
-    )
-    info = await backend.get_info(
-        "shared_kb", ctx=BoundTenantContext("newcomer", "shared_kb")
-    )
+    newcomer = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="newcomer")
+    info = await backend.get_info("shared_kb", ctx=BoundTenantContext("newcomer", "shared_kb"))
     assert info is not None
     assert info.ingestion_status is IngestionStatus.PENDING
     assert info.generation is None
@@ -253,14 +233,10 @@ async def test_resolve_context_bound_vs_unbound() -> None:
     backend = await _seed_backend()
     kb = await _make_kb()
 
-    bound = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    bound = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
     assert bound._resolve_context("kb") == BoundTenantContext("acme", "kb")
     # A different domain yields a context over that domain.
-    assert bound._resolve_context("other") == BoundTenantContext(
-        "acme", "other"
-    )
+    assert bound._resolve_context("other") == BoundTenantContext("acme", "other")
 
     unbound = KnowledgeIngestionManager(source=backend, destination=kb)
     assert unbound._resolve_context("kb") is None
@@ -326,9 +302,7 @@ async def test_context_config_selects_prefixed_changes_state_prefix() -> None:
     assert ctx.state_key_prefix() == "t-acme/kb/"
 
     # Contrast: a bound manager's state prefix is the default convention.
-    bound = KnowledgeIngestionManager(
-        source=backend, destination=kb, tenant_id="acme"
-    )
+    bound = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id="acme")
     bound_ctx = bound._resolve_context("kb")
     assert bound_ctx is not None
     assert bound_ctx.state_key_prefix() == "tenants/acme/_state/"
@@ -353,9 +327,7 @@ async def test_context_config_identity_is_authoritative() -> None:
             "domain_id": "other",
         },
     )
-    assert mgr._resolve_context("real_kb") == BoundTenantContext(
-        "acme", "real_kb"
-    )
+    assert mgr._resolve_context("real_kb") == BoundTenantContext("acme", "real_kb")
 
     await kb.close()
     await backend.close()
@@ -466,9 +438,7 @@ async def test_capability_advertisement() -> None:
     kb = await _make_kb()
 
     for tenant_id in (None, "acme"):
-        mgr = KnowledgeIngestionManager(
-            source=backend, destination=kb, tenant_id=tenant_id
-        )
+        mgr = KnowledgeIngestionManager(source=backend, destination=kb, tenant_id=tenant_id)
         # New in this layer:
         assert mgr.supports(Capability.TENANT_SCOPED_STATE)
         assert mgr.supports(Capability.SNAPSHOT_ISOLATION)

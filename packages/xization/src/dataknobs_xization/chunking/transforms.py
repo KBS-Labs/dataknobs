@@ -53,8 +53,7 @@ class MergeSmallChunks(ChunkTransform):
             chunk_small = chunk.metadata.chunk_size < self.min_size
             would_exceed = (
                 self.max_size is not None
-                and (pending.metadata.chunk_size + chunk.metadata.chunk_size + 2)
-                > self.max_size
+                and (pending.metadata.chunk_size + chunk.metadata.chunk_size + 2) > self.max_size
             )
 
             if same_headings and (pending_small or chunk_small) and not would_exceed:
@@ -144,32 +143,30 @@ class SplitLargeChunks(ChunkTransform):
                 if has_positions:
                     span_len = chunk.metadata.char_end - chunk.metadata.char_start
                     text_len = len(chunk.text) or 1
-                    abs_start = chunk.metadata.char_start + int(
-                        rel_start * span_len / text_len
-                    )
-                    abs_end = chunk.metadata.char_start + int(
-                        rel_end * span_len / text_len
-                    )
+                    abs_start = chunk.metadata.char_start + int(rel_start * span_len / text_len)
+                    abs_end = chunk.metadata.char_start + int(rel_end * span_len / text_len)
                 else:
                     abs_start = 0
                     abs_end = 0
 
-                result.append(Chunk(
-                    text=text,
-                    metadata=ChunkMetadata(
-                        headings=list(chunk.metadata.headings),
-                        heading_levels=list(chunk.metadata.heading_levels),
-                        line_number=chunk.metadata.line_number,
-                        char_start=abs_start,
-                        char_end=abs_end,
-                        chunk_index=0,  # Re-numbered by CompositeChunker
-                        chunk_size=len(text),
-                        content_length=len(text),
-                        heading_display=chunk.metadata.heading_display,
-                        embedding_text="",  # Invalidated by split
-                        custom=dict(chunk.metadata.custom),
-                    ),
-                ))
+                result.append(
+                    Chunk(
+                        text=text,
+                        metadata=ChunkMetadata(
+                            headings=list(chunk.metadata.headings),
+                            heading_levels=list(chunk.metadata.heading_levels),
+                            line_number=chunk.metadata.line_number,
+                            char_start=abs_start,
+                            char_end=abs_end,
+                            chunk_index=0,  # Re-numbered by CompositeChunker
+                            chunk_size=len(text),
+                            content_length=len(text),
+                            heading_display=chunk.metadata.heading_display,
+                            embedding_text="",  # Invalidated by split
+                            custom=dict(chunk.metadata.custom),
+                        ),
+                    )
+                )
         return result
 
     @classmethod

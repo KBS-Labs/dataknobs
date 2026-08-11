@@ -45,9 +45,7 @@ class LifecycleTracker(Middleware):
         self.events.append("finally_turn")
         self.plugin_data_snapshots["finally_turn"] = dict(turn.plugin_data)
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         self.events.append("on_error")
 
 
@@ -132,9 +130,7 @@ class TestFinallyTurn:
         assert "finally_turn" in tracker.events
         assert "after_turn" in tracker.events
         # finally_turn fires after after_turn
-        assert tracker.events.index("after_turn") < tracker.events.index(
-            "finally_turn"
-        )
+        assert tracker.events.index("after_turn") < tracker.events.index("finally_turn")
 
     @pytest.mark.asyncio
     async def test_finally_turn_fires_on_error(self) -> None:
@@ -167,9 +163,7 @@ class TestFinallyTurn:
         ) as harness:
             await harness.chat("test")
 
-        assert tracker.plugin_data_snapshots["finally_turn"]["writer_key"] == (
-            "writer_value"
-        )
+        assert tracker.plugin_data_snapshots["finally_turn"]["writer_key"] == ("writer_value")
 
     @pytest.mark.asyncio
     async def test_finally_turn_fires_on_stream_early_exit(self) -> None:
@@ -189,9 +183,7 @@ class TestFinallyTurn:
             main_responses=[text_response("A long response")],
             middleware=[tracker],
         ) as harness:
-            async with aclosing(
-                harness.bot.stream_chat("Hi", harness.context)
-            ) as stream:
+            async with aclosing(harness.bot.stream_chat("Hi", harness.context)) as stream:
                 async for _chunk in stream:
                     break  # Exit after first chunk
 
@@ -224,12 +216,8 @@ class TestPluginDataParameter:
                 plugin_data={"session_id": "abc-123"},
             )
 
-        assert tracker.plugin_data_snapshots["on_turn_start"]["session_id"] == (
-            "abc-123"
-        )
-        assert tracker.plugin_data_snapshots["finally_turn"]["session_id"] == (
-            "abc-123"
-        )
+        assert tracker.plugin_data_snapshots["on_turn_start"]["session_id"] == ("abc-123")
+        assert tracker.plugin_data_snapshots["finally_turn"]["session_id"] == ("abc-123")
 
     @pytest.mark.asyncio
     async def test_plugin_data_seeded_from_greet(self) -> None:
@@ -256,9 +244,7 @@ class TestPluginDataParameter:
         assert result is None
         assert "finally_turn" in tracker.events
         assert "after_turn" not in tracker.events
-        assert tracker.plugin_data_snapshots["finally_turn"]["request_id"] == (
-            "req-456"
-        )
+        assert tracker.plugin_data_snapshots["finally_turn"]["request_id"] == ("req-456")
 
     @pytest.mark.asyncio
     async def test_greet_no_strategy_fires_finally_turn_with_plugin_data(
@@ -284,9 +270,7 @@ class TestPluginDataParameter:
 
         assert result is None
         assert "finally_turn" in tracker.events
-        assert tracker.plugin_data_snapshots["finally_turn"]["db_session"] == (
-            "session-handle"
-        )
+        assert tracker.plugin_data_snapshots["finally_turn"]["db_session"] == ("session-handle")
         # No other lifecycle hooks should fire — no turn was initiated
         assert "on_turn_start" not in tracker.events
         assert "after_turn" not in tracker.events

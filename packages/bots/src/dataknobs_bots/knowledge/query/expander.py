@@ -63,20 +63,130 @@ class ContextualExpander:
 
         # Common words to filter out
         self._stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "must", "can", "this", "that", "these",
-            "those", "i", "you", "he", "she", "it", "we", "they", "what", "which",
-            "who", "when", "where", "why", "how", "all", "each", "every", "both",
-            "few", "more", "most", "other", "some", "such", "no", "not", "only",
-            "own", "same", "so", "than", "too", "very", "just", "also", "now",
-            "here", "there", "about", "into", "through", "during", "before",
-            "after", "above", "below", "to", "from", "up", "down", "in", "out",
-            "on", "off", "over", "under", "again", "further", "then", "once",
-            "and", "but", "or", "nor", "for", "yet", "because", "as", "until",
-            "while", "of", "at", "by", "with", "without", "between", "me", "my",
-            "your", "his", "her", "its", "our", "their", "please", "help", "want",
-            "need", "like", "show", "tell", "give", "make", "let", "get", "see",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "i",
+            "you",
+            "he",
+            "she",
+            "it",
+            "we",
+            "they",
+            "what",
+            "which",
+            "who",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "each",
+            "every",
+            "both",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "no",
+            "not",
+            "only",
+            "own",
+            "same",
+            "so",
+            "than",
+            "too",
+            "very",
+            "just",
+            "also",
+            "now",
+            "here",
+            "there",
+            "about",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "to",
+            "from",
+            "up",
+            "down",
+            "in",
+            "out",
+            "on",
+            "off",
+            "over",
+            "under",
+            "again",
+            "further",
+            "then",
+            "once",
+            "and",
+            "but",
+            "or",
+            "nor",
+            "for",
+            "yet",
+            "because",
+            "as",
+            "until",
+            "while",
+            "of",
+            "at",
+            "by",
+            "with",
+            "without",
+            "between",
+            "me",
+            "my",
+            "your",
+            "his",
+            "her",
+            "its",
+            "our",
+            "their",
+            "please",
+            "help",
+            "want",
+            "need",
+            "like",
+            "show",
+            "tell",
+            "give",
+            "make",
+            "let",
+            "get",
+            "see",
         }
 
     def expand(
@@ -128,14 +238,13 @@ class ContextualExpander:
             elif isinstance(item, dict):
                 # Prefer raw_content (unaugmented by KB/memory injection)
                 # so keyword extraction operates on the user's actual words.
-                content = (
-                    item.get("metadata", {}).get("raw_content")
-                    or item.get("content", "")
+                content = item.get("metadata", {}).get("raw_content") or item.get("content", "")
+                messages.append(
+                    Message(
+                        role=item.get("role", "user"),
+                        content=content,
+                    )
                 )
-                messages.append(Message(
-                    role=item.get("role", "user"),
-                    content=content,
-                ))
         return messages
 
     def _get_recent_context(self, messages: list[Message]) -> list[str]:
@@ -182,11 +291,7 @@ class ContextualExpander:
             cleaned = word.strip(".,!?\"'()[]{}:;")
 
             # Skip short words, stop words, and numbers
-            if (
-                len(cleaned) < 3
-                or cleaned in self._stop_words
-                or cleaned.isdigit()
-            ):
+            if len(cleaned) < 3 or cleaned in self._stop_words or cleaned.isdigit():
                 continue
 
             # Add keyword if not already present
@@ -256,8 +361,17 @@ def is_ambiguous_query(query: str) -> bool:
 
     # Queries with demonstratives are often context-dependent
     ambiguous_patterns = [
-        "this", "that", "these", "those", "it", "them",
-        "example", "more", "another", "same", "similar",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "them",
+        "example",
+        "more",
+        "another",
+        "same",
+        "similar",
     ]
 
     query_lower = query.lower()

@@ -51,9 +51,7 @@ class TestStatusDispatch:
 
     def test_429_is_rate_limit_error_with_retry_after(self) -> None:
         provider = _provider()
-        err = provider._dataknobs_error_for_status(
-            429, "too fast", retry_after=2.5
-        )
+        err = provider._dataknobs_error_for_status(429, "too fast", retry_after=2.5)
         assert isinstance(err, RateLimitError)
         assert err.retry_after == 2.5
 
@@ -202,9 +200,7 @@ class _TranslatingProvider(_BaseProvider):
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         if isinstance(exc, self._VendorError):
-            return self._dataknobs_error_for_status(
-                429, f"translated: {exc}", retry_after=1.0
-            )
+            return self._dataknobs_error_for_status(429, f"translated: {exc}", retry_after=1.0)
         return None
 
 
@@ -273,9 +269,7 @@ class TestIterTranslated:
         original = provider._VendorError("mid-stream throttle")
         got: list[int] = []
         with pytest.raises(RateLimitError) as excinfo:
-            async for x in provider._iter_translated(
-                _yield_then_raise([1, 2], original)
-            ):
+            async for x in provider._iter_translated(_yield_then_raise([1, 2], original)):
                 got.append(x)
         # Chunks before the error still reached the consumer.
         assert got == [1, 2]
@@ -286,9 +280,7 @@ class TestIterTranslated:
         provider = _translating_provider()
         original = ValueError("our own bug")
         with pytest.raises(ValueError) as excinfo:
-            async for _ in provider._iter_translated(
-                _yield_then_raise([], original)
-            ):
+            async for _ in provider._iter_translated(_yield_then_raise([], original)):
                 pass
         assert excinfo.value is original
 

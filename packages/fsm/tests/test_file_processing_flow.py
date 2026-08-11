@@ -121,9 +121,7 @@ def _tag(record: dict[str, Any]) -> dict[str, Any]:
 async def test_batch_transform_applied_to_output(tmp_path: Path) -> None:
     src, out = tmp_path / "in.jsonl", tmp_path / "out.json"
     _seed_jsonl(src, _RECORDS)
-    await _processor(
-        src, out, ProcessingMode.BATCH, transformations=[_tag]
-    ).process()
+    await _processor(src, out, ProcessingMode.BATCH, transformations=[_tag]).process()
     rows = _read_records(out)
     assert len(rows) == 3
     assert all(r["tag"] == "X" for r in rows)
@@ -132,9 +130,7 @@ async def test_batch_transform_applied_to_output(tmp_path: Path) -> None:
 async def test_stream_transform_applied_to_output(tmp_path: Path) -> None:
     src, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
     _seed_jsonl(src, _RECORDS)
-    await _processor(
-        src, out, ProcessingMode.STREAM, transformations=[_tag]
-    ).process()
+    await _processor(src, out, ProcessingMode.STREAM, transformations=[_tag]).process()
     rows = _read_records(out)
     assert len(rows) == 3
     assert all(r["tag"] == "X" for r in rows)
@@ -143,9 +139,7 @@ async def test_stream_transform_applied_to_output(tmp_path: Path) -> None:
 async def test_whole_transform_applied_to_output(tmp_path: Path) -> None:
     src, out = tmp_path / "in.json", tmp_path / "out.json"
     _seed_json_array(src, _RECORDS)
-    await _processor(
-        src, out, ProcessingMode.WHOLE, transformations=[_tag]
-    ).process()
+    await _processor(src, out, ProcessingMode.WHOLE, transformations=[_tag]).process()
     rows = _read_records(out)
     assert len(rows) == 3
     assert all(r["tag"] == "X" for r in rows)
@@ -164,9 +158,7 @@ def _keep_even(record: dict[str, Any]) -> bool:
 async def test_batch_filter_excludes_records(tmp_path: Path) -> None:
     src, out = tmp_path / "in.jsonl", tmp_path / "out.json"
     _seed_jsonl(src, _RECORDS)
-    metrics = await _processor(
-        src, out, ProcessingMode.BATCH, filters=[_keep_even]
-    ).process()
+    metrics = await _processor(src, out, ProcessingMode.BATCH, filters=[_keep_even]).process()
     assert {r["id"] for r in _read_records(out)} == {0, 2}
     assert metrics["records_written"] == 2
     assert metrics["skipped"] == 1
@@ -176,9 +168,7 @@ async def test_batch_filter_excludes_records(tmp_path: Path) -> None:
 async def test_stream_filter_excludes_records(tmp_path: Path) -> None:
     src, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
     _seed_jsonl(src, _RECORDS)
-    await _processor(
-        src, out, ProcessingMode.STREAM, filters=[_keep_even]
-    ).process()
+    await _processor(src, out, ProcessingMode.STREAM, filters=[_keep_even]).process()
     assert {r["id"] for r in _read_records(out)} == {0, 2}
 
 
@@ -217,9 +207,7 @@ async def test_batch_validation_excludes_invalid(tmp_path: Path) -> None:
 async def test_whole_filter_excludes_records(tmp_path: Path) -> None:
     src, out = tmp_path / "in.json", tmp_path / "out.json"
     _seed_json_array(src, _RECORDS)
-    metrics = await _processor(
-        src, out, ProcessingMode.WHOLE, filters=[_keep_even]
-    ).process()
+    metrics = await _processor(src, out, ProcessingMode.WHOLE, filters=[_keep_even]).process()
     assert {r["id"] for r in _read_records(out)} == {0, 2}
     assert metrics["records_written"] == 2
     assert metrics["skipped"] == 1
@@ -276,9 +264,7 @@ async def test_stream_filter_metrics_count_skipped(tmp_path: Path) -> None:
     """STREAM filter exclusion must surface in the unified metrics."""
     src, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
     _seed_jsonl(src, _RECORDS)
-    metrics = await _processor(
-        src, out, ProcessingMode.STREAM, filters=[_keep_even]
-    ).process()
+    metrics = await _processor(src, out, ProcessingMode.STREAM, filters=[_keep_even]).process()
     assert metrics["records_written"] == 2
     assert metrics["skipped"] == 1
     assert metrics["errors"] == 0
@@ -350,9 +336,7 @@ async def test_stream_validation_metrics_match_batch_and_whole(
         src = tmp_path / f"in_{mode.value}.jsonl"
         out = tmp_path / f"out_{mode.value}.jsonl"
         _seed(src, mode)
-        metrics = await _processor(
-            src, out, mode, validation_schema=schema
-        ).process()
+        metrics = await _processor(src, out, mode, validation_schema=schema).process()
         metrics_by_mode[mode] = {k: metrics[k] for k in keys}
 
     expected = {

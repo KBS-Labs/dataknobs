@@ -249,9 +249,7 @@ class TestWizardConfigBuilderValidation:
 
     def test_no_start_stage_error(self) -> None:
         builder = WizardConfigBuilder("test")
-        builder._stages.append(
-            StageConfig(name="orphan", prompt="No start", is_end=True)
-        )
+        builder._stages.append(StageConfig(name="orphan", prompt="No start", is_end=True))
         result = builder.validate()
         assert result.valid is False
         assert any("start stage" in e for e in result.errors)
@@ -268,12 +266,8 @@ class TestWizardConfigBuilderValidation:
 
     def test_duplicate_stage_names_error(self) -> None:
         builder = WizardConfigBuilder("test")
-        builder._stages.append(
-            StageConfig(name="dup", prompt="First", is_start=True, is_end=True)
-        )
-        builder._stages.append(
-            StageConfig(name="dup", prompt="Second", is_end=True)
-        )
+        builder._stages.append(StageConfig(name="dup", prompt="First", is_start=True, is_end=True))
+        builder._stages.append(StageConfig(name="dup", prompt="Second", is_end=True))
         result = builder.validate()
         assert result.valid is False
         assert any("Duplicate stage name" in e for e in result.errors)
@@ -311,9 +305,7 @@ class TestWizardConfigBuilderValidation:
     def test_invalid_reasoning_error(self) -> None:
         result = (
             WizardConfigBuilder("test")
-            .add_structured_stage(
-                "start", "Go", is_start=True, is_end=True, reasoning="invalid"
-            )
+            .add_structured_stage("start", "Go", is_start=True, is_end=True, reasoning="invalid")
             .validate()
         )
         assert result.valid is False
@@ -353,9 +345,7 @@ class TestWizardConfigBuilderValidation:
     def test_max_iterations_without_reasoning_warning(self) -> None:
         result = (
             WizardConfigBuilder("test")
-            .add_structured_stage(
-                "start", "Go", is_start=True, is_end=True, max_iterations=5
-            )
+            .add_structured_stage("start", "Go", is_start=True, is_end=True, max_iterations=5)
             .validate()
         )
         assert result.valid is True
@@ -373,9 +363,7 @@ class TestWizardConfigBuilderValidation:
                 prompt="Go",
                 is_start=True,
                 is_end=True,
-                transitions=(
-                    TransitionConfig(target="_subflow", subflow={"network": "sub"}),
-                ),
+                transitions=(TransitionConfig(target="_subflow", subflow={"network": "sub"}),),
             )
         )
         result = builder.validate()

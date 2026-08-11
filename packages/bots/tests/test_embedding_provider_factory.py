@@ -17,12 +17,14 @@ class TestCreateEmbeddingProviderReExport:
     @pytest.mark.asyncio
     async def test_reexport_creates_working_provider(self) -> None:
         """The bots re-export creates an initialized embedding provider."""
-        provider = await create_embedding_provider({
-            "embedding": {
-                "provider": "echo",
-                "model": "test-embed",
-            },
-        })
+        provider = await create_embedding_provider(
+            {
+                "embedding": {
+                    "provider": "echo",
+                    "model": "test-embed",
+                },
+            }
+        )
         try:
             assert provider.config.provider == "echo"
             assert provider.config.mode == CompletionMode.EMBEDDING

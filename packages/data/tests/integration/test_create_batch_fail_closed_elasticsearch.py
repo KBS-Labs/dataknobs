@@ -40,9 +40,7 @@ def test_sync_create_batch_fails_closed(elasticsearch_test_index) -> None:
     try:
         db.create(Record({"v": "old"}, id="dup"))
         with pytest.raises(DuplicateRecordError):
-            db.create_batch(
-                [Record({"v": 1}, id="fresh"), Record({"v": 2}, id="dup")]
-            )
+            db.create_batch([Record({"v": 1}, id="fresh"), Record({"v": 2}, id="dup")])
         # The pre-existing document is not overwritten by the failed batch.
         assert db.read("dup").get_value("v") == "old"
     finally:
@@ -66,9 +64,7 @@ def test_sync_streaming_insert_fails_closed(elasticsearch_test_index) -> None:
     try:
         db.create(Record({"v": "old"}, id="2"))
         records = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
-        result = db.stream_write(
-            iter(records), StreamConfig(on_error=lambda e, r: True)
-        )
+        result = db.stream_write(iter(records), StreamConfig(on_error=lambda e, r: True))
         assert result.failed == 1
         assert result.successful == 2
         assert db.read("2").get_value("v") == "old"
@@ -100,7 +96,7 @@ def test_sync_migrate_insert_fails_closed_into_populated_index(
         tgt.create(Record({"v": "old"}, id="2"))  # collides with a source id
         progress = Migrator().migrate(src, tgt, on_error=lambda e, r: True)
         assert progress.succeeded == 2  # ids 1 and 3 written
-        assert progress.failed == 1     # id 2 collided
+        assert progress.failed == 1  # id 2 collided
         assert tgt.read("2").get_value("v") == "old"  # collider untouched
         assert tgt.read("1").get_value("v") == "src"
         assert tgt.read("3").get_value("v") == "src"
@@ -114,9 +110,7 @@ async def test_async_create_batch_fails_closed(elasticsearch_test_index) -> None
     try:
         await db.create(Record({"v": "old"}, id="dup"))
         with pytest.raises(DuplicateRecordError):
-            await db.create_batch(
-                [Record({"v": 1}, id="fresh"), Record({"v": 2}, id="dup")]
-            )
+            await db.create_batch([Record({"v": 1}, id="fresh"), Record({"v": 2}, id="dup")])
         got = await db.read("dup")
         assert got.get_value("v") == "old"
     finally:
@@ -127,9 +121,7 @@ async def test_async_create_batch_preserves_ids(elasticsearch_test_index) -> Non
     db = AsyncElasticsearchDatabase(elasticsearch_test_index)
     await db.connect()
     try:
-        ids = await db.create_batch(
-            [Record({"v": 1}, id="x"), Record({"v": 2}, id="y")]
-        )
+        ids = await db.create_batch([Record({"v": 1}, id="x"), Record({"v": 2}, id="y")])
         assert sorted(ids) == ["x", "y"]
         assert (await db.read("x")).get_value("v") == 1
     finally:
@@ -151,9 +143,7 @@ async def test_async_streaming_insert_fails_closed(elasticsearch_test_index) -> 
             for r in records:
                 yield r
 
-        result = await db.stream_write(
-            _aiter(), StreamConfig(on_error=lambda e, r: True)
-        )
+        result = await db.stream_write(_aiter(), StreamConfig(on_error=lambda e, r: True))
         assert result.failed == 1
         assert result.successful == 2
         assert (await db.read("2")).get_value("v") == "old"

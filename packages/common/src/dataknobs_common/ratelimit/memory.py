@@ -104,9 +104,7 @@ class InMemoryRateLimiter:
         if i > 0:
             self._buckets[name] = bucket[i:]
 
-    def _is_allowed(
-        self, name: str, weight: int, now: float, rates: list[RateLimit]
-    ) -> bool:
+    def _is_allowed(self, name: str, weight: int, now: float, rates: list[RateLimit]) -> bool:
         """Check whether an acquire is allowed under all applicable rates.
 
         Args:
@@ -121,9 +119,7 @@ class InMemoryRateLimiter:
         bucket = self._buckets.get(name, [])
         for rate in rates:
             window_start = now - rate.interval
-            window_weight = sum(
-                w for ts, w in bucket if ts > window_start
-            )
+            window_weight = sum(w for ts, w in bucket if ts > window_start)
             if window_weight + weight > rate.limit:
                 return False
         return True
@@ -158,13 +154,9 @@ class InMemoryRateLimiter:
             self._prune(name, now, rates)
             if self._is_allowed(name, weight, now, rates):
                 self._record(name, weight, now)
-                logger.debug(
-                    "Rate limit acquired for %s (weight=%d)", name, weight
-                )
+                logger.debug("Rate limit acquired for %s (weight=%d)", name, weight)
                 return True
-            logger.debug(
-                "Rate limit denied for %s (weight=%d)", name, weight
-            )
+            logger.debug("Rate limit denied for %s (weight=%d)", name, weight)
             return False
 
     async def acquire(

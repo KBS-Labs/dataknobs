@@ -69,9 +69,7 @@ class BankRecord:
         }
 
     @classmethod
-    def from_dict(
-        cls, d: dict[str, Any], *, strict: bool = True
-    ) -> BankRecord:
+    def from_dict(cls, d: dict[str, Any], *, strict: bool = True) -> BankRecord:
         """Deserialize from a plain dict.
 
         Args:
@@ -82,13 +80,10 @@ class BankRecord:
                 timestamps (legacy data migration).
         """
         if strict:
-            missing = [
-                f for f in ("created_at", "updated_at") if f not in d
-            ]
+            missing = [f for f in ("created_at", "updated_at") if f not in d]
             if missing:
                 raise ValueError(
-                    f"BankRecord.from_dict(): missing required timestamp "
-                    f"fields: {missing}"
+                    f"BankRecord.from_dict(): missing required timestamp fields: {missing}"
                 )
         return cls(
             record_id=d["record_id"],
@@ -296,9 +291,7 @@ class _BankCore:
         required = self._schema.get("required", [])
         missing = [f for f in required if data.get(f) is None]
         if missing:
-            raise ValueError(
-                f"Bank '{self._name}': missing required fields: {missing}"
-            )
+            raise ValueError(f"Bank '{self._name}': missing required fields: {missing}")
 
     # -- Capacity check (pure) --
 
@@ -308,14 +301,8 @@ class _BankCore:
         Args:
             current_count: Current number of records in the bank.
         """
-        if (
-            self._max_records is not None
-            and current_count >= self._max_records
-        ):
-            raise ValueError(
-                f"Bank '{self._name}' is full "
-                f"(max_records={self._max_records})"
-            )
+        if self._max_records is not None and current_count >= self._max_records:
+            raise ValueError(f"Bank '{self._name}' is full (max_records={self._max_records})")
 
     # -- Duplicate detection (pure — caller passes existing records) --
 
@@ -341,9 +328,7 @@ class _BankCore:
             fields_to_check = self._match_fields or list(
                 set(data.keys()) | set(existing.data.keys())
             )
-            if all(
-                existing.data.get(f) == data.get(f) for f in fields_to_check
-            ):
+            if all(existing.data.get(f) == data.get(f) for f in fields_to_check):
                 return existing
         return None
 
@@ -454,9 +439,7 @@ class _BankCore:
     # -- Node ancestry (pure) --
 
     @staticmethod
-    def is_ancestor_or_equal(
-        node_id: str, checkpoint_id: str | None
-    ) -> bool:
+    def is_ancestor_or_equal(node_id: str, checkpoint_id: str | None) -> bool:
         """Check if ``node_id`` is an ancestor of (or equal to) ``checkpoint_id``.
 
         Uses dot-notation node IDs from the conversation tree.
@@ -631,9 +614,7 @@ class MemoryBank:
                     )
                     return existing.record_id
 
-        bank_record, db_record = self._core.create_bank_record(
-            data, source_stage, source_node_id
-        )
+        bank_record, db_record = self._core.create_bank_record(data, source_stage, source_node_id)
         self._db.create(db_record)
         logger.debug(
             "Added record %s to bank '%s' (count=%d)",
@@ -673,9 +654,7 @@ class MemoryBank:
             return False
         meta = db_record.metadata or {}
         self._core.validate(data)
-        updated_record = self._core.create_updated_record(
-            data, meta, modified_in_stage
-        )
+        updated_record = self._core.create_updated_record(data, meta, modified_in_stage)
         self._db.update(record_id, updated_record)
         logger.debug(
             "Updated record %s in bank '%s'",
@@ -724,9 +703,7 @@ class MemoryBank:
 
     def all(self) -> list[BankRecord]:
         """Return all records, ordered by creation time."""
-        records = [
-            _BankCore.to_bank_record(r) for r in self._db_records()
-        ]
+        records = [_BankCore.to_bank_record(r) for r in self._db_records()]
         records.sort(key=lambda r: r.created_at)
         return records
 
@@ -766,15 +743,12 @@ class MemoryBank:
         for record in self.all():
             if record.source_node_id is None:
                 continue
-            if not _BankCore.is_ancestor_or_equal(
-                record.source_node_id, checkpoint_node_id
-            ):
+            if not _BankCore.is_ancestor_or_equal(record.source_node_id, checkpoint_node_id):
                 self._db.delete(record.record_id)
                 removed += 1
         if removed:
             logger.debug(
-                "Undo checkpoint in bank '%s': removed %d records "
-                "(checkpoint=%s)",
+                "Undo checkpoint in bank '%s': removed %d records (checkpoint=%s)",
                 self._core.name,
                 removed,
                 checkpoint_node_id,
@@ -798,11 +772,7 @@ class MemoryBank:
             return self.all()
         from dataknobs_data import Filter, Operator, Query
 
-        query = Query(
-            filters=[
-                Filter(k, Operator.EQ, v) for k, v in field_values.items()
-            ]
-        )
+        query = Query(filters=[Filter(k, Operator.EQ, v) for k, v in field_values.items()])
         results = self._db.search(query)
         records = [_BankCore.to_bank_record(r) for r in (results or [])]
         records.sort(key=lambda r: r.created_at)
@@ -872,9 +842,7 @@ class MemoryBank:
         if scoped is not None:
             self._hook_keys.add(scoped)
 
-    def _fire_hooks(
-        self, hooks: list[BankHook], record: BankRecord
-    ) -> None:
+    def _fire_hooks(self, hooks: list[BankHook], record: BankRecord) -> None:
         """Invoke all hooks, logging and continuing on failure."""
         for hook in hooks:
             try:
@@ -1143,9 +1111,7 @@ class AsyncMemoryBank:
                     await self.update(existing.record_id, merged)
                     return existing.record_id
 
-        bank_record, db_record = self._core.create_bank_record(
-            data, source_stage, source_node_id
-        )
+        bank_record, db_record = self._core.create_bank_record(data, source_stage, source_node_id)
         await self._db.create(db_record)
         logger.debug(
             "Added record %s to async bank '%s'",
@@ -1181,9 +1147,7 @@ class AsyncMemoryBank:
             return False
         meta = db_record.metadata or {}
         self._core.validate(data)
-        updated_record = self._core.create_updated_record(
-            data, meta, modified_in_stage
-        )
+        updated_record = self._core.create_updated_record(data, meta, modified_in_stage)
         await self._db.update(record_id, updated_record)
         updated_bank_record = BankRecord(
             record_id=record_id,
@@ -1216,9 +1180,7 @@ class AsyncMemoryBank:
         return len(await self._db_records())
 
     async def all(self) -> list[BankRecord]:
-        records = [
-            _BankCore.to_bank_record(r) for r in await self._db_records()
-        ]
+        records = [_BankCore.to_bank_record(r) for r in await self._db_records()]
         records.sort(key=lambda r: r.created_at)
         return records
 
@@ -1236,15 +1198,12 @@ class AsyncMemoryBank:
         for record in await self.all():
             if record.source_node_id is None:
                 continue
-            if not _BankCore.is_ancestor_or_equal(
-                record.source_node_id, checkpoint_node_id
-            ):
+            if not _BankCore.is_ancestor_or_equal(record.source_node_id, checkpoint_node_id):
                 await self._db.delete(record.record_id)
                 removed += 1
         if removed:
             logger.debug(
-                "Undo checkpoint in async bank '%s': removed %d records "
-                "(checkpoint=%s)",
+                "Undo checkpoint in async bank '%s': removed %d records (checkpoint=%s)",
                 self._core.name,
                 removed,
                 checkpoint_node_id,
@@ -1256,11 +1215,7 @@ class AsyncMemoryBank:
             return await self.all()
         from dataknobs_data import Filter, Operator, Query
 
-        query = Query(
-            filters=[
-                Filter(k, Operator.EQ, v) for k, v in field_values.items()
-            ]
-        )
+        query = Query(filters=[Filter(k, Operator.EQ, v) for k, v in field_values.items()])
         results = await self._db.search(query)
         records = [_BankCore.to_bank_record(r) for r in (results or [])]
         records.sort(key=lambda r: r.created_at)
@@ -1295,9 +1250,7 @@ class AsyncMemoryBank:
         if scoped is not None:
             self._hook_keys.add(scoped)
 
-    def on_update(
-        self, hook: AsyncBankHook, *, key: str | None = None
-    ) -> None:
+    def on_update(self, hook: AsyncBankHook, *, key: str | None = None) -> None:
         """Register a hook called after a record is updated.
 
         Args:
@@ -1312,9 +1265,7 @@ class AsyncMemoryBank:
         if scoped is not None:
             self._hook_keys.add(scoped)
 
-    def on_remove(
-        self, hook: AsyncBankHook, *, key: str | None = None
-    ) -> None:
+    def on_remove(self, hook: AsyncBankHook, *, key: str | None = None) -> None:
         """Register a hook called after a record is removed.
 
         Args:
@@ -1329,9 +1280,7 @@ class AsyncMemoryBank:
         if scoped is not None:
             self._hook_keys.add(scoped)
 
-    async def _fire_hooks(
-        self, hooks: list[AsyncBankHook], record: BankRecord
-    ) -> None:
+    async def _fire_hooks(self, hooks: list[AsyncBankHook], record: BankRecord) -> None:
         """Invoke all hooks, logging and continuing on failure."""
         for hook in hooks:
             try:

@@ -87,33 +87,25 @@ class TestMergePartials:
 
 class TestMatchFamilyKey:
     def test_exact_match(self) -> None:
-        assert match_family_key("claude-sonnet-5", ["claude-sonnet-5"]) == (
-            "claude-sonnet-5"
-        )
+        assert match_family_key("claude-sonnet-5", ["claude-sonnet-5"]) == ("claude-sonnet-5")
 
     def test_family_alias_short_key_covers_dated_request(self) -> None:
         # resource-style: short family key is a substring of the dated request
         assert (
-            match_family_key(
-                "claude-sonnet-5-20260514", ["claude-sonnet-5", "claude-opus-5"]
-            )
+            match_family_key("claude-sonnet-5-20260514", ["claude-sonnet-5", "claude-opus-5"])
             == "claude-sonnet-5"
         )
 
     def test_bare_alias_request_is_substring_of_dated_key(self) -> None:
         # dynamic-style: bare request resolves against a longer dated cache key
         assert (
-            match_family_key(
-                "claude-sonnet-5", ["claude-sonnet-5-20260514"]
-            )
+            match_family_key("claude-sonnet-5", ["claude-sonnet-5-20260514"])
             == "claude-sonnet-5-20260514"
         )
 
     def test_longest_overlap_wins(self) -> None:
         keys = ["claude", "claude-sonnet-5"]
-        assert match_family_key("claude-sonnet-5-20260514", keys) == (
-            "claude-sonnet-5"
-        )
+        assert match_family_key("claude-sonnet-5-20260514", keys) == ("claude-sonnet-5")
 
     def test_no_match_returns_none(self) -> None:
         assert match_family_key("gpt-4", ["claude", "gemini"]) is None
@@ -129,9 +121,7 @@ class TestProfileFromLoose:
         assert profile_from_loose({}) == ModelProfile()
 
     def test_capabilities_parsed_unknown_dropped(self) -> None:
-        prof = profile_from_loose(
-            {"capabilities": ["vision", "function_calling", "bogus"]}
-        )
+        prof = profile_from_loose({"capabilities": ["vision", "function_calling", "bogus"]})
         assert prof.capabilities == frozenset(
             {ModelCapability.VISION, ModelCapability.FUNCTION_CALLING}
         )
@@ -140,22 +130,16 @@ class TestProfileFromLoose:
         assert profile_from_loose({"capabilities": []}).capabilities == frozenset()
 
     def test_rejected_params_and_aliases(self) -> None:
-        prof = profile_from_loose(
-            {"rejected_params": ["temperature"], "aliases": ["a", "b"]}
-        )
+        prof = profile_from_loose({"rejected_params": ["temperature"], "aliases": ["a", "b"]})
         assert prof.rejected_params == frozenset({"temperature"})
         assert prof.aliases == ("a", "b")
 
     def test_param_remaps(self) -> None:
-        prof = profile_from_loose(
-            {"param_remaps": {"max_tokens": "max_completion_tokens"}}
-        )
+        prof = profile_from_loose({"param_remaps": {"max_tokens": "max_completion_tokens"}})
         assert prof.param_remaps == {"max_tokens": "max_completion_tokens"}
 
     def test_pricing_dict_becomes_model_pricing(self) -> None:
-        prof = profile_from_loose(
-            {"pricing": {"input_per_mtok": 3.0, "output_per_mtok": 15.0}}
-        )
+        prof = profile_from_loose({"pricing": {"input_per_mtok": 3.0, "output_per_mtok": 15.0}})
         assert prof.pricing == ModelPricing(input_per_mtok=3.0, output_per_mtok=15.0)
 
     def test_pricing_instance_passes_through(self) -> None:
@@ -178,9 +162,7 @@ class TestProfileFromLoose:
 
 class TestCallableSource:
     def test_wraps_callable(self) -> None:
-        src = CallableModelMetadataSource(
-            "x", lambda m: ModelProfile(max_output_tokens=len(m))
-        )
+        src = CallableModelMetadataSource("x", lambda m: ModelProfile(max_output_tokens=len(m)))
         assert src.name == "x"
         assert src.resolve("abcd").max_output_tokens == 4
 
@@ -194,9 +176,7 @@ class TestConfigOverrideSource:
         assert src.resolve("anything").max_output_tokens == 4096
 
     def test_per_model_mapping_matches_by_family(self) -> None:
-        src = ConfigOverrideSource(
-            {"claude-opus-5": {"max_output_tokens": 4096}}
-        )
+        src = ConfigOverrideSource({"claude-opus-5": {"max_output_tokens": 4096}})
         # family-alias: dated request resolves to the short model key
         assert src.resolve("claude-opus-5-20260101").max_output_tokens == 4096
         # a different model is untouched
@@ -215,9 +195,7 @@ class TestBundledResourceSource:
         assert src.resolve("claude-haiku-4-5-20251001").max_output_tokens == 64000
 
     def test_unknown_model_is_empty(self) -> None:
-        src = BundledResourceSource(
-            {"claude-sonnet-5": ModelProfile(max_output_tokens=1)}
-        )
+        src = BundledResourceSource({"claude-sonnet-5": ModelProfile(max_output_tokens=1)})
         assert src.resolve("gpt-4") == ModelProfile()
 
     def test_missing_resource_degrades_to_empty(self) -> None:
@@ -235,9 +213,7 @@ class TestBundledResourceSource:
 
 class TestLayeredResolver:
     def _src(self, name: str, **facets: object) -> CallableModelMetadataSource:
-        return CallableModelMetadataSource(
-            name, lambda _m, f=facets: ModelProfile(**f)
-        )
+        return CallableModelMetadataSource(name, lambda _m, f=facets: ModelProfile(**f))
 
     def test_precedence_config_over_live_over_resource(self) -> None:
         resolver = LayeredModelProfileResolver(
@@ -268,9 +244,7 @@ class TestSourceRegistry:
         name = "_test_gateway_source"
 
         def factory(config: dict) -> CallableModelMetadataSource:
-            return CallableModelMetadataSource(
-                name, lambda _m: ModelProfile(available=True)
-            )
+            return CallableModelMetadataSource(name, lambda _m: ModelProfile(available=True))
 
         model_metadata_sources.register(name, factory)
         try:

@@ -64,7 +64,7 @@ import pytest
 
 from tests._workspace import ROOT, tracked_python_files
 
-#: How this repo resolves ruff; see ``test_ruff_config_mirror`` for why a bare
+#: How this repo resolves ruff; see ``test_ruff_config_single_source`` for why a bare
 #: ``ruff`` would degrade the checks that use it into a silent skip.
 RUFF = ("uv", "run", "ruff")
 
@@ -196,9 +196,7 @@ def _scanned() -> tuple[tuple[str, str], ...]:
 def _all_directives() -> tuple[tuple[str, int, str, list[str]], ...]:
     found = []
     for name, source in _scanned():
-        found.extend(
-            (name, lineno, kind, codes) for lineno, kind, codes in directives(source)
-        )
+        found.extend((name, lineno, kind, codes) for lineno, kind, codes in directives(source))
     return tuple(found)
 
 
@@ -340,8 +338,7 @@ def test_the_scan_reads_what_it_claims_to():
 
     assert not _untokenizable(), (
         "these tracked files could not be tokenized, so they left the scan "
-        "without changing its verdict:\n"
-        + "\n".join(f"  - {f}" for f in _untokenizable())
+        "without changing its verdict:\n" + "\n".join(f"  - {f}" for f in _untokenizable())
     )
 
 
@@ -397,9 +394,7 @@ def test_the_checks_detect_the_shapes_they_exist_for():
     }
     for label, (line, expected) in accepted.items():
         _, kind, codes = directives(line)[0]
-        assert kind == "codes" and codes == expected, (
-            f"wrongly rejected or misparsed: {label}"
-        )
+        assert kind == "codes" and codes == expected, f"wrongly rejected or misparsed: {label}"
 
     in_a_string = 'BAD = "x = 1  # noqa: not calling"\n'
     assert not directives(in_a_string), (

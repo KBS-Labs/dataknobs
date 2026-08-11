@@ -87,9 +87,7 @@ class TestCustomTransformExecutes:
         # Register the function with the builder so the config validates,
         # AND pass it as a custom_function to the engine.
         fsm = _build_fsm_with_transform("double_value", double_value)
-        engine = AsyncExecutionEngine(
-            fsm, custom_functions={"double_value": double_value}
-        )
+        engine = AsyncExecutionEngine(fsm, custom_functions={"double_value": double_value})
 
         ctx = ExecutionContext()
         ctx.data = {"value": 5}
@@ -109,9 +107,7 @@ class TestCustomTransformExecutes:
             return result
 
         fsm = _build_fsm_with_transform("async_transform", async_transform)
-        engine = AsyncExecutionEngine(
-            fsm, custom_functions={"async_transform": async_transform}
-        )
+        engine = AsyncExecutionEngine(fsm, custom_functions={"async_transform": async_transform})
 
         ctx = ExecutionContext()
         ctx.data = {"input": "test"}

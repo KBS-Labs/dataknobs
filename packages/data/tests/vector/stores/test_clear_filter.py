@@ -50,8 +50,7 @@ logger = logging.getLogger(__name__)
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -112,16 +111,12 @@ def _seed_vectors() -> np.ndarray:
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -150,9 +145,7 @@ async def any_vector_store(
 
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors(), ids=list(SEED_IDS), metadata=list(SEED_METADATA)
-        )
+        await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=list(SEED_METADATA))
         yield store
     finally:
         await _teardown_backend(backend, store)

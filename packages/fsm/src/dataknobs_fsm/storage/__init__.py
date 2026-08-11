@@ -5,7 +5,7 @@ from dataknobs_fsm.storage.base import (
     BaseHistoryStorage,
     StorageBackend,
     StorageConfig,
-    StorageFactory
+    StorageFactory,
 )
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 from dataknobs_fsm.storage.file import FileStorage
@@ -13,14 +13,13 @@ from dataknobs_fsm.storage.memory import InMemoryStorage
 
 __all__ = [
     # Interfaces and base classes
-    'IHistoryStorage',
-    'BaseHistoryStorage',
-    'StorageBackend',
-    'StorageConfig',
-    'StorageFactory',
-    
+    "IHistoryStorage",
+    "BaseHistoryStorage",
+    "StorageBackend",
+    "StorageConfig",
+    "StorageFactory",
     # Implementations
-    'UnifiedDatabaseStorage',
-    'FileStorage',
-    'InMemoryStorage'
+    "UnifiedDatabaseStorage",
+    "FileStorage",
+    "InMemoryStorage",
 ]

@@ -16,7 +16,7 @@ from dataknobs_fsm.functions.base import (
     ITransformFunction,
     IStateTestFunction,
     IEndStateTestFunction,
-    ExecutionResult
+    ExecutionResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class FunctionSource(Enum):
     """Source of a function definition."""
+
     REGISTERED = "registered"  # Explicitly registered function
     INLINE = "inline"  # Inline code string
     BUILTIN = "builtin"  # Built-in FSM function
@@ -33,6 +34,7 @@ class FunctionSource(Enum):
 @runtime_checkable
 class AsyncCallable(Protocol):
     """Protocol for async callable objects."""
+
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call the async function."""
         ...
@@ -50,7 +52,7 @@ class FunctionWrapper:
         func: Callable,
         name: str,
         source: FunctionSource = FunctionSource.REGISTERED,
-        interface: type | None = None
+        interface: type | None = None,
     ):
         """Initialize function wrapper.
 
@@ -76,8 +78,8 @@ class FunctionWrapper:
         self._is_async = self._check_async(func)
 
         # Store original function metadata
-        self.__name__ = getattr(func, '__name__', name)
-        self.__doc__ = getattr(func, '__doc__', '')
+        self.__name__ = getattr(func, "__name__", name)
+        self.__doc__ = getattr(func, "__doc__", "")
 
     @staticmethod
     def _normalize_interface_callable(func: Callable) -> Callable:
@@ -186,7 +188,7 @@ class FunctionWrapper:
     # Make wrapper detectable as async when wrapping async functions
     def __getattr__(self, name):
         """Forward attribute access to wrapped function."""
-        if name == '_is_coroutine' and self._is_async:
+        if name == "_is_coroutine" and self._is_async:
             # Mark as coroutine function for asyncio detection
             return asyncio.coroutines._is_coroutine
         return getattr(self.func, name)
@@ -194,8 +196,7 @@ class FunctionWrapper:
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"FunctionWrapper(name={self.name}, "
-            f"async={self._is_async}, source={self.source.value})"
+            f"FunctionWrapper(name={self.name}, async={self._is_async}, source={self.source.value})"
         )
 
 
@@ -216,11 +217,11 @@ class InterfaceWrapper:
     def _setup_interface_methods(self):
         """Set up methods based on interface."""
         if self.interface == ITransformFunction:
-            self.transform = self._create_method('transform')
+            self.transform = self._create_method("transform")
             self.get_transform_description = lambda: f"Transform: {self.wrapper.name}"
 
         elif self.interface == IValidationFunction:
-            self.validate = self._create_method('validate')
+            self.validate = self._create_method("validate")
             self.get_validation_rules = lambda: {"name": self.wrapper.name}
 
         elif self.interface == IStateTestFunction:
@@ -242,6 +243,7 @@ class InterfaceWrapper:
         """
         # Check if the function expects a single state argument (common for inline lambdas)
         import inspect
+
         func = self.wrapper.func
         try:
             sig = inspect.signature(func)
@@ -253,40 +255,47 @@ class InterfaceWrapper:
             expects_state_obj = False
 
         if self.wrapper.is_async:
+
             async def async_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+
                     state_obj = wrap_for_lambda(data)
                     result = await self.wrapper.execute_async(state_obj)
                 else:
                     result = await self.wrapper.execute_async(data, context)
-                if method_name in ['validate', 'transform']:
+                if method_name in ["validate", "transform"]:
                     # Wrap in ExecutionResult if needed
                     if not isinstance(result, ExecutionResult):
                         return ExecutionResult.success_result(result)
                 return result
+
             return async_method
         else:
+
             def sync_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+
                     state_obj = wrap_for_lambda(data)
                     result = self.wrapper.execute_sync(state_obj)
                 else:
                     result = self.wrapper.execute_sync(data, context)
-                if method_name in ['validate', 'transform']:
+                if method_name in ["validate", "transform"]:
                     # Wrap in ExecutionResult if needed
                     if not isinstance(result, ExecutionResult):
                         return ExecutionResult.success_result(result)
                 return result
+
             return sync_method
 
     def _create_test_method(self):
         """Create a test method that returns (bool, reason)."""
         # Check if the function expects a single state argument (common for inline lambdas)
         import inspect
+
         func = self.wrapper.func
         try:
             sig = inspect.signature(func)
@@ -298,10 +307,12 @@ class InterfaceWrapper:
             expects_state_obj = False
 
         if self.wrapper.is_async:
+
             async def async_test(data: Any, context: Dict[str, Any] | None = None):
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+
                     state_obj = wrap_for_lambda(data)
                     result = await self.wrapper.execute_async(state_obj)
                 else:
@@ -309,12 +320,15 @@ class InterfaceWrapper:
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
+
             return async_test
         else:
+
             def sync_test(data: Any, context: Dict[str, Any] | None = None):
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+
                     state_obj = wrap_for_lambda(data)
                     result = self.wrapper.execute_sync(state_obj)
                 else:
@@ -322,6 +336,7 @@ class InterfaceWrapper:
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
+
             return sync_test
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -362,7 +377,7 @@ class FunctionManager:
         name: str,
         func: Callable,
         source: FunctionSource = FunctionSource.REGISTERED,
-        interface: type | None = None
+        interface: type | None = None,
     ) -> FunctionWrapper:
         """Register a function.
 
@@ -390,9 +405,7 @@ class FunctionManager:
         return wrapper
 
     def register_functions(
-        self,
-        functions: Dict[str, Callable],
-        source: FunctionSource = FunctionSource.REGISTERED
+        self, functions: Dict[str, Callable], source: FunctionSource = FunctionSource.REGISTERED
     ) -> Dict[str, FunctionWrapper]:
         """Register multiple functions.
 
@@ -409,9 +422,7 @@ class FunctionManager:
         return wrappers
 
     def resolve_function(
-        self,
-        reference: Union[str, Dict[str, Any], Callable],
-        interface: type | None = None
+        self, reference: Union[str, Dict[str, Any], Callable], interface: type | None = None
     ) -> Union[FunctionWrapper, InterfaceWrapper, None]:
         """Resolve a function reference to a wrapper.
 
@@ -427,9 +438,7 @@ class FunctionManager:
         if callable(reference):
             # Direct callable
             wrapper = FunctionWrapper(
-                reference,
-                getattr(reference, '__name__', 'anonymous'),
-                FunctionSource.REGISTERED
+                reference, getattr(reference, "__name__", "anonymous"), FunctionSource.REGISTERED
             )
 
         elif isinstance(reference, str):
@@ -444,15 +453,15 @@ class FunctionManager:
 
         elif isinstance(reference, dict):
             # Dictionary reference
-            ref_type = reference.get('type', 'inline')
+            ref_type = reference.get("type", "inline")
 
-            if ref_type == 'registered':
-                name = reference.get('name')
+            if ref_type == "registered":
+                name = reference.get("name")
                 if name:
                     wrapper = self._functions.get(name) or self._builtin_functions.get(name)
 
-            elif ref_type == 'inline':
-                code = reference.get('code')
+            elif ref_type == "inline":
+                code = reference.get("code")
                 if code:
                     wrapper = self._create_inline_wrapper(code)
 
@@ -478,12 +487,12 @@ class FunctionManager:
         # Compile and create function
         try:
             # Create a namespace for execution with registered functions
-            namespace = {'asyncio': asyncio}
+            namespace = {"asyncio": asyncio}
 
             # Add all registered functions to namespace so inline code can call them
             for name, wrapper in self._functions.items():
                 # Add the actual function, not the wrapper
-                namespace[name] = wrapper.func if hasattr(wrapper, 'func') else wrapper
+                namespace[name] = wrapper.func if hasattr(wrapper, "func") else wrapper
 
             # First try to exec the code directly (might be a full function definition)
             try:
@@ -506,12 +515,12 @@ class FunctionManager:
 
             if not func:
                 # Check if it's a lambda expression
-                if code.strip().startswith('lambda'):
+                if code.strip().startswith("lambda"):
                     # Evaluate lambda directly
                     func = eval(code, namespace)
                 else:
                     # Treat as function body - check if it needs to be async
-                    if 'await' in code:
+                    if "await" in code:
                         # Create async wrapper
                         func_def = "async def inline_func(data, context=None):\n"
                     else:
@@ -519,20 +528,25 @@ class FunctionManager:
                         func_def = "def inline_func(data, context=None):\n"
 
                     # Add the code as the function body
-                    lines = code.split(';') if ';' in code else [code]
+                    lines = code.split(";") if ";" in code else [code]
 
                     # Check if this looks like a simple expression (for conditions)
                     # Common patterns: comparisons, boolean ops, method calls that return bool
                     is_expression = (
-                        '==' in code or '!=' in code or '<' in code or '>' in code or
-                        ' and ' in code or ' or ' in code or ' not ' in code or
-                        code.strip().startswith('not ') or
-                        '.get(' in code or
-                        'in ' in code or
-                        code.strip() in ['True', 'False']
+                        "==" in code
+                        or "!=" in code
+                        or "<" in code
+                        or ">" in code
+                        or " and " in code
+                        or " or " in code
+                        or " not " in code
+                        or code.strip().startswith("not ")
+                        or ".get(" in code
+                        or "in " in code
+                        or code.strip() in ["True", "False"]
                     )
 
-                    if is_expression and 'return' not in code and len(lines) == 1:
+                    if is_expression and "return" not in code and len(lines) == 1:
                         # For expressions, return the expression result
                         func_def += f"    return {code.strip()}\n"
                     else:
@@ -543,11 +557,11 @@ class FunctionManager:
                                 func_def += f"    {stmt}\n"
 
                         # Ensure we return data if no explicit return (for transforms)
-                        if 'return' not in code:
+                        if "return" not in code:
                             func_def += "    return data\n"
 
                     exec(func_def, namespace)
-                    func = namespace.get('inline_func')
+                    func = namespace.get("inline_func")
 
             if func is not None and callable(func):
                 wrapper = FunctionWrapper(func, f"inline_{id(code)}", FunctionSource.INLINE)
@@ -563,13 +577,11 @@ class FunctionManager:
             return FunctionWrapper(
                 lambda data, context=None: data,  # noqa: ARG005
                 f"inline_error_{id(code)}",
-                FunctionSource.INLINE
+                FunctionSource.INLINE,
             )
 
     def _adapt_to_interface(
-        self,
-        wrapper: FunctionWrapper,
-        interface: type
+        self, wrapper: FunctionWrapper, interface: type
     ) -> Union[InterfaceWrapper, FunctionWrapper]:
         """Adapt a wrapper to implement a specific interface.
 
@@ -614,16 +626,16 @@ class FunctionManager:
 
         for name, wrapper in self._functions.items():
             result[name] = {
-                'source': wrapper.source.value,
-                'async': wrapper.is_async,
-                'type': 'registered'
+                "source": wrapper.source.value,
+                "async": wrapper.is_async,
+                "type": "registered",
             }
 
         for name, wrapper in self._builtin_functions.items():
             result[name] = {
-                'source': wrapper.source.value,
-                'async': wrapper.is_async,
-                'type': 'builtin'
+                "source": wrapper.source.value,
+                "async": wrapper.is_async,
+                "type": "builtin",
             }
 
         return result
@@ -653,9 +665,7 @@ def get_function_manager() -> FunctionManager:
 
 
 def register_function(
-    name: str,
-    func: Callable,
-    source: FunctionSource = FunctionSource.REGISTERED
+    name: str, func: Callable, source: FunctionSource = FunctionSource.REGISTERED
 ) -> FunctionWrapper:
     """Register a function with the global manager.
 
@@ -671,8 +681,7 @@ def register_function(
 
 
 def resolve_function(
-    reference: Union[str, Dict[str, Any], Callable],
-    interface: type | None = None
+    reference: Union[str, Dict[str, Any], Callable], interface: type | None = None
 ) -> Union[FunctionWrapper, InterfaceWrapper, None]:
     """Resolve a function reference.
 

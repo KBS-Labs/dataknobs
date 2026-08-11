@@ -17,8 +17,6 @@ from dataknobs_llm.llm.base import LLMConfig, LLMMessage, ToolCall
 from _anthropic_stubs import make_anthropic_response
 
 
-
-
 class FakeTool:
     """Minimal Tool-like object for adapter tests.
 
@@ -75,8 +73,10 @@ class TestGenerationParams:
     def test_both_set(self):
         """Both should appear when both explicitly set."""
         config = LLMConfig(
-            provider="anthropic", model="claude-3-haiku",
-            temperature=0.5, top_p=0.9,
+            provider="anthropic",
+            model="claude-3-haiku",
+            temperature=0.5,
+            top_p=0.9,
         )
         params = config.generation_params()
         assert params["temperature"] == 0.5
@@ -91,7 +91,8 @@ class TestGenerationParams:
     def test_stop_sequences_included(self):
         """stop_sequences should appear when set."""
         config = LLMConfig(
-            provider="anthropic", model="claude-3-haiku",
+            provider="anthropic",
+            model="claude-3-haiku",
             stop_sequences=["STOP"],
         )
         params = config.generation_params()
@@ -134,7 +135,8 @@ class TestAnthropicBuildApiParams:
     def test_only_temperature_sent_when_set(self):
         """Only temperature should be sent when explicitly set."""
         provider = self._make_provider(
-            model="claude-3-haiku-20240307", temperature=0.5,
+            model="claude-3-haiku-20240307",
+            temperature=0.5,
         )
         params = provider.adapter.adapt_config(provider.config)
         assert params["temperature"] == 0.5
@@ -143,7 +145,8 @@ class TestAnthropicBuildApiParams:
     def test_only_top_p_sent_when_set(self):
         """Only top_p should be sent when explicitly set."""
         provider = self._make_provider(
-            model="claude-3-haiku-20240307", top_p=0.9,
+            model="claude-3-haiku-20240307",
+            top_p=0.9,
         )
         params = provider.adapter.adapt_config(provider.config)
         assert params["top_p"] == 0.9
@@ -152,7 +155,9 @@ class TestAnthropicBuildApiParams:
     def test_both_sent_when_both_explicitly_set(self):
         """Both should be sent when both explicitly set."""
         provider = self._make_provider(
-            model="claude-3-haiku-20240307", temperature=0.5, top_p=0.9,
+            model="claude-3-haiku-20240307",
+            temperature=0.5,
+            top_p=0.9,
         )
         params = provider.adapter.adapt_config(provider.config)
         assert params["temperature"] == 0.5
@@ -167,7 +172,8 @@ class TestAnthropicBuildApiParams:
     def test_max_tokens_uses_explicit_value(self):
         """max_tokens should use explicitly set value."""
         provider = self._make_provider(
-            model="claude-3-haiku-20240307", max_tokens=2048,
+            model="claude-3-haiku-20240307",
+            max_tokens=2048,
         )
         params = provider.adapter.adapt_config(provider.config)
         assert params["max_tokens"] == 2048
@@ -175,7 +181,8 @@ class TestAnthropicBuildApiParams:
     def test_stop_sequences_included(self):
         """stop_sequences should be forwarded to API params."""
         provider = self._make_provider(
-            model="claude-3-haiku-20240307", stop_sequences=["STOP", "END"],
+            model="claude-3-haiku-20240307",
+            stop_sequences=["STOP", "END"],
         )
         params = provider.adapter.adapt_config(provider.config)
         assert params["stop_sequences"] == ["STOP", "END"]
@@ -197,6 +204,7 @@ class TestAnthropicAdaptMessages:
 
     def _adapter(self):
         from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
+
         return AnthropicAdapter()
 
     def test_system_messages_extracted(self):
@@ -322,6 +330,7 @@ class TestAnthropicAdaptResponse:
 
     def _adapter(self):
         from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
+
         return AnthropicAdapter()
 
     def test_text_only_response(self):
@@ -335,12 +344,16 @@ class TestAnthropicAdaptResponse:
     def test_tool_use_only_response(self):
         """Single tool_use block (no text) should not crash."""
         adapter = self._adapter()
-        resp = make_anthropic_response([{
-            "type": "tool_use",
-            "id": "toolu_abc",
-            "name": "search",
-            "input": {"q": "test"},
-        }])
+        resp = make_anthropic_response(
+            [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_abc",
+                    "name": "search",
+                    "input": {"q": "test"},
+                }
+            ]
+        )
         parsed = adapter.adapt_response(resp)
         assert parsed.content == ""
         assert len(parsed.tool_calls) == 1
@@ -352,11 +365,13 @@ class TestAnthropicAdaptResponse:
     def test_mixed_text_and_tool_use(self):
         """Mixed response should capture both text and tool calls."""
         adapter = self._adapter()
-        resp = make_anthropic_response([
-            {"type": "text", "text": "I'll search for that."},
-            {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"q": "x"}},
-            {"type": "tool_use", "id": "toolu_2", "name": "calc", "input": {"expr": "1+1"}},
-        ])
+        resp = make_anthropic_response(
+            [
+                {"type": "text", "text": "I'll search for that."},
+                {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"q": "x"}},
+                {"type": "tool_use", "id": "toolu_2", "name": "calc", "input": {"expr": "1+1"}},
+            ]
+        )
         parsed = adapter.adapt_response(resp)
         assert parsed.content == "I'll search for that."
         assert len(parsed.tool_calls) == 2
@@ -383,6 +398,7 @@ class TestAnthropicAdaptTools:
 
     def _adapter(self):
         from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
+
         return AnthropicAdapter()
 
     def test_converts_tool_objects(self):

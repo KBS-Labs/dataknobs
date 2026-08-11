@@ -16,7 +16,7 @@ from dataknobs_fsm.resources.pool import ResourcePool, PoolConfig
 
 __all__ = [
     "IResourceProvider",
-    "IResourcePool", 
+    "IResourcePool",
     "ResourceStatus",
     "ResourceHealth",
     "ResourceMetrics",

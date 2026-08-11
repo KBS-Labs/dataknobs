@@ -63,36 +63,26 @@ class TestBuildEnrichedText:
 
     def test_path_with_multiword_at_end(self):
         """Test path ending in multi-word heading."""
-        result = build_enriched_text(
-            ["Patterns", "Chain of Thought", "Example"],
-            "code here"
-        )
+        result = build_enriched_text(["Patterns", "Chain of Thought", "Example"], "code here")
         # Should include from "Chain of Thought" onwards
         assert result == "Chain of Thought: Example: code here"
 
     def test_all_single_word_headings(self):
         """Test path with all single-word headings."""
-        result = build_enriched_text(
-            ["Patterns", "Advanced", "Examples"],
-            "content here"
-        )
+        result = build_enriched_text(["Patterns", "Advanced", "Examples"], "content here")
         # All single words, so include all
         assert result == "Patterns: Advanced: Examples: content here"
 
     def test_multiword_in_middle(self):
         """Test path with multi-word heading in middle."""
-        result = build_enriched_text(
-            ["Topics", "Chain of Thought", "Basics", "Example"],
-            "content"
-        )
+        result = build_enriched_text(["Topics", "Chain of Thought", "Basics", "Example"], "content")
         # Should include from first multi-word (Chain of Thought) to end
         assert result == "Chain of Thought: Basics: Example: content"
 
     def test_multiple_multiword_headings(self):
         """Test path with multiple multi-word headings."""
         result = build_enriched_text(
-            ["Topics", "Chain of Thought", "Zero Shot Learning"],
-            "content"
+            ["Topics", "Chain of Thought", "Zero Shot Learning"], "content"
         )
         # Should stop at first multi-word going backwards (Zero Shot Learning)
         # Then include Chain of Thought

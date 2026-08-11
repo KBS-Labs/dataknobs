@@ -31,6 +31,7 @@ from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def message_stage_config() -> dict[str, Any]:
     """Wizard with a message stage between two data stages."""
@@ -226,10 +227,13 @@ def conditional_message_config() -> dict[str, Any]:
 # TestCanAutoAdvanceMessageStage — unit tests for _can_auto_advance
 # ---------------------------------------------------------------------------
 
+
 class TestCanAutoAdvanceMessageStage:
     """Tests that _can_auto_advance correctly handles schema-less stages."""
 
-    def test_message_stage_with_explicit_auto_advance(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_message_stage_with_explicit_auto_advance(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """A schema-less stage with auto_advance: true CAN auto-advance."""
         config = {
             "name": "test",
@@ -267,7 +271,9 @@ class TestCanAutoAdvanceMessageStage:
 
         assert reasoning._can_auto_advance(state, stage) is True
 
-    def test_schema_less_stage_without_auto_advance_cannot_advance(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_schema_less_stage_without_auto_advance_cannot_advance(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """A schema-less stage WITHOUT auto_advance: true cannot auto-advance."""
         config = {
             "name": "test",
@@ -290,7 +296,9 @@ class TestCanAutoAdvanceMessageStage:
 
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_global_auto_advance_does_not_affect_schema_less_stages(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_global_auto_advance_does_not_affect_schema_less_stages(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Global auto_advance_filled_stages alone does NOT enable schema-less advance.
 
         The global setting means "skip stages whose required fields are filled."
@@ -314,15 +322,15 @@ class TestCanAutoAdvanceMessageStage:
         }
         fsm = wizard_loader.load_from_dict(config)
 
-        reasoning = WizardReasoning(
-            wizard_fsm=fsm, auto_advance_filled_stages=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=fsm, auto_advance_filled_stages=True)
         state = WizardState(current_stage="msg", data={})
         stage = fsm.current_metadata
 
         assert reasoning._can_auto_advance(state, stage) is False
 
-    def test_message_stage_end_stage_cannot_auto_advance(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_message_stage_end_stage_cannot_auto_advance(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """End stages cannot auto-advance even with auto_advance: true."""
         config = {
             "name": "test",
@@ -349,6 +357,7 @@ class TestCanAutoAdvanceMessageStage:
 # TestMessageStageGenerate — integration tests via generate()
 # ---------------------------------------------------------------------------
 
+
 class TestMessageStageGenerate:
     """Tests that generate() auto-advances through message stages.
 
@@ -360,7 +369,9 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_message_stage_auto_advances_with_template_in_response(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """After transition to a message stage, the response includes its
         template AND the wizard lands on the next data-collection stage.
         """
@@ -423,11 +434,14 @@ class TestMessageStageGenerate:
         # auto-advance via its per-stage auto_advance: true.
         from unit.conftest import set_wizard_state
 
-        set_wizard_state(manager, {
-            "current_stage": "collect_name",
-            "data": {"user_name": "Alice"},
-            "history": ["collect_name"],
-        })
+        set_wizard_state(
+            manager,
+            {
+                "current_stage": "collect_name",
+                "data": {"user_name": "Alice"},
+                "history": ["collect_name"],
+            },
+        )
 
         # User says anything — extraction doesn't matter because the stage
         # will auto-advance with pre-filled data.
@@ -447,7 +461,9 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_chained_message_stages(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Two consecutive message stages both render and auto-advance."""
         manager, provider = conversation_manager_pair
 
@@ -513,11 +529,14 @@ class TestMessageStageGenerate:
 
         from unit.conftest import set_wizard_state
 
-        set_wizard_state(manager, {
-            "current_stage": "collect_name",
-            "data": {"user_name": "Bob"},
-            "history": ["collect_name"],
-        })
+        set_wizard_state(
+            manager,
+            {
+                "current_stage": "collect_name",
+                "data": {"user_name": "Bob"},
+                "history": ["collect_name"],
+            },
+        )
 
         provider.set_responses(["ok"])
         await manager.add_message(role="user", content="Bob")
@@ -535,7 +554,9 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_conditional_message_stage_routes_correctly(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Message stage evaluates conditions based on collected data."""
         manager, provider = conversation_manager_pair
 
@@ -594,11 +615,14 @@ class TestMessageStageGenerate:
 
         from unit.conftest import set_wizard_state
 
-        set_wizard_state(manager, {
-            "current_stage": "collect_role",
-            "data": {"role": "admin"},
-            "history": ["collect_role"],
-        })
+        set_wizard_state(
+            manager,
+            {
+                "current_stage": "collect_role",
+                "data": {"role": "admin"},
+                "history": ["collect_role"],
+            },
+        )
 
         provider.set_responses(["ok"])
         await manager.add_message(role="user", content="admin")
@@ -615,7 +639,9 @@ class TestMessageStageGenerate:
     @pytest.mark.asyncio
     async def test_message_stage_records_transition(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Auto-advance through a message stage records transition with
         trigger='auto_advance'.
         """
@@ -675,11 +701,14 @@ class TestMessageStageGenerate:
 
         from unit.conftest import set_wizard_state
 
-        set_wizard_state(manager, {
-            "current_stage": "collect_name",
-            "data": {"user_name": "Alice"},
-            "history": ["collect_name"],
-        })
+        set_wizard_state(
+            manager,
+            {
+                "current_stage": "collect_name",
+                "data": {"user_name": "Alice"},
+                "history": ["collect_name"],
+            },
+        )
 
         provider.set_responses(["ok"])
         await manager.add_message(role="user", content="Alice")
@@ -693,15 +722,10 @@ class TestMessageStageGenerate:
 
         # Should have: collect_name -> confirmation (auto_advance from global)
         #              confirmation -> collect_email (auto_advance from per-stage)
-        auto_advance_transitions = [
-            t for t in transitions if t.get("trigger") == "auto_advance"
-        ]
+        auto_advance_transitions = [t for t in transitions if t.get("trigger") == "auto_advance"]
         assert len(auto_advance_transitions) >= 1
         # At least one auto-advance transition should be from the message stage
-        msg_transitions = [
-            t for t in auto_advance_transitions
-            if t["from_stage"] == "confirmation"
-        ]
+        msg_transitions = [t for t in auto_advance_transitions if t["from_stage"] == "confirmation"]
         assert len(msg_transitions) == 1
         assert msg_transitions[0]["to_stage"] == "collect_email"
 
@@ -710,6 +734,7 @@ class TestMessageStageGenerate:
 # TestMessageStageGreet — greet() with message start stages
 # ---------------------------------------------------------------------------
 
+
 class TestMessageStageGreet:
     """Tests for greet() when the start stage is a message stage."""
 
@@ -717,7 +742,9 @@ class TestMessageStageGreet:
     async def test_greet_auto_advances_through_message_start_stage(
         self,
         greeting_message_config: dict[str, Any],
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """greet() on a message start stage renders its template and
         auto-advances to the next stage.
         """
@@ -740,7 +767,9 @@ class TestMessageStageGreet:
     async def test_greet_message_stage_includes_next_stage_prompt(
         self,
         greeting_message_config: dict[str, Any],
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """greet() renders both the message stage template and the
         landing stage's template (if any).
         """
@@ -758,6 +787,7 @@ class TestMessageStageGreet:
 # ---------------------------------------------------------------------------
 # TestMessageStageDynaBot — full integration via DynaBot
 # ---------------------------------------------------------------------------
+
 
 class TestMessageStageDynaBot:
     """Integration tests using DynaBot for message stages."""
@@ -826,9 +856,7 @@ class TestMessageStageDynaBot:
 
             # Pre-seed name via initial_context — collect auto-advances
             # (filled fields), then thanks auto-advances (message stage).
-            greeting = await bot.greet(
-                context, initial_context={"name": "Alice"}
-            )
+            greeting = await bot.greet(context, initial_context={"name": "Alice"})
             assert greeting is not None
             assert "Thanks Alice!" in greeting
 

@@ -133,17 +133,23 @@ class TestDetectBooleanSignal:
 
     def test_custom_affirmative_phrases(self) -> None:
         custom = ("all systems go",)
-        assert self._detect(
-            "All systems go!",
-            aff_phrases=custom,
-        ) is True
+        assert (
+            self._detect(
+                "All systems go!",
+                aff_phrases=custom,
+            )
+            is True
+        )
 
     def test_custom_negative_phrases(self) -> None:
         custom = ("take it back",)
-        assert self._detect(
-            "Take it back!",
-            neg_phrases=custom,
-        ) is False
+        assert (
+            self._detect(
+                "Take it back!",
+                neg_phrases=custom,
+            )
+            is False
+        )
 
     def test_empty_message_returns_none(self) -> None:
         assert self._detect("") is None
@@ -261,9 +267,8 @@ def _classifier_signal(
 
     # Affirmative won — apply the same flip-when-alone semantic that
     # ``detect_boolean_signal`` applies locally.
-    has_neg_match = (
-        any(_word_in_text(w, msg_lower) for w in neg_signals)
-        or any(_word_in_text(p, msg_lower) for p in neg_phr)
+    has_neg_match = any(_word_in_text(w, msg_lower) for w in neg_signals) or any(
+        _word_in_text(p, msg_lower) for p in neg_phr
     )
     if not has_neg_match:
         check_neg = DEFAULT_NEGATION_KEYWORDS - neg_signals
@@ -300,21 +305,27 @@ class TestDetectBooleanSignalParityWithClassifier:
 
     @pytest.mark.parametrize(("message", "overrides"), _PARITY_CUSTOM_CASES)
     def test_custom_vocabulary_parity(
-        self, message: str, overrides: dict,
+        self,
+        message: str,
+        overrides: dict,
     ) -> None:
         wrapper_signal = detect_boolean_signal(
             message.lower(),
             affirmative_signals=overrides.get(
-                "aff", _DEFAULT_AFFIRMATIVE_SIGNALS,
+                "aff",
+                _DEFAULT_AFFIRMATIVE_SIGNALS,
             ),
             affirmative_phrases=overrides.get(
-                "aff_phrases", _DEFAULT_AFFIRMATIVE_PHRASES,
+                "aff_phrases",
+                _DEFAULT_AFFIRMATIVE_PHRASES,
             ),
             negative_signals=overrides.get(
-                "neg", _DEFAULT_NEGATIVE_SIGNALS,
+                "neg",
+                _DEFAULT_NEGATIVE_SIGNALS,
             ),
             negative_phrases=overrides.get(
-                "neg_phrases", _DEFAULT_NEGATIVE_PHRASES,
+                "neg_phrases",
+                _DEFAULT_NEGATIVE_PHRASES,
             ),
         )
         classifier_signal = _classifier_signal(message, **overrides)
@@ -341,9 +352,12 @@ def _confirm_stage_config(
 
     # Gather stage: collect a name
     builder.stage(
-        "gather", is_start=True, prompt="Tell me your name.",
+        "gather",
+        is_start=True,
+        prompt="Tell me your name.",
     ).field("name", field_type="string", required=True).transition(
-        "review", "data.get('name')",
+        "review",
+        "data.get('name')",
     )
 
     # Review stage: boolean confirmed field
@@ -681,7 +695,9 @@ class TestBooleanRecoveryIntegration:
         builder = WizardConfigBuilder("non-bool-test")
         builder.stage("gather", is_start=True, prompt="Tell me.")
         builder.field(
-            "confirmed", field_type="boolean", required=True,
+            "confirmed",
+            field_type="boolean",
+            required=True,
             description="User confirmation.",
         )
         builder.field("name", field_type="string", required=True)

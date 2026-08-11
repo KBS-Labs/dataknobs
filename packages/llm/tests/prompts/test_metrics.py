@@ -22,11 +22,7 @@ class TestMetricsCollector:
     async def test_record_event(self, collector):
         """Test recording a usage event."""
         event = await collector.record_event(
-            version_id="v1",
-            success=True,
-            response_time=0.5,
-            tokens=100,
-            user_rating=4.5
+            version_id="v1", success=True, response_time=0.5, tokens=100, user_rating=4.5
         )
 
         assert event.version_id == "v1"
@@ -41,13 +37,13 @@ class TestMetricsCollector:
         with pytest.raises(ValueError, match="rating must be between"):
             await collector.record_event(
                 version_id="v1",
-                user_rating=6.0  # Invalid: > 5.0
+                user_rating=6.0,  # Invalid: > 5.0
             )
 
         with pytest.raises(ValueError, match="rating must be between"):
             await collector.record_event(
                 version_id="v1",
-                user_rating=0.5  # Invalid: < 1.0
+                user_rating=0.5,  # Invalid: < 1.0
             )
 
     @pytest.mark.asyncio
@@ -63,25 +59,15 @@ class TestMetricsCollector:
     async def test_get_metrics_after_events(self, collector):
         """Test getting aggregated metrics after recording events."""
         # Record some events
-        await collector.record_event(
-            version_id="v1",
-            success=True,
-            response_time=0.5,
-            tokens=100
-        )
+        await collector.record_event(version_id="v1", success=True, response_time=0.5, tokens=100)
 
-        await collector.record_event(
-            version_id="v1",
-            success=True,
-            response_time=0.7,
-            tokens=150
-        )
+        await collector.record_event(version_id="v1", success=True, response_time=0.7, tokens=150)
 
         await collector.record_event(
             version_id="v1",
             success=False,  # One failure
             response_time=1.0,
-            tokens=200
+            tokens=200,
         )
 
         metrics = await collector.get_metrics("v1")
@@ -89,7 +75,7 @@ class TestMetricsCollector:
         assert metrics.total_uses == 3
         assert metrics.success_count == 2
         assert metrics.error_count == 1
-        assert abs(metrics.success_rate - 2/3) < 0.01
+        assert abs(metrics.success_rate - 2 / 3) < 0.01
         assert abs(metrics.avg_response_time - 0.73) < 0.05
         assert abs(metrics.avg_tokens - 150.0) < 0.1
 
@@ -108,7 +94,7 @@ class TestMetricsCollector:
             await collector.record_event(version_id="v1", success=False)
 
         metrics = await collector.get_metrics("v1")
-        assert abs(metrics.success_rate - 10/15) < 0.01
+        assert abs(metrics.success_rate - 10 / 15) < 0.01
 
     @pytest.mark.asyncio
     async def test_metrics_avg_response_time(self, collector):
@@ -189,18 +175,12 @@ class TestMetricsCollector:
 
         # Filter to future time range (should get nothing)
         future = now + timedelta(hours=1)
-        events = await collector.get_events(
-            version_id="v1",
-            start_time=future
-        )
+        events = await collector.get_events(version_id="v1", start_time=future)
         assert len(events) == 0
 
         # Filter to past time range (should get the event)
         past = now - timedelta(hours=1)
-        events = await collector.get_events(
-            version_id="v1",
-            start_time=past
-        )
+        events = await collector.get_events(version_id="v1", start_time=past)
         assert len(events) == 1
 
     @pytest.mark.asyncio
@@ -225,7 +205,7 @@ class TestMetricsCollector:
         assert comparison["v1"].success_rate == 1.0
 
         assert comparison["v2"].total_uses == 15
-        assert abs(comparison["v2"].success_rate - 10/15) < 0.01
+        assert abs(comparison["v2"].success_rate - 10 / 15) < 0.01
 
     @pytest.mark.asyncio
     async def test_reset_metrics(self, collector):
@@ -271,7 +251,7 @@ class TestMetricsCollector:
         assert summary["total_uses"] == 20
         assert summary["total_successes"] == 15
         assert summary["total_errors"] == 5
-        assert abs(summary["overall_success_rate"] - 15/20) < 0.01
+        assert abs(summary["overall_success_rate"] - 15 / 20) < 0.01
 
         assert "v1" in summary["versions"]
         assert "v2" in summary["versions"]
@@ -295,11 +275,7 @@ class TestMetricsCollector:
         for _ in range(5):
             await collector.record_event(version_id="v3", success=False)
 
-        top = await collector.get_top_versions(
-            ["v1", "v2", "v3"],
-            metric="success_rate",
-            limit=2
-        )
+        top = await collector.get_top_versions(["v1", "v2", "v3"], metric="success_rate", limit=2)
 
         assert len(top) == 2
         assert top[0][0] == "v1"  # Highest success rate
@@ -320,11 +296,7 @@ class TestMetricsCollector:
         for _ in range(10):
             await collector.record_event(version_id="v3", user_rating=4.5)
 
-        top = await collector.get_top_versions(
-            ["v1", "v2", "v3"],
-            metric="avg_rating",
-            limit=3
-        )
+        top = await collector.get_top_versions(["v1", "v2", "v3"], metric="avg_rating", limit=3)
 
         assert len(top) == 3
         assert top[0][0] == "v1"  # Highest rating
@@ -347,9 +319,7 @@ class TestMetricsCollector:
             await collector.record_event(version_id="v3", response_time=0.3)
 
         top = await collector.get_top_versions(
-            ["v1", "v2", "v3"],
-            metric="avg_response_time",
-            limit=3
+            ["v1", "v2", "v3"], metric="avg_response_time", limit=3
         )
 
         # Should be sorted fastest to slowest
@@ -361,10 +331,7 @@ class TestMetricsCollector:
     async def test_get_top_versions_invalid_metric(self, collector):
         """Test that invalid metric name raises error."""
         with pytest.raises(ValueError, match="Invalid metric"):
-            await collector.get_top_versions(
-                ["v1"],
-                metric="invalid_metric"
-            )
+            await collector.get_top_versions(["v1"], metric="invalid_metric")
 
     @pytest.mark.asyncio
     async def test_get_top_versions_excludes_empty(self, collector):
@@ -374,10 +341,7 @@ class TestMetricsCollector:
 
         # Version 2: no data
 
-        top = await collector.get_top_versions(
-            ["v1", "v2"],
-            metric="success_rate"
-        )
+        top = await collector.get_top_versions(["v1", "v2"], metric="success_rate")
 
         assert len(top) == 1
         assert top[0][0] == "v1"
@@ -387,11 +351,7 @@ class TestMetricsCollector:
         """Test serialization/deserialization of PromptMetrics."""
         # Record some events
         await collector.record_event(
-            version_id="v1",
-            success=True,
-            response_time=0.5,
-            tokens=100,
-            user_rating=4.5
+            version_id="v1", success=True, response_time=0.5, tokens=100, user_rating=4.5
         )
 
         original = await collector.get_metrics("v1")
@@ -425,7 +385,7 @@ class TestMetricsCollector:
             response_time=0.5,
             tokens=100,
             user_rating=4.5,
-            metadata={"key": "value"}
+            metadata={"key": "value"},
         )
 
         # Convert to dict

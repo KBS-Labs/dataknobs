@@ -40,9 +40,7 @@ pytestmark = [
 ]
 
 
-def _make_state(
-    conversation_id: str, metadata: dict[str, str]
-) -> ConversationState:
+def _make_state(conversation_id: str, metadata: dict[str, str]) -> ConversationState:
     root = ConversationNode(
         message=LLMMessage(role="system", content="x"),
         node_id="",
@@ -95,9 +93,7 @@ async def test_list_conversations_filter_by_metadata_postgres(
                 )
             )
 
-        alice_convs = await storage.list_conversations(
-            filter_metadata={"user_id": "alice"}
-        )
+        alice_convs = await storage.list_conversations(filter_metadata={"user_id": "alice"})
         assert len(alice_convs) == 2
         assert all(c.metadata["user_id"] == "alice" for c in alice_convs)
 
@@ -108,9 +104,7 @@ async def test_list_conversations_filter_by_metadata_postgres(
         assert len(domain_convs) == 3
 
         # No-match: regression guard against false positives.
-        empty = await storage.list_conversations(
-            filter_metadata={"user_id": "nobody"}
-        )
+        empty = await storage.list_conversations(filter_metadata={"user_id": "nobody"})
         assert empty == []
     finally:
         await backend.close()
@@ -138,24 +132,9 @@ async def test_count_conversations_filter_by_metadata_postgres(
                 )
             )
 
-        assert (
-            await storage.count_conversations(
-                filter_metadata={"user_id": "alice"}
-            )
-            == 2
-        )
-        assert (
-            await storage.count_conversations(
-                filter_metadata={"user_id": "bob"}
-            )
-            == 1
-        )
-        assert (
-            await storage.count_conversations(
-                filter_metadata={"user_id": "nobody"}
-            )
-            == 0
-        )
+        assert await storage.count_conversations(filter_metadata={"user_id": "alice"}) == 2
+        assert await storage.count_conversations(filter_metadata={"user_id": "bob"}) == 1
+        assert await storage.count_conversations(filter_metadata={"user_id": "nobody"}) == 0
     finally:
         await backend.close()
 

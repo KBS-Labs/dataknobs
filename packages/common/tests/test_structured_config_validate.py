@@ -164,15 +164,11 @@ def test_skip_sentinel_skips_without_raising(caplog: Any) -> None:
     # (unknown discriminator) path which raises.
     config_registries.register("leaf", _resolve_skip, allow_overwrite=True)
     try:
-        with caplog.at_level(
-            logging.DEBUG, logger="dataknobs_common.structured_config"
-        ):
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.structured_config"):
             _Adopter.from_dict({"section": {"kind": "leaf", "size": -1}}).validate()
         # -1 would fail _LeafConfig.__post_init__ if it were built; the skip
         # means the section is never dry-run-built, so no error surfaces.
-        assert any(
-            "exposes no typed config" in r.message for r in caplog.records
-        )
+        assert any("exposes no typed config" in r.message for r in caplog.records)
     finally:
         config_registries.unregister("leaf")
 
@@ -211,9 +207,7 @@ def test_recursion_validates_whole_tree() -> None:
     config_registries.register("adopter", _resolve_adopter, allow_overwrite=True)
     config_registries.register("leaf", _resolve_leaf, allow_overwrite=True)
     try:
-        _ParentAdopter.from_dict(
-            {"child": {"section": {"kind": "leaf", "size": 0}}}
-        ).validate()
+        _ParentAdopter.from_dict({"child": {"section": {"kind": "leaf", "size": 0}}}).validate()
         with pytest.raises(ValueError, match="size must be >= 0"):
             _ParentAdopter.from_dict(
                 {"child": {"section": {"kind": "leaf", "size": -1}}}

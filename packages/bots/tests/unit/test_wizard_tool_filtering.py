@@ -91,9 +91,7 @@ class TestFilterToolsForStage:
         assert len(result) == 2
         assert {t.name for t in result} == {"tool_a", "tool_c"}
 
-    def test_no_tools_passed_returns_none(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_tools_passed_returns_none(self, wizard_reasoning: WizardReasoning) -> None:
         """When no tools are passed, return None regardless of stage config."""
         stage: dict[str, Any] = {"name": "review", "tools": ["tool_a"]}
 
@@ -101,9 +99,7 @@ class TestFilterToolsForStage:
 
         assert result is None
 
-    def test_empty_tools_passed_returns_none(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_tools_passed_returns_none(self, wizard_reasoning: WizardReasoning) -> None:
         """When empty tools list is passed, return None."""
         stage: dict[str, Any] = {"name": "review", "tools": ["tool_a"]}
 
@@ -111,9 +107,7 @@ class TestFilterToolsForStage:
 
         assert result is None
 
-    def test_nonexistent_tool_name_ignored(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_nonexistent_tool_name_ignored(self, wizard_reasoning: WizardReasoning) -> None:
         """Tool names in stage config that don't match any tool are ignored."""
         tools = [SimpleTool("tool_a")]
         stage: dict[str, Any] = {"name": "review", "tools": ["tool_a", "nonexistent"]}
@@ -124,9 +118,7 @@ class TestFilterToolsForStage:
         assert len(result) == 1
         assert result[0].name == "tool_a"
 
-    def test_all_nonexistent_returns_none(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_all_nonexistent_returns_none(self, wizard_reasoning: WizardReasoning) -> None:
         """If no tools match the stage config, return None."""
         tools = [SimpleTool("tool_a")]
         stage: dict[str, Any] = {
@@ -196,9 +188,7 @@ class TestToolFilteringIntegration:
                         "properties": {"subject": {"type": "string"}},
                     },
                     # Note: no 'tools' key - should get NO tools
-                    "transitions": [
-                        {"target": "done", "condition": "data.get('subject')"}
-                    ],
+                    "transitions": [{"target": "done", "condition": "data.get('subject')"}],
                 },
                 {"name": "done", "prompt": "Complete!", "is_end": True},
             ],

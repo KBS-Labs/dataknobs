@@ -49,9 +49,7 @@ if ASYNCPG_AVAILABLE:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not ASYNCPG_AVAILABLE, reason="asyncpg not installed"
-)
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 async def test_one_config_feeds_all_postgres_constructs(
     postgres_test_db,
 ) -> None:
@@ -81,7 +79,8 @@ async def test_one_config_feeds_all_postgres_constructs(
     # 1. SyncPostgresDatabase
     # ------------------------------------------------------------------
     sync_db = SyncDatabase.from_backend(
-        "postgres", {**config, "table": sync_table, "schema": "public"},
+        "postgres",
+        {**config, "table": sync_table, "schema": "public"},
     )
     sync_db.connect()
 
@@ -89,7 +88,8 @@ async def test_one_config_feeds_all_postgres_constructs(
     # 2. AsyncPostgresDatabase
     # ------------------------------------------------------------------
     async_db = await AsyncDatabase.from_backend(
-        "postgres", {**config, "table": async_table, "schema": "public"},
+        "postgres",
+        {**config, "table": async_table, "schema": "public"},
     )
     await async_db.connect()
 
@@ -132,9 +132,7 @@ async def test_one_config_feeds_all_postgres_constructs(
         # Verify cross-construct observability: create a record via the
         # async client, read it back via the sync client, publish an
         # event, receive it on a subscriber.
-        record_id = await async_db.create(
-            Record({"id": f"rec_{suffix}", "data": "hello"})
-        )
+        record_id = await async_db.create(Record({"id": f"rec_{suffix}", "data": "hello"}))
         assert await async_db.exists(record_id)
 
         sync_record = sync_db.read(record_id) if sync_db.exists(record_id) else None
@@ -209,9 +207,7 @@ async def test_one_config_feeds_all_postgres_constructs(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not ASYNCPG_AVAILABLE, reason="asyncpg not installed"
-)
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 async def test_env_fallbacks_feed_all_postgres_constructs(
     postgres_test_db,
     monkeypatch,
@@ -258,7 +254,9 @@ async def test_env_fallbacks_feed_all_postgres_constructs(
     # Sanity check: the normalizer resolves the connection from env
     # with an empty config dict.
     resolved = normalize_postgres_connection_config(
-        {}, require=True, load_dotenv=False,
+        {},
+        require=True,
+        load_dotenv=False,
     )
     assert resolved is not None
     assert resolved["host"] == postgres_test_db["host"]
@@ -267,7 +265,8 @@ async def test_env_fallbacks_feed_all_postgres_constructs(
     # Exercise all four postgres-using constructs with {} config — each
     # must resolve from env without drift.
     sync_db = SyncDatabase.from_backend(
-        "postgres", {"table": sync_table, "schema": "public"},
+        "postgres",
+        {"table": sync_table, "schema": "public"},
     )
     sync_db.connect()
 

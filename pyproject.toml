@@ -32,6 +32,11 @@ dev = [
     "pandas-stubs>=2.0.0",
     "types-requests>=2.31.0",
     "types-beautifulsoup4>=4.12.0",
+    "types-PyYAML>=6.0.0",
+    # botocore arrives transitively via aioboto3 and is imported directly for
+    # its config, exceptions and session modules. Stubs rather than an
+    # ignore_missing_imports override, which would type all three as Any.
+    "botocore-stubs>=1.34.0",
     "numpy>=1.24.0",
     "jupyter>=1.1.1",
     "ipywidgets>=8.1.5",
@@ -92,26 +97,50 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
+# A bare `# type: ignore` waives every check on its line, including ones written
+# years after it. `warn_unused_ignores` cannot reach that: a bare directive that
+# still suppresses *something* is used, so it never goes stale, and what it
+# suppresses is free to change underneath it. Requiring the code is what makes a
+# suppression reviewable -- and what lets a directive stop applying loudly.
+#
+# Enabled tree-wide, with the four exceptions below. The default direction is
+# deliberate: a new package, or a new top-level directory, is covered on the day
+# it appears rather than on the day someone remembers to list it.
+enable_error_code = ["ignore-without-code"]
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src:packages/legacy/src"
 cache_dir = ".mypy_cache"
 incremental = true
-# Note: For focused type checking that suppresses less critical errors,
-# use: uv run mypy --config-file mypy.ini
-# This configuration shows all type issues for comprehensive analysis.
+# The only mypy configuration. There used to be a second — mypy.ini — which
+# disabled twenty error codes and was what bin/validate.sh read by default,
+# while the quality contract measured under this one. Two configurations meant
+# two answers to "is this clean", and the weaker one was the one a developer
+# saw. The ceilings in .dataknobs/quality-contract.json are what makes a single
+# strict configuration usable against a tree that is not yet strict-clean.
 
 # Per-module options
+#
+# A section here that matches no module suppresses nothing. mypy reports that as
+# a *note*, so nothing fails on it, and the quality contract's mypy check reads
+# the note and does. Three sections were dead when that check was written, and
+# two of them had been written to waive findings that were still being reported:
+# `dataknobs_legacy.*` (the package's module is `dataknobs`) and `python_nmap.*`
+# (the library imported is `nmap3`, from a different distribution entirely).
 [[tool.mypy.overrides]]
 module = [
     "nltk.*",
     "graphviz.*",
     "pyparsing.*",
     "json_stream.*",
-    "sklearn.*",
-    "python_nmap.*",
     "more_itertools.*",
-    "flask.*",
+    # A hard dependency of dataknobs-utils (distribution `python3-nmap`) that
+    # ships neither stubs nor a py.typed marker, and has no stub package.
+    # Typeshed's `types-python-nmap` covers the *other* library -- distribution
+    # `python-nmap`, module `nmap` -- which is what an override spelled
+    # `python_nmap.*` was reaching for here, and why it matched nothing for as
+    # long as it existed.
+    "nmap3.*",
     "asyncpg.*",
     # Imported inside a try/except ImportError by bin/check-services.py, as the
     # more accurate of its two PostgreSQL liveness probes. Stubs are not carried
@@ -131,12 +160,6 @@ ignore_missing_imports = true
 module = "numpy.*"
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = "dataknobs_legacy.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = false
-
 # Relaxed type checking for dataknobs_xization (complex NLP/annotation code)
 [[tool.mypy.overrides]]
 module = "dataknobs_xization.*"
@@ -148,6 +171,31 @@ warn_return_any = false
 warn_unused_ignores = false
 warn_no_return = false
 warn_unreachable = false
+
+# `ignore-without-code`, paused where a backlog predates it.
+#
+# These four packages hold 66 bare directives between them. Their ceilings in
+# .dataknobs/quality-contract.json equal their measurements exactly, so turning
+# the rule on for them would breach all four at once -- and `update_baseline`
+# lowers a ceiling, never raises one. Rather than re-baseline four packages to
+# absorb a rule none of them has read, each pays for its own when it is adopted:
+# the entry comes out, the directives get their codes, and the ceiling falls.
+#
+# So this list is expected to shrink to nothing, and an entry that outlives its
+# package's adoption is the failure mode -- a package at tier `strict` while the
+# rule that makes its suppressions readable is still switched off. That is what
+# `test_ignore_without_code_tracks_the_adopted_set` asserts, since mypy cannot:
+# a section that matches modules is a *used* section however little it earns.
+#
+# Counts measured 2026-08-10 on `ce926e32`, whole-tree.
+[[tool.mypy.overrides]]
+module = [
+    "dataknobs_fsm.*",   # 46
+    "dataknobs_data.*",  #  9
+    "dataknobs_llm.*",   #  8
+    "dataknobs_bots.*",  #  3
+]
+disable_error_code = ["ignore-without-code"]
 
 # Gradual migration for complex vector store implementations
 [[tool.mypy.overrides]]
@@ -356,8 +404,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
 "*.ipynb" = ["E402", "F811", "F401"]  # Allow imports not at top, redefinition, unused imports in notebooks
 # ASYNC false positives — verified cheap one-shot stats / poll loops, not hot-loop
-# blocking I/O. Mirrors the per-package per-file-ignores (validate.sh lints with
-# --config <root>, so the suppressions must also live here). See .claude/rules/async-transport.md.
+# blocking I/O. These paths are repo-relative because this is now the only ruff
+# config: the per-package sections these used to be mirrored into are gone, so
+# there is one place to add the next one. See .claude/rules/async-transport.md.
 "packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # queue-drain poll; asyncio.sleep does not block the loop (style lint, not an I/O defect). Idiomatic Queue.join()/task_done() migration tracked separately
 "packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # one-time ingest-setup path resolution (cwd + existence checks); setup-time, not a per-record hot path
 "packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240", "SIM115"]  # ASYNC240: cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call. SIM115: handle stored on self.file_handle by open(), released by the paired close()
@@ -387,7 +436,12 @@ force-wrap-aliases = true
 # the guard suite that checks the toolchain. Named explicitly rather than left to
 # `src` resolution because that only fires for a directory ruff can see from the
 # file being checked, and these are imported from every package tree as well.
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization", "dataknobs_workspace", "tests"]
+# `dataknobs_fsm` was the one package name missing here while the five
+# per-package sections existed, and it was invisible from either side: root
+# ignores I001, so nothing sorted imports under this config, while fsm's own
+# section named itself first-party and did not. Consolidating removed the
+# second answer, which would have left the omission as the only one.
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_fsm", "dataknobs_llm", "dataknobs_bots", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization", "dataknobs_workspace", "tests"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention

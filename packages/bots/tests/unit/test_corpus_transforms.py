@@ -55,18 +55,26 @@ async def test_add_to_corpus_transform(context: TransformContext) -> None:
     data["topic"] = "Math Quiz"
 
     # Create corpus first
-    await create_corpus(data, context, config={
-        "corpus_type": "quiz_bank",
-        "item_type": "quiz_question",
-        "name_field": "topic",
-    })
+    await create_corpus(
+        data,
+        context,
+        config={
+            "corpus_type": "quiz_bank",
+            "item_type": "quiz_question",
+            "name_field": "topic",
+        },
+    )
 
     # Add an item
     data["_current_item"] = {"stem": "What is 2+2?", "answer": "4"}
-    await add_to_corpus(data, context, config={
-        "content_key": "_current_item",
-        "tags": ["math"],
-    })
+    await add_to_corpus(
+        data,
+        context,
+        config={
+            "content_key": "_current_item",
+            "tags": ["math"],
+        },
+    )
 
     assert data["_last_added_artifact_id"].startswith("art_")
     assert data["_corpus_item_count"] == 1
@@ -87,11 +95,15 @@ async def test_finalize_corpus_transform(
     """finalize_corpus sets _corpus_summary and approves the corpus."""
     data: dict = {"topic": "Science Quiz"}
 
-    await create_corpus(data, context, config={
-        "corpus_type": "quiz_bank",
-        "item_type": "quiz_question",
-        "name_field": "topic",
-    })
+    await create_corpus(
+        data,
+        context,
+        config={
+            "corpus_type": "quiz_bank",
+            "item_type": "quiz_question",
+            "name_field": "topic",
+        },
+    )
 
     data["_current_item"] = {"stem": "Q1"}
     await add_to_corpus(data, context)
@@ -111,14 +123,18 @@ async def test_full_flow(context: TransformContext) -> None:
     """Full flow: create_corpus -> add_to_corpus x3 -> finalize_corpus."""
     data: dict = {"topic": "History Quiz"}
 
-    await create_corpus(data, context, config={
-        "corpus_type": "quiz_bank",
-        "item_type": "quiz_question",
-        "name_field": "topic",
-    })
+    await create_corpus(
+        data,
+        context,
+        config={
+            "corpus_type": "quiz_bank",
+            "item_type": "quiz_question",
+            "name_field": "topic",
+        },
+    )
 
     for i in range(3):
-        data["_current_item"] = {"stem": f"Question {i+1}", "answer": f"Answer {i+1}"}
+        data["_current_item"] = {"stem": f"Question {i + 1}", "answer": f"Answer {i + 1}"}
         await add_to_corpus(data, context)
 
     assert data["_corpus_item_count"] == 3
@@ -140,14 +156,18 @@ async def test_add_to_corpus_with_dedup(context: TransformContext) -> None:
     """Dedup config in create_corpus prevents duplicate items."""
     data: dict = {"topic": "Dedup Quiz"}
 
-    await create_corpus(data, context, config={
-        "corpus_type": "quiz_bank",
-        "item_type": "quiz_question",
-        "name_field": "topic",
-        "dedup": {
-            "hash_fields": ["stem"],
+    await create_corpus(
+        data,
+        context,
+        config={
+            "corpus_type": "quiz_bank",
+            "item_type": "quiz_question",
+            "name_field": "topic",
+            "dedup": {
+                "hash_fields": ["stem"],
+            },
         },
-    })
+    )
 
     # First add succeeds
     data["_current_item"] = {"stem": "What is 2+2?"}
@@ -167,11 +187,15 @@ async def test_add_to_corpus_reload_from_id(context: TransformContext) -> None:
     """add_to_corpus reconstructs corpus from _corpus_id when _corpus is missing."""
     data: dict = {"topic": "Reload Quiz"}
 
-    await create_corpus(data, context, config={
-        "corpus_type": "quiz_bank",
-        "item_type": "quiz_question",
-        "name_field": "topic",
-    })
+    await create_corpus(
+        data,
+        context,
+        config={
+            "corpus_type": "quiz_bank",
+            "item_type": "quiz_question",
+            "name_field": "topic",
+        },
+    )
 
     # Simulate session reload: remove transient _corpus, keep _corpus_id
     corpus_id = data["_corpus_id"]
@@ -194,7 +218,11 @@ async def test_create_corpus_missing_registry() -> None:
     data: dict = {"topic": "Test"}
 
     with pytest.raises(ValueError, match="artifact_registry"):
-        await create_corpus(data, context, config={
-            "corpus_type": "quiz_bank",
-            "item_type": "quiz_question",
-        })
+        await create_corpus(
+            data,
+            context,
+            config={
+                "corpus_type": "quiz_bank",
+                "item_type": "quiz_question",
+            },
+        )

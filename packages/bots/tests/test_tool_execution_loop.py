@@ -74,9 +74,7 @@ class ToolExecutionTracker(Middleware):
     def __init__(self) -> None:
         self.executions: list[ToolExecution] = []
 
-    async def on_tool_executed(
-        self, execution: ToolExecution, context: BotContext
-    ) -> None:
+    async def on_tool_executed(self, execution: ToolExecution, context: BotContext) -> None:
         self.executions.append(execution)
 
 
@@ -334,9 +332,7 @@ class TestStreamChatToolExecution:
             tools=[echo_tool],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "echo hello", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("echo hello", harness.context):
                 chunks.append(chunk)
 
         full_text = "".join(c.delta for c in chunks)
@@ -379,9 +375,7 @@ class TestStreamChatToolExecution:
             tools=[echo_tool],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "do stuff", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("do stuff", harness.context):
                 chunks.append(chunk)
 
         full_text = "".join(c.delta for c in chunks)
@@ -439,9 +433,7 @@ class TestStreamChatToolExecution:
             tools=[echo_tool],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "loop forever", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("loop forever", harness.context):
                 chunks.append(chunk)
             max_iters = harness.bot._max_tool_iterations
 
@@ -483,10 +475,12 @@ class TestMultiToolExecution:
         async with await BotTestHarness.create(
             bot_config=_SIMPLE_BOT_CONFIG,
             main_responses=[
-                multi_tool_response([
-                    ("echo", {"text": "first"}),
-                    ("echo", {"text": "second"}),
-                ]),
+                multi_tool_response(
+                    [
+                        ("echo", {"text": "first"}),
+                        ("echo", {"text": "second"}),
+                    ]
+                ),
                 text_response("both done"),
             ],
             tools=[echo_tool, failing_tool],
@@ -507,18 +501,18 @@ class TestMultiToolExecution:
         async with await BotTestHarness.create(
             bot_config=_SIMPLE_BOT_CONFIG,
             main_responses=[
-                multi_tool_response([
-                    ("echo", {"text": "a"}),
-                    ("echo", {"text": "b"}),
-                ]),
+                multi_tool_response(
+                    [
+                        ("echo", {"text": "a"}),
+                        ("echo", {"text": "b"}),
+                    ]
+                ),
                 text_response("multi done"),
             ],
             tools=[echo_tool],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "do two at once", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("do two at once", harness.context):
                 chunks.append(chunk)
 
         full_text = "".join(c.delta for c in chunks)
@@ -599,9 +593,7 @@ class TestNoStrategyToolExecution:
             tools=[echo_tool],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "what is 2+2?", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("what is 2+2?", harness.context):
                 chunks.append(chunk)
 
         # Verify tools were passed to the provider in the initial call

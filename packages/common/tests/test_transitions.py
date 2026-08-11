@@ -10,29 +10,36 @@ from dataknobs_common.transitions import InvalidTransitionError, TransitionValid
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def order_validator():
     """A typical order lifecycle graph."""
-    return TransitionValidator("order", {
-        "draft":     {"submitted"},
-        "submitted": {"approved", "rejected"},
-        "approved":  {"shipped"},
-        "shipped":   {"delivered"},
-        "rejected":  set(),
-        "delivered":  set(),
-    })
+    return TransitionValidator(
+        "order",
+        {
+            "draft": {"submitted"},
+            "submitted": {"approved", "rejected"},
+            "approved": {"shipped"},
+            "shipped": {"delivered"},
+            "rejected": set(),
+            "delivered": set(),
+        },
+    )
 
 
 @pytest.fixture
 def cyclic_validator():
     """A graph with a cycle (failed -> pending -> running -> failed)."""
-    return TransitionValidator("job", {
-        "pending":   {"running", "cancelled"},
-        "running":   {"completed", "failed"},
-        "failed":    {"pending"},
-        "completed": set(),
-        "cancelled": set(),
-    })
+    return TransitionValidator(
+        "job",
+        {
+            "pending": {"running", "cancelled"},
+            "running": {"completed", "failed"},
+            "failed": {"pending"},
+            "completed": set(),
+            "cancelled": set(),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +48,6 @@ def cyclic_validator():
 
 
 class TestValidTransitions:
-
     def test_valid_transition_does_not_raise(self, order_validator):
         order_validator.validate("draft", "submitted")
 
@@ -61,7 +67,6 @@ class TestValidTransitions:
 
 
 class TestInvalidTransitions:
-
     def test_disallowed_transition_raises(self, order_validator):
         with pytest.raises(InvalidTransitionError) as exc_info:
             order_validator.validate("draft", "approved")
@@ -98,7 +103,6 @@ class TestInvalidTransitions:
 
 
 class TestErrorMessages:
-
     def test_error_message_includes_entity_and_statuses(self, order_validator):
         with pytest.raises(InvalidTransitionError, match="order"):
             order_validator.validate("draft", "delivered")
@@ -128,7 +132,6 @@ class TestErrorMessages:
 
 
 class TestExceptionHierarchy:
-
     def test_inherits_from_operation_error(self):
         assert issubclass(InvalidTransitionError, OperationError)
 
@@ -143,7 +146,6 @@ class TestExceptionHierarchy:
 
 
 class TestIntrospection:
-
     def test_allowed_transitions_returns_copy(self, order_validator):
         graph = order_validator.allowed_transitions
         assert graph["draft"] == {"submitted"}
@@ -173,7 +175,6 @@ class TestIntrospection:
 
 
 class TestIsValid:
-
     def test_valid_transition_returns_true(self, order_validator):
         assert order_validator.is_valid("draft", "submitted") is True
 
@@ -196,7 +197,6 @@ class TestIsValid:
 
 
 class TestGetReachable:
-
     def test_reachable_from_start(self, order_validator):
         reachable = order_validator.get_reachable("draft")
         assert reachable == {"submitted", "approved", "rejected", "shipped", "delivered"}
@@ -226,7 +226,6 @@ class TestGetReachable:
 
 
 class TestPackageImport:
-
     def test_import_from_dataknobs_common(self):
         from dataknobs_common import InvalidTransitionError as ITE
         from dataknobs_common import TransitionValidator as TV

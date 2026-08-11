@@ -172,10 +172,7 @@ def _system_notice_present(messages: list[LLMMessage]) -> bool:
     The system prompt itself is legitimate; this looks specifically for the
     old duplicate/timeout notices ("System notice: ...").
     """
-    return any(
-        m.role == "system" and m.content and "System notice" in m.content
-        for m in messages
-    )
+    return any(m.role == "system" and m.content and "System notice" in m.content for m in messages)
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +189,7 @@ def _make_provider(responses: list[Any]) -> EchoProvider:
 
 
 async def _make_manager(provider: EchoProvider) -> ConversationManager:
-    library = ConfigPromptLibrary(
-        {"system": {"assistant": {"template": "You are a test bot."}}}
-    )
+    library = ConfigPromptLibrary({"system": {"assistant": {"template": "You are a test bot."}}})
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     mgr = await ConversationManager.create(
@@ -464,9 +459,7 @@ def _assistant(*tool_calls: ToolCall) -> LLMMessage:
 
 def _tool_result(tc: ToolCall) -> LLMMessage:
     """A real (executed) tool_result for ``tc``, keyed as the adapters key it."""
-    return LLMMessage(
-        role="tool", content="ok", name=tc.name, tool_call_id=tc.id
-    )
+    return LLMMessage(role="tool", content="ok", name=tc.name, tool_call_id=tc.id)
 
 
 class TestPairOrphanToolCallsCore:

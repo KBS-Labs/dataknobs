@@ -158,9 +158,7 @@ class TestAnalyzeResponse:
     """Tests for _analyze_response() hook."""
 
     @pytest.mark.asyncio
-    async def test_analyze_response_passthrough(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_analyze_response_passthrough(self, provider: EchoProvider) -> None:
         """Default _analyze_response returns the response unchanged."""
         provider.set_responses([text_response("hello")])
         await provider.initialize()

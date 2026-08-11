@@ -309,16 +309,24 @@ class TestLoadApp:
         monkeypatch.setenv("DATAKNOBS_ENVIRONMENT", "development")
 
         # Create app config
-        (app_dir / "my-app.yaml").write_text(yaml.dump({
-            "name": "my-app",
-            "bot": {"setting": "value"},
-        }))
+        (app_dir / "my-app.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "my-app",
+                    "bot": {"setting": "value"},
+                }
+            )
+        )
 
         # Create environment config
-        (env_dir / "development.yaml").write_text(yaml.dump({
-            "name": "development",
-            "settings": {"debug": True},
-        }))
+        (env_dir / "development.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "development",
+                    "settings": {"debug": True},
+                }
+            )
+        )
 
         config = EnvironmentAwareConfig.load_app(
             "my-app",
@@ -409,14 +417,18 @@ class TestWithEnvironment:
         """Test creating new config with different environment name."""
         env_dir = tmp_path / "environments"
         env_dir.mkdir()
-        (env_dir / "production.yaml").write_text(yaml.dump({
-            "name": "production",
-            "resources": {
-                "databases": {
-                    "default": {"backend": "postgres"},
-                },
-            },
-        }))
+        (env_dir / "production.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "production",
+                    "resources": {
+                        "databases": {
+                            "default": {"backend": "postgres"},
+                        },
+                    },
+                }
+            )
+        )
 
         original = EnvironmentAwareConfig(
             config=base_config,
@@ -595,9 +607,7 @@ class TestMissingResourceIsObservable:
 
     def test_missing_resource_warns_with_inline_defaults(self, env, caplog):
         app = EnvironmentAwareConfig(
-            config={
-                "db": {"$resource": "typo", "type": "databases", "timeout": 5}
-            },
+            config={"db": {"$resource": "typo", "type": "databases", "timeout": 5}},
             environment=env,
         )
 
@@ -643,9 +653,7 @@ class TestResolveForBuildSubstitutionOrder:
         return EnvironmentConfig.from_dict(
             {
                 "name": "test",
-                "resources": {
-                    "databases": {"main": {"password": "${ORDER_PW}"}}
-                },
+                "resources": {"databases": {"main": {"password": "${ORDER_PW}"}}},
             }
         )
 
@@ -699,9 +707,7 @@ class TestResolveForBuildSubstitutionOrder:
         env = EnvironmentConfig(
             name="test",
             resources={
-                "databases": {
-                    "outer": {"inner": {"$resource": "leaf", "type": "secrets"}}
-                },
+                "databases": {"outer": {"inner": {"$resource": "leaf", "type": "secrets"}}},
                 "secrets": {"leaf": {"password": "${ORDER_PW}"}},
             },
         )
@@ -735,9 +741,7 @@ class TestResourceNameFromEnvVar:
         return EnvironmentConfig.from_dict(
             {
                 "name": "test",
-                "resources": {
-                    "databases": {"primary": {"backend": "postgres"}}
-                },
+                "resources": {"databases": {"primary": {"backend": "postgres"}}},
             }
         )
 
@@ -779,9 +783,7 @@ class TestResourceNameFromEnvVar:
         """An unset ref without a default still raises, as it does anywhere."""
         monkeypatch.delenv("MISSING_BINDING", raising=False)
         app = EnvironmentAwareConfig(
-            config={
-                "db": {"$resource": "${MISSING_BINDING}", "type": "databases"}
-            },
+            config={"db": {"$resource": "${MISSING_BINDING}", "type": "databases"}},
             environment=env,
         )
 
@@ -810,11 +812,7 @@ class TestMissingResourceStillResolvesItsDefaults:
         return EnvironmentConfig.from_dict(
             {
                 "name": "test",
-                "resources": {
-                    "databases": {
-                        "fallback": {"backend": "sqlite", "path": ":memory:"}
-                    }
-                },
+                "resources": {"databases": {"fallback": {"backend": "sqlite", "path": ":memory:"}}},
             }
         )
 
@@ -928,9 +926,7 @@ class TestOnlyReferencedResourcesAreExpanded:
             substitute_vars=False,
         )
 
-    def test_an_unreferenced_resource_does_not_abort_the_build(
-        self, env, monkeypatch
-    ):
+    def test_an_unreferenced_resource_does_not_abort_the_build(self, env, monkeypatch):
         monkeypatch.setenv("WANTED_DSN", "postgres://real")
         monkeypatch.delenv("NEVER_REFERENCED", raising=False)
         monkeypatch.delenv("ALSO_NEVER_REFERENCED", raising=False)
@@ -944,9 +940,7 @@ class TestOnlyReferencedResourcesAreExpanded:
 
         assert resolved["db"]["dsn"] == "postgres://real"
 
-    def test_the_referenced_resource_is_still_expanded_exactly_once(
-        self, env, monkeypatch
-    ):
+    def test_the_referenced_resource_is_still_expanded_exactly_once(self, env, monkeypatch):
         """The value's own ``${...}`` text stays literal — the whole point."""
         monkeypatch.setenv("WANTED_DSN", "p${x}ss")
         monkeypatch.setenv("x", "INJECTED")
@@ -994,17 +988,11 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
         return EnvironmentConfig.from_dict(
             {
                 "name": "prod",
-                "resources": {
-                    "databases": {
-                        "main": {"host": "db.prod", "password": "realsecret"}
-                    }
-                },
+                "resources": {"databases": {"main": {"host": "db.prod", "password": "realsecret"}}},
             }
         )
 
-    def test_an_overridden_default_does_not_have_to_resolve(
-        self, env, monkeypatch
-    ):
+    def test_an_overridden_default_does_not_have_to_resolve(self, env, monkeypatch):
         monkeypatch.delenv("LOCAL_DB_PASSWORD", raising=False)
 
         app = EnvironmentAwareConfig(
@@ -1037,9 +1025,7 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
 
         assert app.resolve_for_build()["db"]["pool_size"] == "7"
 
-    def test_a_surviving_default_is_expanded_exactly_once(
-        self, env, monkeypatch
-    ):
+    def test_a_surviving_default_is_expanded_exactly_once(self, env, monkeypatch):
         monkeypatch.setenv("LOCAL_POOL_SIZE", "p${x}ss")
         monkeypatch.setenv("x", "INJECTED")
 
@@ -1056,9 +1042,7 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
 
         assert app.resolve_for_build()["db"]["pool_size"] == "p${x}ss"
 
-    def test_an_unset_var_in_a_surviving_default_still_raises(
-        self, env, monkeypatch
-    ):
+    def test_an_unset_var_in_a_surviving_default_still_raises(self, env, monkeypatch):
         """The deferral moves the pass; it does not suppress its errors."""
         monkeypatch.delenv("LOCAL_POOL_SIZE", raising=False)
 
@@ -1076,9 +1060,7 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
         with pytest.raises(ValueError, match="LOCAL_POOL_SIZE"):
             app.resolve_for_build()
 
-    def test_a_degraded_reference_expands_the_defaults_it_falls_back_to(
-        self, env, monkeypatch
-    ):
+    def test_a_degraded_reference_expands_the_defaults_it_falls_back_to(self, env, monkeypatch):
         """Nothing overrides them, so every one survives — and must resolve."""
         monkeypatch.setenv("LOCAL_DB_PASSWORD", "devsecret")
 
@@ -1095,9 +1077,7 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
 
         assert app.resolve_for_build()["db"]["password"] == "devsecret"
 
-    def test_ordinary_app_values_are_untouched_by_the_deferral(
-        self, env, monkeypatch
-    ):
+    def test_ordinary_app_values_are_untouched_by_the_deferral(self, env, monkeypatch):
         """Only inline defaults defer; the rest of the app config does not."""
         monkeypatch.setenv("APP_NAME", "billing")
 
@@ -1111,9 +1091,7 @@ class TestInlineDefaultsAreExpandedOnlyWhenTheySurvive:
 
         assert app.resolve_for_build()["name"] == "billing"
 
-    def test_a_default_deferred_past_a_splice_that_never_runs_is_stranded(
-        self, env, monkeypatch
-    ):
+    def test_a_default_deferred_past_a_splice_that_never_runs_is_stranded(self, env, monkeypatch):
         """Deferring is only sound when a splice follows.
 
         ``resolve_resources=False`` performs no splice, so nothing discards a
@@ -1311,9 +1289,7 @@ class TestKeysAreExpandedLikeValues:
         assert app.resolve_for_build()["sections"] == {"prod": {"gold": "on"}}
 
     def test_a_key_inside_a_list(self, env):
-        app = EnvironmentAwareConfig(
-            config={"items": [{"${SECTION}": 1}]}, environment=env
-        )
+        app = EnvironmentAwareConfig(config={"items": [{"${SECTION}": 1}]}, environment=env)
 
         assert app.resolve_for_build()["items"] == [{"prod": 1}]
 
@@ -1368,9 +1344,7 @@ class TestKeysAreExpandedLikeValues:
         assert app.resolve_for_build()["db"]["opts"] == {"k${x}y": "on"}
 
     def test_a_non_string_key_passes_through(self, env):
-        app = EnvironmentAwareConfig(
-            config={"codes": {200: "ok", True: "yes"}}, environment=env
-        )
+        app = EnvironmentAwareConfig(config={"codes": {200: "ok", True: "yes"}}, environment=env)
 
         assert app.resolve_for_build()["codes"] == {200: "ok", True: "yes"}
 
@@ -1394,9 +1368,7 @@ class TestADefaultsKeyIsExpandedEvenIfTheDefaultIsDiscarded:
         return EnvironmentConfig.from_dict(
             {
                 "name": "prod",
-                "resources": {
-                    "databases": {"main": {"host": "db.prod", "opt": "env"}}
-                },
+                "resources": {"databases": {"main": {"host": "db.prod", "opt": "env"}}},
             }
         )
 

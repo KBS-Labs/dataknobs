@@ -7,7 +7,35 @@
 # A label-regex hit is suppressed ONLY when the offending file's path
 # equals the entry path AND the offending line contains the exact
 # substring.  Keying is (path, substring) -- never line number, because
-# line numbers drift while content is stable.
+# line numbers drift under any edit above them.
+#
+# Content is more stable than a line number, but it is NOT stable, and
+# adopting the formatter proved it twice in one commit.  A substring is
+# only as durable as the two things it spans:
+#
+#   * Quote style is not content.  `, 'name': 'Item ` stopped matching
+#     when the formatter normalized the fixture to double quotes.  Write
+#     an entry in the style the formatter produces -- double quotes --
+#     since that is the only style that survives it.
+#   * A substring must appear on the line it suppresses.  The
+#     `llama3-2-11b` entry covered a `llama3-2-90b` hit for as long as
+#     the two shared a line, which its own reason column recorded as
+#     though it were a rule; the formatter split the list and the
+#     suppression stopped covering anything.  One entry per hit, and
+#     never an entry that works by proximity.
+#
+# Both failures are the shape this guard exists to catch, arriving in the
+# guard's own configuration: a suppression that silently stops covering
+# its target reads exactly like a clean scan.
+#
+# So an entry that suppresses nothing is now an error on a full-scope run,
+# and the check names it.  Both failures above happened to be loud, because
+# the hit each stopped covering became a reported leak -- but that is luck,
+# not a property.  An entry whose target line was deleted or reworded away
+# goes on suppressing nothing forever, and nothing in the report says so.
+# If the check names an entry here, do not delete it reflexively: re-read
+# the target line first, because a moved or requoted hit needs the entry
+# corrected, and only a genuinely-gone one needs it removed.
 #
 # Every entry below is a genuine fixture record value or markdown
 # list-item test fixture -- NOT a planning/tracker reference.  Adding a
@@ -20,7 +48,7 @@
 packages/bots/tests/test_knowledge.py	{"title": "Item 1"}	fixture record value
 packages/common/src/dataknobs_common/testing/_core.py	, "name": "Item 	fixture record value (Item 1-4)
 packages/fsm/src/dataknobs_fsm/api/async_simple.py	, 'text': 'Item 	docstring example fixture value (Item 1-3)
-packages/fsm/tests/test_streaming.py	, 'name': 'Item 	fixture record value (Item 1-3)
+packages/fsm/tests/test_streaming.py	, "name": "Item 	fixture record value (Item 1-3)
 packages/llm/tests/benchmarks/test_prompt_benchmarks.py	"Item 0" in result.content	generated benchmark test content
 packages/llm/tests/prompts/test_rag_caching.py	{"content": "Item 	fixture record value (Item 1-2)
 packages/xization/tests/test_content_transformer.py	{"name": "Item 	fixture record value (Item 1-2)
@@ -32,7 +60,8 @@ packages/xization/tests/test_md_constructs.py	* Item 	markdown list-item test fi
 packages/xization/tests/test_md_constructs.py	+ Item 	markdown list-item test fixture
 packages/xization/tests/test_md_constructs.py	assert "Item 	fixture assertion on markdown list content
 packages/data/src/dataknobs_data/backends/elasticsearch.py	per-item 409	HTTP 409 conflict status code in docstring, not a tracker label
-packages/llm/src/dataknobs_llm/llm/providers/bedrock.py	llama3-2-11b	public Llama model-id size tokens (vision family list; line also has llama3-2-90b)
+packages/llm/src/dataknobs_llm/llm/providers/bedrock.py	llama3-2-11b	public Llama model-id size token (vision family list)
+packages/llm/src/dataknobs_llm/llm/providers/bedrock.py	llama3-2-90b	public Llama model-id size token; had shared a line with 11b until the formatter split the list
 packages/llm/tests/test_bedrock_model_binding.py	llama3-2-90b	public Llama model-id in test fixture (meta.llama3-2-90b-instruct)
 packages/llm/tests/test_bedrock_model_binding.py	llama3-1-70b	public Llama model-id in test fixture (meta.llama3-1-70b-instruct)
 tests/test_internal_label_scope.py	Item 116	synthetic label the separator test matches against — the test cannot assert the pattern catches a spelling without writing that spelling

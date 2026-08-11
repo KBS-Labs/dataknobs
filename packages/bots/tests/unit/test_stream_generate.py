@@ -56,10 +56,12 @@ class TestSimpleReasoningStreamGenerate:
     ) -> None:
         """stream_generate() produces the same content as generate()."""
         manager, provider = conversation_manager_pair
-        provider.set_responses([
-            "Response for streaming",
-            "Response for streaming",  # Second call for generate()
-        ])
+        provider.set_responses(
+            [
+                "Response for streaming",
+                "Response for streaming",  # Second call for generate()
+            ]
+        )
 
         await manager.add_message("user", "Hi")
 
@@ -116,9 +118,7 @@ class TestWizardReasoningStreamGenerate:
         await conversation_manager.add_message("user", "hello")
 
         results: list[Any] = []
-        async for item in reasoning.stream_generate(
-            conversation_manager, llm=None, tools=[]
-        ):
+        async for item in reasoning.stream_generate(conversation_manager, llm=None, tools=[]):
             results.append(item)
 
         # Wizard yields a single complete response (not stream chunks)

@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `RequestHelper`'s request body accepts a serialized `str` or `bytes` as well
+  as a mapping. The bodies are sent as `data=`, where a mapping is form-encoded
+  and a string is sent verbatim — which is how the Elasticsearch helper in this
+  package has always passed pre-serialized JSON, against a declared type that
+  admitted only the mapping.
+
+- The five convenience wrappers declare their real return type,
+  `ServerResponse`, rather than `Any`; so does `ElasticsearchIndex._request`.
+  Their docstrings already said so.
+
 ### Fixed
+
+- **`RequestHelper.get` / `post` / `put` / `delete` / `head` sent requests with
+  no timeout at all.** The convenience wrappers spell "unset" as `None` and
+  passed it straight through to `request()`, which spells it as `0` and so
+  never substituted the helper's configured timeout. `timeout=None` reaches
+  `requests` as *wait indefinitely* — on a call the caller believed carried the
+  default it configured. `request()` now treats both spellings as unset, so
+  every wrapper falls back correctly; an explicitly passed timeout still wins.
+
+- **`load_project_vars` could return `None` values and raise `TypeError` when
+  asked to set the environment.** A bare `KEY` line in a `.project_vars` or
+  `.env` file — no `=` at all — is reported by `python-dotenv` as `None`, which
+  the declared `dict[str, str]` return type does not admit and which
+  `os.environ` cannot hold. Such entries are now dropped rather than coerced:
+  `KEY=` remains how an empty value is spelled, so coercing would turn a
+  malformed line into a plausible-looking one.
 
 - Raised the `nltk` floor to `>=3.10.2`, excluding the broken 3.10.1
   release. 3.10.1 shipped an import-security hook (`nltk/inisec.py`) that

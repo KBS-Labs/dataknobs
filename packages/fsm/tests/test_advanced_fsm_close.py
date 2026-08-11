@@ -53,9 +53,7 @@ def _step_to_start_bridge(fsm: AdvancedFSM) -> Any:
     context = fsm.create_context({"value": 1})
     fsm.execute_step_sync(context)
     thread = fsm.fsm.get_sync_bridge()._thread
-    assert thread.is_alive(), (
-        "execute_step_sync did not start the FSM's shared bridge thread"
-    )
+    assert thread.is_alive(), "execute_step_sync did not start the FSM's shared bridge thread"
     return thread
 
 
@@ -82,9 +80,7 @@ async def test_aclose_joins_bridge_thread() -> None:
 
     await fsm.aclose()
 
-    assert not thread.is_alive(), (
-        "AdvancedFSM.aclose() did not join the FSM's shared bridge thread"
-    )
+    assert not thread.is_alive(), "AdvancedFSM.aclose() did not join the FSM's shared bridge thread"
 
 
 def test_context_manager_closes_bridge_thread() -> None:

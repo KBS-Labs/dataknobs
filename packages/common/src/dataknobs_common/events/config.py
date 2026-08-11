@@ -105,10 +105,7 @@ class PostgresEventBusConfig(EventBusConfig):
     def __post_init__(self) -> None:
         safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", self.channel_prefix)
         if not safe_prefix:
-            raise ValueError(
-                f"channel_prefix {self.channel_prefix!r} is empty after "
-                "sanitization"
-            )
+            raise ValueError(f"channel_prefix {self.channel_prefix!r} is empty after sanitization")
         if safe_prefix != self.channel_prefix:
             # Frozen dataclass — bypass the immutability guard to store
             # the sanitized value computed from the caller's input.
@@ -192,9 +189,7 @@ class SqsEventBusConfig(EventBusConfig):
 
     def __post_init__(self) -> None:
         if not self.queue_url:
-            raise ValueError(
-                "SqsEventBusConfig requires a non-empty queue_url"
-            )
+            raise ValueError("SqsEventBusConfig requires a non-empty queue_url")
 
 
 __all__ = [

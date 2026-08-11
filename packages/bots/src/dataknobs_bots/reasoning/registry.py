@@ -130,9 +130,7 @@ def _resolve_reasoning_config_cls(
 # ``config_registries`` is a plain ``Registry`` -> ``allow_overwrite`` (NOT
 # ``override=``, which is this module's ``register_strategy`` /
 # ``PluginRegistry`` param — do not cross the two) keeps re-import idempotent.
-config_registries.register(
-    "reasoning", _resolve_reasoning_config_cls, allow_overwrite=True
-)
+config_registries.register("reasoning", _resolve_reasoning_config_cls, allow_overwrite=True)
 
 
 # ------------------------------------------------------------------

@@ -33,9 +33,7 @@ def _minimal_wizard_yaml() -> dict[str, Any]:
 class TestWizardConfigPathResolution:
     """Tests for config_base_path support in WizardReasoning.from_config()."""
 
-    def test_relative_path_resolved_against_config_base_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_relative_path_resolved_against_config_base_path(self, tmp_path: Path) -> None:
         """Relative wizard_config path should resolve against config_base_path."""
         wizard_dir = tmp_path / "wizards"
         wizard_dir.mkdir()
@@ -51,9 +49,7 @@ class TestWizardConfigPathResolution:
         assert reasoning is not None
         assert reasoning._wizard_fsm is not None
 
-    def test_absolute_path_ignores_config_base_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_absolute_path_ignores_config_base_path(self, tmp_path: Path) -> None:
         """Absolute wizard_config paths should work regardless of config_base_path."""
         wizard_file = tmp_path / "flow.yaml"
         wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
@@ -94,9 +90,7 @@ class TestWizardConfigPathResolution:
         reasoning = WizardReasoning.from_config(config)
         assert reasoning is not None
 
-    def test_base_path_propagated_to_subflow_resolution(
-        self, tmp_path: Path
-    ) -> None:
+    def test_base_path_propagated_to_subflow_resolution(self, tmp_path: Path) -> None:
         """config_base_path should be passed through to loader for subflow resolution."""
         # Create main wizard with a subflow reference
         subflow_dir = tmp_path / "subflows"
@@ -157,9 +151,7 @@ class TestBotConfigBasePathPropagation:
     """Tests for config_base_path propagation from bot config to reasoning."""
 
     @pytest.mark.asyncio
-    async def test_bot_config_base_path_propagated_to_reasoning(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bot_config_base_path_propagated_to_reasoning(self, tmp_path: Path) -> None:
         """config_base_path at bot level should propagate to reasoning config.
 
         Exercises the full DynaBot.from_config() path to verify that
@@ -191,9 +183,7 @@ class TestBotConfigBasePathPropagation:
             await bot.close()
 
     @pytest.mark.asyncio
-    async def test_reasoning_level_base_path_takes_precedence(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_reasoning_level_base_path_takes_precedence(self, tmp_path: Path) -> None:
         """Reasoning-level config_base_path wins over bot-level."""
         from dataknobs_bots.bot.base import DynaBot
 
@@ -266,9 +256,7 @@ class TestDynaBotConfigBuilderBasePath:
         from dataknobs_bots.config.builder import DynaBotConfigBuilder
 
         builder = (
-            DynaBotConfigBuilder()
-            .set_llm("echo", model="test")
-            .set_conversation_storage("memory")
+            DynaBotConfigBuilder().set_llm("echo", model="test").set_conversation_storage("memory")
         )
         result = builder.set_config_base_path("/path/to/configs")
         assert result is builder  # fluent API
@@ -280,9 +268,7 @@ class TestDynaBotConfigBuilderBasePath:
         from dataknobs_bots.config.builder import DynaBotConfigBuilder
 
         builder = (
-            DynaBotConfigBuilder()
-            .set_llm("echo", model="test")
-            .set_conversation_storage("memory")
+            DynaBotConfigBuilder().set_llm("echo", model="test").set_conversation_storage("memory")
         )
         builder.set_config_base_path(Path("/path/to/configs"))
         config = builder.build()

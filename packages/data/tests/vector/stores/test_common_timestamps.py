@@ -34,18 +34,14 @@ class TestTimestampFormat:
         assert store._format_timestamp(dt) == "2026-04-22T14:23:45.123456+00:00"
 
     def test_format_epoch(self):
-        store = _ConcreteStore(
-            {"dimensions": 4, "timestamps": {"format": "epoch"}}
-        )
+        store = _ConcreteStore({"dimensions": 4, "timestamps": {"format": "epoch"}})
         dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         result = store._format_timestamp(dt)
         assert isinstance(result, float)
         assert result == dt.timestamp()
 
     def test_format_datetime(self):
-        store = _ConcreteStore(
-            {"dimensions": 4, "timestamps": {"format": "datetime"}}
-        )
+        store = _ConcreteStore({"dimensions": 4, "timestamps": {"format": "datetime"}})
         dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         assert store._format_timestamp(dt) is dt
 
@@ -98,9 +94,7 @@ class TestInjectTimestamps:
         consumer_meta: dict[str, Any] = {"_created_at": "consumer-value"}
 
         with caplog.at_level(logging.WARNING):
-            result = store._inject_timestamps(
-                consumer_meta, created=dt, updated=dt
-            )
+            result = store._inject_timestamps(consumer_meta, created=dt, updated=dt)
 
         assert result["_created_at"] == "consumer-value"
         # Updated key was not in consumer's dict, so it is injected normally.
@@ -115,19 +109,12 @@ class TestInjectTimestamps:
         dt = datetime(2026, 4, 22, tzinfo=UTC)
 
         with caplog.at_level(logging.WARNING):
-            store._inject_timestamps(
-                {"_created_at": "x"}, created=dt, updated=dt
-            )
-            store._inject_timestamps(
-                {"_created_at": "y"}, created=dt, updated=dt
-            )
-            store._inject_timestamps(
-                {"_created_at": "z"}, created=dt, updated=dt
-            )
+            store._inject_timestamps({"_created_at": "x"}, created=dt, updated=dt)
+            store._inject_timestamps({"_created_at": "y"}, created=dt, updated=dt)
+            store._inject_timestamps({"_created_at": "z"}, created=dt, updated=dt)
 
         collision_records = [
-            r for r in caplog.records
-            if "_created_at" in r.message and "skipped" in r.message
+            r for r in caplog.records if "_created_at" in r.message and "skipped" in r.message
         ]
         assert len(collision_records) == 1, (
             "Collision warning must fire exactly once per key per store "
@@ -146,29 +133,24 @@ class TestInjectTimestamps:
         dt = datetime(2026, 4, 22, tzinfo=UTC)
 
         with caplog.at_level(logging.WARNING):
-            store_a._inject_timestamps(
-                {"_created_at": "x"}, created=dt, updated=dt
-            )
-            store_b._inject_timestamps(
-                {"_created_at": "y"}, created=dt, updated=dt
-            )
+            store_a._inject_timestamps({"_created_at": "x"}, created=dt, updated=dt)
+            store_b._inject_timestamps({"_created_at": "y"}, created=dt, updated=dt)
 
         collision_records = [
-            r for r in caplog.records
-            if "_created_at" in r.message and "skipped" in r.message
+            r for r in caplog.records if "_created_at" in r.message and "skipped" in r.message
         ]
-        assert len(collision_records) == 2, (
-            "Separate store instances must warn independently."
-        )
+        assert len(collision_records) == 2, "Separate store instances must warn independently."
 
     def test_inject_custom_keys(self):
-        store = _ConcreteStore({
-            "dimensions": 4,
-            "timestamps": {
-                "created_key": "freshness.created",
-                "updated_key": "freshness.updated",
-            },
-        })
+        store = _ConcreteStore(
+            {
+                "dimensions": 4,
+                "timestamps": {
+                    "created_key": "freshness.created",
+                    "updated_key": "freshness.updated",
+                },
+            }
+        )
         dt = datetime(2026, 4, 22, tzinfo=UTC)
         result = store._inject_timestamps({}, created=dt, updated=dt)
         assert "freshness.created" in result
@@ -177,9 +159,7 @@ class TestInjectTimestamps:
         assert "_updated_at" not in result
 
     def test_inject_applies_configured_format(self):
-        store = _ConcreteStore(
-            {"dimensions": 4, "timestamps": {"format": "epoch"}}
-        )
+        store = _ConcreteStore({"dimensions": 4, "timestamps": {"format": "epoch"}})
         dt = datetime(2026, 4, 22, 14, 23, 45, tzinfo=UTC)
         result = store._inject_timestamps({}, created=dt, updated=dt)
         assert isinstance(result["_created_at"], float)

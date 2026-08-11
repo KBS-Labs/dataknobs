@@ -7,7 +7,7 @@ from dataknobs_fsm.api.simple import SimpleFSM, process_file
 
 
 # FSM workflow for normalizing text lines from a file
-NORMALIZE_FILE_WORKFLOW_YAML = '''
+NORMALIZE_FILE_WORKFLOW_YAML = """
 name: text_normalization_workflow
 description: Process text lines through normalization pipeline
 
@@ -42,7 +42,7 @@ arcs:
       code: "lambda data, ctx: {**data, 'text': data.get('text', '').lower().strip()}"
     metadata:
       description: Apply normalization and complete processing
-'''
+"""
 
 
 # Parse the YAML workflow once
@@ -61,10 +61,10 @@ def normalize_file_streaming(input_file: str, output_file: str):
         results = fsm.process_stream(
             source=input_file,
             sink=output_file,
-            input_format='text',      # Read as text lines
-            text_field_name='text',   # Each line becomes {'text': 'line content'}
-            chunk_size=1000,          # Process 1000 lines at a time
-            use_streaming=True        # Enable memory-efficient streaming
+            input_format="text",  # Read as text lines
+            text_field_name="text",  # Each line becomes {'text': 'line content'}
+            chunk_size=1000,  # Process 1000 lines at a time
+            use_streaming=True,  # Enable memory-efficient streaming
         )
 
         print(f"Processing completed:")
@@ -87,10 +87,10 @@ def normalize_file_simple(input_file: str, output_file: str):
         fsm_config=WORKFLOW_CONFIG,
         input_file=input_file,
         output_file=output_file,
-        input_format='text',       # Auto-detect or specify format
-        text_field_name='text',    # Field name for text lines
-        chunk_size=5000,           # Larger chunks for better performance
-        use_streaming=True         # Enable streaming for large files
+        input_format="text",  # Auto-detect or specify format
+        text_field_name="text",  # Field name for text lines
+        chunk_size=5000,  # Larger chunks for better performance
+        use_streaming=True,  # Enable streaming for large files
     )
 
     print(f"File processed: {results}")
@@ -107,11 +107,11 @@ def normalize_lines(lines: list[str]) -> list[str]:
     try:
         for line in lines:
             # Process each line through the FSM
-            result = fsm.process({'text': line})
+            result = fsm.process({"text": line})
 
-            if result['success']:
+            if result["success"]:
                 # Extract the normalized text from the result
-                normalized_text = result['data'].get('text', line)
+                normalized_text = result["data"].get("text", line)
                 normalized.append(normalized_text)
             else:
                 print(f"Failed to normalize: {line}")
@@ -132,20 +132,16 @@ def normalize_batch(input_lines: list[str]) -> list[str]:
 
     try:
         # Convert lines to the expected format
-        data = [{'text': line} for line in input_lines]
+        data = [{"text": line} for line in input_lines]
 
         # Process in batches - works in both sync and async contexts now
-        results = fsm.process_batch(
-            data=data,
-            batch_size=100,
-            max_workers=4
-        )
+        results = fsm.process_batch(data=data, batch_size=100, max_workers=4)
 
         # Extract normalized text from results
         normalized = []
         for i, result in enumerate(results):
-            if result['success']:
-                normalized.append(result['data'].get('text', input_lines[i]))
+            if result["success"]:
+                normalized.append(result["data"].get("text", input_lines[i]))
             else:
                 print(f"Failed item {i}: {result.get('error')}")
                 normalized.append(input_lines[i])
@@ -168,7 +164,7 @@ if __name__ == "__main__":
     output_path = "tmp/normalized_output.txt"
 
     # Create sample data
-    with open(input_path, 'w') as f:
+    with open(input_path, "w") as f:
         f.write("  HELLO WORLD  \n")
         f.write("this is a TEST\n")
         f.write("   Mixed   CASE   text   \n")
@@ -196,11 +192,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Example 3: Process individual lines")
     print("=" * 60)
-    test_lines = [
-        "  UPPERCASE TEXT  ",
-        "MiXeD cAsE",
-        "   extra   spaces   "
-    ]
+    test_lines = ["  UPPERCASE TEXT  ", "MiXeD cAsE", "   extra   spaces   "]
     normalized = normalize_lines(test_lines)
     for original, norm in zip(test_lines, normalized):
         print(f"'{original}' -> '{norm}'")

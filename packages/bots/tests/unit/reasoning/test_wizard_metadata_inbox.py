@@ -14,6 +14,7 @@ set. These tests pin the consumer-visible contract:
 - ``greet`` symmetrically consumes the inbox.
 - Writer helper round-trips end-to-end.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -159,9 +160,7 @@ async def test_empty_dict_inbox_is_silent_no_op(caplog) -> None:
     # Empty payload should pop the key (consume-on-read still applies)
     # but NOT log "consumed" — it's a no-op merge.
     assert "_inbox" not in manager.metadata
-    assert not any(
-        "consumed manager.metadata" in rec.message for rec in caplog.records
-    )
+    assert not any("consumed manager.metadata" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +339,12 @@ async def test_non_mapping_payload_warns_and_skips(caplog) -> None:
 
     # Did not crash; key still popped (consume-on-read); state unaffected.
     assert "_inbox" not in manager.metadata
-    assert handle.wizard_state.data == {} or all(
-        k.startswith("_") for k in handle.wizard_state.data
-    ) or "not a dict" not in str(handle.wizard_state.data)
-    assert any(
-        "not a mapping" in rec.message.lower()
-        for rec in caplog.records
+    assert (
+        handle.wizard_state.data == {}
+        or all(k.startswith("_") for k in handle.wizard_state.data)
+        or "not a dict" not in str(handle.wizard_state.data)
     )
+    assert any("not a mapping" in rec.message.lower() for rec in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -369,10 +367,7 @@ async def test_empty_list_payload_warns_not_silent(caplog) -> None:
     await wizard.begin_turn(manager, llm=_dummy_llm(), tools=None)
 
     assert "_inbox" not in manager.metadata
-    assert any(
-        "not a mapping" in rec.message.lower()
-        for rec in caplog.records
-    ), (
+    assert any("not a mapping" in rec.message.lower() for rec in caplog.records), (
         "Empty-list payload must produce the non-mapping WARNING — "
         "the pre-fix ``if not payload:`` check silently swallowed it."
     )

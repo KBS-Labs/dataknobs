@@ -28,11 +28,7 @@ class TestDictResourceAdapter:
 
     def test_get_value_simple(self):
         """Test getting simple top-level values."""
-        data = {
-            "name": "Alice",
-            "age": 30,
-            "active": True
-        }
+        data = {"name": "Alice", "age": 30, "active": True}
         adapter = DictResourceAdapter(data)
 
         assert adapter.get_value("name") == "Alice"
@@ -41,15 +37,7 @@ class TestDictResourceAdapter:
 
     def test_get_value_nested(self):
         """Test getting nested values with dot notation."""
-        data = {
-            "user": {
-                "name": "Bob",
-                "profile": {
-                    "age": 25,
-                    "city": "NYC"
-                }
-            }
-        }
+        data = {"user": {"name": "Bob", "profile": {"age": 25, "city": "NYC"}}}
         adapter = DictResourceAdapter(data)
 
         assert adapter.get_value("user.name") == "Bob"
@@ -77,11 +65,7 @@ class TestDictResourceAdapter:
 
     def test_search_case_insensitive(self):
         """Test case-insensitive search (default)."""
-        data = {
-            "user1": "Alice in Wonderland",
-            "user2": "Bob in NYC",
-            "user3": "alice in Paris"
-        }
+        data = {"user1": "Alice in Wonderland", "user2": "Bob in NYC", "user3": "alice in Paris"}
         adapter = DictResourceAdapter(data, case_sensitive=False)
 
         results = adapter.search("alice")
@@ -90,11 +74,7 @@ class TestDictResourceAdapter:
 
     def test_search_case_sensitive(self):
         """Test case-sensitive search."""
-        data = {
-            "user1": "Alice in Wonderland",
-            "user2": "Bob in NYC",
-            "user3": "alice in Paris"
-        }
+        data = {"user1": "Alice in Wonderland", "user2": "Bob in NYC", "user3": "alice in Paris"}
         adapter = DictResourceAdapter(data, case_sensitive=True)
 
         results = adapter.search("Alice")
@@ -115,10 +95,7 @@ class TestDictResourceAdapter:
 
     def test_search_scoring(self):
         """Test search scoring (exact vs contains)."""
-        data = {
-            "exact": "alice",
-            "contains": "alice in wonderland"
-        }
+        data = {"exact": "alice", "contains": "alice in wonderland"}
         adapter = DictResourceAdapter(data, case_sensitive=False)
 
         results = adapter.search("alice")
@@ -134,10 +111,7 @@ class TestDictResourceAdapter:
 
     def test_search_includes_key(self):
         """Test that search results include the key."""
-        data = {
-            "user.name": "Alice",
-            "user.age": "30"
-        }
+        data = {"user.name": "Alice", "user.age": "30"}
         adapter = DictResourceAdapter(data)
 
         results = adapter.search("Alice")
@@ -148,14 +122,8 @@ class TestDictResourceAdapter:
         """Test searching through nested dictionary data."""
         data = {
             "users": {
-                "alice": {
-                    "email": "alice@example.com",
-                    "role": "admin"
-                },
-                "bob": {
-                    "email": "bob@example.com",
-                    "role": "user"
-                }
+                "alice": {"email": "alice@example.com", "role": "admin"},
+                "bob": {"email": "bob@example.com", "role": "user"},
             }
         }
         adapter = DictResourceAdapter(data)
@@ -169,10 +137,7 @@ class TestDictResourceAdapter:
 
     def test_search_with_min_score(self):
         """Test search with minimum score filter."""
-        data = {
-            "exact": "test",
-            "contains": "this is a test value"
-        }
+        data = {"exact": "test", "contains": "this is a test value"}
         adapter = DictResourceAdapter(data)
 
         # Without min_score, both results returned
@@ -186,11 +151,7 @@ class TestDictResourceAdapter:
 
     def test_search_with_deduplication(self):
         """Test search with deduplication enabled."""
-        data = {
-            "item1": "duplicate value",
-            "item2": "duplicate value",
-            "item3": "unique value"
-        }
+        data = {"item1": "duplicate value", "item2": "duplicate value", "item3": "unique value"}
         adapter = DictResourceAdapter(data)
 
         # Without deduplication
@@ -205,36 +166,17 @@ class TestDictResourceAdapter:
         """Test dictionary flattening."""
         adapter = DictResourceAdapter({})
 
-        nested = {
-            "a": 1,
-            "b": {
-                "c": 2,
-                "d": {
-                    "e": 3
-                }
-            }
-        }
+        nested = {"a": 1, "b": {"c": 2, "d": {"e": 3}}}
 
         flattened = adapter._flatten_dict(nested)
-        assert flattened == {
-            "a": 1,
-            "b.c": 2,
-            "b.d.e": 3
-        }
+        assert flattened == {"a": 1, "b.c": 2, "b.d.e": 3}
 
     def test_batch_get_values(self):
         """Test batch getting multiple values."""
-        data = {
-            "name": "Alice",
-            "age": 30,
-            "city": "NYC"
-        }
+        data = {"name": "Alice", "age": 30, "city": "NYC"}
         adapter = DictResourceAdapter(data)
 
-        results = adapter.batch_get_values(
-            ["name", "age", "country"],
-            default="Unknown"
-        )
+        results = adapter.batch_get_values(["name", "age", "country"], default="Unknown")
 
         assert results["name"] == "Alice"
         assert results["age"] == 30
@@ -263,14 +205,7 @@ class TestAsyncDictResourceAdapter:
     @pytest.mark.asyncio
     async def test_get_value_nested(self):
         """Test getting nested values (async)."""
-        data = {
-            "user": {
-                "name": "Bob",
-                "profile": {
-                    "city": "NYC"
-                }
-            }
-        }
+        data = {"user": {"name": "Bob", "profile": {"city": "NYC"}}}
         adapter = AsyncDictResourceAdapter(data)
 
         assert await adapter.get_value("user.name") == "Bob"
@@ -288,11 +223,7 @@ class TestAsyncDictResourceAdapter:
     @pytest.mark.asyncio
     async def test_search_basic(self):
         """Test basic search (async)."""
-        data = {
-            "user1": "Alice in Wonderland",
-            "user2": "Bob in NYC",
-            "user3": "Alice in Paris"
-        }
+        data = {"user1": "Alice in Wonderland", "user2": "Bob in NYC", "user3": "Alice in Paris"}
         adapter = AsyncDictResourceAdapter(data)
 
         results = await adapter.search("Alice")
@@ -311,17 +242,10 @@ class TestAsyncDictResourceAdapter:
     @pytest.mark.asyncio
     async def test_batch_get_values(self):
         """Test async batch getting multiple values."""
-        data = {
-            "name": "Alice",
-            "age": 30,
-            "city": "NYC"
-        }
+        data = {"name": "Alice", "age": 30, "city": "NYC"}
         adapter = AsyncDictResourceAdapter(data)
 
-        results = await adapter.batch_get_values(
-            ["name", "age", "country"],
-            default="Unknown"
-        )
+        results = await adapter.batch_get_values(["name", "age", "country"], default="Unknown")
 
         assert results["name"] == "Alice"
         assert results["age"] == 30
@@ -353,11 +277,7 @@ class TestDictAdapterEdgeCases:
 
     def test_numeric_values_in_search(self):
         """Test searching for numeric values."""
-        data = {
-            "age": 30,
-            "score": 95.5,
-            "count": 0
-        }
+        data = {"age": 30, "score": 95.5, "count": 0}
         adapter = DictResourceAdapter(data)
 
         results = adapter.search("30")
@@ -369,11 +289,7 @@ class TestDictAdapterEdgeCases:
 
     def test_special_characters_in_keys(self):
         """Test keys with special characters."""
-        data = {
-            "user-name": "Alice",
-            "user_email": "alice@example.com",
-            "user/id": "123"
-        }
+        data = {"user-name": "Alice", "user_email": "alice@example.com", "user/id": "123"}
         adapter = DictResourceAdapter(data)
 
         assert adapter.get_value("user-name") == "Alice"

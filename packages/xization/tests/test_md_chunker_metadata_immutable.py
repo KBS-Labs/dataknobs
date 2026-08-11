@@ -43,8 +43,7 @@ def test_create_chunk_preserves_chunker_node_type(caplog):
     assert chunk.metadata.custom.get("language") == "python"
     # Warning emitted naming node_type.
     assert any(
-        "node_type" in record.message
-        and "immutable" in record.message.lower()
+        "node_type" in record.message and "immutable" in record.message.lower()
         for record in caplog.records
     )
 

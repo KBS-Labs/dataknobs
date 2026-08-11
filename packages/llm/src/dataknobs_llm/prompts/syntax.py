@@ -79,14 +79,14 @@ class TemplateSyntax(Enum):
 # but NOT {{ (literal brace) or {} (empty — positional)
 _FORMAT_VAR_RE = re.compile(
     r"\{"
-    r"(?!"            # negative lookahead: not a literal {{ or empty {}
-    r"\{|"            # not {{
-    r"\})"            # not {}
+    r"(?!"  # negative lookahead: not a literal {{ or empty {}
+    r"\{|"  # not {{
+    r"\})"  # not {}
     r"([a-zA-Z_][a-zA-Z0-9_]*)"  # variable name (group 1)
-    r"(?:"            # optional format spec group
-    r"![sra]"         # conversion flag
+    r"(?:"  # optional format spec group
+    r"![sra]"  # conversion flag
     r"|"
-    r":[^}]*"         # format spec
+    r":[^}]*"  # format spec
     r")?"
     r"\}"
 )
@@ -173,9 +173,7 @@ _JINJA2_FILTER_RE = re.compile(r"\{\{[^}]*\|[^}]*\}\}")
 _JINJA2_FUNCTION_CALL_RE = re.compile(r"\{\{[^}]*\([^)]*\)[^}]*\}\}")
 
 # Simple Jinja2 variable reference: {{ var_name }}
-_JINJA2_SIMPLE_VAR_RE = re.compile(
-    r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}"
-)
+_JINJA2_SIMPLE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 
 def jinja2_to_format(template: str) -> str:
@@ -260,6 +258,7 @@ def jinja2_to_format(template: str) -> str:
 # Syntax detection
 # ---------------------------------------------------------------------------
 
+
 def detect_syntax(template: str) -> TemplateSyntax:
     """Heuristically detect whether a template uses .format() or Jinja2 syntax.
 
@@ -338,6 +337,7 @@ def detect_syntax(template: str) -> TemplateSyntax:
 # Normalization
 # ---------------------------------------------------------------------------
 
+
 def normalize_to_jinja2(template: str, syntax: TemplateSyntax) -> str:
     """Normalize a template to Jinja2 syntax based on its declared syntax.
 
@@ -363,6 +363,7 @@ def normalize_to_jinja2(template: str, syntax: TemplateSyntax) -> str:
 # CLI entry point
 # ============================================================================
 
+
 def _cli_main() -> None:  # pragma: no cover
     """CLI for prompt syntax operations.
 
@@ -386,12 +387,16 @@ def _cli_main() -> None:  # pragma: no cover
         help="Convert a prompt between syntaxes",
     )
     convert_p.add_argument(
-        "--from", dest="from_syntax", required=True,
+        "--from",
+        dest="from_syntax",
+        required=True,
         choices=["format", "jinja2"],
         help="Source syntax",
     )
     convert_p.add_argument(
-        "--to", dest="to_syntax", required=True,
+        "--to",
+        dest="to_syntax",
+        required=True,
         choices=["format", "jinja2"],
         help="Target syntax",
     )
@@ -418,7 +423,8 @@ def _cli_main() -> None:  # pragma: no cover
         help="Validate a prompt against a key's placeholder requirements",
     )
     validate_p.add_argument(
-        "--key", required=True,
+        "--key",
+        required=True,
         help="Prompt key to validate against (e.g. extraction.default.instructions)",
     )
     validate_p.add_argument(
@@ -477,8 +483,7 @@ def _cli_main() -> None:  # pragma: no cover
                 mod_path, func_name = args.library.rsplit(":", 1)
             except ValueError:
                 print(
-                    f"Error: --library must be 'module:function', "
-                    f"got {args.library!r}",
+                    f"Error: --library must be 'module:function', got {args.library!r}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -512,6 +517,7 @@ def _cli_main() -> None:  # pragma: no cover
 
         if default_syntax == "format":
             import string
+
             formatter = string.Formatter()
             try:
                 default_placeholders = {
@@ -523,9 +529,7 @@ def _cli_main() -> None:  # pragma: no cover
                 default_placeholders = set()
         else:
             # Jinja2 — extract {{ var }} patterns (simple heuristic)
-            default_placeholders = set(
-                re.findall(r'\{\{\s*(\w+)\s*\}\}', default_template)
-            )
+            default_placeholders = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", default_template))
 
         if default_placeholders:
             print(f"Expected placeholders: {', '.join(sorted(default_placeholders))}")

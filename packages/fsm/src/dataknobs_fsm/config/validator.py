@@ -9,10 +9,10 @@ from .loader import ConfigLoader
 
 class ConfigValidator:
     """Configuration validation utility."""
-    
+
     def __init__(self):
         self.loader = ConfigLoader()
-    
+
     def validate_file(self, file_path: str) -> List[str]:
         """Validate configuration file.
 
@@ -33,22 +33,22 @@ class ConfigValidator:
         except Exception as e:
             errors.append(str(e))
             return errors
-    
+
     def validate_dict(self, config_dict: Dict[str, Any]) -> List[str]:
         """Validate configuration dictionary.
-        
+
         Args:
             config_dict: Configuration dictionary
-            
+
         Returns:
             List of validation errors (empty if valid)
         """
         errors = []
-        
+
         try:
             validate_config(config_dict)
             return errors
-            
+
         except Exception as e:
             errors.append(str(e))
             return errors

@@ -29,9 +29,7 @@ from dataknobs_common.testing import is_faiss_available
 if is_faiss_available():
     from dataknobs_data.vector.stores.faiss import FaissVectorStore
 
-requires_faiss = pytest.mark.skipif(
-    not is_faiss_available(), reason="faiss not installed"
-)
+requires_faiss = pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed")
 
 
 @requires_faiss
@@ -66,8 +64,7 @@ async def test_upsert_does_not_leak_orphan_metadata():
 
     # metadata_store should hold exactly one entry — no orphan.
     assert len(store.metadata_store) == 1, (
-        f"Orphan metadata leaked on upsert: metadata_store = "
-        f"{store.metadata_store!r}"
+        f"Orphan metadata leaked on upsert: metadata_store = {store.metadata_store!r}"
     )
 
 

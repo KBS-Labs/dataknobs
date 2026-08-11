@@ -99,9 +99,7 @@ class Record:
 
         # Process data first to populate fields
         if data:
-            if isinstance(data, OrderedDict) and all(
-                isinstance(v, Field) for v in data.values()
-            ):
+            if isinstance(data, OrderedDict) and all(isinstance(v, Field) for v in data.values()):
                 self.fields = data
             else:
                 for key, value in data.items():
@@ -201,10 +199,10 @@ class Record:
 
     def get_user_id(self) -> str | None:
         """Get the user-defined ID field value (not the storage ID).
-        
+
         This explicitly returns the value of the 'id' field in the record's data,
         ignoring any storage_id that may be set.
-        
+
         Returns:
             The value of the 'id' field if present, None otherwise
         """
@@ -216,7 +214,7 @@ class Record:
 
     def has_storage_id(self) -> bool:
         """Check if this record has a storage system ID assigned.
-        
+
         Returns:
             True if storage_id is set, False otherwise
         """
@@ -352,7 +350,7 @@ class Record:
 
     def set_value(self, name: str, value: Any) -> None:
         """Set a field's value by name.
-        
+
         Convenience method that creates the field if it doesn't exist.
         """
         if name in self.fields:
@@ -363,7 +361,7 @@ class Record:
     @property
     def data(self) -> dict[str, Any]:
         """Get all field values as a dictionary.
-        
+
         Provides a simple dict-like view of the record's data.
         """
         return {name: field.value for name, field in self.fields.items()}
@@ -471,9 +469,7 @@ class Record:
         """
         # Avoid infinite recursion for special attributes
         if name.startswith("_") or name in ("fields", "metadata", "id"):
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no attribute '{name}'"
-            )
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
         # Check if it's a field
         if hasattr(self, "fields") and name in self.fields:
@@ -531,7 +527,7 @@ class Record:
             result = {}
             for name, field in self.fields.items():
                 # Handle VectorField specially to ensure JSON serialization
-                if hasattr(field, 'to_list') and callable(field.to_list):
+                if hasattr(field, "to_list") and callable(field.to_list):
                     # VectorField has a to_list() method for serialization
                     result[name] = field.to_list()
                 else:
@@ -543,15 +539,9 @@ class Record:
         else:
             # Structured format for serialization
             if include_field_objects:
-                result = {
-                    "fields": {
-                        name: field.to_dict() for name, field in self.fields.items()
-                    }
-                }
+                result = {"fields": {name: field.to_dict() for name, field in self.fields.items()}}
             else:
-                result = {
-                    "fields": {name: field.value for name, field in self.fields.items()}
-                }
+                result = {"fields": {name: field.value for name, field in self.fields.items()}}
             if self.id:
                 result["id"] = self.id
             if include_metadata:
@@ -614,19 +604,20 @@ class Record:
             new_fields = OrderedDict()
             for name, field in self.fields.items():
                 # Preserve the actual field type (Field or VectorField)
-                if hasattr(field, '__class__'):
+                if hasattr(field, "__class__"):
                     # Use the actual class of the field
                     field_class = field.__class__
-                    if field_class.__name__ == 'VectorField':
+                    if field_class.__name__ == "VectorField":
                         # Import VectorField if needed
                         from dataknobs_data.fields import VectorField
+
                         new_fields[name] = VectorField(
                             name=field.name,
                             value=copy.deepcopy(field.value),
-                            dimensions=getattr(field, 'dimensions', None),
-                            source_field=getattr(field, 'source_field', None),
-                            model_name=getattr(field, 'model_name', None),
-                            model_version=getattr(field, 'model_version', None),
+                            dimensions=getattr(field, "dimensions", None),
+                            source_field=getattr(field, "source_field", None),
+                            model_name=getattr(field, "model_name", None),
+                            model_version=getattr(field, "model_version", None),
                             metadata=copy.deepcopy(field.metadata),
                         )
                     else:

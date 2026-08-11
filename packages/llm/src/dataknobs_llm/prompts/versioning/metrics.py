@@ -263,7 +263,7 @@ class MetricsCollector:
                     "avg_rating": m.avg_rating,
                 }
                 for vid, m in all_metrics.items()
-            }
+            },
         }
 
     # ===== Helper Methods =====
@@ -339,9 +339,7 @@ class MetricsCollector:
         """
         valid_metrics = ["success_rate", "avg_rating", "avg_response_time", "avg_tokens"]
         if metric not in valid_metrics:
-            raise ValueError(
-                f"Invalid metric: {metric}. Valid metrics: {', '.join(valid_metrics)}"
-            )
+            raise ValueError(f"Invalid metric: {metric}. Valid metrics: {', '.join(valid_metrics)}")
 
         # Get metrics for all versions
         all_metrics = await self.compare_variants(version_ids)
@@ -408,14 +406,19 @@ class MetricsCollector:
             total = len(bucket_events)
             successes = sum(1 for e in bucket_events if e.success)
 
-            result.append({
-                "time_bucket": bucket_key,
-                "total_uses": total,
-                "success_count": successes,
-                "success_rate": successes / total if total > 0 else 0.0,
-                "avg_response_time": sum(
-                    e.response_time for e in bucket_events if e.response_time
-                ) / total if total > 0 else 0.0,
-            })
+            result.append(
+                {
+                    "time_bucket": bucket_key,
+                    "total_uses": total,
+                    "success_count": successes,
+                    "success_rate": successes / total if total > 0 else 0.0,
+                    "avg_response_time": sum(
+                        e.response_time for e in bucket_events if e.response_time
+                    )
+                    / total
+                    if total > 0
+                    else 0.0,
+                }
+            )
 
         return result

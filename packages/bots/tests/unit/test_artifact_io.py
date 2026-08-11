@@ -227,9 +227,7 @@ class TestBookOperations:
             append_to_book(artifact, filepath)
 
         # All have artifact name "recipe", but we can load by that
-        restored = load_from_book(
-            filepath, name="recipe", artifact_config=RECIPE_CONFIG
-        )
+        restored = load_from_book(filepath, name="recipe", artifact_config=RECIPE_CONFIG)
         assert restored.name == "recipe"
         assert restored.field("recipe_name") == "Cookies"  # first match
 
@@ -239,9 +237,7 @@ class TestBookOperations:
             artifact = _make_recipe(recipe_name=name)
             append_to_book(artifact, filepath)
 
-        restored = load_from_book(
-            filepath, index=1, artifact_config=RECIPE_CONFIG
-        )
+        restored = load_from_book(filepath, index=1, artifact_config=RECIPE_CONFIG)
         assert restored.field("recipe_name") == "Brownies"
 
     def test_load_name_not_found(self, tmp_path: Path) -> None:
@@ -331,9 +327,7 @@ class TestAtomicWrite:
         save_book(artifacts, filepath)
 
         # Each line is valid JSON
-        lines = [
-            line for line in filepath.read_text().strip().split("\n") if line.strip()
-        ]
+        lines = [line for line in filepath.read_text().strip().split("\n") if line.strip()]
         assert len(lines) == 2
         for line in lines:
             data = json.loads(line)

@@ -17,6 +17,7 @@ wrapper over the private :meth:`_classify_sync` core. Same-package
 synchronous callers can dispatch through the sync core directly
 without an event-loop bridge.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -75,9 +76,7 @@ class KeywordIntentClassifier(IntentClassifier):
         phrase_priority: bool = False,
         phrases: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
-        self._vocabulary = (
-            vocabulary if vocabulary is not None else DEFAULT_VOCABULARY
-        )
+        self._vocabulary = vocabulary if vocabulary is not None else DEFAULT_VOCABULARY
         self._tokenizer = tokenizer or default_word_boundary_tokenizer
         self._phrase_priority = phrase_priority
         self._phrases: Mapping[str, frozenset[str]] = phrases or {}
@@ -104,7 +103,9 @@ class KeywordIntentClassifier(IntentClassifier):
         lower = message.lower()
         if self._phrase_priority:
             return self._classify_phrase_priority_sync(
-                lower, intents, message,
+                lower,
+                intents,
+                message,
             )
         return self._classify_first_match_sync(lower, intents, message)
 
@@ -118,12 +119,16 @@ class KeywordIntentClassifier(IntentClassifier):
             keywords = self._keywords_for(spec)
             if any(self._tokenizer(kw.lower(), lower) for kw in keywords):
                 return IntentMatchResult(
-                    intent=spec, extracted=None,
-                    rule_based=True, raw_reply=raw_message,
+                    intent=spec,
+                    extracted=None,
+                    rule_based=True,
+                    raw_reply=raw_message,
                 )
         return IntentMatchResult(
-            intent=None, extracted=None,
-            rule_based=False, raw_reply=raw_message,
+            intent=None,
+            extracted=None,
+            rule_based=False,
+            raw_reply=raw_message,
         )
 
     def _classify_phrase_priority_sync(
@@ -145,14 +150,18 @@ class KeywordIntentClassifier(IntentClassifier):
         # Phrase tier wins outright when unique.
         if len(phrase_matches) == 1:
             return IntentMatchResult(
-                intent=phrase_matches[0], extracted=None,
-                rule_based=True, raw_reply=raw_message,
+                intent=phrase_matches[0],
+                extracted=None,
+                rule_based=True,
+                raw_reply=raw_message,
             )
         if len(phrase_matches) > 1:
             # Same-priority ambiguity at the phrase tier.
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=raw_message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=raw_message,
             )
 
         # No phrase match — fall back to the word tier. (The non-empty
@@ -160,23 +169,26 @@ class KeywordIntentClassifier(IntentClassifier):
         # guaranteed empty here.)
         if len(word_matches) == 1:
             return IntentMatchResult(
-                intent=word_matches[0], extracted=None,
-                rule_based=True, raw_reply=raw_message,
+                intent=word_matches[0],
+                extracted=None,
+                rule_based=True,
+                raw_reply=raw_message,
             )
         if len(word_matches) > 1:
             # Same-priority ambiguity at the word tier.
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=raw_message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=raw_message,
             )
 
         return IntentMatchResult(
-            intent=None, extracted=None,
-            rule_based=False, raw_reply=raw_message,
+            intent=None,
+            extracted=None,
+            rule_based=False,
+            raw_reply=raw_message,
         )
 
     def _keywords_for(self, spec: IntentSpec) -> list[str]:
-        return (
-            list(spec.keywords) if spec.keywords
-            else list(self._vocabulary.get(spec.name, ()))
-        )
+        return list(spec.keywords) if spec.keywords else list(self._vocabulary.get(spec.name, ()))

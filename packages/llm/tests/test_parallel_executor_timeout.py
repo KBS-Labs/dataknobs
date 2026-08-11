@@ -60,9 +60,11 @@ async def test_per_task_timeout_returns_timeout_error(
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
     start = time.monotonic()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello"), timeout=0.05),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello"), timeout=0.05),
+        }
+    )
     elapsed = time.monotonic() - start
 
     assert results["a"].success is False
@@ -77,13 +79,13 @@ async def test_default_timeout_applies_when_per_task_unset(
 ) -> None:
     """Executor-level default_per_task_timeout applies when task.timeout is None."""
     _patch_slow_complete(provider, delay=0.5)
-    executor = ParallelLLMExecutor(
-        provider, max_concurrency=5, default_per_task_timeout=0.05
-    )
+    executor = ParallelLLMExecutor(provider, max_concurrency=5, default_per_task_timeout=0.05)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello")),
+        }
+    )
 
     assert results["a"].success is False
     assert isinstance(results["a"].error, TimeoutError)
@@ -93,14 +95,14 @@ async def test_default_timeout_applies_when_per_task_unset(
 async def test_per_task_timeout_overrides_default(provider: EchoProvider) -> None:
     """Per-task timeout takes precedence over the executor default."""
     _patch_slow_complete(provider, delay=0.2)
-    executor = ParallelLLMExecutor(
-        provider, max_concurrency=5, default_per_task_timeout=2.0
-    )
+    executor = ParallelLLMExecutor(provider, max_concurrency=5, default_per_task_timeout=2.0)
 
     start = time.monotonic()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello"), timeout=0.05),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello"), timeout=0.05),
+        }
+    )
     elapsed = time.monotonic() - start
 
     assert results["a"].success is False
@@ -115,9 +117,11 @@ async def test_no_timeout_default_off(provider: EchoProvider) -> None:
     _patch_slow_complete(provider, delay=0.05)
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello")),
+        }
+    )
 
     assert results["a"].success is True
     assert isinstance(results["a"].value, LLMResponse)
@@ -139,9 +143,11 @@ async def test_timeout_bounds_each_retry_attempt_not_total(
     retry = RetryConfig(max_attempts=3, initial_delay=0.0)
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("hello"), retry=retry, timeout=0.05),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("hello"), retry=retry, timeout=0.05),
+        }
+    )
 
     assert results["a"].success is False
     assert isinstance(results["a"].error, TimeoutError)
@@ -172,12 +178,14 @@ async def test_fail_fast_with_timeouts_cancels_on_first_timeout(
     executor = ParallelLLMExecutor(provider, max_concurrency=5, fail_fast=True)
 
     start = time.monotonic()
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("fast_fail"), timeout=0.05),
-        "b": LLMTask(messages=_msg("slow1")),
-        "c": LLMTask(messages=_msg("slow2")),
-        "d": LLMTask(messages=_msg("slow3")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("fast_fail"), timeout=0.05),
+            "b": LLMTask(messages=_msg("slow1")),
+            "c": LLMTask(messages=_msg("slow2")),
+            "d": LLMTask(messages=_msg("slow3")),
+        }
+    )
     elapsed = time.monotonic() - start
 
     # Resolves shortly after the 50ms timeout, far below the 2s slow-task time.
@@ -198,9 +206,11 @@ async def test_deterministic_task_timeout(provider: EchoProvider) -> None:
         return "done"
 
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
-    results = await executor.execute_mixed({
-        "a": DeterministicTask(fn=slow_async, args=(0.5,), timeout=0.05),
-    })
+    results = await executor.execute_mixed(
+        {
+            "a": DeterministicTask(fn=slow_async, args=(0.5,), timeout=0.05),
+        }
+    )
 
     assert results["a"].success is False
     assert isinstance(results["a"].error, TimeoutError)

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 @dataclass
 class PandasTypeMapping:
     """Mapping configuration for type conversion."""
+
     field_type: FieldType
     pandas_dtype: str | type | np.dtype
     nullable: bool = True
@@ -40,46 +41,42 @@ class TypeMapper:
             FieldType.STRING: PandasTypeMapping(
                 field_type=FieldType.STRING,
                 pandas_dtype="string",  # pd.StringDtype()
-                nullable=True
+                nullable=True,
             ),
             FieldType.INTEGER: PandasTypeMapping(
                 field_type=FieldType.INTEGER,
                 pandas_dtype="Int64",  # pd.Int64Dtype()
-                nullable=True
+                nullable=True,
             ),
             FieldType.FLOAT: PandasTypeMapping(
                 field_type=FieldType.FLOAT,
                 pandas_dtype="Float64",  # pd.Float64Dtype()
-                nullable=True
+                nullable=True,
             ),
             FieldType.BOOLEAN: PandasTypeMapping(
                 field_type=FieldType.BOOLEAN,
                 pandas_dtype="boolean",  # pd.BooleanDtype()
-                nullable=True
+                nullable=True,
             ),
             FieldType.DATETIME: PandasTypeMapping(
                 field_type=FieldType.DATETIME,
                 pandas_dtype="datetime64[ns]",
                 nullable=True,
                 converter=self._to_datetime,
-                reverse_converter=self._from_datetime
+                reverse_converter=self._from_datetime,
             ),
             FieldType.JSON: PandasTypeMapping(
                 field_type=FieldType.JSON,
                 pandas_dtype="object",
                 nullable=True,
                 converter=self._to_json_object,
-                reverse_converter=self._from_json_object
+                reverse_converter=self._from_json_object,
             ),
             FieldType.BINARY: PandasTypeMapping(
-                field_type=FieldType.BINARY,
-                pandas_dtype="object",
-                nullable=True
+                field_type=FieldType.BINARY, pandas_dtype="object", nullable=True
             ),
             FieldType.TEXT: PandasTypeMapping(
-                field_type=FieldType.TEXT,
-                pandas_dtype="string",
-                nullable=True
+                field_type=FieldType.TEXT, pandas_dtype="string", nullable=True
             ),
         }
 
@@ -95,10 +92,10 @@ class TypeMapper:
 
     def field_type_to_pandas(self, field_type: FieldType) -> str | type | np.dtype:
         """Convert FieldType to pandas dtype.
-        
+
         Args:
             field_type: DataKnobs FieldType
-            
+
         Returns:
             Corresponding pandas dtype
         """
@@ -109,10 +106,10 @@ class TypeMapper:
 
     def pandas_to_field_type(self, dtype: str | np.dtype | type) -> FieldType:
         """Infer FieldType from pandas dtype.
-        
+
         Args:
             dtype: Pandas dtype
-            
+
         Returns:
             Corresponding FieldType
         """
@@ -140,11 +137,11 @@ class TypeMapper:
 
     def convert_value_to_pandas(self, value: Any, field_type: FieldType) -> Any:
         """Convert a field value to pandas-compatible format.
-        
+
         Args:
             value: Value to convert
             field_type: Source field type
-            
+
         Returns:
             Pandas-compatible value
         """
@@ -159,11 +156,11 @@ class TypeMapper:
 
     def convert_value_from_pandas(self, value: Any, field_type: FieldType) -> Any:
         """Convert a pandas value to field-compatible format.
-        
+
         Args:
             value: Pandas value
             field_type: Target field type
-            
+
         Returns:
             Field-compatible value
         """
@@ -188,10 +185,10 @@ class TypeMapper:
 
     def infer_field_type_from_value(self, value: Any) -> FieldType:
         """Infer FieldType from a Python value.
-        
+
         Args:
             value: Value to analyze
-            
+
         Returns:
             Inferred FieldType
         """
@@ -228,11 +225,11 @@ class TypeMapper:
 
     def cast_series(self, series: pd.Series, field_type: FieldType) -> pd.Series:
         """Cast a pandas Series to the appropriate dtype for a FieldType.
-        
+
         Args:
             series: Series to cast
             field_type: Target field type
-            
+
         Returns:
             Casted Series
         """
@@ -241,7 +238,7 @@ class TypeMapper:
         try:
             # Special handling for datetime
             if field_type == FieldType.DATETIME:
-                return pd.to_datetime(series, errors='coerce')
+                return pd.to_datetime(series, errors="coerce")
 
             # Special handling for JSON
             if field_type == FieldType.JSON:
@@ -260,7 +257,7 @@ class TypeMapper:
             return pd.Timestamp(value)
         elif isinstance(value, (int, float)):
             # Assume Unix timestamp
-            return pd.Timestamp(value, unit='s')
+            return pd.Timestamp(value, unit="s")
         return value
 
     @staticmethod
@@ -311,10 +308,10 @@ class TypeMapper:
 
     def infer_field_type(self, series: pd.Series) -> str:
         """Infer field type from a pandas Series.
-        
+
         Args:
             series: Series to analyze
-            
+
         Returns:
             Field type string
         """
@@ -331,7 +328,11 @@ class TypeMapper:
             return "datetime"
         elif is_numeric_dtype(non_null):
             # Check if all values are integers
-            if non_null.apply(lambda x: isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())).all():
+            if non_null.apply(
+                lambda x: (
+                    isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())
+                )
+            ).all():
                 return "integer"
             else:
                 return "number"
@@ -339,11 +340,19 @@ class TypeMapper:
             # Check values for special types
             sample = non_null.iloc[0] if len(non_null) > 0 else None
             if sample is not None:
-                if isinstance(sample, (datetime, pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp, pd._libs.tslibs.nattype.NaTType)):
+                if isinstance(
+                    sample,
+                    (
+                        datetime,
+                        pd.Timestamp,
+                        pd._libs.tslibs.timestamps.Timestamp,
+                        pd._libs.tslibs.nattype.NaTType,
+                    ),
+                ):
                     return "datetime"
-                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():  # type: ignore[unreachable]
+                elif hasattr(sample, "__class__") and "date" in sample.__class__.__name__.lower():  # type: ignore[unreachable]
                     return "date"
-                elif hasattr(sample, '__class__') and 'time' in sample.__class__.__name__.lower():
+                elif hasattr(sample, "__class__") and "time" in sample.__class__.__name__.lower():
                     return "time"
                 else:
                     # Other object types
@@ -354,10 +363,10 @@ class TypeMapper:
 
     def get_pandas_dtype(self, field_type: str) -> str:
         """Get pandas dtype for a field type string.
-        
+
         Args:
             field_type: Field type string
-            
+
         Returns:
             Pandas dtype string
         """
@@ -378,11 +387,11 @@ class TypeMapper:
 
     def convert_value(self, value: Any, target_type: str) -> Any:
         """Convert a value to target type.
-        
+
         Args:
             value: Value to convert
             target_type: Target type string
-            
+
         Returns:
             Converted value
         """
@@ -401,7 +410,7 @@ class TypeMapper:
             return str(value)
         elif target_type == "boolean":
             if isinstance(value, str):
-                return value.lower() in ('true', '1', 'yes')
+                return value.lower() in ("true", "1", "yes")
             return bool(value)
         elif target_type == "datetime":
             if isinstance(value, str):
@@ -410,13 +419,13 @@ class TypeMapper:
         elif target_type == "date":
             if isinstance(value, str):
                 return pd.Timestamp(value).date()
-            elif hasattr(value, 'date'):
+            elif hasattr(value, "date"):
                 return value.date()
             return value
         elif target_type == "time":
             if isinstance(value, str):
                 return pd.Timestamp(value).time()
-            elif hasattr(value, 'time'):
+            elif hasattr(value, "time"):
                 return value.time()
             return value
 
@@ -424,11 +433,11 @@ class TypeMapper:
 
     def cast_dataframe_dtypes(self, df: pd.DataFrame, dtype_map: dict[str, str]) -> pd.DataFrame:
         """Cast DataFrame columns to specified dtypes.
-        
+
         Args:
             df: DataFrame to cast
             dtype_map: Dictionary of column: dtype
-            
+
         Returns:
             DataFrame with casted dtypes
         """
@@ -450,17 +459,17 @@ class TypeMapper:
 
     def normalize_timezone(self, series: pd.Series, target_tz: str) -> pd.Series:
         """Normalize timezone for datetime series.
-        
+
         Args:
             series: Datetime series
             target_tz: Target timezone
-            
+
         Returns:
             Series with normalized timezone
         """
         if not is_datetime64_any_dtype(series):
             # Try to convert to datetime first
-            series = pd.to_datetime(series, errors='coerce')
+            series = pd.to_datetime(series, errors="coerce")
 
         # If series is timezone-naive, localize it
         if series.dt.tz is None:
@@ -471,10 +480,10 @@ class TypeMapper:
 
     def get_optimal_dtype(self, series: pd.Series) -> str:
         """Determine optimal dtype for a Series based on its values.
-        
+
         Args:
             series: Series to analyze
-            
+
         Returns:
             Optimal dtype string
         """
@@ -491,7 +500,11 @@ class TypeMapper:
                 return "bool"
 
             # Check for integer
-            if non_null.apply(lambda x: isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())).all():
+            if non_null.apply(
+                lambda x: (
+                    isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())
+                )
+            ).all():
                 # Determine the smallest int type that can hold the values
                 min_val = non_null.min()
                 max_val = non_null.max()
@@ -517,7 +530,7 @@ class TypeMapper:
             # Check for datetime
             try:
                 # Use infer_datetime_format to suppress the warning
-                pd.to_datetime(non_null, format='mixed')
+                pd.to_datetime(non_null, format="mixed")
                 return "datetime64[ns]"
             except (ValueError, TypeError):
                 pass

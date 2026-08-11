@@ -7,6 +7,7 @@ try:
     import duckdb
     from dataknobs_data.factory import AsyncDatabaseFactory, DatabaseFactory
     from dataknobs_data.records import Record
+
     DUCKDB_AVAILABLE = True
 except ImportError:
     DUCKDB_AVAILABLE = False
@@ -15,8 +16,7 @@ except ImportError:
 
 # Skip all tests if DuckDB is not installed
 pytestmark = pytest.mark.skipif(
-    not DUCKDB_AVAILABLE,
-    reason="DuckDB tests require duckdb package (pip install duckdb)"
+    not DUCKDB_AVAILABLE, reason="DuckDB tests require duckdb package (pip install duckdb)"
 )
 
 
@@ -32,6 +32,7 @@ class TestDuckDBFactoryIntegration:
 
         # Verify it's the correct type
         from dataknobs_data.backends.duckdb import SyncDuckDBDatabase
+
         assert isinstance(db, SyncDuckDBDatabase)
 
         # Test basic operations
@@ -57,6 +58,7 @@ class TestDuckDBFactoryIntegration:
 
         # Verify it's the correct type
         from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
+
         assert isinstance(db, AsyncDuckDBDatabase)
 
         # Test basic operations
@@ -76,11 +78,7 @@ class TestDuckDBFactoryIntegration:
         """Test sync factory with custom configuration."""
         factory = DatabaseFactory()
 
-        db = factory.create(
-            backend="duckdb",
-            path=":memory:",
-            table="custom_table"
-        )
+        db = factory.create(backend="duckdb", path=":memory:", table="custom_table")
 
         db.connect()
         assert db.table_name == "custom_table"
@@ -99,11 +97,7 @@ class TestDuckDBFactoryIntegration:
         """Test async factory with custom configuration."""
         factory = AsyncDatabaseFactory()
 
-        db = factory.create(
-            backend="duckdb",
-            path=":memory:",
-            table="async_custom_table"
-        )
+        db = factory.create(backend="duckdb", path=":memory:", table="async_custom_table")
 
         await db.connect()
         assert db.table_name == "async_custom_table"
@@ -123,7 +117,10 @@ class TestDuckDBFactoryIntegration:
 
         info = factory.get_backend_info("duckdb")
 
-        assert info["description"] == "DuckDB database backend for analytical workloads with columnar storage"
+        assert (
+            info["description"]
+            == "DuckDB database backend for analytical workloads with columnar storage"
+        )
         assert info["persistent"] is True
         assert info["vector_support"] is False
         assert "path" in info["config_options"]

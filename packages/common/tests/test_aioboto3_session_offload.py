@@ -169,9 +169,7 @@ async def test_distinct_warm_service_gets_distinct_sessions() -> None:
     warmed sessions.
     """
     s3_session = await create_aioboto3_session(_CREDS)  # default "s3"
-    bedrock_session = await create_aioboto3_session(
-        _CREDS, warm_service="bedrock-runtime"
-    )
+    bedrock_session = await create_aioboto3_session(_CREDS, warm_service="bedrock-runtime")
     assert s3_session is not bedrock_session
 
 
@@ -230,8 +228,6 @@ async def test_warm_only_loads_paginator_for_s3(
     assert paginators == []
 
     clients.clear()
-    await asyncio.to_thread(
-        aws_mod._build_aioboto3_session, {"region_name": "us-east-1"}, "s3"
-    )
+    await asyncio.to_thread(aws_mod._build_aioboto3_session, {"region_name": "us-east-1"}, "s3")
     assert clients == ["s3"]
     assert paginators == [("s3", "list_objects_v2")]

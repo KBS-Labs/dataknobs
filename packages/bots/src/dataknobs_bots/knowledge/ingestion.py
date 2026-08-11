@@ -540,11 +540,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 stacklevel=3,
             )
             if swap_mode is None:
-                return (
-                    IngestSwapMode.CLEAR_FIRST
-                    if clear_existing
-                    else IngestSwapMode.APPEND
-                )
+                return IngestSwapMode.CLEAR_FIRST if clear_existing else IngestSwapMode.APPEND
         if swap_mode is not None:
             return swap_mode
         return IngestSwapMode.CLEAR_FIRST
@@ -604,9 +600,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # swap *before* the INGESTING status write clears the
             # persisted token. No-op when not interrupted.
             await self._reconcile_interrupted_swap(domain_id)
-            await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.INGESTING, ctx=ctx
-            )
+            await self._source.set_ingestion_status(domain_id, IngestionStatus.INGESTING, ctx=ctx)
             logger.info("Starting ingestion for domain: %s", domain_id)
 
             await self._apply_file_ops(
@@ -631,9 +625,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             raise
         finally:
             result.finish()
-            await self._publish_ingest_end(
-                domain_id, result, failed=failed
-            )
+            await self._publish_ingest_end(domain_id, result, failed=failed)
 
         return result
 
@@ -721,18 +713,12 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             return
 
         if swap_mode is IngestSwapMode.CLEAR_FIRST:
-            await self._destination.clear(
-                filter=self._scope_for_tenant({"domain_id": domain_id})
-            )
-            logger.debug(
-                "Cleared existing vectors for domain: %s", domain_id
-            )
+            await self._destination.clear(filter=self._scope_for_tenant({"domain_id": domain_id}))
+            logger.debug("Cleared existing vectors for domain: %s", domain_id)
 
         for path in delete_paths or ():
             await self._destination.clear(
-                filter=self._scope_for_tenant(
-                    {"domain_id": domain_id, "source_path": path}
-                )
+                filter=self._scope_for_tenant({"domain_id": domain_id, "source_path": path})
             )
         if delete_paths:
             logger.debug(
@@ -907,16 +893,8 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 "source_path": list(delete_paths),
             }
             modified_paths = sorted(set(delete_paths) - deleted_set)
-            modified_scope = (
-                {**base, "source_path": modified_paths}
-                if modified_paths
-                else None
-            )
-            deleted_scope = (
-                {**base, "source_path": sorted(deleted_set)}
-                if deleted_set
-                else None
-            )
+            modified_scope = {**base, "source_path": modified_paths} if modified_paths else None
+            deleted_scope = {**base, "source_path": sorted(deleted_set)} if deleted_set else None
         else:
             # Purely additive delta: only brand-new files are embedded.
             # They have no prior generation, so there is nothing to
@@ -929,9 +907,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             deleted_scope = None
 
         if tombstone_scope is not None:
-            await self._destination.update_metadata_where(
-                tombstone_scope, {"_stale": True}
-            )
+            await self._destination.update_metadata_where(tombstone_scope, {"_stale": True})
         await self._source.set_ingestion_status(
             domain_id,
             IngestionStatus.SWAPPING,
@@ -939,8 +915,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             ctx=self._resolve_context(domain_id),
         )
         logger.debug(
-            "Tombstoned existing chunks for domain %s "
-            "(scope=%s, gen=%s)",
+            "Tombstoned existing chunks for domain %s (scope=%s, gen=%s)",
             domain_id,
             tombstone_scope,
             generation,
@@ -957,9 +932,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 extra_metadata=extra_metadata,
             )
         except Exception:
-            await self._rollback_swap(
-                domain_id, generation, modified_scope, deleted_scope
-            )
+            await self._rollback_swap(domain_id, generation, modified_scope, deleted_scope)
             logger.warning(
                 "Tombstone swap failed for domain %s; dropped the "
                 "partial new generation and restored the previous one",
@@ -974,9 +947,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # purely additive delta: nothing was tombstoned, so there
             # is nothing to retire.
             if tombstone_scope is not None:
-                await self._destination.clear(
-                    filter={**tombstone_scope, "_stale": True}
-                )
+                await self._destination.clear(filter={**tombstone_scope, "_stale": True})
             logger.debug(
                 "Retired tombstoned chunks for domain %s (gen=%s)",
                 domain_id,
@@ -987,9 +958,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # and must not be kept. Identical undo to a raised failure
             # — the only difference is the caller does not re-raise;
             # _finalize reports "error".
-            await self._rollback_swap(
-                domain_id, generation, modified_scope, deleted_scope
-            )
+            await self._rollback_swap(domain_id, generation, modified_scope, deleted_scope)
             logger.warning(
                 "Tombstone swap for domain %s completed with %d "
                 "error(s); dropped the incomplete new generation and "
@@ -1028,18 +997,14 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
            state.
         """
         await self._destination.clear(
-            filter=self._scope_for_tenant(
-                {"domain_id": domain_id, "_generation": generation}
-            )
+            filter=self._scope_for_tenant({"domain_id": domain_id, "_generation": generation})
         )
         if modified_scope is not None:
             await self._destination.update_metadata_where(
                 {**modified_scope, "_stale": True}, {"_stale": False}
             )
         if deleted_scope is not None:
-            await self._destination.clear(
-                filter={**deleted_scope, "_stale": True}
-            )
+            await self._destination.clear(filter={**deleted_scope, "_stale": True})
 
     async def _reconcile_interrupted_swap(self, domain_id: str) -> bool:
         """Recover a domain stuck in SWAPPING from a crashed swap.
@@ -1074,10 +1039,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         """
         ctx = self._resolve_context(domain_id)
         info = await self._source.get_info(domain_id, ctx=ctx)
-        if (
-            info is None
-            or info.ingestion_status is not IngestionStatus.SWAPPING
-        ):
+        if info is None or info.ingestion_status is not IngestionStatus.SWAPPING:
             return False
 
         token = info.generation
@@ -1087,13 +1049,9 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         )
         if token:
             await self._destination.clear(
-                filter=self._scope_for_tenant(
-                    {"domain_id": domain_id, "_generation": token}
-                )
+                filter=self._scope_for_tenant({"domain_id": domain_id, "_generation": token})
             )
-        await self._source.set_ingestion_status(
-            domain_id, IngestionStatus.READY, ctx=ctx
-        )
+        await self._source.set_ingestion_status(domain_id, IngestionStatus.READY, ctx=ctx)
         logger.warning(
             "Reconciled an interrupted TOMBSTONE swap for domain %s "
             "(restored previous generation; dropped orphan gen=%s)",
@@ -1116,9 +1074,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         """
         return await self._reconcile_interrupted_swap(domain_id)
 
-    async def _finalize(
-        self, domain_id: str, result: IngestionResult
-    ) -> str:
+    async def _finalize(self, domain_id: str, result: IngestionResult) -> str:
         """Set the terminal ingestion status and log.
 
         Shared tail of :meth:`ingest` and :meth:`ingest_changes` — the
@@ -1133,16 +1089,13 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         error_msg = str(result.errors) if result.errors else None
         await self._source.set_ingestion_status(
             domain_id,
-            IngestionStatus.READY
-            if result.success
-            else IngestionStatus.ERROR,
+            IngestionStatus.READY if result.success else IngestionStatus.ERROR,
             error_msg,
             ctx=self._resolve_context(domain_id),
         )
 
         logger.info(
-            "Ingestion completed for %s: %d files, %d chunks, "
-            "%d deleted, %d errors",
+            "Ingestion completed for %s: %d files, %d chunks, %d deleted, %d errors",
             domain_id,
             result.files_processed,
             result.chunks_created,
@@ -1177,9 +1130,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             domain_id,
             started_at=started_at.isoformat(),
         )
-        await self.lifecycle_callbacks.fire_async(
-            INGEST_DOMAIN_START, payload
-        )
+        await self.lifecycle_callbacks.fire_async(INGEST_DOMAIN_START, payload)
 
     async def _publish_ingest_end(
         self,
@@ -1201,13 +1152,9 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             chunks_created=result.chunks_created,
             files_deleted=result.files_deleted,
             status=status,
-            completed_at=(
-                result.completed_at or datetime.now(UTC)
-            ).isoformat(),
+            completed_at=(result.completed_at or datetime.now(UTC)).isoformat(),
         )
-        await self.lifecycle_callbacks.fire_async(
-            INGEST_DOMAIN_END, payload
-        )
+        await self.lifecycle_callbacks.fire_async(INGEST_DOMAIN_END, payload)
 
     async def ingest_if_changed(
         self,
@@ -1323,9 +1270,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         # status and ``result.finish()`` written a second time here.
         ctx = self._resolve_context(domain_id)
         try:
-            change = await self._source.list_changes_since(
-                domain_id, since_version, ctx=ctx
-            )
+            change = await self._source.list_changes_since(domain_id, since_version, ctx=ctx)
         except InvalidVersionError:
             logger.warning(
                 "Version %s for domain %s predates snapshot "
@@ -1339,9 +1284,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 config=config,
             )
         except Exception as e:
-            logger.error(
-                "Incremental ingestion failed for %s: %s", domain_id, e
-            )
+            logger.error("Incremental ingestion failed for %s: %s", domain_id, e)
             await self._source.set_ingestion_status(
                 domain_id, IngestionStatus.ERROR, str(e), ctx=ctx
             )
@@ -1355,19 +1298,12 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # swap *before* the INGESTING status write clears the
             # persisted token. No-op when not interrupted.
             await self._reconcile_interrupted_swap(domain_id)
-            await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.INGESTING, ctx=ctx
-            )
+            await self._source.set_ingestion_status(domain_id, IngestionStatus.INGESTING, ctx=ctx)
 
-            changed_paths = {f.path for f in change.added} | {
-                f.path for f in change.modified
-            }
+            changed_paths = {f.path for f in change.added} | {f.path for f in change.modified}
             # Modified files' stale chunks must be purged before
             # re-embedding, alongside the deleted ones.
-            delete_paths = sorted(
-                set(change.deleted)
-                | {f.path for f in change.modified}
-            )
+            delete_paths = sorted(set(change.deleted) | {f.path for f in change.modified})
             # Files deleted at the source (not modified) — under
             # TOMBSTONE these must stay gone even on rollback (never
             # resurrected), unlike modified files whose old generation
@@ -1407,18 +1343,14 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
 
         except Exception as e:
             failed = True
-            logger.error(
-                "Incremental ingestion failed for %s: %s", domain_id, e
-            )
+            logger.error("Incremental ingestion failed for %s: %s", domain_id, e)
             await self._source.set_ingestion_status(
                 domain_id, IngestionStatus.ERROR, str(e), ctx=ctx
             )
             raise
         finally:
             result.finish()
-            await self._publish_ingest_end(
-                domain_id, result, failed=failed
-            )
+            await self._publish_ingest_end(domain_id, result, failed=failed)
 
         return result
 

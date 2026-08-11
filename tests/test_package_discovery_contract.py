@@ -61,9 +61,7 @@ def _hostile(tmp_path, tool: str) -> dict[str, str]:
 
 
 def _run(args: list[str], env: dict[str, str] | None = None):
-    return subprocess.run(
-        args, cwd=ROOT, capture_output=True, text=True, env=env, check=False
-    )
+    return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, env=env, check=False)
 
 
 def _assert_failed_deliberately(result, why: str) -> None:
@@ -138,8 +136,7 @@ def test_a_failing_basename_survives_the_substitution_boundary(tmp_path):
     result = _run([str(DISCOVERY), "ordered"], env=_hostile(tmp_path, "basename"))
     _assert_failed_deliberately(
         result,
-        "a failing basename inside discover_packages crossing the substitution "
-        "boundary as success",
+        "a failing basename inside discover_packages crossing the substitution boundary as success",
     )
 
 

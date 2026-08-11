@@ -24,11 +24,13 @@ async def test_error_response_raises(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_mixed_success_and_error_queue(provider: EchoProvider) -> None:
     """Interleaved success and error responses work correctly."""
-    provider.set_responses([
-        text_response("ok first"),
-        ErrorResponse(RuntimeError("fail")),
-        text_response("ok third"),
-    ])
+    provider.set_responses(
+        [
+            text_response("ok first"),
+            ErrorResponse(RuntimeError("fail")),
+            text_response("ok third"),
+        ]
+    )
 
     # First call succeeds
     response1 = await provider.complete("first")
@@ -46,10 +48,12 @@ async def test_mixed_success_and_error_queue(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_error_response_with_call_history(provider: EchoProvider) -> None:
     """Failed calls are tracked in call history."""
-    provider.set_responses([
-        text_response("ok"),
-        ErrorResponse(ValueError("bad input")),
-    ])
+    provider.set_responses(
+        [
+            text_response("ok"),
+            ErrorResponse(ValueError("bad input")),
+        ]
+    )
 
     await provider.complete("first")
     with pytest.raises(ValueError, match="bad input"):

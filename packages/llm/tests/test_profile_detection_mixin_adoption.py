@@ -100,39 +100,21 @@ class TestTrioInheritedNotCopied:
 
     @pytest.mark.parametrize("provider_cls", FULLY_INHERITING)
     def test_openai_ollama_inherit_all_three(self, provider_cls: type) -> None:
-        assert (
-            provider_cls._detect_capabilities
-            is ProfileDetectionMixin._detect_capabilities
-        )
-        assert (
-            provider_cls._detect_constraints
-            is ProfileDetectionMixin._detect_constraints
-        )
+        assert provider_cls._detect_capabilities is ProfileDetectionMixin._detect_capabilities
+        assert provider_cls._detect_constraints is ProfileDetectionMixin._detect_constraints
         assert provider_cls._detect_pricing is ProfileDetectionMixin._detect_pricing
 
     @pytest.mark.parametrize("provider_cls", FULLY_INHERITING)
     def test_openai_ollama_keep_default_lookup_key(self, provider_cls: type) -> None:
-        assert (
-            provider_cls._profile_lookup_key
-            is ProfileDetectionMixin._profile_lookup_key
-        )
+        assert provider_cls._profile_lookup_key is ProfileDetectionMixin._profile_lookup_key
 
     def test_bedrock_inherits_trio_overrides_lookup_key(self) -> None:
         # Bedrock's only variance is the resolve key, so it inherits all three
         # detection methods and overrides the key seam instead of re-copying.
-        assert (
-            BedrockProvider._detect_capabilities
-            is ProfileDetectionMixin._detect_capabilities
-        )
-        assert (
-            BedrockProvider._detect_constraints
-            is ProfileDetectionMixin._detect_constraints
-        )
+        assert BedrockProvider._detect_capabilities is ProfileDetectionMixin._detect_capabilities
+        assert BedrockProvider._detect_constraints is ProfileDetectionMixin._detect_constraints
         assert BedrockProvider._detect_pricing is ProfileDetectionMixin._detect_pricing
-        assert (
-            BedrockProvider._profile_lookup_key
-            is not ProfileDetectionMixin._profile_lookup_key
-        )
+        assert BedrockProvider._profile_lookup_key is not ProfileDetectionMixin._profile_lookup_key
 
     def test_anthropic_inherits_caps_and_pricing_overrides_only_constraints(
         self,
@@ -140,19 +122,12 @@ class TestTrioInheritedNotCopied:
         # Anthropic adds two constraint rules (no inline system, discovered
         # rejected-param union), so it overrides ONLY _detect_constraints and
         # inherits capabilities + pricing + the default lookup key.
-        assert (
-            AnthropicProvider._detect_capabilities
-            is ProfileDetectionMixin._detect_capabilities
-        )
+        assert AnthropicProvider._detect_capabilities is ProfileDetectionMixin._detect_capabilities
         assert AnthropicProvider._detect_pricing is ProfileDetectionMixin._detect_pricing
         assert (
-            AnthropicProvider._detect_constraints
-            is not ProfileDetectionMixin._detect_constraints
+            AnthropicProvider._detect_constraints is not ProfileDetectionMixin._detect_constraints
         )
-        assert (
-            AnthropicProvider._profile_lookup_key
-            is ProfileDetectionMixin._profile_lookup_key
-        )
+        assert AnthropicProvider._profile_lookup_key is ProfileDetectionMixin._profile_lookup_key
 
 
 class TestNoSubstrateBoundProviderReCopiesTrio:
@@ -178,9 +153,7 @@ class TestNoSubstrateBoundProviderReCopiesTrio:
             HuggingFaceProvider,
         }
 
-    @pytest.mark.parametrize(
-        "provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__
-    )
+    @pytest.mark.parametrize("provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__)
     def test_bound_provider_adopts_mixin(self, provider_cls: type) -> None:
         assert issubclass(provider_cls, ProfileDetectionMixin), (
             f"{provider_cls.__name__} supplies a concrete _profile_resolver but "
@@ -188,25 +161,18 @@ class TestNoSubstrateBoundProviderReCopiesTrio:
             "re-copy it."
         )
 
-    @pytest.mark.parametrize(
-        "provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__
-    )
+    @pytest.mark.parametrize("provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__)
     def test_bound_provider_inherits_caps_and_pricing(self, provider_cls: type) -> None:
         # A re-copied method is a distinct function object, so identity fails.
-        assert (
-            provider_cls._detect_capabilities
-            is ProfileDetectionMixin._detect_capabilities
-        ), f"{provider_cls.__name__} re-copies _detect_capabilities"
-        assert (
-            provider_cls._detect_pricing is ProfileDetectionMixin._detect_pricing
-        ), f"{provider_cls.__name__} re-copies _detect_pricing"
+        assert provider_cls._detect_capabilities is ProfileDetectionMixin._detect_capabilities, (
+            f"{provider_cls.__name__} re-copies _detect_capabilities"
+        )
+        assert provider_cls._detect_pricing is ProfileDetectionMixin._detect_pricing, (
+            f"{provider_cls.__name__} re-copies _detect_pricing"
+        )
 
-    @pytest.mark.parametrize(
-        "provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__
-    )
-    def test_overriding_constraints_routes_through_shared_helper(
-        self, provider_cls: type
-    ) -> None:
+    @pytest.mark.parametrize("provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__)
+    def test_overriding_constraints_routes_through_shared_helper(self, provider_cls: type) -> None:
         # A bound provider may override _detect_constraints (Anthropic does), but
         # only by reusing the shared _resolve_profile — never by re-inlining the
         # resolver composition + lookup key, which is the duplication we killed.
@@ -245,9 +211,7 @@ class TestValidateModelPinTemplate:
         # Guard against the invariant becoming vacuous: pin that both shapes are
         # actually exercised by the shipped providers.
         inherits_validate = {
-            c
-            for c in _BOUND_PROVIDERS
-            if c.validate_model is ProfileDetectionMixin.validate_model
+            c for c in _BOUND_PROVIDERS if c.validate_model is ProfileDetectionMixin.validate_model
         }
         overrides_validate = set(_BOUND_PROVIDERS) - inherits_validate
         assert inherits_validate >= {OpenAIProvider, HuggingFaceProvider}
@@ -257,20 +221,15 @@ class TestValidateModelPinTemplate:
             AnthropicProvider,
         }
 
-    @pytest.mark.parametrize(
-        "provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__
-    )
-    def test_inherited_validate_model_has_a_probe_override(
-        self, provider_cls: type
-    ) -> None:
+    @pytest.mark.parametrize("provider_cls", _BOUND_PROVIDERS, ids=lambda c: c.__name__)
+    def test_inherited_validate_model_has_a_probe_override(self, provider_cls: type) -> None:
         # If the provider inherits the mixin's pin-honoring validate_model, it must
         # supply the probe the template calls — otherwise an unpinned validate_model
         # raises NotImplementedError at call time.
         if provider_cls.validate_model is not ProfileDetectionMixin.validate_model:
             return  # facet-resolved: overrides validate_model, no probe needed
         assert (
-            provider_cls._probe_model_available
-            is not ProfileDetectionMixin._probe_model_available
+            provider_cls._probe_model_available is not ProfileDetectionMixin._probe_model_available
         ), (
             f"{provider_cls.__name__} inherits ProfileDetectionMixin.validate_model "
             "but does not override _probe_model_available — an unpinned "
@@ -294,9 +253,7 @@ class TestBedrockLookupKeyCanonicalizes:
         assert key == "anthropic.claude-opus-4-8-20260101-v1:0"
 
     def test_plain_id_is_unchanged(self) -> None:
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0"))
         assert provider._profile_lookup_key(provider.config) == "amazon.nova-pro-v1:0"
 
 

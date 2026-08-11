@@ -215,9 +215,7 @@ class TestBankCoreCheckDuplicate:
             ),
         ]
         # Same name, different amount — still a match on match_fields
-        result = core.check_duplicate(
-            {"name": "flour", "amount": "2 cups"}, existing
-        )
+        result = core.check_duplicate({"name": "flour", "amount": "2 cups"}, existing)
         assert result is not None
 
     def test_union_of_keys_prevents_false_duplicate(self) -> None:
@@ -249,9 +247,7 @@ class TestBankCoreCreateBankRecord:
 
     def test_creates_bank_record_and_db_record(self) -> None:
         core = _make_core()
-        bank_record, db_record = core.create_bank_record(
-            {"name": "flour"}, source_stage="collect"
-        )
+        bank_record, db_record = core.create_bank_record({"name": "flour"}, source_stage="collect")
 
         assert len(bank_record.record_id) == 12
         assert bank_record.data == {"name": "flour"}
@@ -290,9 +286,7 @@ class TestBankCoreCreateUpdatedRecord:
             "created_at": 1000.0,
             "updated_at": 1000.0,
         }
-        updated = core.create_updated_record(
-            {"name": "flour updated"}, existing_meta
-        )
+        updated = core.create_updated_record({"name": "flour updated"}, existing_meta)
         assert updated.data == {"name": "flour updated"}
         meta = updated.metadata
         assert meta["record_id"] == "abc123"
@@ -311,9 +305,7 @@ class TestBankCoreCreateUpdatedRecord:
     def test_no_modified_in_stage_when_empty(self) -> None:
         core = _make_core()
         existing_meta = {"record_id": "abc123"}
-        updated = core.create_updated_record(
-            {"name": "flour"}, existing_meta
-        )
+        updated = core.create_updated_record({"name": "flour"}, existing_meta)
         assert "modified_in_stage" not in updated.metadata
 
 
@@ -498,17 +490,13 @@ class TestBankCoreStorageId:
             "created_at": 1000.0,
             "updated_at": 1000.0,
         }
-        updated = core.create_updated_record(
-            {"name": "flour updated"}, existing_meta
-        )
+        updated = core.create_updated_record({"name": "flour updated"}, existing_meta)
         assert updated.storage_id == "abc123"
 
     def test_create_updated_record_no_record_id_no_storage_id(self) -> None:
         core = _make_core()
         existing_meta = {"created_at": 1000.0, "updated_at": 1000.0}
-        updated = core.create_updated_record(
-            {"name": "flour"}, existing_meta
-        )
+        updated = core.create_updated_record({"name": "flour"}, existing_meta)
         # No record_id in metadata → storage_id not set
         assert updated.storage_id is None
 

@@ -562,16 +562,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # no instance attribute needed.
         filters: list[MergeFilter] = []
         if extraction_grounding and not skip_builtin_grounding:
-            filters.append(SchemaGroundingFilter(
-                overlap_threshold=grounding_overlap_threshold,
-                expansion_config=expansion_config,
-            ))
+            filters.append(
+                SchemaGroundingFilter(
+                    overlap_threshold=grounding_overlap_threshold,
+                    expansion_config=expansion_config,
+                )
+            )
         if merge_filter is not None:
             filters.append(merge_filter)
         if len(filters) > 1:
-            _merge_filter: MergeFilter | None = (
-                CompositeMergeFilter(filters)
-            )
+            _merge_filter: MergeFilter | None = CompositeMergeFilter(filters)
         elif len(filters) == 1:
             _merge_filter = filters[0]
         else:
@@ -582,15 +582,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             unknown = set(recovery_pipeline) - VALID_RECOVERY_STRATEGIES
             if unknown:
                 logger.warning(
-                    "Unknown recovery strategies %s — removing. "
-                    "Valid: %s",
+                    "Unknown recovery strategies %s — removing. Valid: %s",
                     sorted(unknown),
                     sorted(VALID_RECOVERY_STRATEGIES),
                 )
-            _validated_pipeline = [
-                s for s in recovery_pipeline
-                if s in VALID_RECOVERY_STRATEGIES
-            ]
+            _validated_pipeline = [s for s in recovery_pipeline if s in VALID_RECOVERY_STRATEGIES]
         else:
             _validated_pipeline = list(DEFAULT_RECOVERY_PIPELINE)
 
@@ -611,9 +607,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # and per-turn keys (which are implicitly ephemeral).
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
         self._ephemeral_keys: frozenset[str] = (
-            DEFAULT_EPHEMERAL_KEYS
-            | frozenset(config_ephemeral)
-            | self._per_turn_keys
+            DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral) | self._per_turn_keys
         )
 
         # Extraction pipeline — handles extract, normalize, merge,
@@ -659,9 +653,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._default_claimed: bool = False
 
         # Conversation-independent templates (same for every conversation).
-        self._bank_configs: dict[str, dict[str, Any]] = dict(
-            wizard_fsm.settings.get("banks", {})
-        )
+        self._bank_configs: dict[str, dict[str, Any]] = dict(wizard_fsm.settings.get("banks", {}))
         self._artifact_config: dict[str, Any] | None = None
         self._catalog_config: dict[str, Any] | None = None
         self._seed_config: dict[str, Any] | None = None
@@ -729,9 +721,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Build navigation keyword config from wizard-level settings
         nav_settings = wizard_fsm.settings.get("navigation", {})
-        self._navigation_config: NavigationConfig = NavigationConfig.from_dict(
-            nav_settings or {}
-        )
+        self._navigation_config: NavigationConfig = NavigationConfig.from_dict(nav_settings or {})
 
         # Navigation module — handles back/skip/restart, amendments,
         # and conversation tree branching (extracted to WizardNavigator).
@@ -757,9 +747,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # The primary factory is a per-call closure installed by
         # _execute_fsm_step; this fallback handles initial-state entry.
         self._wizard_fsm = wizard_fsm
-        self._wizard_fsm.set_transform_context_factory(
-            self._build_transform_context
-        )
+        self._wizard_fsm.set_transform_context_factory(self._build_transform_context)
 
     # -----------------------------------------------------------------
     # Per-conversation bank-state resolution
@@ -775,9 +763,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         ``self._banks`` / ``self._artifact`` / ``self._catalog`` access sites
         resolve to the active conversation without change.
         """
-        return self._conv_state.setdefault(
-            _active_conversation.get(), _ConvBankState()
-        )
+        return self._conv_state.setdefault(_active_conversation.get(), _ConvBankState())
 
     @property
     def _banks(self) -> dict[str, Any]:
@@ -897,7 +883,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         the render like the other navigation paths.
         """
         result = await self._response.generate_stage_response(
-            manager, llm, stage, state, tools,
+            manager,
+            llm,
+            stage,
+            state,
+            tools,
         )
         return result.response
 
@@ -905,9 +895,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     # MemoryBank management
     # -----------------------------------------------------------------
 
-    def _create_bank_db(
-        self, bank_name: str, cfg: dict[str, Any]
-    ) -> tuple[SyncDatabase, str]:
+    def _create_bank_db(self, bank_name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
         """Create database backend and storage mode for a memory bank.
 
         Args:
@@ -944,9 +932,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Support both flat keys (duplicate_strategy, match_fields) and
         # nested duplicate_detection.{strategy, match_fields}.
         dup_cfg = cfg.get("duplicate_detection", {})
-        dup_strategy = (
-            cfg.get("duplicate_strategy") or dup_cfg.get("strategy", "allow")
-        )
+        dup_strategy = cfg.get("duplicate_strategy") or dup_cfg.get("strategy", "allow")
         match_fields = cfg.get("match_fields") or dup_cfg.get("match_fields")
         db, storage_mode = self._create_bank_db(name, cfg)
         return MemoryBank(
@@ -966,8 +952,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             return
         for name, cfg in self._bank_configs.items():
             self._banks[name] = self._build_bank(name, cfg)
-        logger.debug("Initialised %d memory banks: %s",
-                      len(self._banks), list(self._banks))
+        logger.debug("Initialised %d memory banks: %s", len(self._banks), list(self._banks))
 
     def _restore_banks(self, banks_data: dict[str, Any]) -> None:
         """Restore ``MemoryBank`` instances from persisted data.
@@ -987,9 +972,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if backend != "memory":
                 db, _mode = self._create_bank_db(name, cfg)
                 # The db is built by this wizard for the bank — owned.
-                self._banks[name] = MemoryBank.from_dict(
-                    bank_dict, db=db, owns_db=True
-                )
+                self._banks[name] = MemoryBank.from_dict(bank_dict, db=db, owns_db=True)
             else:
                 self._banks[name] = MemoryBank.from_dict(bank_dict)
         # Build any configured bank absent from the persisted snapshot — a
@@ -1111,19 +1094,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         assert self._artifact_config is not None
         artifact_config = self._artifact_config
-        self._artifact = ArtifactBank.from_config(
-            artifact_config, db_factory=self._create_bank_db
-        )
+        self._artifact = ArtifactBank.from_config(artifact_config, db_factory=self._create_bank_db)
         self._banks = dict(self._artifact.sections)
 
         # Optionally create a catalog for storing/loading artifacts.
         if self._catalog_config:
             from ..memory.catalog import ArtifactBankCatalog
 
-            self._catalog = ArtifactBankCatalog.from_config({
-                **self._catalog_config,
-                "artifact_config": artifact_config,
-            })
+            self._catalog = ArtifactBankCatalog.from_config(
+                {
+                    **self._catalog_config,
+                    "artifact_config": artifact_config,
+                }
+            )
 
         # Optionally seed the artifact from a file.
         if self._seed_config:
@@ -1172,7 +1155,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         try:
             if fmt == "jsonl":
                 data = self._load_jsonl_entry(
-                    source_path, seed_config.get("select"),
+                    source_path,
+                    seed_config.get("select"),
                 )
             else:
                 text = source_path.read_text(encoding="utf-8")
@@ -1193,7 +1177,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 data = temp.compile()
 
             self._artifact.populate_from_compiled(
-                data, source_stage="seed",
+                data,
+                source_stage="seed",
             )
             logger.info(
                 "Seeded artifact '%s' from %s",
@@ -1254,12 +1239,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 if not key.startswith("_") and isinstance(value, str) and value == select:
                     return entry
 
-        available = [
-            entry.get("_artifact_name", "<unnamed>") for entry in entries
-        ]
+        available = [entry.get("_artifact_name", "<unnamed>") for entry in entries]
         raise ValueError(
-            f"No entry matching '{select}' in {path}. "
-            f"Available artifact names: {available}"
+            f"No entry matching '{select}' in {path}. Available artifact names: {available}"
         )
 
     def _sync_artifact_fields(self, state: WizardState) -> None:
@@ -1342,8 +1324,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Filter to only schema-defined fields
         schema_props = StageSchema.from_stage(stage).property_names
         record_data = {
-            k: v for k, v in extracted_data.items()
-            if k in schema_props and v is not None
+            k: v for k, v in extracted_data.items() if k in schema_props and v is not None
         }
 
         if record_data:
@@ -1352,9 +1333,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 # revertable by node-based undo. Without provenance the record
                 # defaults to the root anchor ("") — an ancestor of every
                 # checkpoint — so a later-turn undo would never revert it.
-                source_node_id = (
-                    manager.state.current_node_id if manager.state else ""
-                )
+                source_node_id = manager.state.current_node_id if manager.state else ""
                 bank.add(
                     record_data,
                     source_stage=stage.get("name", ""),
@@ -1382,12 +1361,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # each loop iteration deepens the tree (0 → 0.0 → 0.0.0 …) instead
         # of branching (0, 0.1, 0.2 …).
         await self._navigator.branch_for_revisited_stage(
-            manager, stage.get("name", ""),
+            manager,
+            stage.get("name", ""),
         )
 
         # Render the stage response
         stage_result = await self._response.generate_stage_response(
-            manager, llm, stage, state, tools,
+            manager,
+            llm,
+            stage,
+            state,
+            tools,
         )
         await self._save_wizard_state(manager, state)
         return stage_result.response
@@ -1532,9 +1516,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if hasattr(bank, "undo_to_checkpoint"):
                 bank.undo_to_checkpoint(checkpoint_node_id)
 
-    def _close_conversation_slot(
-        self, conversation_id: _ConvKey, state: _ConvBankState
-    ) -> None:
+    def _close_conversation_slot(self, conversation_id: _ConvKey, state: _ConvBankState) -> None:
         """Close one conversation's memory banks and artifact catalog.
 
         Closes ``state`` directly (not via the ``self._banks`` / ``self._catalog``
@@ -1655,9 +1637,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             self._close_conversation_slot(key, state)
         self._conv_state.clear()
 
-    def _partition_data(
-        self, data: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _partition_data(self, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """Partition a flat working dict into persistent and transient parts.
 
         Keys in ``self._ephemeral_keys`` are routed to transient.  Keys not
@@ -1811,8 +1791,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 extractor = SchemaExtractor.from_env_config(extraction_config)
             except ImportError:
                 logger.warning(
-                    "dataknobs_llm.extraction not available, "
-                    "extraction will be disabled"
+                    "dataknobs_llm.extraction not available, extraction will be disabled"
                 )
 
         # Create hooks if hooks config specified
@@ -1833,13 +1812,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         log_conflicts = wizard_fsm.settings.get("log_conflicts", True)
         extraction_grounding = wizard_fsm.settings.get("extraction_grounding", True)
         grounding_overlap_threshold = wizard_fsm.settings.get(
-            "grounding_overlap_threshold", 0.5,
+            "grounding_overlap_threshold",
+            0.5,
         )
         expansion_config_dict = wizard_fsm.settings.get("expansion_config")
         expansion_config: ValueExpansionConfig | None = (
-            ValueExpansionConfig(**expansion_config_dict)
-            if expansion_config_dict
-            else None
+            ValueExpansionConfig(**expansion_config_dict) if expansion_config_dict else None
         )
 
         # Load custom merge filter if specified
@@ -1848,14 +1826,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if merge_filter_path:
             merge_filter = _load_merge_filter(merge_filter_path)
         skip_builtin_grounding = wizard_fsm.settings.get(
-            "skip_builtin_grounding", False,
+            "skip_builtin_grounding",
+            False,
         )
 
         # Load scope escalation settings
         scope_escalation_config = wizard_fsm.settings.get("scope_escalation", {})
         scope_escalation_enabled = scope_escalation_config.get("enabled", False)
         scope_escalation_scope = scope_escalation_config.get(
-            "escalation_scope", "wizard_session",
+            "escalation_scope",
+            "wizard_session",
         )
         if scope_escalation_scope not in SCOPE_BREADTH:
             logger.warning(
@@ -1874,7 +1854,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             )
             scope_escalation_scope = "wizard_session"
         recent_messages_count = scope_escalation_config.get(
-            "recent_messages_count", 3,
+            "recent_messages_count",
+            3,
         )
 
         # Load field derivation rules
@@ -1904,15 +1885,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Load clarification grouping settings
         clarification_config = recovery_config.get("clarification", {})
-        clarification_groups: list[dict[str, Any]] = (
-            clarification_config.get("groups", [])
-        )
-        clarification_exclude_derivable: bool = (
-            clarification_config.get("exclude_derivable", False)
-        )
-        clarification_template: str | None = (
-            clarification_config.get("template")
-        )
+        clarification_groups: list[dict[str, Any]] = clarification_config.get("groups", [])
+        clarification_exclude_derivable: bool = clarification_config.get("exclude_derivable", False)
+        clarification_template: str | None = clarification_config.get("template")
 
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
@@ -1928,9 +1903,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
                 # Build type definitions from config
                 type_definitions: dict[str, ArtifactTypeDefinition] = {}
-                for def_id, def_config in artifacts_config.get(
-                    "definitions", {}
-                ).items():
+                for def_id, def_config in artifacts_config.get("definitions", {}).items():
                     type_definitions[def_id] = ArtifactTypeDefinition.from_config(
                         def_id, def_config
                     )
@@ -1953,9 +1926,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     len(type_definitions),
                 )
             except ImportError:
-                logger.warning(
-                    "Artifact modules not available, artifact tracking disabled"
-                )
+                logger.warning("Artifact modules not available, artifact tracking disabled")
 
         # Create review executor if review protocols configured
         review_executor = None
@@ -1973,9 +1944,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     protocols=protocols,
                     prompt_resolver=kwargs.get("prompt_resolver"),
                 )
-                logger.info(
-                    "Created review executor with %d protocols", len(protocols)
-                )
+                logger.info("Created review executor with %d protocols", len(protocols))
             except ImportError:
                 logger.warning("Review modules not available, reviews disabled")
 
@@ -2101,7 +2070,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         stage = active_fsm.current_metadata
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
-            manager, llm, stage, wizard_state, tools=[],
+            manager,
+            llm,
+            stage,
+            wizard_state,
+            tools=[],
         )
         response = stage_result.response
 
@@ -2111,8 +2084,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if self._response.can_auto_advance(wizard_state, stage):
             auto_advance_messages = [response.content]
             loop_messages = await self._response.run_auto_advance_loop(
-                wizard_state, active_fsm, stage,
-                skip_first_render=True, llm=llm,
+                wizard_state,
+                active_fsm,
+                stage,
+                skip_first_render=True,
+                llm=llm,
             )
             auto_advance_messages.extend(loop_messages)
 
@@ -2127,12 +2103,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     manager, landing_stage.get("name", "")
                 )
                 stage_result = await self._response.generate_stage_response(
-                    manager, llm, landing_stage, wizard_state, tools=[],
+                    manager,
+                    llm,
+                    landing_stage,
+                    wizard_state,
+                    tools=[],
                 )
                 response = stage_result.response
-                WizardResponder.prepend_messages_to_response(
-                    response, auto_advance_messages
-                )
+                WizardResponder.prepend_messages_to_response(response, auto_advance_messages)
 
             # Clear skip_extraction — the user's first message after greet()
             # IS directed at the landing stage (unlike generate() auto-advance
@@ -2183,7 +2161,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             :class:`WizardTurnHandle` with wizard state and user message.
         """
         handle = WizardTurnHandle(
-            manager=manager, llm=llm, tools=tools, kwargs=kwargs,
+            manager=manager,
+            llm=llm,
+            tools=tools,
+            kwargs=kwargs,
         )
 
         # Get or restore wizard state
@@ -2206,8 +2187,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         handle.user_message = self._get_last_user_message(manager)
 
         logger.debug(
-            "Wizard generate: stage='%s', completed=%s, "
-            "data_keys=%s, history=%s, subflow_depth=%d",
+            "Wizard generate: stage='%s', completed=%s, data_keys=%s, history=%s, subflow_depth=%d",
             wizard_state.current_stage,
             wizard_state.completed,
             list(wizard_state.data.keys()),
@@ -2218,13 +2198,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Handle post-completion amendments
         if wizard_state.completed and self._allow_amendments:
             amendment_response = await self._navigator.handle_amendment(
-                handle.user_message, wizard_state, manager, llm, tools,
+                handle.user_message,
+                wizard_state,
+                manager,
+                llm,
+                tools,
             )
             if amendment_response:
                 await self._save_wizard_state(manager, wizard_state)
                 handle.early_response = amendment_response
                 await self._fire_turn_end_hook(
-                    manager, wizard_state, reason="amendment",
+                    manager,
+                    wizard_state,
+                    reason="amendment",
                 )
                 return handle
 
@@ -2241,19 +2227,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # the user's message is processed by the fresh first stage
         # (extraction, transitions, etc.) rather than the stale ReAct
         # loop on the old stage.
-        _should_auto_restart = (
-            (wizard_state.completed and not self._allow_amendments)
-            or (
-                not wizard_state.completed
-                and self._artifact is not None
-                and self._artifact.is_finalized
-            )
+        _should_auto_restart = (wizard_state.completed and not self._allow_amendments) or (
+            not wizard_state.completed
+            and self._artifact is not None
+            and self._artifact.is_finalized
         )
 
         if _should_auto_restart:
             logger.info(
-                "Auto-restarting wizard (completed=%s, "
-                "artifact_finalized=%s, amendments=%s)",
+                "Auto-restarting wizard (completed=%s, artifact_finalized=%s, amendments=%s)",
                 wizard_state.completed,
                 self._artifact.is_finalized if self._artifact else False,
                 self._allow_amendments,
@@ -2264,9 +2246,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # Branch the conversation tree so the new recipe's context
             # starts fresh — the LLM won't see the old recipe's detailed
             # tool calls and record-level operations.
-            await self._navigator.branch_for_revisited_stage(
-                manager, wizard_state.current_stage
-            )
+            await self._navigator.branch_for_revisited_stage(manager, wizard_state.current_stage)
 
         # Handle navigation commands
         nav_result = await self._navigator.handle_navigation(
@@ -2276,7 +2256,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             await self._save_wizard_state(manager, wizard_state)
             handle.early_response = nav_result
             await self._fire_turn_end_hook(
-                manager, wizard_state, reason="navigation",
+                manager,
+                wizard_state,
+                reason="navigation",
             )
             return handle
 
@@ -2369,7 +2351,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             and not _collection_done_signal
         ):
             collection_intent = WizardExtractor.classify_collection_intent(
-                user_message, stage,
+                user_message,
+                stage,
             )
             if collection_intent == "help":
                 _collection_help = True
@@ -2422,7 +2405,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             result.early_response = response
             result.action = "collection_help"
             await self._fire_turn_end_hook(
-                manager, wizard_state, reason="collection_help",
+                manager,
+                wizard_state,
+                reason="collection_help",
             )
             return result
         else:
@@ -2433,9 +2418,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # (e.g. "help", "confused") can skip extraction entirely
             # and trigger transitions via transition conditions.
             if stage.get("intent_detection"):
-                await self._extraction.detect_intent(
-                    user_message, stage, wizard_state, llm
-                )
+                await self._extraction.detect_intent(user_message, stage, wizard_state, llm)
 
             # If an intent was detected, skip extraction/validation and
             # proceed to transition evaluation so the detour can fire.
@@ -2443,7 +2426,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 # Run the shared extraction pipeline (extract, normalize,
                 # merge, defaults, derivations, recovery).
                 pipeline_result = await self._extraction.run_extraction_pipeline(
-                    user_message, stage, wizard_state, llm,
+                    user_message,
+                    stage,
+                    wizard_state,
+                    llm,
                     manager=manager,
                 )
                 extraction = pipeline_result.extraction
@@ -2461,24 +2447,30 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
                     if wizard_state.clarification_attempts >= 3:
                         response = await self._response.generate_restart_offer(
-                            manager, llm, stage, extraction.errors,
-                            tools=tools, wizard_state=wizard_state,
+                            manager,
+                            llm,
+                            stage,
+                            extraction.errors,
+                            tools=tools,
+                            wizard_state=wizard_state,
                         )
                     else:
-                        response = (
-                            await self._response.generate_clarification_response(
-                                manager, llm, stage, extraction.errors,
-                                tools=tools, wizard_state=wizard_state,
-                            )
+                        response = await self._response.generate_clarification_response(
+                            manager,
+                            llm,
+                            stage,
+                            extraction.errors,
+                            tools=tools,
+                            wizard_state=wizard_state,
                         )
 
-                    self._response.add_wizard_metadata(
-                        response, wizard_state, stage
-                    )
+                    self._response.add_wizard_metadata(response, wizard_state, stage)
                     result.early_response = response
                     result.action = "clarification"
                     await self._fire_turn_end_hook(
-                        manager, wizard_state, reason="clarification",
+                        manager,
+                        wizard_state,
+                        reason="clarification",
                     )
                     return result
 
@@ -2512,7 +2504,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         result.early_response = col_response
                         result.action = "collection_loop"
                         await self._fire_turn_end_hook(
-                            manager, wizard_state, reason="collection_loop",
+                            manager,
+                            wizard_state,
+                            reason="collection_loop",
                         )
                         return result
 
@@ -2520,7 +2514,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 # evaluating transitions.  The evaluator owns the
                 # decision matrix and snapshot lifecycle.
                 evaluation = self._confirmation.evaluate(
-                    stage, wizard_state, new_data_keys,
+                    stage,
+                    wizard_state,
+                    new_data_keys,
                 )
 
                 if evaluation.should_save_snapshot and not evaluation.should_confirm:
@@ -2531,12 +2527,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     self._confirmation.save_snapshot(stage, wizard_state)
 
                 if evaluation.should_confirm:
-                    render_count = wizard_state.increment_render_count(
-                        stage_name
-                    )
+                    render_count = wizard_state.increment_render_count(stage_name)
                     if evaluation.should_save_snapshot:
                         self._confirmation.save_snapshot(
-                            stage, wizard_state,
+                            stage,
+                            wizard_state,
                         )
                     logger.debug(
                         "Confirmation at stage '%s' — keys=%s "
@@ -2547,28 +2542,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         evaluation.snapshot_diff_keys,
                         render_count,
                     )
-                    confirmation_content = (
-                        self._response.build_confirmation_content(
-                            stage,
-                            wizard_state,
-                            evaluation.confirm_keys,
-                        )
+                    confirmation_content = self._response.build_confirmation_content(
+                        stage,
+                        wizard_state,
+                        evaluation.confirm_keys,
                     )
-                    response = self._response.create_template_response(
-                        confirmation_content
-                    )
-                    self._response.add_wizard_metadata(
-                        response, wizard_state, stage
-                    )
+                    response = self._response.create_template_response(confirmation_content)
+                    self._response.add_wizard_metadata(response, wizard_state, stage)
                     # Persist confirmation to conversation history so the
                     # LLM sees it on subsequent turns (matches the old
                     # generate_stage_response path via
                     # _resolve_template_content).
-                    wizard_snapshot = {
-                        "wizard": self._build_wizard_metadata(
-                            wizard_state
-                        )
-                    }
+                    wizard_snapshot = {"wizard": self._build_wizard_metadata(wizard_state)}
                     await manager.add_message(
                         role="assistant",
                         content=confirmation_content,
@@ -2578,7 +2563,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     result.early_response = response
                     result.action = "confirmation"
                     await self._fire_turn_end_hook(
-                        manager, wizard_state, reason="confirmation",
+                        manager,
+                        wizard_state,
+                        reason="confirmation",
                     )
                     return result
 
@@ -2592,14 +2579,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         # Save state before returning validation error
                         await self._save_wizard_state(manager, wizard_state)
                         response = await self._response.generate_validation_response(
-                            manager, llm, stage, validation_errors,
-                            tools=tools, wizard_state=wizard_state,
+                            manager,
+                            llm,
+                            stage,
+                            validation_errors,
+                            tools=tools,
+                            wizard_state=wizard_state,
                         )
                         self._response.add_wizard_metadata(response, wizard_state, stage)
                         result.early_response = response
                         result.action = "validation_error"
                         await self._fire_turn_end_hook(
-                            manager, wizard_state, reason="validation_error",
+                            manager,
+                            wizard_state,
+                            reason="validation_error",
                         )
                         return result
 
@@ -2628,10 +2621,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         value = wizard_state.data.get(state_key)
                         if value is not None:
                             params[param_name] = value
-                    specs.append(ToolCallSpec(
-                        name=trm_entry.tool_name,
-                        parameters=params,
-                    ))
+                    specs.append(
+                        ToolCallSpec(
+                            name=trm_entry.tool_name,
+                            parameters=params,
+                        )
+                    )
                 result.pending_tool_calls = specs
                 result.needs_tool_execution = True
                 handle.tool_result_mapping = parsed_entries
@@ -2674,9 +2669,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Trigger stage exit hook if configured
         if self._hooks:
-            await self._hooks.trigger_exit(
-                wizard_state.current_stage, wizard_state.data
-            )
+            await self._hooks.trigger_exit(wizard_state.current_stage, wizard_state.data)
 
         # Update stage-exit tasks before leaving
         update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
@@ -2725,9 +2718,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         ):
             active_fsm = self._subflows.get_active_fsm()
             new_stage = active_fsm.current_metadata
-            await self._navigator.branch_for_revisited_stage(
-                manager, new_stage.get("name", "")
-            )
+            await self._navigator.branch_for_revisited_stage(manager, new_stage.get("name", ""))
             return FinalizePreambleResult(
                 wizard_state=wizard_state,
                 manager=manager,
@@ -2777,9 +2768,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         active_fsm = self._subflows.get_active_fsm()
         new_stage = active_fsm.current_metadata
         if new_stage.get("name") != from_stage:
-            await self._navigator.branch_for_revisited_stage(
-                manager, new_stage.get("name", "")
-            )
+            await self._navigator.branch_for_revisited_stage(manager, new_stage.get("name", ""))
 
         return FinalizePreambleResult(
             wizard_state=wizard_state,
@@ -2824,8 +2813,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # ── Subflow push: generate response and return ───────────
         if pre.subflow_pushed:
             stage_result = await self._response.generate_stage_response(
-                pre.manager, pre.llm, pre.subflow_new_stage,
-                pre.wizard_state, pre.tools, track_render=False,
+                pre.manager,
+                pre.llm,
+                pre.subflow_new_stage,
+                pre.wizard_state,
+                pre.tools,
+                track_render=False,
             )
             await self._save_wizard_state(pre.manager, pre.wizard_state)
             await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
@@ -2833,14 +2826,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # ── Normal path: generate response with lifecycle handling ─
         stage_result = await self._response.generate_stage_response(
-            pre.manager, pre.llm, pre.new_stage, pre.wizard_state, pre.tools,
+            pre.manager,
+            pre.llm,
+            pre.new_stage,
+            pre.wizard_state,
+            pre.tools,
         )
         response = stage_result.response
 
         # Prepend any messages collected from intermediate auto-advance stages
         if pre.auto_advance_messages:
             WizardResponder.prepend_messages_to_response(
-                response, pre.auto_advance_messages,
+                response,
+                pre.auto_advance_messages,
             )
 
         # Check for tool-initiated restart (RestartWizardTool signal).
@@ -2849,7 +2847,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if stage_result.tool_restart_requested:
             logger.info("Wizard restart signaled by restart_wizard tool")
             response = await self._navigator.execute_restart(
-                pre.user_message, pre.wizard_state, pre.manager, pre.llm,
+                pre.user_message,
+                pre.wizard_state,
+                pre.manager,
+                pre.llm,
             )
 
         # Check for tool-initiated completion (CompleteWizardTool signal)
@@ -2922,8 +2923,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if pre.subflow_pushed:
                 stream_ctx = StreamStageContext()
                 async for chunk in self._response.stream_generate_stage_response(
-                    pre.manager, pre.llm, pre.subflow_new_stage,
-                    pre.wizard_state, pre.tools, stream_ctx,
+                    pre.manager,
+                    pre.llm,
+                    pre.subflow_new_stage,
+                    pre.wizard_state,
+                    pre.tools,
+                    stream_ctx,
                     track_render=False,
                 ):
                     yield chunk
@@ -2942,8 +2947,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # Stream stage response.
             stream_ctx = StreamStageContext()
             async for chunk in self._response.stream_generate_stage_response(
-                pre.manager, pre.llm, pre.new_stage, pre.wizard_state,
-                pre.tools, stream_ctx,
+                pre.manager,
+                pre.llm,
+                pre.new_stage,
+                pre.wizard_state,
+                pre.tools,
+                stream_ctx,
             ):
                 yield chunk
 
@@ -2959,7 +2968,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if stream_ctx.tool_restart_requested:
                 logger.info("Wizard restart signaled by restart_wizard tool (streaming)")
                 await self._navigator.restart_cleanup(
-                    pre.wizard_state, pre.user_message,
+                    pre.wizard_state,
+                    pre.user_message,
                 )
 
             # Check for tool-initiated completion
@@ -2993,8 +3003,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # already-completed normal path.
             if not state_saved:
                 await self._fire_turn_end_hook(
-                    pre.manager, pre.wizard_state,
-                    reason="abandoned", state_saved=False,
+                    pre.manager,
+                    pre.wizard_state,
+                    reason="abandoned",
+                    state_saved=False,
                 )
             raise
 
@@ -3182,7 +3194,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if extract_mode:
                 # Extraction mode: run the full pipeline
                 pipeline_result = await self._extraction.run_extraction_pipeline(
-                    user_input, stage, state, llm,
+                    user_input,
+                    stage,
+                    state,
+                    llm,
                 )
             else:
                 # Dict mode: direct merge (existing behavior)
@@ -3190,9 +3205,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
             # Exit hook
             if self._hooks:
-                await self._hooks.trigger_exit(
-                    state.current_stage, state.data
-                )
+                await self._hooks.trigger_exit(state.current_stage, state.data)
             update_stage_exit_tasks(state, state.current_stage)
 
             # Pre-transition preparation: derivations, routing transforms,
@@ -3224,21 +3237,24 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         raw_suggestions = active_fsm.get_stage_suggestions()
         nav_context = {
             "can_skip": active_fsm.can_skip(),
-            "can_go_back": (
-                active_fsm.can_go_back() and len(state.history) > 1
-            ),
+            "can_go_back": (active_fsm.can_go_back() and len(state.history) > 1),
         }
 
         advance_result = WizardAdvanceResult(
             state=state,
             stage_name=state.current_stage,
             stage_prompt=self._renderer.render(
-                raw_prompt, stage_meta, state,
-                extra_context=nav_context, fallback=raw_prompt,
+                raw_prompt,
+                stage_meta,
+                state,
+                extra_context=nav_context,
+                fallback=raw_prompt,
             ),
             stage_schema=StageSchema.from_stage(stage_meta).raw or None,
             suggestions=self._renderer.render_list(
-                raw_suggestions, stage_meta, state,
+                raw_suggestions,
+                stage_meta,
+                state,
             ),
             can_skip=active_fsm.can_skip(),
             can_go_back=active_fsm.can_go_back() and len(state.history) > 1,
@@ -3247,15 +3263,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             from_stage=from_stage if transitioned else None,
             auto_advance_messages=auto_advance_messages,
             metadata=metadata,
-            extraction=(
-                pipeline_result.extraction if pipeline_result else None
-            ),
-            missing_fields=(
-                pipeline_result.missing_fields if pipeline_result else None
-            ),
-            changed_fields=(
-                pipeline_result.new_data_keys if pipeline_result else None
-            ),
+            extraction=(pipeline_result.extraction if pipeline_result else None),
+            missing_fields=(pipeline_result.missing_fields if pipeline_result else None),
+            changed_fields=(pipeline_result.new_data_keys if pipeline_result else None),
         )
 
         # Fire turn-lifecycle ``on_turn_end`` on the non-conversational
@@ -3263,7 +3273,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # ConversationManager); consumers depending on the manager
         # filter on ``reason`` or check for presence.
         await self._fire_turn_end_hook(
-            None, state, reason="advance",
+            None,
+            state,
+            reason="advance",
         )
 
         return advance_result
@@ -3347,11 +3359,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if self._hooks is None:
             self._hooks = WizardHooks()
 
-        inbox_keys: list[str] = (
-            [inbox_key]
-            if isinstance(inbox_key, str)
-            else list(inbox_key)
-        )
+        inbox_keys: list[str] = [inbox_key] if isinstance(inbox_key, str) else list(inbox_key)
         inbox_hook = make_metadata_inbox_hook(
             inbox_keys=inbox_keys,
             merge_fn=self.config.inbox_merge_fn,
@@ -3474,26 +3482,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if wizard_data.get("fsm_state"):
             fsm_state = wizard_data["fsm_state"]
             # Restore transitions from serialized data
-            transitions = [
-                TransitionRecord.from_dict(t)
-                for t in fsm_state.get("transitions", [])
-            ]
+            transitions = [TransitionRecord.from_dict(t) for t in fsm_state.get("transitions", [])]
             # Restore tasks from serialized data
             tasks_data = fsm_state.get("tasks", {})
-            tasks = (
-                WizardTaskList.from_dict(tasks_data)
-                if tasks_data
-                else WizardTaskList()
-            )
+            tasks = WizardTaskList.from_dict(tasks_data) if tasks_data else WizardTaskList()
             # Restore subflow stack from serialized data
             subflow_stack = [
-                SubflowContext.from_dict(s)
-                for s in fsm_state.get("subflow_stack", [])
+                SubflowContext.from_dict(s) for s in fsm_state.get("subflow_stack", [])
             ]
             state = WizardState(
-                current_stage=fsm_state.get(
-                    "current_stage", self._fsm.current_stage
-                ),
+                current_stage=fsm_state.get("current_stage", self._fsm.current_stage),
                 data=copy.deepcopy(fsm_state.get("data", {})),
                 history=list(fsm_state.get("history", [])),
                 completed=fsm_state.get("completed", False),
@@ -3628,10 +3626,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 state,
                 extra_context={
                     "can_skip": active_fsm.can_skip(),
-                    "can_go_back": (
-                        active_fsm.can_go_back()
-                        and len(state.history) > 1
-                    ),
+                    "can_go_back": (active_fsm.can_go_back() and len(state.history) > 1),
                 },
                 fallback=active_fsm.get_stage_prompt(),
             ),
@@ -3647,9 +3642,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             subflow_stage_meta = active_fsm.current_metadata
             metadata["subflow_stage"] = {
                 "name": state.current_stage,
-                "label": subflow_stage_meta.get(
-                    "label", state.current_stage
-                ),
+                "label": subflow_stage_meta.get("label", state.current_stage),
             }
 
         return metadata
@@ -3684,18 +3677,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             "data": sanitize_for_json(state.data, on_drop="warn"),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
-            "transitions": [
-                sanitize_for_json(t, on_drop="warn") for t in state.transitions
-            ],
+            "transitions": [sanitize_for_json(t, on_drop="warn") for t in state.transitions],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in state.subflow_stack],
         }
         # Persist MemoryBank data alongside FSM state
         if self._banks:
-            wizard_meta["banks"] = {
-                name: bank.to_dict() for name, bank in self._banks.items()
-            }
+            wizard_meta["banks"] = {name: bank.to_dict() for name, bank in self._banks.items()}
         # Persist ArtifactBank data alongside banks
         if self._artifact:
             wizard_meta["artifact"] = self._artifact.to_dict()
@@ -3706,15 +3695,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # (stage, history, data, transitions) and fits naturally as
         # per-node metadata.
         if hasattr(manager, "state") and manager.state is not None:
-            current_node = get_node_by_id(
-                manager.state.message_tree, manager.state.current_node_id
-            )
+            current_node = get_node_by_id(manager.state.message_tree, manager.state.current_node_id)
             if current_node is not None and hasattr(current_node, "data"):
                 node_data = current_node.data
                 if isinstance(node_data, ConversationNode):
-                    node_data.metadata["wizard_fsm_state"] = wizard_meta[
-                        "fsm_state"
-                    ]
+                    node_data.metadata["wizard_fsm_state"] = wizard_meta["fsm_state"]
 
         # Persist so conversation-level metadata is up to date in storage.
         # Without this, the metadata written by manager.complete() /
@@ -3759,7 +3744,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     # both generate() (conversational path) and advance() (non-conversational
     # path).  Each was extracted from inline code that was duplicated across
     # generate(), WizardNavigator._execute_skip(), and WizardNavigator._execute_back().
-
 
     async def _execute_fsm_step(
         self,
@@ -3874,9 +3858,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Record transition if stage changed
         if to_stage != from_stage:
-            condition_expr = active_fsm.get_transition_condition(
-                from_stage, to_stage
-            )
+            condition_expr = active_fsm.get_transition_condition(from_stage, to_stage)
             transition = create_transition_record(
                 from_stage=from_stage,
                 to_stage=to_stage,
@@ -3962,13 +3944,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # 2. Re-extraction
         re_extracted = await self._run_post_transition_re_extraction(
-            state, from_stage, user_message,
-            llm=llm, manager=manager,
+            state,
+            from_stage,
+            user_message,
+            llm=llm,
+            manager=manager,
         )
 
         # 3. Post-transition lifecycle (subflow pop, auto-advance, hooks)
         return await self._run_post_transition_lifecycle(
-            state, llm=llm, after_re_extraction=re_extracted,
+            state,
+            llm=llm,
+            after_re_extraction=re_extracted,
         )
 
     async def _run_post_transition_lifecycle(
@@ -4006,7 +3993,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
         auto_advance_messages = await self._response.run_auto_advance_loop(
-            state, active_fsm, stage, llm=llm,
+            state,
+            active_fsm,
+            stage,
+            llm=llm,
             after_re_extraction=after_re_extraction,
         )
 
@@ -4015,9 +4005,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Stage entry hook
         if self._hooks:
-            await self._hooks.trigger_enter(
-                state.current_stage, state.data
-            )
+            await self._hooks.trigger_enter(state.current_stage, state.data)
 
         # Completion hook
         if state.completed and self._hooks:
@@ -4096,15 +4084,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             return False
 
         logger.info(
-            "Re-extracting at landing stage '%s' from transition message "
-            "(source: '%s')",
+            "Re-extracting at landing stage '%s' from transition message (source: '%s')",
             stage.get("name"),
             from_stage,
         )
 
         # Run the full extraction pipeline against the target stage's schema
         pipeline_result = await self._extraction.run_extraction_pipeline(
-            user_message, stage, state, llm,
+            user_message,
+            stage,
+            state,
+            llm,
             manager=manager,
         )
 
@@ -4145,49 +4135,73 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     # ------------------------------------------------------------------
 
     async def _handle_navigation(
-        self, message: str, state: WizardState, manager: Any, llm: Any,
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
     ) -> Any | None:
         """Delegate to navigator.  See :meth:`WizardNavigator.handle_navigation`."""
         return await self._navigator.handle_navigation(message, state, manager, llm)
 
     async def _navigate_back(
-        self, state: WizardState, *, user_message: str | None = None,
+        self,
+        state: WizardState,
+        *,
+        user_message: str | None = None,
     ) -> bool:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_back`."""
         return await self._navigator.navigate_back(state, user_message=user_message)
 
     async def _navigate_skip(
-        self, state: WizardState, *, user_message: str | None = None,
+        self,
+        state: WizardState,
+        *,
+        user_message: str | None = None,
     ) -> tuple[bool, list[str]]:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_skip`."""
         return await self._navigator.navigate_skip(state, user_message=user_message)
 
     async def _navigate_restart(
-        self, state: WizardState, user_message: str = "",
+        self,
+        state: WizardState,
+        user_message: str = "",
     ) -> None:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_restart`."""
         await self._navigator.navigate_restart(state, user_message=user_message)
 
     async def _restart_cleanup(
-        self, state: WizardState, message: str, trigger: str = "restart",
+        self,
+        state: WizardState,
+        message: str,
+        trigger: str = "restart",
     ) -> None:
         """Delegate to navigator.  See :meth:`WizardNavigator.restart_cleanup`."""
         await self._navigator.restart_cleanup(state, message, trigger=trigger)
 
     async def _execute_restart(
-        self, message: str, state: WizardState, manager: Any, llm: Any,
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
     ) -> Any:
         """Delegate to navigator.  See :meth:`WizardNavigator.execute_restart`."""
         return await self._navigator.execute_restart(message, state, manager, llm)
 
     async def _branch_for_revisited_stage(
-        self, manager: Any, stage_name: str,
+        self,
+        manager: Any,
+        stage_name: str,
     ) -> None:
         """Delegate to navigator.  See :meth:`WizardNavigator.branch_for_revisited_stage`."""
         await self._navigator.branch_for_revisited_stage(manager, stage_name)
 
     async def _detect_amendment(
-        self, message: str, state: WizardState, llm: Any,
+        self,
+        message: str,
+        state: WizardState,
+        llm: Any,
     ) -> dict[str, Any] | None:
         """Delegate to navigator.  See :meth:`WizardNavigator.detect_amendment`."""
         return await self._navigator.detect_amendment(message, state, llm)
@@ -4275,7 +4289,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 if isinstance(value, str) and "{{" in value:
                     try:
                         resolved = self._renderer.render_simple(
-                            value, collected_data,
+                            value,
+                            collected_data,
                         )
                         # Skip empty renders (template variable was undefined)
                         if resolved.strip():
@@ -4287,9 +4302,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                                 transition.get("target", "?"),
                             )
                     except Exception as e:
-                        logger.warning(
-                            "Failed to derive '%s' from template: %s", key, e
-                        )
+                        logger.warning("Failed to derive '%s' from template: %s", key, e)
                 else:
                     state.data[key] = value
                     logger.debug(
@@ -4336,8 +4349,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             func = active_fsm.resolve_function(name)
             if func is None:
                 logger.warning(
-                    "Routing transform '%s' not found in function registry "
-                    "for stage '%s'",
+                    "Routing transform '%s' not found in function registry for stage '%s'",
                     name,
                     stage.get("name", "?"),
                 )
@@ -4373,17 +4385,27 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     # ------------------------------------------------------------------
 
     async def _generate_stage_response(
-        self, manager: Any, llm: Any, stage: dict[str, Any],
-        state: WizardState, tools: list[Any] | None,
+        self,
+        manager: Any,
+        llm: Any,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any] | None,
     ) -> Any:
         """Delegate to responder.  See :meth:`WizardResponder.generate_stage_response`."""
         result = await self._response.generate_stage_response(
-            manager, llm, stage, state, tools,
+            manager,
+            llm,
+            stage,
+            state,
+            tools,
         )
         return result.response
 
     def _can_auto_advance(
-        self, wizard_state: WizardState, stage: dict[str, Any],
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
     ) -> bool:
         """Delegate to responder.  See :meth:`WizardResponder.can_auto_advance`."""
         return self._response.can_auto_advance(wizard_state, stage)
@@ -4394,7 +4416,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
     @staticmethod
     def _prepend_messages_to_response(
-        response: Any, messages: list[str],
+        response: Any,
+        messages: list[str],
     ) -> None:
         """Delegate to responder.  See :meth:`WizardResponder.prepend_messages_to_response`."""
         WizardResponder.prepend_messages_to_response(response, messages)
@@ -4410,19 +4433,26 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         return WizardResponder.create_template_response(content)
 
     def _build_stage_context(
-        self, stage: dict[str, Any], state: WizardState,
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
     ) -> str:
         """Delegate to responder.  See :meth:`WizardResponder.build_stage_context`."""
         return self._response.build_stage_context(stage, state)
 
     def _filter_tools_for_stage(
-        self, stage: dict[str, Any], tools: list[Any] | None,
+        self,
+        stage: dict[str, Any],
+        tools: list[Any] | None,
     ) -> list[Any] | None:
         """Delegate to responder.  See :meth:`WizardResponder.filter_tools_for_stage`."""
         return self._response.filter_tools_for_stage(stage, tools)
 
     def _add_wizard_metadata(
-        self, response: Any, state: WizardState, stage: dict[str, Any],
+        self,
+        response: Any,
+        state: WizardState,
+        stage: dict[str, Any],
     ) -> None:
         """Delegate to responder.  See :meth:`WizardResponder.add_wizard_metadata`."""
         self._response.add_wizard_metadata(response, state, stage)
@@ -4435,67 +4465,100 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     ) -> list[dict[str, Any]]:
         """Delegate to responder.  See :meth:`WizardResponder._build_clarification_groups`."""
         return self._response._build_clarification_groups(
-            missing_fields, stage, wizard_state,
+            missing_fields,
+            stage,
+            wizard_state,
         )
 
     async def _run_auto_advance_loop(
-        self, wizard_state: WizardState, active_fsm: Any,
-        initial_stage: dict[str, Any], **kwargs: Any,
+        self,
+        wizard_state: WizardState,
+        active_fsm: Any,
+        initial_stage: dict[str, Any],
+        **kwargs: Any,
     ) -> list[str]:
         """Delegate to responder.  See :meth:`WizardResponder.run_auto_advance_loop`."""
         return await self._response.run_auto_advance_loop(
-            wizard_state, active_fsm, initial_stage, **kwargs,
+            wizard_state,
+            active_fsm,
+            initial_stage,
+            **kwargs,
         )
 
     def _render_response_template(
-        self, template_str: str, stage: dict[str, Any],
-        state: WizardState, extra_context: dict[str, Any] | None = None,
+        self,
+        template_str: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        extra_context: dict[str, Any] | None = None,
     ) -> str:
         """Delegate to responder.  See :meth:`WizardResponder._render_response_template`."""
         return self._response._render_response_template(
-            template_str, stage, state, extra_context=extra_context,
+            template_str,
+            stage,
+            state,
+            extra_context=extra_context,
         )
 
     async def _generate_context_variables(
-        self, stage: dict[str, Any], state: WizardState, llm: Any,
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+        llm: Any,
     ) -> dict[str, str]:
         """Delegate to responder.  See :meth:`WizardResponder._generate_context_variables`."""
         return await self._response._generate_context_variables(stage, state, llm)
 
     def _render_suggestions(
-        self, suggestions: list[str], state: WizardState,
+        self,
+        suggestions: list[str],
+        state: WizardState,
     ) -> list[str]:
         """Delegate to responder.  See :meth:`WizardResponder.render_suggestions`."""
         return self._response.render_suggestions(suggestions, state)
 
     def _build_default_context(
-        self, stage: dict[str, Any], state: WizardState,
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
     ) -> str:
         """Delegate to responder.  See :meth:`WizardResponder._build_default_context`."""
         return self._response._build_default_context(stage, state)
 
     def _render_custom_context(
-        self, stage: dict[str, Any], state: WizardState,
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
     ) -> str:
         """Delegate to responder.  See :meth:`WizardResponder._render_custom_context`."""
         return self._response._render_custom_context(stage, state)
 
     def _resolve_stage_strategy(
-        self, stage: dict[str, Any],
+        self,
+        stage: dict[str, Any],
     ) -> ReasoningStrategy | None:
         """Delegate to responder.  See :meth:`WizardResponder._resolve_stage_strategy`."""
         return self._response._resolve_stage_strategy(stage)
 
     async def _strategy_stage_response(
-        self, strategy: ReasoningStrategy, manager: Any,
-        enhanced_prompt: str, stage: dict[str, Any],
-        state: WizardState, tools: list[Any],
+        self,
+        strategy: ReasoningStrategy,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
         metadata: dict[str, Any] | None = None,
     ) -> tuple[Any, bool, str, bool]:
         """Delegate to responder.  See :meth:`WizardResponder._strategy_stage_response`."""
         return await self._response._strategy_stage_response(
-            strategy, manager, enhanced_prompt, stage, state,
-            tools, metadata=metadata,
+            strategy,
+            manager,
+            enhanced_prompt,
+            stage,
+            state,
+            tools,
+            metadata=metadata,
         )
 
     def _get_max_iterations(self, stage: dict[str, Any]) -> int:
@@ -4609,18 +4672,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         fsm_state = wizard_meta.get("fsm_state", {})
 
         # Parse transitions
-        transitions = [
-            TransitionRecord.from_dict(t)
-            for t in fsm_state.get("transitions", [])
-        ]
+        transitions = [TransitionRecord.from_dict(t) for t in fsm_state.get("transitions", [])]
 
         # Parse tasks
         tasks_data = fsm_state.get("tasks", {})
-        task_list = (
-            WizardTaskList.from_dict(tasks_data)
-            if tasks_data
-            else WizardTaskList()
-        )
+        task_list = WizardTaskList.from_dict(tasks_data) if tasks_data else WizardTaskList()
         available_tasks = task_list.get_available_tasks()
 
         # Calculate stage index if definitions provided
@@ -4648,20 +4704,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             history_set = set(fsm_state.get("history", []))
             if isinstance(stage_definitions, dict):
                 for name, meta in stage_definitions.items():
-                    label = (
-                        meta.get("label", name)
-                        if isinstance(meta, dict)
-                        else name
-                    )
+                    label = meta.get("label", name) if isinstance(meta, dict) else name
                     if name == current_stage:
                         status = "current"
                     elif name in history_set:
                         status = "completed"
                     else:
                         status = "pending"
-                    stages.append(
-                        {"name": name, "label": label, "status": status}
-                    )
+                    stages.append({"name": name, "label": label, "status": status})
             elif isinstance(stage_definitions, list):
                 for s in stage_definitions:
                     name = s.get("name", "")
@@ -4672,9 +4722,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         status = "completed"
                     else:
                         status = "pending"
-                    stages.append(
-                        {"name": name, "label": label, "status": status}
-                    )
+                    stages.append({"name": name, "label": label, "status": status})
 
         return WizardStateSnapshot(
             current_stage=current_stage,

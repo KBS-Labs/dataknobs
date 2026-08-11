@@ -5,7 +5,7 @@ import yaml
 from dataknobs_fsm.api.simple import SimpleFSM
 
 # FSM workflow using regex for text normalization
-REGEX_NORMALIZE_WORKFLOW_YAML = '''
+REGEX_NORMALIZE_WORKFLOW_YAML = """
 name: regex_normalization_workflow
 description: Process text using regular expressions in inline transforms
 
@@ -98,10 +98,10 @@ arcs:
         }
     metadata:
       description: Capitalize first letter of sentences
-'''
+"""
 
 # Alternative approach: More complex regex operations
-ADVANCED_REGEX_WORKFLOW_YAML = '''
+ADVANCED_REGEX_WORKFLOW_YAML = """
 name: advanced_regex_workflow
 description: Advanced text processing with complex regex patterns
 
@@ -143,7 +143,8 @@ arcs:
 
   - from: process
     to: complete
-'''
+"""
+
 
 def demo_regex_normalization():
     """Demonstrate regex-based text normalization."""
@@ -166,10 +167,10 @@ def demo_regex_normalization():
 
     try:
         for text in test_texts:
-            result = fsm.process({'text': text})
+            result = fsm.process({"text": text})
 
-            if result['success']:
-                data = result['data']
+            if result["success"]:
+                data = result["data"]
                 print(f"Original:            '{data.get('original_text', text)}'")
                 print(f"clean_whitespace:    '{data.get('clean_whitespace', '')}'")
                 print(f"clean_punctuation:   '{data.get('clean_punctuation', '')}'")
@@ -182,6 +183,7 @@ def demo_regex_normalization():
                 print(f"Error: {result.get('error')}")
     finally:
         fsm.close()
+
 
 def demo_advanced_regex():
     """Demonstrate advanced regex processing."""
@@ -201,14 +203,15 @@ def demo_advanced_regex():
 
     try:
         for text in test_texts:
-            result = fsm.process({'text': text})
+            result = fsm.process({"text": text})
 
-            if result['success']:
+            if result["success"]:
                 print(f"Original:   '{text}'")
                 print(f"Processed:  '{result['data']['text']}'")
                 print()
     finally:
         fsm.close()
+
 
 def create_custom_regex_workflow(patterns: dict) -> dict:
     """Create a custom workflow with user-defined regex patterns."""
@@ -225,40 +228,38 @@ def create_custom_regex_workflow(patterns: dict) -> dict:
     transform_code += text_expr + "})(__import__('re'))"
 
     return {
-        'name': 'custom_regex_workflow',
-        'states': [
-            {'name': 'start', 'is_start': True},
-            {'name': 'process'},
-            {'name': 'complete', 'is_end': True}
+        "name": "custom_regex_workflow",
+        "states": [
+            {"name": "start", "is_start": True},
+            {"name": "process"},
+            {"name": "complete", "is_end": True},
         ],
-        'arcs': [
+        "arcs": [
             {
-                'from': 'start',
-                'to': 'process',
-                'transform': {
-                    'type': 'inline',
-                    'code': transform_code
-                }
+                "from": "start",
+                "to": "process",
+                "transform": {"type": "inline", "code": transform_code},
             },
-            {'from': 'process', 'to': 'complete'}
-        ]
+            {"from": "process", "to": "complete"},
+        ],
     }
+
 
 def demo_custom_regex():
     """Demonstrate dynamically created regex workflows."""
 
     # Define custom patterns
     patterns = {
-        r'\b([A-Z]{2,})\b': lambda m: m.group(1).capitalize(),  # ACRONYMS -> Acronyms
-        r'(\d+)\s*%': r'\1 percent',  # 50% -> 50 percent
-        r'\$(\d+)': r'\1 dollars',  # $100 -> 100 dollars
+        r"\b([A-Z]{2,})\b": lambda m: m.group(1).capitalize(),  # ACRONYMS -> Acronyms
+        r"(\d+)\s*%": r"\1 percent",  # 50% -> 50 percent
+        r"\$(\d+)": r"\1 dollars",  # $100 -> 100 dollars
     }
 
     # For the config, we need string replacements
     string_patterns = {
-        r'\b([A-Z]{2,})\b': r'\1',  # Keep as-is for now
-        r'(\d+)\s*%': r'\1 percent',
-        r'\$(\d+)': r'\1 dollars',
+        r"\b([A-Z]{2,})\b": r"\1",  # Keep as-is for now
+        r"(\d+)\s*%": r"\1 percent",
+        r"\$(\d+)": r"\1 dollars",
     }
 
     config = create_custom_regex_workflow(string_patterns)
@@ -275,14 +276,15 @@ def demo_custom_regex():
 
     try:
         for text in test_texts:
-            result = fsm.process({'text': text})
+            result = fsm.process({"text": text})
 
-            if result['success']:
+            if result["success"]:
                 print(f"Original:   '{text}'")
                 print(f"Processed:  '{result['data']['text']}'")
                 print()
     finally:
         fsm.close()
+
 
 if __name__ == "__main__":
     # Run all demonstrations

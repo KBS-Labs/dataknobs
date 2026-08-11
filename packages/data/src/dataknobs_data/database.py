@@ -138,9 +138,7 @@ def _maybe_warn_shadowed_id(record: Any) -> None:
     )
 
 
-def _iter_write_records(
-    name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> Iterator[Any]:
+def _iter_write_records(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Iterator[Any]:
     """Yield the record(s) a write verb persists, for pre-write inspection.
 
     Argument shapes differ per verb; this reads the record(s) from the
@@ -468,9 +466,7 @@ class RecordStorageMixin:
         record_copy.storage_id = resolved
         return resolved, record_copy
 
-    def _prepare_record_from_storage(
-        self, record: Record | None, storage_id: str
-    ) -> Record | None:
+    def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
         """Prepare a record retrieved from storage by ensuring storage_id is set.
 
         Args:
@@ -551,9 +547,11 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     # later needs a backend-specific capability MUST declare
     # ``SUPPORTED_CAPABILITIES = AsyncDatabase.SUPPORTED_CAPABILITIES | {...}``
     # or it will silently drop ``CONDITIONAL_WRITE``.
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
-        Capability.CONDITIONAL_WRITE,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {
+            Capability.CONDITIONAL_WRITE,
+        }
+    )
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Wrap every subclass's write methods with the pre-write inspection.
@@ -634,7 +632,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
-        
+
         Args:
             schema: The database schema to use
         """
@@ -642,7 +640,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def add_field_schema(self, field_schema: FieldSchema) -> None:
         """Add a field to the database schema.
-        
+
         Args:
             field_schema: The field schema to add
         """
@@ -650,9 +648,9 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def with_schema(self, **field_definitions) -> AsyncDatabase:
         """Set schema using field definitions.
-        
+
         Returns self for chaining.
-        
+
         Examples:
             db = AsyncMemoryDatabase().with_schema(
                 content=FieldType.TEXT,
@@ -695,9 +693,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -779,22 +775,23 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     async def all(self) -> list[Record]:
         """Get all records from the database.
-        
+
         Returns:
             List of all records
         """
         # Default implementation using search with empty query
         from .query import Query
+
         return await self.search(Query())
 
     async def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.
-        
+
         Backends can override this for native boolean logic support.
-        
+
         Args:
             query: Complex query with boolean logic
-            
+
         Returns:
             List of matching records
         """
@@ -835,9 +832,9 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # is honored as Python-slice semantics (empty result) and
             # not silently dropped.
             if query.offset_value is not None:
-                results = results[query.offset_value:]
+                results = results[query.offset_value :]
             if query.limit_value is not None:
-                results = results[:query.limit_value]
+                results = results[: query.limit_value]
 
             # Apply field projection
             if query.fields:
@@ -919,9 +916,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         # Return the created ID (might be different from what we provided).
         return created_id or id
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records in batch.
 
         Args:
@@ -942,9 +937,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             ids.append(id)
         return ids
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records in batch.
 
         The batch sibling of :meth:`create_batch`. Each record is written with
@@ -984,9 +977,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             records.append(record)
         return records
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records by ID.
 
         Args:
@@ -1098,9 +1089,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         yield None
 
-    async def begin_transaction(
-        self, *, policy: str = "strict"
-    ) -> BufferedTransaction:
+    async def begin_transaction(self, *, policy: str = "strict") -> BufferedTransaction:
         """Open a buffered transaction; the caller must ``commit``/``rollback``.
 
         Prefer :meth:`transaction` (the context-manager form) unless the
@@ -1133,9 +1122,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         return BufferedTransaction(self, policy=policy)
 
     @asynccontextmanager
-    async def transaction(
-        self, *, policy: str = "strict"
-    ) -> AsyncIterator[BufferedTransaction]:
+    async def transaction(self, *, policy: str = "strict") -> AsyncIterator[BufferedTransaction]:
         """Buffered transaction context manager.
 
         Writes staged on the yielded handle are flushed atomically on clean
@@ -1182,18 +1169,16 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     @abstractmethod
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database.
-        
+
         Yields records one at a time, fetching in batches internally.
-        
+
         Args:
             query: Optional query to filter records
             config: Streaming configuration
-            
+
         Yields:
             Records matching the query
         """
@@ -1201,18 +1186,16 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     @abstractmethod
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
-        
+
         Accepts an iterator and writes in batches.
-        
+
         Args:
             records: Iterator of records to write
             config: Streaming configuration
-            
+
         Returns:
             Result of the streaming operation
         """
@@ -1222,17 +1205,17 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         self,
         query: Query | None = None,
         transform: Callable[[Record], Record | None] | None = None,
-        config: StreamConfig | None = None
+        config: StreamConfig | None = None,
     ) -> AsyncIterator[Record]:
         """Stream records through a transformation.
-        
+
         Default implementation, can be overridden for efficiency.
-        
+
         Args:
             query: Optional query to filter records
             transform: Optional transformation function
             config: Streaming configuration
-            
+
         Yields:
             Transformed records
         """
@@ -1245,7 +1228,9 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 yield record
 
     @classmethod
-    async def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> AsyncDatabase:
+    async def from_backend(
+        cls, backend: str, config: dict[str, Any] | None = None
+    ) -> AsyncDatabase:
         """Factory method to create and connect a database instance.
 
         Args:
@@ -1259,10 +1244,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
         backend_class = async_backends.get_factory(backend)
         if not backend_class:
-            raise ValueError(
-                f"Unknown backend: {backend}. "
-                f"Available: {async_backends.list_keys()}"
-            )
+            raise ValueError(f"Unknown backend: {backend}. Available: {async_backends.list_keys()}")
 
         instance = backend_class(config)
         await instance.connect()
@@ -1306,9 +1288,11 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     # See ``AsyncDatabase.SUPPORTED_CAPABILITIES`` — the same uniform
     # conditional-write guarantee applies to every sync backend, and the
     # same MRO no-auto-union caveat holds for backend-specific additions.
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
-        Capability.CONDITIONAL_WRITE,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {
+            Capability.CONDITIONAL_WRITE,
+        }
+    )
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Wrap every subclass's write methods with the pre-write inspection.
@@ -1374,7 +1358,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
-        
+
         Args:
             schema: The database schema to use
         """
@@ -1382,7 +1366,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def add_field_schema(self, field_schema: FieldSchema) -> None:
         """Add a field to the database schema.
-        
+
         Args:
             field_schema: The field schema to add
         """
@@ -1390,9 +1374,9 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def with_schema(self, **field_definitions) -> SyncDatabase:
         """Set schema using field definitions.
-        
+
         Returns self for chaining.
-        
+
         Examples:
             db = SyncMemoryDatabase().with_schema(
                 content=FieldType.TEXT,
@@ -1449,9 +1433,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -1564,22 +1546,23 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def all(self) -> list[Record]:
         """Get all records from the database.
-        
+
         Returns:
             List of all records
         """
         # Default implementation using search with empty query
         from .query import Query
+
         return self.search(Query())
 
     def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.
-        
+
         Backends can override this for native boolean logic support.
-        
+
         Args:
             query: Complex query with boolean logic
-            
+
         Returns:
             List of matching records
         """
@@ -1620,9 +1603,9 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # is honored as Python-slice semantics (empty result) and
             # not silently dropped.
             if query.offset_value is not None:
-                results = results[query.offset_value:]
+                results = results[query.offset_value :]
             if query.limit_value is not None:
-                results = results[:query.limit_value]
+                results = results[: query.limit_value]
 
             # Apply field projection
             if query.fields:
@@ -1823,18 +1806,16 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     @abstractmethod
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from database.
-        
+
         Yields records one at a time, fetching in batches internally.
-        
+
         Args:
             query: Optional query to filter records
             config: Streaming configuration
-            
+
         Yields:
             Records matching the query
         """
@@ -1842,18 +1823,16 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     @abstractmethod
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
-        
+
         Accepts an iterator and writes in batches.
-        
+
         Args:
             records: Iterator of records to write
             config: Streaming configuration
-            
+
         Returns:
             Result of the streaming operation
         """
@@ -1863,17 +1842,17 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         self,
         query: Query | None = None,
         transform: Callable[[Record], Record | None] | None = None,
-        config: StreamConfig | None = None
+        config: StreamConfig | None = None,
     ) -> Iterator[Record]:
         """Stream records through a transformation.
-        
+
         Default implementation, can be overridden for efficiency.
-        
+
         Args:
             query: Optional query to filter records
             transform: Optional transformation function
             config: Streaming configuration
-            
+
         Yields:
             Transformed records
         """
@@ -1900,10 +1879,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
         backend_class = sync_backends.get_factory(backend)
         if not backend_class:
-            raise ValueError(
-                f"Unknown backend: {backend}. "
-                f"Available: {sync_backends.list_keys()}"
-            )
+            raise ValueError(f"Unknown backend: {backend}. Available: {sync_backends.list_keys()}")
 
         instance = backend_class(config)
         instance.connect()

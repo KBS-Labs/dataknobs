@@ -61,9 +61,7 @@ class TestValidationResult:
         assert merged.warnings == ["w1", "w2"]
 
     def test_to_dict(self) -> None:
-        result = ValidationResult(
-            valid=False, errors=["err"], warnings=["warn"]
-        )
+        result = ValidationResult(valid=False, errors=["err"], warnings=["warn"])
         d = result.to_dict()
         assert d == {"valid": False, "errors": ["err"], "warnings": ["warn"]}
 
@@ -163,17 +161,13 @@ class TestConfigValidator:
     def test_validate_component(self) -> None:
         schema = DynaBotConfigSchema()
         validator = ConfigValidator(schema=schema)
-        result = validator.validate_component(
-            "llm", {"provider": "ollama", "model": "llama3.2"}
-        )
+        result = validator.validate_component("llm", {"provider": "ollama", "model": "llama3.2"})
         assert result.valid is True
 
     def test_validate_component_invalid(self) -> None:
         schema = DynaBotConfigSchema()
         validator = ConfigValidator(schema=schema)
-        result = validator.validate_component(
-            "llm", {"provider": "not_a_provider"}
-        )
+        result = validator.validate_component("llm", {"provider": "not_a_provider"})
         assert result.valid is False
 
     def test_validator_exception_handling(self) -> None:

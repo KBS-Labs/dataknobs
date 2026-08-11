@@ -181,9 +181,7 @@ class TestQueryArtifactsTool:
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = await tool.execute_with_context(
-            context, artifact_type="quiz"
-        )
+        result = await tool.execute_with_context(context, artifact_type="quiz")
 
         assert result["count"] == 1
         assert result["artifacts"][0]["type"] == "quiz"
@@ -192,11 +190,15 @@ class TestQueryArtifactsTool:
         db = AsyncMemoryDatabase()
         registry = ArtifactRegistry(db)
         await registry.create(
-            artifact_type="content", name="Tagged", content={"x": 1},
+            artifact_type="content",
+            name="Tagged",
+            content={"x": 1},
             tags=["math"],
         )
         await registry.create(
-            artifact_type="content", name="Untagged", content={"x": 2},
+            artifact_type="content",
+            name="Untagged",
+            content={"x": 2},
         )
 
         tool = QueryArtifactsTool(artifact_registry=registry)
@@ -210,9 +212,7 @@ class TestQueryArtifactsTool:
     async def test_query_include_content(self) -> None:
         db = AsyncMemoryDatabase()
         registry = ArtifactRegistry(db)
-        await registry.create(
-            artifact_type="content", name="A", content={"data": "value"}
-        )
+        await registry.create(artifact_type="content", name="A", content={"data": "value"})
 
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
@@ -238,16 +238,12 @@ class TestSubmitForReviewTool:
     async def test_submits_artifact(self) -> None:
         db = AsyncMemoryDatabase()
         registry = ArtifactRegistry(db)
-        artifact = await registry.create(
-            artifact_type="content", name="Test", content={"v": 1}
-        )
+        artifact = await registry.create(artifact_type="content", name="Test", content={"v": 1})
 
         tool = SubmitForReviewTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = await tool.execute_with_context(
-            context, artifact_id=artifact.id
-        )
+        result = await tool.execute_with_context(context, artifact_id=artifact.id)
 
         assert result["artifact_id"] == artifact.id
         assert "evaluations" in result
@@ -258,9 +254,7 @@ class TestSubmitForReviewTool:
         tool = SubmitForReviewTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = await tool.execute_with_context(
-            context, artifact_id="nonexistent"
-        )
+        result = await tool.execute_with_context(context, artifact_id="nonexistent")
 
         assert "error" in result
 
@@ -290,9 +284,7 @@ class TestGetArtifactTool:
         tool = GetArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = await tool.execute_with_context(
-            context, artifact_id=artifact.id
-        )
+        result = await tool.execute_with_context(context, artifact_id=artifact.id)
 
         assert result["id"] == artifact.id
         assert result["name"] == "Test Doc"
@@ -307,9 +299,7 @@ class TestGetArtifactTool:
         tool = GetArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = await tool.execute_with_context(
-            context, artifact_id="nonexistent"
-        )
+        result = await tool.execute_with_context(context, artifact_id="nonexistent")
 
         assert "error" in result
 

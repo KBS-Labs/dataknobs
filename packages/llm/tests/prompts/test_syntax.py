@@ -27,8 +27,8 @@ from dataknobs_llm.prompts.base.types import TemplateMode
 # TemplateSyntax enum
 # ============================================================================
 
-class TestTemplateSyntax:
 
+class TestTemplateSyntax:
     def test_values(self) -> None:
         assert TemplateSyntax.FORMAT.value == "format"
         assert TemplateSyntax.JINJA2.value == "jinja2"
@@ -50,8 +50,8 @@ class TestTemplateSyntax:
 # format_to_jinja2
 # ============================================================================
 
-class TestFormatToJinja2:
 
+class TestFormatToJinja2:
     def test_empty_string(self) -> None:
         assert format_to_jinja2("") == ""
 
@@ -87,15 +87,12 @@ class TestFormatToJinja2:
     def test_literal_braces_around_content(self) -> None:
         # {{key}} in .format() means literal { + key + literal }
         # This is NOT a variable — it's literal braces around text
-        result = format_to_jinja2('{{key}}')
+        result = format_to_jinja2("{{key}}")
         assert result == '{{ "{" }}key{{ "}" }}'
 
     def test_json_example_in_prompt(self) -> None:
         """Real-world case: extraction prompts contain JSON examples with literal braces."""
-        template = (
-            "Return ONLY a valid JSON object:\n"
-            '{{"name": "John", "age": 30}}'
-        )
+        template = 'Return ONLY a valid JSON object:\n{{"name": "John", "age": 30}}'
         result = format_to_jinja2(template)
         assert '{{ "{" }}' in result
         assert '{{ "}" }}' in result
@@ -117,6 +114,7 @@ class TestFormatToJinja2:
         assert "{schema}" not in result  # no format vars
         # The result should be renderable by Jinja2 to produce the original JSON
         from jinja2 import Environment
+
         env = Environment()
         rendered = env.from_string(result).render()
         assert rendered == '{"data": {"name": "John"}, "assumptions": []}'
@@ -131,8 +129,8 @@ class TestFormatToJinja2:
 # jinja2_to_format
 # ============================================================================
 
-class TestJinja2ToFormat:
 
+class TestJinja2ToFormat:
     def test_empty_string(self) -> None:
         assert jinja2_to_format("") == ""
 
@@ -179,8 +177,8 @@ class TestJinja2ToFormat:
 # detect_syntax
 # ============================================================================
 
-class TestDetectSyntax:
 
+class TestDetectSyntax:
     def test_empty_string(self) -> None:
         assert detect_syntax("") == TemplateSyntax.FORMAT
 
@@ -234,8 +232,8 @@ class TestDetectSyntax:
 # normalize_to_jinja2
 # ============================================================================
 
-class TestNormalizeToJinja2:
 
+class TestNormalizeToJinja2:
     def test_jinja2_passthrough(self) -> None:
         template = "{{ name }}"
         assert normalize_to_jinja2(template, TemplateSyntax.JINJA2) == template
@@ -252,8 +250,8 @@ class TestNormalizeToJinja2:
 # Round-trip tests
 # ============================================================================
 
-class TestRoundTrip:
 
+class TestRoundTrip:
     def test_simple_variables_round_trip(self) -> None:
         """format → jinja2 → format should produce original for simple templates."""
         original = "Hello {name}, you are {age} years old."
@@ -277,8 +275,8 @@ class TestRoundTrip:
 # Integration: TemplateRenderer with template_syntax
 # ============================================================================
 
-class TestRendererSyntaxIntegration:
 
+class TestRendererSyntaxIntegration:
     def test_format_syntax_renders_correctly(self) -> None:
         """A PromptTemplateDict with template_syntax='format' renders correctly."""
         renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
@@ -325,12 +323,7 @@ class TestRendererSyntaxIntegration:
         """Test the exact pattern from the extraction prompts."""
         renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
         prompt = {
-            "template": (
-                "Extract data.\n"
-                "Schema: {schema}\n"
-                "If empty, return {{}}\n"
-                "Text: {text}"
-            ),
+            "template": ("Extract data.\nSchema: {schema}\nIf empty, return {{}}\nText: {text}"),
             "template_syntax": "format",
         }
         result = renderer.render_prompt_template(

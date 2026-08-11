@@ -21,7 +21,7 @@ jobs:
       docs-changed: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
         id: filter
         with:
           filters: |
@@ -42,7 +42,6 @@ jobs:
               # workspace guards assert against every file listed here, and
               # they cannot run on a job that does not start.
               - 'packages/*/pyproject.toml'
-              - 'mypy.ini'
               - 'pytest.ini'
               - '.python-version'
               - '.pylintrc'
@@ -149,7 +148,7 @@ jobs:
 
             **Please run the following command locally before pushing:**
             \`\`\`bash
-            ./bin/run-quality-checks.sh
+            ./bin/dk pr
             \`\`\`
 
             This will:
@@ -158,6 +157,10 @@ jobs:
             3. Perform style checks with ruff
             4. Generate coverage reports
             5. Create artifacts in \`.quality-artifacts/\` that must be committed
+
+            \`./bin/run-quality-checks.sh\` runs the same checks but writes no
+            artifacts — use it to iterate, and \`./bin/dk pr\` to produce the
+            evidence this job verifies.
 
             For more information, see [Quality Checks Guide](../blob/main/docs/development/quality-checks.md)`
             })
