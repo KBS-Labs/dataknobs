@@ -14,7 +14,6 @@ import hashlib
 import importlib.util
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,15 +31,11 @@ _HASH_PATTERNS = [
     (".", "pyproject.toml"),
 ]
 
-# Lines matching these patterns are stripped before hashing because they
-# change during releases but do not affect code quality.
-_VERSION_LINE_RE = re.compile(r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$')
-
-# Cross-package dependency constraint lines — bumped by release-helper.sh
-# whenever a sibling dataknobs package's version changes. The dep itself
-# is hashed independently and propagates via the transitive-dirty graph,
-# so the constraint string adds no signal about *this* package's behavior.
-_DEP_CONSTRAINT_LINE_RE = re.compile(r'^"dataknobs-[a-z]+(?:>=|==)[^"]+",?$')
+# The lines stripped before hashing because a release rewrites them without
+# changing behaviour are declared in changed-packages.py and imported below,
+# beside the workspace-input declaration this module already takes from there.
+# They were defined here, where only this module could see them, and change
+# detection reached the opposite answer about the same version bump as a result.
 
 # Increment when the hashing algorithm changes (e.g., adding version stripping).
 # A mismatch between stored and current version means hashes are incomparable
@@ -66,6 +61,7 @@ ALL_PACKAGES: list[str] = _changed_packages.ALL_PACKAGES
 get_transitive_dependents = _changed_packages.get_transitive_dependents
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = _changed_packages.WORKSPACE_QUALITY_INPUTS
 GLOBAL_SCOPES: frozenset[str] = _changed_packages.GLOBAL_SCOPES
+strip_release_noise = _changed_packages.strip_release_noise
 
 
 def _hash_files(files: list[Path], base: Path) -> str:
@@ -86,13 +82,9 @@ def _hash_files(files: list[Path], base: Path) -> str:
         #   - own version lines in pyproject.toml / __init__.py
         #   - cross-package dataknobs-* dep constraint lines in pyproject.toml
         # Both change at release time but don't reflect this package's behavior.
-        filtered_lines = [
-            line
-            for line in content.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
-            if not _VERSION_LINE_RE.match(line.strip())
-            and not _DEP_CONSTRAINT_LINE_RE.match(line.strip())
-        ]
-        filtered_content = "".join(filtered_lines).encode("utf-8")
+        # Shared with change detection, which decides whether that same bump
+        # schedules a suite — one definition, so the two cannot disagree.
+        filtered_content = strip_release_noise(content)
 
         # Hash path + content with null-byte separators to avoid ambiguity
         hasher.update(rel_path.encode("utf-8"))

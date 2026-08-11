@@ -227,6 +227,66 @@ WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
 #: workspace guard suite. package-hashes.py reads this to size the dirty set.
 GLOBAL_SCOPES = frozenset({"toolchain"})
 
+# ---------------------------------------------------------------------------
+# Release-time noise
+# ---------------------------------------------------------------------------
+#
+# The lines release-helper.sh rewrites when it bumps a version: a package's own
+# version, and the cross-package dataknobs-* constraints bumped alongside it.
+# Neither says anything about how the code behaves — the depended-on package is
+# hashed independently and reaches its dependents through the transitive-dirty
+# graph, so the constraint string adds no signal the graph does not already
+# carry.
+#
+# These lived in package-hashes.py, which strips them precisely so a version
+# bump does not dirty a package. Change detection does not import that module
+# and so did not strip them, and the two readers ended up disagreeing about what
+# a version bump *is*: the hasher proved not one package input had moved while
+# change detection, matching on paths alone, scheduled all ten suites for the
+# same diff. Declared here, in the module both readers already share, so the
+# question has one answer instead of two that drift.
+#
+# The regexes match a stripped line, so leading indentation is already gone by
+# the time they are applied.
+_VERSION_LINE_RE = re.compile(r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$')
+_DEP_CONSTRAINT_LINE_RE = re.compile(r'^"dataknobs-[a-z]+(?:>=|==)[^"]+",?$')
+
+
+def strip_release_noise(content: bytes) -> bytes:
+    """Drop the release-rewritten lines from a file's content.
+
+    Returns a comparison key, not a rendering: two files agree on behaviour
+    when their stripped forms are equal.
+
+    Decoded *and re-encoded* with ``surrogateescape`` so content that is not
+    valid UTF-8 round-trips instead of raising. The decode always tolerated it
+    and the encode did not, which left the pair able to raise on a file the
+    workspace scopes reach through their suffix predicate. Bytes are unchanged
+    for any input that encoded cleanly before — which is every input that
+    hashes today, since the alternative was a crash — so no stored hash moves.
+    """
+    decoded = content.decode("utf-8", errors="surrogateescape")
+    kept = [
+        line
+        for line in decoded.splitlines(keepends=True)
+        if not _VERSION_LINE_RE.match(line.strip())
+        and not _DEP_CONSTRAINT_LINE_RE.match(line.strip())
+    ]
+    return "".join(kept).encode("utf-8", errors="surrogateescape")
+
+
+#: Documentation that sits at a package root rather than under its ``docs/``.
+#: Reached by no hash scope — not ``_HASH_PATTERNS`` in package-hashes.py (the
+#: ``.py`` files under ``src/`` and ``tests/``, plus ``pyproject.toml``) and not
+#: the ``packages/*/docs/`` entry in the docs scope — so a change here moves no
+#: recorded verdict about the package, and no test reads one. Every CHANGELOG
+#: mention under ``tests/`` is a citation in a docstring.
+#:
+#: Deliberately not extended to ``README.md``: a package README is a candidate
+#: for transclusion into the site in a way a changelog is not, and the entry
+#: that would make that safe is a docs-scope one, not this.
+_PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
+
 # Paths whose change means the gate should re-run the documentation checks.
 # Matched by prefix, so a full path names exactly one file.
 #
@@ -288,8 +348,78 @@ def _resolve_base_ref(base_ref: str) -> str:
     return base_ref
 
 
+def _blob_at(ref: str, path: str) -> bytes | None:
+    """One path's content at a git ref, or ``None`` when it is absent there.
+
+    Run from the repository root so the repo-relative paths ``git diff
+    --name-only`` produces resolve the same way whatever directory the caller
+    invoked the script from.
+    """
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        capture_output=True,
+        check=False,
+        cwd=_ROOT,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _worktree_bytes(path: str) -> bytes | None:
+    """One path's content in the working tree, or ``None`` when unreadable."""
+    try:
+        return (_ROOT / path).read_bytes()
+    except OSError:
+        return None
+
+
+def drop_release_noise_only(files: list[str], resolved_ref: str) -> list[str]:
+    """Drop files whose only difference from *resolved_ref* is release noise.
+
+    Applied to the raw git answer so every later reader — the global-trigger
+    check, the workspace-input check, the package mapping — sees one list of
+    files that *materially* changed. Filtering here rather than at each of the
+    three is what keeps them from disagreeing again: a version bump rewrites
+    ``uv.lock`` (a global trigger) as well as every package's ``pyproject.toml``
+    and ``__init__.py``, so a fix applied only to the package mapping would
+    still have scheduled all ten suites through the global trigger.
+
+    A file that was added or removed is kept without comparison: absence on one
+    side is a real change, and the noise patterns describe an edit to a line
+    that exists on both.
+
+    Note the asymmetry with the hasher this shares its definition with. The
+    hasher decides *membership* too — it hashes only the ``.py`` files under
+    ``src/`` and ``tests/`` — and deferring to that would be unsafe here,
+    because a test input it does not hash (a golden JSON file, a YAML fixture)
+    still decides whether a suite passes. So this shares the "what counts as a
+    change" half and not the "what counts as an input" half: a fixture edit
+    keeps scheduling its package's suite even though it moves no stored hash.
+    """
+    material: list[str] = []
+
+    for path in files:
+        before = _blob_at(resolved_ref, path)
+        after = _worktree_bytes(path)
+
+        if before is None or after is None:
+            material.append(path)
+            continue
+
+        if strip_release_noise(before) != strip_release_noise(after):
+            material.append(path)
+
+    return material
+
+
 def get_changed_files(base_ref: str) -> list[str]:
-    """Get all changed files: committed on branch, staged, and unstaged."""
+    """Get all changed files: committed on branch, staged, and unstaged.
+
+    Release noise is removed before the list is returned, so a caller asking
+    "what changed" is told what changed in a sense every reader of the answer
+    agrees on. See :func:`drop_release_noise_only`.
+    """
     files: set[str] = set()
 
     resolved_ref = _resolve_base_ref(base_ref)
@@ -306,7 +436,7 @@ def get_changed_files(base_ref: str) -> list[str]:
     # Untracked files (new files not yet staged)
     files.update(_run_git("ls-files", "--others", "--exclude-standard"))
 
-    return sorted(files)
+    return drop_release_noise_only(sorted(files), resolved_ref)
 
 
 def build_reverse_graph() -> dict[str, list[str]]:
@@ -380,6 +510,14 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
         # Check for package-specific docs
         if "/docs/" in filepath and filepath.startswith("packages/"):
             docs_changed = True
+
+        # Package-root documentation, which the mapping below would otherwise
+        # read as a change to the package itself — scheduling its whole suite
+        # to publish a release note. See _PACKAGE_DOC_FILES for why nothing
+        # about a package's recorded verdict depends on one.
+        if filepath.startswith("packages/") and filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
+            docs_changed = True
+            continue
 
         # Map to package
         if filepath.startswith("packages/"):
